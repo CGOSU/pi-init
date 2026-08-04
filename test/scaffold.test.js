@@ -28,10 +28,18 @@ test("生成默认文件结构和动态 Skill", async () => {
       "docs/pitfalls.md",
       ".pi/skills/example-app/SKILL.md",
     ]);
-    assert.match(await readFile(path.join(target, "AGENTS.md"), "utf8"), /^# Example App AI 协作指南/);
+    const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
     const skill = await readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8");
+    assert.match(agents, /^# Example App AI 协作指南/);
+    assert.match(agents, /git config user\.name CGOSU/);
+    assert.match(agents, /git config user\.email dev@cgosu\.com/);
+    assert.doesNotMatch(agents, /知识库地址远程地址/);
     assert.match(skill, /^---\nname: example-app\n/);
-    assert.doesNotMatch(skill, /\{\{[A-Z_]+\}\}/);
+    assert.doesNotMatch(skill, /docs\/current-state\.md/);
+
+    for (const file of result.files) {
+      assert.doesNotMatch(await readFile(path.join(target, file), "utf8"), /\{\{[A-Z_]+\}\}/);
+    }
   });
 });
 
@@ -61,8 +69,11 @@ test("英文模板和显式中文项目 slug 可用", async () => {
       testCommand: "npm test",
     });
 
-    assert.match(await readFile(path.join(target, "AGENTS.md"), "utf8"), /## Project Purpose/);
-    assert.match(await readFile(path.join(target, "AGENTS.md"), "utf8"), /- Test: `npm test`/);
+    const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
+    assert.match(agents, /## Project Purpose/);
+    assert.match(agents, /- Test: `npm test`/);
+    assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
+    assert.match(agents, /git config user\.name CGOSU/);
     assert.match(await readFile(path.join(target, ".pi/skills/mall-app/SKILL.md"), "utf8"), /name: mall-app/);
   });
 });

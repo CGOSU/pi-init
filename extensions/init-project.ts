@@ -171,6 +171,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptSnippet: "Initialize a project's AI Coding context files and Pi Skill",
     promptGuidelines: [
       "Use init_project when the user asks to initialize a project with AI Coding collaboration context.",
+      "Before calling init_project, inspect available project metadata and provide description and testCommand when known.",
       "Use init_project with dryRun=true first when the target project may already contain generated files.",
     ],
     parameters: initProjectParameters,

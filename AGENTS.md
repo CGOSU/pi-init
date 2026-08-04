@@ -1,4 +1,4 @@
-# {{PROJECT_NAME}} AI 协作指南
+# pi-init AI 协作指南
 
 本文件定义本项目长期有效的 AI Coding 协作规则。开始任务前先阅读本文件，并按顺序读取：
 
@@ -11,11 +11,11 @@
 
 ## 项目定位
 
-{{PROJECT_DESCRIPTION}}
+用于 Pi 的项目初始化扩展，生成 `AGENTS.md`、项目记忆文档和项目级 Skill。
 
 ## 常用命令
 
-- 测试：`{{TEST_COMMAND}}`
+- 测试：`npm test`
 
 如果命令尚未补充，先检查项目现有脚本和工具链，不要猜测命令。
 

@@ -5,7 +5,9 @@ This file defines the long-term AI coding rules for this project. Before startin
 1. `docs/current-state.md` for current goals, known state, and unfinished work;
 2. `docs/decisions.md` for confirmed design decisions;
 3. the latest relevant entries in `docs/session-log.md`;
-4. relevant historical issues in `docs/pitfalls.md`.
+4. relevant historical issues in `docs/pitfalls.md`;
+5. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then commit in Chinese and run `git push`;
+6. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
 
 ## Project Purpose
 
@@ -39,4 +41,4 @@ After completing a task:
 3. record completed work, verification commands, and remaining issues in `docs/session-log.md`;
 4. add newly discovered, non-obvious, recurring issues to `docs/pitfalls.md`.
 
-Maintain each fact in one file only. Elsewhere, use a short summary and a relative link to its canonical source.
+Update a file only when there is a new fact to record; do not make no-op documentation edits. Maintain each fact in one file only. Elsewhere, use a short summary and a relative link to its canonical source.
