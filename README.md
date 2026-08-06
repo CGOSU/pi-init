@@ -49,7 +49,7 @@ Skill 会在每个职责开始前调用 `switch_role`，由 Extension 读取 `.p
 
 职责切换模式配置在 `.pi/role-models.json` 顶层：`auto` 自动切换，`confirm` 切换前询问（默认接受建议），`manual` 只允许用户通过 `/role` 切换。`/role-mode <mode>` 仅临时覆盖当前会话。
 
-架构师完成规划后，如果存在至少两个文件范围不重叠的工作包，Skill 会在允许自动切换时调用 `parallel_develop`。该工具为多个 `developer-test` 子代理创建隔离 Git worktree，并发执行 `gpt-5.6-luna/max`，成功后自动将修改合并回主工作区；主工作区必须干净，子代理不会提交或推送。
+架构师完成规划后，如果存在至少两个文件范围不重叠的工作包，Skill 会在允许自动切换时调用 `parallel_develop`。该工具仅在受信任项目中运行，为多个 `developer-test` 子代理创建隔离 Git worktree，并发执行当前已生效的开发测试模型，状态栏和工具进度会显示 `已启动 x/y`，成功后自动将修改合并回主工作区；主工作区必须干净，子代理不会提交或推送。子代理使用 Pi 的文本输出模式和 `--no-approve`，不会自动提升项目受信任级别。
 
 ## 检查
 

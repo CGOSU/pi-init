@@ -50,3 +50,13 @@
 - 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
 - 验证：RPC 命令发现包含 `role-mode`，手动模式下执行 `/role architect` 后模型为 `gpt-5.6-sol/max`。
 - 遗留问题：暂无。
+
+### 2026-08-06：加固并行开发执行链路
+
+- 完成内容：将并行 worktree、子代理执行和补丁合并移至 `src/parallel-runner.js`；改用 Pi 文本输出模式，移除 JSON 事件解析；传递已生效的开发测试模型；未受信任项目拒绝并行执行，子代理使用 `--no-approve`。
+- 完成内容：关闭 Git 重命名检测以阻止文件范围绕过；手动职责模式现在会核对当前 provider、model 和 thinking level；删除无用职责模式 Schema。
+- 完成内容：并行执行通过状态栏和工具进度显示已启动子代理数量（`x/y`），最终结果也显示总数。
+- 验证：`npm test`，7 项测试全部通过，包含两个确定性 worktree/补丁合并测试和重命名范围测试。
+- 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 和 runner 通过。
+- 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
+- 遗留问题：尚未执行真实 LLM 子代理端到端演练。

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
 
 import { createScaffold } from "../src/scaffold.js";
@@ -16,6 +18,13 @@ import {
   MAX_PARALLEL_DEVELOPERS,
   validateParallelTasks,
 } from "../src/parallel.js";
+import { runParallelDevelop } from "../src/parallel-runner.js";
+
+const execFileAsync = promisify(execFile);
+
+function normalizeNewlines(value) {
+  return value.replaceAll("\r\n", "\n");
+}
 
 async function withTempDirectory(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-"));
@@ -65,6 +74,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
     assert.match(skill, /调用 `parallel_develop`/);
+    assert.match(skill, /受信任项目/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);
 
     for (const file of result.files) {
@@ -138,6 +148,95 @@ test("并行开发任务要求独立且受限的文件范围", () => {
   assert.equal(MAX_PARALLEL_DEVELOPERS, 4);
 });
 
+async function git(cwd, args) {
+  const result = await execFileAsync("git", args, { cwd, encoding: "utf8" });
+  return result.stdout;
+}
+
+function fakeParallelExec(worker) {
+  return async (command, args, options = {}) => {
+    if (command !== "git") {
+      await worker(args, options.cwd);
+      return { stdout: "worker complete\n", stderr: "", code: 0, killed: false };
+    }
+    const result = await execFileAsync(command, args, { cwd: options.cwd, encoding: "utf8" });
+    return { stdout: result.stdout, stderr: result.stderr, code: 0, killed: false };
+  };
+}
+
+async function createGitFixture(directory) {
+  await git(directory, ["init"]);
+  await git(directory, ["config", "user.name", "test"]);
+  await git(directory, ["config", "user.email", "test@example.com"]);
+  await writeFile(path.join(directory, "base.txt"), "base\n", "utf8");
+  await git(directory, ["add", "."]);
+  await git(directory, ["commit", "-m", "init"]);
+}
+
+test("并行开发创建隔离 worktree 并合并独立修改", async () => {
+  await withTempDirectory(async (directory) => {
+    await createGitFixture(directory);
+    const started = [];
+    const updates = [];
+    const result = await runParallelDevelop({
+      exec: fakeParallelExec(async (args, cwd) => {
+        const file = args.at(-1).includes("task-a") ? "a.txt" : "b.txt";
+        await writeFile(path.join(cwd, file), `${file}\n`, "utf8");
+      }),
+      cwd: directory,
+      planInput: "实现两个互不冲突的文件",
+      taskInput: [
+        { id: "a", task: "task-a", files: ["a.txt"] },
+        { id: "b", task: "task-b", files: ["b.txt"] },
+      ],
+      target: { provider: "test", model: "model", thinkingLevel: "off" },
+      onStarted: (event) => started.push(event),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    assert.deepEqual(started.map(({ started: count }) => count).sort(), [1, 2]);
+    assert.ok(started.every(({ total }) => total === 2));
+    assert.equal(updates[0].details.status, "starting");
+    assert.equal(updates.filter(({ details }) => details.status === "running").length, 2);
+    assert.equal(result.results.length, 2);
+    assert.deepEqual(result.results.map(({ changedFiles }) => changedFiles), [["a.txt"], ["b.txt"]]);
+    assert.equal(normalizeNewlines(await readFile(path.join(directory, "a.txt"), "utf8")), "a.txt\n");
+    assert.equal(normalizeNewlines(await readFile(path.join(directory, "b.txt"), "utf8")), "b.txt\n");
+    assert.equal((await git(directory, ["worktree", "list", "--porcelain"])).split("\nworktree ").length, 1);
+  });
+});
+
+test("并行开发拒绝重命名导致的范围外删除", async () => {
+  await withTempDirectory(async (directory) => {
+    await createGitFixture(directory);
+    await writeFile(path.join(directory, "outside.txt"), "outside\n", "utf8");
+    await git(directory, ["add", "outside.txt"]);
+    await git(directory, ["commit", "-m", "outside"]);
+
+    await assert.rejects(
+      runParallelDevelop({
+        exec: fakeParallelExec(async (args, cwd) => {
+          if (args.at(-1).includes("rename-task")) {
+            await git(cwd, ["mv", "outside.txt", "inside.txt"]);
+          }
+        }),
+        cwd: directory,
+        planInput: "限制每个任务只能修改声明范围",
+        taskInput: [
+          { id: "rename", task: "rename-task", files: ["inside.txt"] },
+          { id: "noop", task: "noop-task", files: ["noop.txt"] },
+        ],
+        target: { provider: "test", model: "model", thinkingLevel: "off" },
+      }),
+      /未声明范围：.*outside\.txt/,
+    );
+
+    assert.equal(normalizeNewlines(await readFile(path.join(directory, "outside.txt"), "utf8")), "outside\n");
+    await assert.rejects(readFile(path.join(directory, "inside.txt"), "utf8"), { code: "ENOENT" });
+    assert.equal(await git(directory, ["status", "--porcelain"]), "");
+  });
+});
+
 test("英文模板和显式中文项目 slug 可用", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "商城");
@@ -161,5 +260,6 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(skill, /Documentation and Commit Engineer.+Technical Writer \/ Release Engineer/);
     assert.match(skill, /Call `switch_role` before every role starts/);
     assert.match(skill, /call `parallel_develop`/);
+    assert.match(skill, /trusted projects/);
   });
 });

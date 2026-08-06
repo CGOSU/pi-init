@@ -39,7 +39,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 
 - After the Architect produces a plan with at least two independent work packages, call `parallel_develop` to run multiple Development and Test Engineers concurrently.
 - Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; tasks touching the same file must remain sequential.
-- `parallel_develop` uses isolated Git worktrees and merges successful changes automatically; the main worktree must be clean, and workers must not commit or push.
+- `parallel_develop` runs only in trusted projects, uses isolated Git worktrees, and merges successful changes automatically; the status bar and tool progress show the started count (`x/y`); the main worktree must be clean, and workers must not commit or push. Workers use `--no-approve` and never promote project trust automatically.
 - Skip `parallel_develop` for one small work package and use a single Development and Test Engineer.
 
 ## Handoff Contract

@@ -39,7 +39,7 @@ description: {{SKILL_DESCRIPTION}}
 
 - 架构师完成规划且存在至少两个相互独立的工作包时，调用 `parallel_develop`，让多个开发测试工程师并行实现和测试。
 - 每个 `parallel_develop` 任务必须提供 `id`、`task` 和不重叠的 `files` 范围；同一文件上的任务必须串行。
-- `parallel_develop` 使用隔离 Git worktree，成功后自动合并修改；主工作区必须干净，开发测试工程师不得提交或推送。
+- `parallel_develop` 仅在受信任项目中运行，使用隔离 Git worktree，成功后自动合并修改；状态栏和工具进度显示已启动数量（`x/y`）；主工作区必须干净，开发测试工程师不得提交或推送。子代理使用 `--no-approve`，不会自动提升项目受信任级别。
 - 只有一个简单工作包时跳过 `parallel_develop`，直接由开发测试工程师处理。
 
 ## 交接要求

@@ -1,13 +1,10 @@
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile } from "node:fs/promises";
 import { resolve, basename, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
   CONFIG_DIR_NAME,
   withFileMutationQueue,
-  type AgentToolUpdateCallback,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
@@ -20,11 +17,8 @@ import {
   resolveRoleMode,
   resolveRoleModel,
 } from "../src/roles.js";
-import {
-  isPathAllowed,
-  MAX_PARALLEL_DEVELOPERS,
-  validateParallelTasks,
-} from "../src/parallel.js";
+import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
+import { runParallelDevelop } from "../src/parallel-runner.js";
 
 const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
@@ -40,10 +34,6 @@ const roleNameSchema = StringEnum(ROLE_NAMES, {
   description: "要切换的职责：architect、developer-test 或 docs-commit",
 });
 const switchRoleParameters = Type.Object({ role: roleNameSchema });
-const roleModeSchema = StringEnum(ROLE_MODES, {
-  description: "职责切换模式：auto、confirm 或 manual",
-});
-const roleModeParameters = Type.Object({ mode: roleModeSchema });
 const parallelTaskSchema = Type.Object({
   id: Type.String({ description: "唯一任务 ID" }),
   task: Type.String({ description: "开发测试任务和验收要求" }),
@@ -189,251 +179,13 @@ function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
   ctx.ui.notify(formatResult(result) + suffix, result.cancelled ? "warning" : "info");
 }
 
-function getPiInvocation(args: string[]) {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtualScript && existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] };
-  }
-
-  const executable = basename(process.execPath).toLowerCase();
-  if (!/^(node|bun)(\.exe)?$/.test(executable)) {
-    return { command: process.execPath, args };
-  }
-  return { command: process.platform === "win32" ? "pi.cmd" : "pi", args };
-}
-
-async function runGit(
-  pi: ExtensionAPI,
-  cwd: string,
-  args: string[],
-  signal?: AbortSignal,
-) {
-  const result = await pi.exec("git", args, { cwd, signal });
-  if (result.code !== 0) {
-    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-    throw new Error(`git ${args.join(" ")} 失败（退出码 ${result.code}）${output ? `：${output}` : ""}`);
-  }
-  return result.stdout;
-}
-
-function truncateText(value: string, maxBytes = 8000) {
-  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
-  let result = value.slice(0, maxBytes);
-  while (Buffer.byteLength(result, "utf8") > maxBytes) result = result.slice(0, -1);
-  return `${result}\n\n[输出已截断]`;
-}
-
-function parseWorkerOutput(stdout: string) {
-  let output = "";
-  let errorMessage = "";
-  let stopReason = "";
-
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    if (event.type === "error") {
-      errorMessage = String(event.errorMessage ?? event.message ?? "子代理返回错误");
-    }
-    const message = event.type === "message_end" ? event.message : undefined;
-    if (message?.role !== "assistant") continue;
-    const text = Array.isArray(message.content)
-      ? message.content
-          .filter((part: { type?: string }): part is { type: "text"; text: string } => part.type === "text")
-          .map((part: { text: string }) => part.text)
-          .join("")
-      : typeof message.content === "string"
-        ? message.content
-        : "";
-    if (text) output = text;
-    if (message.errorMessage) errorMessage = String(message.errorMessage);
-    if (message.stopReason) stopReason = String(message.stopReason);
-  }
-
-  return { output, errorMessage, stopReason };
-}
-
-async function runDeveloperWorker(
-  pi: ExtensionAPI,
-  repoRoot: string,
-  base: string,
-  tempRoot: string,
-  worktree: string,
-  plan: string,
-  task: { id: string; task: string; files: string[] },
-  target: { provider: string; model: string; thinkingLevel: string },
-  index: number,
-  signal: AbortSignal | undefined,
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-) {
-  const promptPath = join(tempRoot, `worker-${index + 1}.md`);
-  await writeFile(
-    promptPath,
-    [
-      "你是并行开发测试工程师。架构师已经完成规划；你只负责下面这个独立工作包。",
-      "必须在当前独立 worktree 内实现代码并运行相关测试。不要调用其他代理，不要 git commit，不要 git push。",
-      `只能修改以下文件或目录：${task.files.join(", ")}`,
-      "如果测试或工具产生了声明范围外的文件，清理它们；不要修改范围外的源码。",
-      "完成后用简短文字说明修改内容、测试命令和真实结果。",
-      "",
-      "## 架构规划",
-      plan,
-      "",
-      `## 工作包 ${task.id}`,
-      task.task,
-    ].join("\n"),
-    "utf8",
-  );
-
-  onUpdate?.({
-    content: [{ type: "text", text: `已启动 ${task.id}（${target.provider}/${target.model}:${target.thinkingLevel}）` }],
-    details: { status: "running", id: task.id },
-  });
-
-  const invocation = getPiInvocation([
-    "--mode",
-    "json",
-    "-p",
-    "--approve",
-    "--no-session",
-    "--no-extensions",
-    "--no-skills",
-    "--model",
-    `${target.provider}/${target.model}`,
-    "--thinking",
-    target.thinkingLevel,
-    "--append-system-prompt",
-    promptPath,
-    `Task: ${task.task}`,
-  ]);
-  const child = await pi.exec(invocation.command, invocation.args, { cwd: worktree, signal });
-  const parsed = parseWorkerOutput(child.stdout);
-  if (child.code !== 0 || child.killed || parsed.errorMessage || parsed.stopReason === "error" || parsed.stopReason === "aborted") {
-    const detail = parsed.errorMessage || child.stderr.trim() || parsed.output || "子代理未返回结果";
-    throw new Error(`任务 ${task.id} 失败：${detail}`);
-  }
-
-  await runGit(pi, worktree, ["add", "--all"], signal);
-  const changedFiles = (await runGit(pi, worktree, ["diff", "--name-only", "-z", base], signal))
-    .split("\0")
-    .filter(Boolean);
-  const unauthorized = changedFiles.filter((file) => !isPathAllowed(file, task.files));
-  if (unauthorized.length > 0) {
-    throw new Error(`任务 ${task.id} 修改了未声明范围：${unauthorized.join(", ")}`);
-  }
-
-  return {
-    id: task.id,
-    output: truncateText(parsed.output || "子代理未提供文字摘要"),
-    changedFiles,
-    patch: await runGit(pi, worktree, ["diff", "--binary", "--full-index", "--no-ext-diff", base], signal),
-  };
-}
-
-async function runParallelDevelop(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  planInput: string,
-  taskInput: unknown,
-  signal: AbortSignal | undefined,
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-) {
-  const plan = planInput.trim();
-  if (!plan) throw new Error("parallel_develop 缺少架构规划");
-  const tasks = validateParallelTasks(taskInput);
-  const target = resolveRoleModel(await readRoleConfig(ctx), "developer-test");
-  if (!ctx.modelRegistry.find(target.provider, target.model)) {
-    throw new Error(`开发测试职责配置的模型不存在：${target.provider}/${target.model}`);
-  }
-
-  const repoRoot = (await runGit(pi, ctx.cwd, ["rev-parse", "--show-toplevel"], signal)).trim();
-  const status = await runGit(pi, repoRoot, ["status", "--porcelain", "--untracked-files=all"], signal);
-  if (status.trim()) {
-    throw new Error("parallel_develop 要求主工作区干净；请先处理现有修改，再启动并行开发");
-  }
-  const base = (await runGit(pi, repoRoot, ["rev-parse", "HEAD"], signal)).trim();
-  const tempRoot = await mkdtemp(join(os.tmpdir(), "pi-init-parallel-"));
-  const worktrees: string[] = [];
-
-  try {
-    for (let index = 0; index < tasks.length; index += 1) {
-      const worktree = join(tempRoot, `worktree-${index + 1}`);
-      await runGit(pi, repoRoot, ["worktree", "add", "--detach", worktree, base], signal);
-      worktrees.push(worktree);
-    }
-
-    const settled = await Promise.allSettled(
-      tasks.map((task, index) =>
-        runDeveloperWorker(
-          pi,
-          repoRoot,
-          base,
-          tempRoot,
-          worktrees[index],
-          plan,
-          task,
-          target,
-          index,
-          signal,
-          onUpdate,
-        ),
-      ),
-    );
-    const results = settled.map((entry, index) =>
-      entry.status === "fulfilled"
-        ? { ...entry.value, ok: true as const }
-        : { id: tasks[index].id, ok: false as const, error: textOf(entry.reason), changedFiles: [], output: "", patch: "" },
-    );
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length > 0) {
-      throw new Error(
-        [
-          `并行开发失败：${failures.length}/${results.length} 个任务失败`,
-          ...failures.map((result) => `- ${result.id}: ${result.error}`),
-        ].join("\n"),
-      );
-    }
-
-    const currentStatus = await runGit(pi, repoRoot, ["status", "--porcelain", "--untracked-files=all"], signal);
-    const currentBase = (await runGit(pi, repoRoot, ["rev-parse", "HEAD"], signal)).trim();
-    if (currentStatus.trim() || currentBase !== base) {
-      throw new Error("主工作区在并行执行期间发生变化，已停止合并");
-    }
-
-    const patch = results.map((result) => result.patch).filter(Boolean).join("\n");
-    if (patch) {
-      const patchPath = join(tempRoot, "combined.patch");
-      await writeFile(patchPath, patch, "utf8");
-      const check = await pi.exec("git", ["apply", "--check", "--binary", patchPath], {
-        cwd: repoRoot,
-        signal,
-      });
-      if (check.code !== 0) {
-        throw new Error(`并行修改无法合并：${check.stderr.trim() || check.stdout.trim()}`);
-      }
-      await runGit(pi, repoRoot, ["apply", "--binary", patchPath], signal);
-    }
-
-    return { target, results };
-  } finally {
-    for (const worktree of worktrees.reverse()) {
-      await pi.exec("git", ["worktree", "remove", "--force", worktree], {
-        cwd: repoRoot,
-        timeout: 10000,
-      });
-    }
-    await rm(tempRoot, { recursive: true, force: true });
-  }
-}
-
 export default function initProjectExtension(pi: ExtensionAPI) {
-  let activeRole: string | undefined;
+  let activeRole: {
+    role: string;
+    provider: string;
+    model: string;
+    thinkingLevel: string;
+  } | undefined;
   let sessionModeOverride: string | undefined;
 
   async function applyRole(role: string, ctx: ExtensionContext) {
@@ -451,13 +203,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     pi.setThinkingLevel(
       target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0],
     );
-    activeRole = role;
     const result = {
       role,
       provider: target.provider,
       model: target.model,
       thinkingLevel: pi.getThinkingLevel(),
     };
+    activeRole = result;
     ctx.ui.setStatus(
       "pi-init-role",
       `${role}: ${target.provider}/${target.model} · ${result.thinkingLevel}`,
@@ -465,16 +217,26 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return result;
   }
 
-  async function currentRole(role: string, ctx: ExtensionContext) {
-    if (!activeRole || activeRole !== role || !ctx.model) {
+  function currentRole(role: string, ctx: ExtensionContext) {
+    const result = ctx.model
+      ? {
+          role,
+          provider: ctx.model.provider,
+          model: ctx.model.id,
+          thinkingLevel: pi.getThinkingLevel(),
+        }
+      : undefined;
+    if (
+      !activeRole ||
+      !result ||
+      activeRole.role !== role ||
+      activeRole.provider !== result.provider ||
+      activeRole.model !== result.model ||
+      activeRole.thinkingLevel !== result.thinkingLevel
+    ) {
       throw new Error(`当前为手动模式，请先执行 /role ${role}`);
     }
-    return {
-      role,
-      provider: ctx.model.provider,
-      model: ctx.model.id,
-      thinkingLevel: pi.getThinkingLevel(),
-    };
+    return result;
   }
 
   async function automaticRole(role: string, ctx: ExtensionContext) {
@@ -484,11 +246,15 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return { mode, requestedRole: role, result: await applyRole(role, ctx) };
     }
     if (mode === "manual") {
-      return { mode, requestedRole: role, result: await currentRole(role, ctx) };
+      return { mode, requestedRole: role, result: currentRole(role, ctx) };
     }
 
-    if (activeRole === role) {
-      return { mode, requestedRole: role, result: await currentRole(role, ctx) };
+    if (activeRole?.role === role) {
+      try {
+        return { mode, requestedRole: role, result: currentRole(role, ctx) };
+      } catch {
+        // The user changed the model or thinking level; confirm the role again.
+      }
     }
     if (!ctx.hasUI) {
       throw new Error(`职责切换模式为 confirm，但当前环境无法确认；请先执行 /role ${role} 或 /role-mode auto`);
@@ -630,12 +396,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "parallel_develop",
     label: "Parallel Development",
     description:
-      `Run ${MAX_PARALLEL_DEVELOPERS} or fewer independent development/test workers concurrently with isolated Git worktrees, using the developer-test role model, then merge their non-overlapping patches into the main worktree. The main worktree must be clean; workers do not commit or push.`,
+      `Run ${MAX_PARALLEL_DEVELOPERS} or fewer independent development/test workers concurrently with isolated Git worktrees, using the active developer-test role model, then merge their non-overlapping patches into the main worktree. Only run in trusted projects; the main worktree must be clean, and workers do not commit or push.`,
     promptSnippet: "Run independent development and test work packages concurrently after architecture planning",
     promptGuidelines: [
       "Use parallel_develop only after an architecture plan has split the work into at least two independent packages.",
       "Each parallel_develop task must declare non-overlapping files; keep tasks that touch the same file sequential.",
-      "parallel_develop uses isolated worktrees and merges successful patches into the main worktree; inspect the merged diff and run the full test command afterward.",
+      "parallel_develop runs only in trusted projects, uses isolated worktrees, and merges successful patches into the main worktree; inspect the merged diff and run the full test command afterward.",
     ],
     parameters: parallelDevelopParameters,
     executionMode: "sequential",
@@ -643,14 +409,35 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "并行开发已取消。" }], details: {} };
       }
+      if (!ctx.isProjectTrusted()) {
+        throw new Error("parallel_develop 仅允许在受信任项目中运行；请先信任当前项目");
+      }
       const selection = await automaticRole("developer-test", ctx);
       const role = selection.result;
       if (role.role !== "developer-test") {
         throw new Error("parallel_develop 需要 developer-test 职责；请执行 /role developer-test 后重试");
       }
-      const result = await runParallelDevelop(pi, ctx, params.plan, params.tasks, signal, onUpdate);
+      const total = params.tasks.length;
+      ctx.ui.setStatus("pi-init-parallel", `并行子代理：准备启动 0/${total}`);
+      const result = await runParallelDevelop({
+        exec: pi.exec.bind(pi),
+        cwd: ctx.cwd,
+        planInput: params.plan,
+        taskInput: params.tasks,
+        target: {
+          provider: role.provider,
+          model: role.model,
+          thinkingLevel: role.thinkingLevel,
+        },
+        signal,
+        onUpdate,
+        onStarted: ({ started: count, total: taskTotal, id }: { started: number; total: number; id: string }) => {
+          ctx.ui.setStatus("pi-init-parallel", `并行子代理：已启动 ${count}/${taskTotal}（${id}）`);
+        },
+      });
+      ctx.ui.setStatus("pi-init-parallel", `并行子代理：已完成 ${result.results.length}/${total}`);
       const lines = [
-        `已完成 ${result.results.length} 个并行开发测试任务。`,
+        `已启动并完成 ${result.results.length}/${total} 个并行开发测试任务。`,
         `模型：${role.provider}/${role.model}，推理强度：${role.thinkingLevel}`,
         ...result.results.map(
           (worker) => `- ${worker.id}：${worker.changedFiles.length > 0 ? worker.changedFiles.join(", ") : "无文件修改"}\n  ${worker.output}`,
