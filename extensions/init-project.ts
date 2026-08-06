@@ -280,7 +280,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "switch_role",
     label: "Switch Role",
     description:
-      "Switch the active Pi model and reasoning level for a responsibility. Reads trusted project overrides from .pi/role-models.json; defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-terra:high, docs-commit=openai-codex/gpt-5.6-luna:medium.",
+      "Switch the active Pi model and reasoning level for a responsibility. Reads trusted project overrides from .pi/role-models.json; defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
     promptSnippet: "Switch model and reasoning level for architect, developer-test, or docs-commit work",
     promptGuidelines: [
       "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
