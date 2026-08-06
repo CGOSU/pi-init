@@ -13,6 +13,10 @@ This file defines the long-term AI coding rules for this project. Before startin
 
 {{PROJECT_DESCRIPTION}}
 
+## Runtime Environment and Command Conventions
+
+{{ENVIRONMENT_CONTEXT}}
+
 ## Common Commands
 
 - Test: `{{TEST_COMMAND}}`

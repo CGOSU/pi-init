@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { createScaffold } from "../src/scaffold.js";
+import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_MODELS,
@@ -46,6 +46,19 @@ function assertSkillMatchesRoleConfig(skill, config) {
   }
 }
 
+test("运行环境说明按平台生成", () => {
+  const windows = formatEnvironmentInstructions("zh-CN", { platform: "win32", arch: "arm64" });
+  assert.match(windows, /Windows \(`win32`\)，CPU 架构：`arm64`/);
+  assert.match(windows, /`where\.exe`/);
+  assert.match(windows, /`.cmd` shim/);
+  assert.match(windows, /Linux-only 的 `which`/);
+
+  const linux = formatEnvironmentInstructions("en", { platform: "linux", arch: "x64" });
+  assert.match(linux, /Linux \(`linux`\), CPU architecture: `x64`/);
+  assert.match(linux, /POSIX shells/);
+  assert.doesNotMatch(linux, /where\.exe/);
+});
+
 test("生成默认文件结构和动态 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "example-app");
@@ -66,6 +79,13 @@ test("生成默认文件结构和动态 Skill", async () => {
       await readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8"),
     );
     assert.match(agents, /^# Example App AI 协作指南/);
+    assert.match(agents, /## 运行环境与命令约定/);
+    assert.match(agents, new RegExp("`" + process.platform + "`"));
+    assert.match(agents, new RegExp("`" + process.arch + "`"));
+    if (process.platform === "win32") {
+      assert.match(agents, /`where\.exe`/);
+      assert.match(agents, /Linux-only 的 `which`/);
+    }
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
     assert.doesNotMatch(agents, /知识库地址远程地址/);
@@ -469,6 +489,8 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
     const skill = await readFile(path.join(target, ".pi/skills/mall-app/SKILL.md"), "utf8");
     assert.match(agents, /## Project Purpose/);
+    assert.match(agents, /## Runtime Environment and Command Conventions/);
+    assert.match(agents, new RegExp("`" + process.platform + "`"));
     assert.match(agents, /- Test: `npm test`/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);

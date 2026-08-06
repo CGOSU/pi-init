@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-06：在 AGENTS.md 写入初始化时的宿主环境快照
+
+- 决定：`init_project` 和 `/init-project` 在生成的中英文 `AGENTS.md` 中记录 `process.platform`、`process.arch` 及平台相关命令约定；不把这类规则放进项目 Skill。
+- 原因：`AGENTS.md` 是 Pi 默认加载的长期项目上下文，Skill 只在任务匹配后按需加载；系统信息应先于任务路由生效。
+- 约束：这是初始化宿主环境的快照，不承诺项目部署目标；工具仍需在实际运行环境重新探测命令。跨项目固定规则使用 Pi 全局 `~/.pi/agent/AGENTS.md`，而不是 `settings.json`。
+
 ### 2026-08-04：保留项目级 Skill 作为默认产物
 
 - 决定：默认生成 `AGENTS.md`、四个项目记忆文档和 `.pi/skills/<slug>/SKILL.md`。

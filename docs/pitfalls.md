@@ -48,3 +48,10 @@
 - 根因：Pi 的 `--approve` 会覆盖非交互模式默认的项目信任决策。
 - 修复：父扩展要求当前项目已受信任，子代理改用 `--no-approve`。
 - 验证：见 `docs/session-log.md` 中 2026-08-06 的实际验证记录。
+
+### 2026-08-06：Windows 下 CLI 查找成功但直接启动仍可能失败
+
+- 现象：`where.exe agent-browser` 能找到全局安装的 CLI，但依赖 Linux `which`、直接启动无扩展名 shim 或假设 POSIX 路径的工具仍提示未安装或无法执行。
+- 根因：Windows npm 全局 CLI 同时可能存在 POSIX shell 脚本和 `.cmd` shim；Pi 扩展的 `pi.exec` 是直接启动进程，不会替工具经过 Bash 解析。
+- 修复：生成的 `AGENTS.md` 和全局宿主规则要求先用 `where.exe`/`command -v` 复核，并提醒扩展按 Windows 入口启动；第三方工具本身仍需采用平台兼容的检测和执行逻辑。
+- 验证：`where.exe agent-browser` 返回两个入口，`cmd.exe` 启动 `agent-browser --version` 成功；当前 browser 工具仍返回未安装，待其上游修复 Windows 检测/启动链。

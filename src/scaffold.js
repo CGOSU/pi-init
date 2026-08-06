@@ -7,6 +7,17 @@ import { resolveRoleConfig } from "./roles.js";
 const TEMPLATE_ROOT = fileURLToPath(new URL("../templates/", import.meta.url));
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SUPPORTED_LANGUAGES = new Set(["zh-CN", "en"]);
+const PLATFORM_NAMES = {
+  aix: "AIX",
+  android: "Android",
+  darwin: "macOS",
+  freebsd: "FreeBSD",
+  haiku: "Haiku",
+  linux: "Linux",
+  openbsd: "OpenBSD",
+  sunos: "SunOS",
+  win32: "Windows",
+};
 
 const TEMPLATE_FILES = [
   ["AGENTS.md", () => "AGENTS.md"],
@@ -54,6 +65,55 @@ function resolveLanguage(value = "zh-CN") {
     throw new Error("模板语言仅支持 zh-CN 或 en");
   }
   return value;
+}
+
+export function formatEnvironmentInstructions(
+  language = "zh-CN",
+  { platform = process.platform, arch = process.arch } = {},
+) {
+  const platformName = PLATFORM_NAMES[platform] ?? platform;
+  const host =
+    language === "en"
+      ? `${platformName} (\`${platform}\`), CPU architecture: \`${arch}\``
+      : `${platformName} (\`${platform}\`)，CPU 架构：\`${arch}\``;
+  const commandGuidance =
+    platform === "win32"
+      ? language === "en"
+        ? [
+            "- Pi's built-in `bash` tool normally runs through Bash on Windows; extensions using `pi.exec` start processes directly and do not pass through Bash.",
+            "- Prefer `where.exe` or the current shell's `command -v` for command discovery; do not use Linux-only `which` as the only check.",
+            "- npm global CLIs may be exposed through a Windows `.cmd` shim; choose the platform-appropriate executable entry when spawning them directly.",
+            "- If a tool reports a CLI as missing, verify it with `where.exe <command>` (and its `.cmd` shim) before installing anything.",
+          ]
+        : [
+            "- Pi 的内置 `bash` 工具在 Windows 上通常通过 Bash 执行；扩展使用 `pi.exec` 时是直接启动进程，不会经过 Bash。",
+            "- 查找命令优先使用 `where.exe` 或当前 shell 支持的 `command -v`；不要把 Linux-only 的 `which` 作为唯一检查。",
+            "- npm 全局 CLI 可能通过 Windows `.cmd` shim 暴露；直接启动时要选择当前平台可用的执行入口。",
+            "- 如果工具提示 CLI 不存在，先用 `where.exe <command>`（以及对应的 `.cmd` shim）核实，再决定是否安装。",
+          ]
+      : language === "en"
+        ? [
+            "- Use commands supported by the current shell and project toolchain; do not assume a different operating system, shell, or package manager.",
+            "- Use the current shell's standard command-discovery mechanism (usually `command -v` on POSIX shells); do not hard-code executable paths.",
+          ]
+        : [
+            "- 使用当前 shell 和项目工具链支持的命令；不要假定另一种操作系统、shell 或包管理器。",
+            "- 使用当前 shell 的标准方式查找命令（POSIX shell 通常为 `command -v`）；不要硬编码可执行文件路径。",
+          ];
+
+  if (language === "en") {
+    return [
+      `- Host platform detected at initialization: ${host}.`,
+      "- This is a snapshot of the Pi host, not necessarily the project's deployment target; if execution moves to WSL, a container, a remote host, or another environment, re-detect and follow that environment.",
+      ...commandGuidance,
+    ].join("\n");
+  }
+
+  return [
+    `- 初始化时检测到的宿主系统：${host}。`,
+    "- 这是运行 Pi 的宿主环境快照，不一定是项目部署目标；如果实际执行发生在 WSL、容器、远程主机或其他环境中，应重新检测并以当前环境为准。",
+    ...commandGuidance,
+  ].join("\n");
 }
 
 function escapeInlineCode(value) {
@@ -123,6 +183,7 @@ export async function createScaffold(targetDir, options = {}) {
     PROJECT_DESCRIPTION: projectDescription,
     SKILL_DESCRIPTION: JSON.stringify(skillDescription),
     TEST_COMMAND: escapeInlineCode(testCommand),
+    ENVIRONMENT_CONTEXT: formatEnvironmentInstructions(language),
     ARCHITECT_PROVIDER: roleConfig.architect.provider,
     ARCHITECT_MODEL: roleConfig.architect.model,
     ARCHITECT_THINKING_LEVEL: roleConfig.architect.thinkingLevel,

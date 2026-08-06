@@ -538,11 +538,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "init_project",
     label: "Initialize Project",
     description:
-      "Generate AGENTS.md, four docs memory files, .pi/role-models.json, and a role-routing .pi/skills/<slug>/SKILL.md in a project. The Skill defines technical level, model type, and Pi reasoning level for architecture, development/testing, and documentation/commit work. Existing generated files may be overwritten after confirmation.",
+      "Generate AGENTS.md, four docs memory files, .pi/role-models.json, and a role-routing .pi/skills/<slug>/SKILL.md in a project. AGENTS.md also records the host platform and command conventions detected during initialization. The Skill defines technical level, model type, and Pi reasoning level for architecture, development/testing, and documentation/commit work. Existing generated files may be overwritten after confirmation.",
     promptSnippet: "Initialize project context files and an intelligent responsibility-routing Skill",
     promptGuidelines: [
       "Use init_project when the user asks to initialize a project with AI Coding collaboration context.",
       "Before calling init_project, inspect available project metadata and provide description and testCommand when known.",
+      "init_project records the current Pi host platform in AGENTS.md; if the target runs in WSL, a container, or a remote environment, mention that difference and update the generated context.",
       "Use init_project with dryRun=true first when the target project may already contain generated files.",
     ],
     parameters: initProjectParameters,

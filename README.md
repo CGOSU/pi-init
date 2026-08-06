@@ -27,6 +27,10 @@ pi --no-extensions -e ./extensions/init-project.ts
 
 然后在 Pi 中执行 `/init-project`。命令会询问项目名称、语言、项目定位、测试命令和 Skill 名称，并在写入前确认。
 
+生成的 `AGENTS.md` 会记录初始化时检测到的宿主系统、CPU 架构和对应的命令约定；如果实际执行转移到 WSL、容器或远程主机，应以当前环境重新检测为准。
+
+希望所有项目都遵守同一套主机规则时，使用 Pi 的全局上下文文件 `~/.pi/agent/AGENTS.md`；`settings.json` 主要用于配置，不适合承载这类自然语言指令。
+
 也可以安装当前目录作为 Pi package：
 
 ```bash

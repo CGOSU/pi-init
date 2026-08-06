@@ -13,6 +13,10 @@
 
 {{PROJECT_DESCRIPTION}}
 
+## 运行环境与命令约定
+
+{{ENVIRONMENT_CONTEXT}}
+
 ## 常用命令
 
 - 测试：`{{TEST_COMMAND}}`
