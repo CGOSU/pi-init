@@ -17,6 +17,7 @@ import {
   resolveRoleModel,
 } from "../src/roles.js";
 import {
+  DEFAULT_PARALLEL_CONCURRENCY,
   isPathAllowed,
   MAX_PARALLEL_DEVELOPERS,
   validateParallelTasks,
@@ -271,15 +272,29 @@ test("并行开发任务要求独立且受限的文件范围", () => {
     /不支持通配符/,
   );
   assert.equal(MAX_PARALLEL_DEVELOPERS, 4);
+  assert.equal(DEFAULT_PARALLEL_CONCURRENCY, 2);
 });
 
-test("子代理 JSON 事件流会实时解析工具活动和模型摘要", async () => {
+test("子代理 JSON 事件流会实时解析工具活动、摘要和指标", async () => {
   await withTempDirectory(async (directory) => {
+    const retry = { type: "auto_retry_start", attempt: 1, maxAttempts: 1 };
     const event = {
       type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "完成摘要" }] },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "完成摘要" }],
+        stopReason: "stop",
+        usage: {
+          input: 10,
+          output: 20,
+          cacheRead: 3,
+          cacheWrite: 4,
+          totalTokens: 30,
+          cost: { total: 0.05 },
+        },
+      },
     };
-    const script = `console.log(JSON.stringify(${JSON.stringify(event)}))`;
+    const script = [retry, event].map((value) => `console.log(JSON.stringify(${JSON.stringify(value)}))`).join(";");
     const events = [];
     const result = await spawnPiWorker(
       { command: process.execPath, args: ["-e", script] },
@@ -288,7 +303,18 @@ test("子代理 JSON 事件流会实时解析工具活动和模型摘要", async
 
     assert.equal(result.code, 0);
     assert.equal(result.summary, "完成摘要");
-    assert.deepEqual(events, [event]);
+    assert.deepEqual(events, [retry, event]);
+    assert.deepEqual(result.metrics, {
+      elapsedMs: 0,
+      turns: 1,
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 4,
+      totalTokens: 30,
+      cost: 0.05,
+      autoRetries: 1,
+    });
   });
 });
 
@@ -372,6 +398,53 @@ test("并行开发创建隔离 worktree 并合并独立修改", async () => {
   });
 });
 
+test("并行开发默认限制同时运行 worker 数量并返回阶段耗时", async () => {
+  await withTempDirectory(async (directory) => {
+    await createGitFixture(directory);
+    let active = 0;
+    let maxActive = 0;
+    const result = await runParallelDevelop({
+      exec: fakeParallelExec(),
+      cwd: directory,
+      planInput: "实现三个互不冲突的文件",
+      taskInput: [
+        { id: "a", task: "task-a", files: ["a.txt"] },
+        { id: "b", task: "task-b", files: ["b.txt"] },
+        { id: "c", task: "task-c", files: ["c.txt"] },
+      ],
+      target: { provider: "test", model: "model", thinkingLevel: "off" },
+      heartbeatMs: 0,
+      spawnWorker: async (invocation, options) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        const task = invocation.args.at(-1);
+        const file = `${task.at(-1)}.txt`;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await writeFile(path.join(options.cwd, file), `${file}\n`, "utf8");
+        active -= 1;
+        return {
+          stdout: "",
+          stderr: "",
+          summary: "worker complete",
+          code: 0,
+          killed: false,
+          aborted: false,
+          timedOut: false,
+          metrics: { turns: 1, outputTokens: 5 },
+        };
+      },
+    });
+
+    assert.equal(maxActive, DEFAULT_PARALLEL_CONCURRENCY);
+    assert.equal(result.results.length, 3);
+    assert.ok(result.metrics.setupMs >= 0);
+    assert.ok(result.metrics.workersMs >= 20);
+    assert.ok(result.metrics.mergeMs >= 0);
+    assert.ok(result.metrics.totalMs >= result.metrics.workersMs);
+    assert.ok(result.tasks.every((task) => task.metrics.elapsedMs >= 20));
+  });
+});
+
 test("并行开发报告实时事件、心跳并自动重试基础设施错误", async () => {
   await withTempDirectory(async (directory) => {
     await createGitFixture(directory);
@@ -387,9 +460,11 @@ test("并行开发报告实时事件、心跳并自动重试基础设施错误",
           options.onEvent?.({ type: "auto_retry_start", attempt: 1, maxAttempts: 1 });
           return {
             stdout: "",
-            stderr: "429 too many requests",
+            stderr: "",
             summary: "",
-            code: 1,
+            stopReason: "error",
+            errorMessage: "terminated",
+            code: 0,
             killed: false,
             aborted: false,
             timedOut: false,

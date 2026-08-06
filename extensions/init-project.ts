@@ -84,6 +84,12 @@ function textOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatElapsed(milliseconds: number) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 function formatParallelStatus(update: any) {
   const details = update.details;
   if (!details || typeof details !== "object" || !Array.isArray((details as { tasks?: unknown }).tasks)) {
@@ -576,12 +582,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "parallel_develop",
     label: "Parallel Development",
     description:
-      `Run ${MAX_PARALLEL_DEVELOPERS} or fewer independent development/test workers concurrently with isolated Git worktrees, using the active developer-test role model, then merge their non-overlapping patches into the main worktree. Only run in trusted projects; the main worktree must be clean, and workers do not commit or push.`,
+      `Run ${MAX_PARALLEL_DEVELOPERS} or fewer independent development/test workers with isolated Git worktrees, using the active developer-test role model; two workers run concurrently by default, then successful non-overlapping patches are merged into the main worktree. Only run in trusted projects; the main worktree must be clean, and workers do not commit or push.`,
     promptSnippet: "Run independent development and test work packages concurrently after architecture planning",
     promptGuidelines: [
-      "Use parallel_develop only after an architecture plan has split the work into at least two independent packages.",
-      "Each parallel_develop task must declare non-overlapping files; keep tasks that touch the same file sequential.",
-      "parallel_develop runs only in trusted projects, uses isolated worktrees, and merges successful patches into the main worktree; inspect the merged diff and run the full test command afterward.",
+      "Use parallel_develop only after an architecture plan has split the work into at least two truly independent, contract-frozen packages that are large enough to run for a while; use one worker for small or semantically coupled work.",
+      "Each parallel_develop task must declare non-overlapping files; non-overlapping files are not sufficient when tasks share a DOM, API, or test contract. The runner accepts up to four tasks and defaults to two concurrent workers.",
+      "parallel_develop runs only in trusted projects, uses isolated worktrees, throttles high-frequency progress updates, retries transient transport failures such as terminated once, and merges successful patches into the main worktree; inspect the metrics and merged diff, then run the full test command afterward.",
     ],
     parameters: parallelDevelopParameters,
     executionMode: "sequential",
@@ -626,8 +632,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           `已启动并完成 ${result.results.length}/${total} 个并行开发测试任务。`,
           `模型：${role.provider}/${role.model}，推理强度：${role.thinkingLevel}`,
           ...result.results.map(
-            (worker) => `- ${worker.id}：${worker.changedFiles.length > 0 ? worker.changedFiles.join(", ") : "无文件修改"}\n  ${worker.output}`,
+            (worker) =>
+              `- ${worker.id}：${worker.changedFiles.length > 0 ? worker.changedFiles.join(", ") : "无文件修改"}` +
+              `（${formatElapsed(worker.metrics?.elapsedMs ?? 0)}，${worker.metrics?.turns ?? 0} turns，` +
+              `${worker.metrics?.totalTokens ?? 0} tokens，自动重试 ${worker.metrics?.autoRetries ?? 0} 次）\n  ${worker.output}`,
           ),
+          `阶段耗时：准备 ${formatElapsed(result.metrics?.setupMs ?? 0)} · worker ${formatElapsed(result.metrics?.workersMs ?? 0)} · 合并 ${formatElapsed(result.metrics?.mergeMs ?? 0)}`,
           "请检查合并后的 diff，并运行项目完整测试。",
         ];
         return {
@@ -639,7 +649,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             model: role.model,
             thinkingLevel: role.thinkingLevel,
             tasks: result.tasks,
-            results: result.results.map(({ id, changedFiles, output }) => ({ id, changedFiles, output })),
+            metrics: result.metrics,
+            results: result.results.map(({ id, changedFiles, output, metrics }) => ({
+              id,
+              changedFiles,
+              output,
+              metrics,
+            })),
           },
         };
       } catch (error) {

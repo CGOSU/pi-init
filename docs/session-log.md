@@ -87,6 +87,16 @@
 - 验证：`git diff --check` 和 `node --check src/roles.js` 通过。
 - 遗留问题：暂无。
 
+### 2026-08-06：并行子代理性能和传输错误处理优化
+
+- 完成内容：默认并发从任务数上限调整为 2，超过并发数的任务排队；高频模型进度更新按 250ms 节流。
+- 完成内容：修正终态 worker 耗时统计，增加每个 worker 及准备、worker、合并阶段的耗时、turn/token/cache/cost/自动重试指标。
+- 完成内容：识别子代理 JSON 中 `stopReason: error`，将 `terminated` 等传输错误交给已有基础设施重试链路，避免退出码为 0 时误判为成功。
+- 验证：`npm test`，15 项测试全部通过。
+- 验证：`node --check src/parallel-runner.js`、`node --check src/parallel.js` 和 `git diff --check` 通过。
+- 验证：RPC 命令发现成功，`parallel_develop` 扩展加载正常。
+- 遗留问题：尚未进行真实 LLM 子代理端到端 A/B 性能测试；传输协议仍由 Pi 全局设置控制。
+
 ### 2026-08-06：并行子代理实时可观察性和故障接管
 
 - 完成内容：worker 改用 Pi JSON 事件流，实时上报模型输出、工具调用、任务状态、耗时和心跳；主界面状态栏显示完成/运行/失败任务及当前活动。

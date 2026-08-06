@@ -4,11 +4,47 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { basename, join } from "node:path";
 
-import { isPathAllowed, validateParallelTasks } from "./parallel.js";
+import {
+  DEFAULT_PARALLEL_CONCURRENCY,
+  isPathAllowed,
+  validateParallelTasks,
+} from "./parallel.js";
 
 export const DEFAULT_WORKER_TIMEOUT_MS = 15 * 60 * 1000;
 export const WORKER_RETRY_LIMIT = 1;
+export const PROGRESS_THROTTLE_MS = 250;
 const MAX_CAPTURED_OUTPUT_BYTES = 256 * 1024;
+
+function emptyWorkerMetrics() {
+  return {
+    elapsedMs: 0,
+    turns: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    cost: 0,
+    autoRetries: 0,
+  };
+}
+
+function addWorkerMetrics(target, source) {
+  if (!source) return target;
+  for (const key of [
+    "turns",
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "totalTokens",
+    "cost",
+    "autoRetries",
+  ]) {
+    target[key] += Number(source[key] ?? 0);
+  }
+  return target;
+}
 
 function textOf(error) {
   return error instanceof Error ? error.message : String(error);
@@ -88,7 +124,7 @@ function formatToolActivity(event) {
 }
 
 function isTransientFailure(value) {
-  return /(?:429|502|503|504|rate\s*limit|too\s*many\s*requests|timeout|timed\s*out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|network|fetch failed|temporar(?:y|ily)|socket)/i.test(
+  return /(?:429|502|503|504|rate\s*limit|too\s*many\s*requests|timeout|timed\s*out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|network|fetch failed|terminated|temporar(?:y|ily)|socket)/i.test(
     value,
   );
 }
@@ -106,13 +142,19 @@ function formatElapsed(milliseconds) {
 }
 
 function snapshotTaskStates(states, now = Date.now()) {
+  const terminal = new Set(["completed", "failed", "cancelled"]);
   return states.map((state) => ({
     id: state.id,
     status: state.status,
     attempt: state.attempt,
     current: state.current,
-    elapsedMs: state.startedAt ? now - state.startedAt : state.elapsedMs,
+    elapsedMs: terminal.has(state.status)
+      ? state.elapsedMs
+      : state.startedAt
+        ? now - state.startedAt
+        : state.elapsedMs,
     lastActivityAt: state.lastActivityAt,
+    metrics: { ...state.metrics, elapsedMs: terminal.has(state.status) ? state.elapsedMs : undefined },
     ...(state.error ? { error: state.error } : {}),
   }));
 }
@@ -137,6 +179,47 @@ function emitProgress(onUpdate, states, status = overallStatus(states), extra = 
     content: [{ type: "text", text: `并行开发：${finished}/${tasks.length} 完成 · ${running} 运行${activeText}` }],
     details: { status, tasks, ...extra },
   });
+}
+
+function createProgressReporter(onUpdate, states, intervalMs = PROGRESS_THROTTLE_MS) {
+  let lastEmittedAt = 0;
+  let timer;
+  let pending;
+
+  const flush = () => {
+    timer = undefined;
+    if (!pending) return;
+    const next = pending;
+    pending = undefined;
+    lastEmittedAt = Date.now();
+    emitProgress(onUpdate, states, next.status, next.extra);
+  };
+
+  const report = (status = overallStatus(states), extra = {}, force = false) => {
+    if (!onUpdate) return;
+    const now = Date.now();
+    if (force || lastEmittedAt === 0 || now - lastEmittedAt >= intervalMs) {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      pending = undefined;
+      lastEmittedAt = now;
+      emitProgress(onUpdate, states, status, extra);
+      return;
+    }
+
+    pending = { status, extra };
+    if (!timer) {
+      timer = setTimeout(flush, intervalMs - (now - lastEmittedAt));
+      timer.unref?.();
+    }
+  };
+
+  report.flush = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    flush();
+  };
+  return report;
 }
 
 function parseJsonLines(buffer, onEvent) {
@@ -177,6 +260,9 @@ export async function spawnPiWorker(invocation, { cwd, signal, timeout, onEvent 
     let stdoutBuffer = "";
     let stderrBuffer = "";
     let summary = "";
+    let stopReason;
+    let errorMessage;
+    const metrics = emptyWorkerMetrics();
     const stdoutChunks = [];
     const capturedStdout = { bytes: 0 };
     const capturedStderr = { bytes: 0 };
@@ -201,6 +287,9 @@ export async function spawnPiWorker(invocation, { cwd, signal, timeout, onEvent 
         stdout: stdoutChunks.join(""),
         stderr: stderrBuffer,
         summary,
+        stopReason,
+        errorMessage,
+        metrics,
         code: code ?? 0,
         killed,
         aborted,
@@ -228,8 +317,24 @@ export async function spawnPiWorker(invocation, { cwd, signal, timeout, onEvent 
     }
 
     handleEvent = (event) => {
+      if (event.type === "auto_retry_start") {
+        metrics.autoRetries += 1;
+      }
       if (event.type === "message_end" && event.message?.role === "assistant") {
-        summary = extractMessageText(event.message) || summary;
+        const message = event.message;
+        summary = extractMessageText(message) || summary;
+        stopReason = message.stopReason ?? stopReason;
+        errorMessage = message.errorMessage ?? errorMessage;
+        metrics.turns += 1;
+        const usage = message.usage;
+        if (usage) {
+          metrics.inputTokens += Number(usage.input ?? 0);
+          metrics.outputTokens += Number(usage.output ?? 0);
+          metrics.cacheReadTokens += Number(usage.cacheRead ?? 0);
+          metrics.cacheWriteTokens += Number(usage.cacheWrite ?? 0);
+          metrics.totalTokens += Number(usage.totalTokens ?? 0);
+          metrics.cost += Number(usage.cost?.total ?? 0);
+        }
       }
       onEvent?.(event);
     };
@@ -298,10 +403,11 @@ async function runDeveloperWorker(
   states,
   signal,
   workerTimeoutMs,
-  onUpdate,
+  reportProgress,
   onStarted,
 ) {
   const state = states[index];
+  const metrics = emptyWorkerMetrics();
   const promptPath = join(tempRoot, `worker-${index + 1}.md`);
   await writeFile(
     promptPath,
@@ -329,7 +435,7 @@ async function runDeveloperWorker(
     state.current = attempt === 1 ? "启动子代理" : `基础设施错误，自动重试 ${attempt - 1}/${WORKER_RETRY_LIMIT}`;
     state.startedAt ??= Date.now();
     state.lastActivityAt = Date.now();
-    emitProgress(onUpdate, states);
+    reportProgress(undefined, {}, true);
     if (attempt === 1) {
       const started = ++progress.started;
       onStarted?.({ started, total, id: task.id });
@@ -365,11 +471,13 @@ async function runDeveloperWorker(
         if (activity) {
           state.current = activity;
           state.lastActivityAt = Date.now();
-          emitProgress(onUpdate, states);
+          reportProgress(undefined, {}, event.type !== "message_update");
         }
       },
     });
     output = child.summary || child.stdout || "";
+    addWorkerMetrics(metrics, child.metrics);
+    state.metrics = { ...metrics };
     await writeWorkerLogs(tempRoot, index, attempt, child);
 
     if (child.aborted || signal?.aborted) {
@@ -384,6 +492,12 @@ async function runDeveloperWorker(
         category: "infrastructure",
         retryable: true,
       });
+    } else if (child.stopReason === "error") {
+      const detail = child.errorMessage || child.stderr.trim() || output.trim() || "子代理模型请求失败";
+      lastError = createError(`任务 ${task.id} 失败：${truncateText(detail)}`, {
+        category: isTransientFailure(detail) ? "infrastructure" : "code",
+        retryable: isTransientFailure(detail),
+      });
     } else if (child.code !== 0 || child.killed) {
       const detail = child.stderr.trim() || output.trim() || "子代理未返回结果";
       lastError = createError(`任务 ${task.id} 失败：${truncateText(detail)}`, {
@@ -394,7 +508,7 @@ async function runDeveloperWorker(
       state.status = "validating";
       state.current = "校验修改范围";
       state.lastActivityAt = Date.now();
-      emitProgress(onUpdate, states);
+      reportProgress(undefined, {}, true);
       await runGit(exec, worktree, ["add", "--all"], signal);
       const changedFiles = (await runGit(
         exec,
@@ -414,12 +528,15 @@ async function runDeveloperWorker(
         state.status = "completed";
         state.current = `完成，${changedFiles.length} 个文件`;
         state.elapsedMs = state.startedAt ? Date.now() - state.startedAt : 0;
+        metrics.elapsedMs = state.elapsedMs;
+        state.metrics = { ...metrics };
         state.lastActivityAt = Date.now();
-        emitProgress(onUpdate, states);
+        reportProgress(undefined, {}, true);
         return {
           id: task.id,
           output: truncateText(output || "子代理未提供文字摘要"),
           changedFiles,
+          metrics: { ...metrics },
           patch: await runGit(exec, worktree, ["diff", "--binary", "--full-index", "--no-ext-diff", base], signal),
           category: "completed",
         };
@@ -431,17 +548,41 @@ async function runDeveloperWorker(
     if (lastError.retryable && attempt <= WORKER_RETRY_LIMIT && !signal?.aborted) {
       state.status = "retrying";
       state.current = `基础设施错误，准备自动重试 ${attempt}/${WORKER_RETRY_LIMIT}`;
-      emitProgress(onUpdate, states);
+      reportProgress(undefined, {}, true);
       continue;
     }
 
     state.status = lastError.category === "cancelled" ? "cancelled" : "failed";
+    state.elapsedMs = state.startedAt ? Date.now() - state.startedAt : 0;
+    metrics.elapsedMs = state.elapsedMs;
+    state.metrics = { ...metrics };
     state.current = `${lastError.category === "infrastructure" ? "基础设施错误" : "任务失败"}：${truncateText(textOf(lastError), 160)}`;
-    emitProgress(onUpdate, states);
+    reportProgress(undefined, {}, true);
     throw lastError;
   }
 
   throw lastError ?? createError(`任务 ${task.id} 失败`, { category: "code", retryable: false });
+}
+
+async function mapWithConcurrency(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      try {
+        results[index] = { status: "fulfilled", value: await fn(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 export async function runParallelDevelop({
@@ -456,7 +597,9 @@ export async function runParallelDevelop({
   spawnWorker = spawnPiWorker,
   heartbeatMs = 5000,
   workerTimeoutMs = DEFAULT_WORKER_TIMEOUT_MS,
+  concurrency = DEFAULT_PARALLEL_CONCURRENCY,
 }) {
+  const runStartedAt = Date.now();
   const plan = planInput.trim();
   if (!plan) throw new Error("parallel_develop 缺少架构规划");
   const tasks = validateParallelTasks(taskInput);
@@ -477,11 +620,14 @@ export async function runParallelDevelop({
     startedAt: undefined,
     elapsedMs: 0,
     lastActivityAt: Date.now(),
+    metrics: emptyWorkerMetrics(),
     error: undefined,
   }));
   let preserveFailureArtifacts = false;
   let heartbeat;
-  emitProgress(onUpdate, states, "starting", { total: tasks.length });
+  const reportProgress = createProgressReporter(onUpdate, states);
+  const workerConcurrency = Math.max(1, Math.min(concurrency, tasks.length));
+  reportProgress("starting", { total: tasks.length, concurrency: workerConcurrency }, true);
 
   try {
     for (let index = 0; index < tasks.length; index += 1) {
@@ -491,32 +637,32 @@ export async function runParallelDevelop({
     }
 
     if (heartbeatMs > 0 && onUpdate) {
-      heartbeat = setInterval(() => emitProgress(onUpdate, states), heartbeatMs);
+      heartbeat = setInterval(() => reportProgress(), heartbeatMs);
       heartbeat.unref?.();
     }
 
-    const settled = await Promise.allSettled(
-      tasks.map((task, index) =>
-        runDeveloperWorker(
-          exec,
-          spawnWorker,
-          base,
-          tempRoot,
-          worktrees[index],
-          plan,
-          task,
-          target,
-          index,
-          tasks.length,
-          progress,
-          states,
-          signal,
-          workerTimeoutMs,
-          onUpdate,
-          onStarted,
-        ),
+    const workerStartedAt = Date.now();
+    const settled = await mapWithConcurrency(tasks, workerConcurrency, (task, index) =>
+      runDeveloperWorker(
+        exec,
+        spawnWorker,
+        base,
+        tempRoot,
+        worktrees[index],
+        plan,
+        task,
+        target,
+        index,
+        tasks.length,
+        progress,
+        states,
+        signal,
+        workerTimeoutMs,
+        reportProgress,
+        onStarted,
       ),
     );
+    const mergeStartedAt = Date.now();
     const results = settled.map((entry, index) =>
       entry.status === "fulfilled"
         ? { ...entry.value, ok: true }
@@ -527,13 +673,14 @@ export async function runParallelDevelop({
             category: entry.reason?.category ?? "code",
             changedFiles: [],
             output: "",
+            metrics: states[index].metrics,
             patch: "",
           },
     );
     const failures = results.filter((result) => !result.ok);
     if (failures.length > 0) {
       preserveFailureArtifacts = true;
-      emitProgress(onUpdate, states, "failed", { failures });
+      reportProgress("failed", { failures }, true);
       throw createError(
         [
           `并行开发失败：${failures.length}/${results.length} 个任务失败`,
@@ -572,8 +719,18 @@ export async function runParallelDevelop({
       await runGit(exec, repoRoot, ["apply", "--binary", patchPath], signal);
     }
 
-    emitProgress(onUpdate, states, "completed");
-    return { results, tasks: snapshotTaskStates(states) };
+    reportProgress("completed", {}, true);
+    const finishedAt = Date.now();
+    return {
+      results,
+      tasks: snapshotTaskStates(states, finishedAt),
+      metrics: {
+        setupMs: workerStartedAt - runStartedAt,
+        workersMs: mergeStartedAt - workerStartedAt,
+        mergeMs: finishedAt - mergeStartedAt,
+        totalMs: finishedAt - runStartedAt,
+      },
+    };
   } catch (error) {
     if (tempRoot && !String(error?.message ?? error).includes(tempRoot) && !preserveFailureArtifacts) {
       preserveFailureArtifacts = true;
@@ -585,6 +742,7 @@ export async function runParallelDevelop({
     throw error;
   } finally {
     clearInterval(heartbeat);
+    reportProgress.flush();
     if (!preserveFailureArtifacts) {
       for (const worktree of worktrees.reverse()) {
         try {

@@ -1,4 +1,5 @@
 export const MAX_PARALLEL_DEVELOPERS = 4;
+export const DEFAULT_PARALLEL_CONCURRENCY = 2;
 
 function normalizePath(value) {
   if (typeof value !== "string") {
