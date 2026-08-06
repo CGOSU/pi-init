@@ -98,14 +98,29 @@ function formatRoleModel(config: RoleModelConfig) {
   return `${config.provider}/${config.model} · ${config.thinkingLevel}`;
 }
 
+function availableThinkingLevels(model: any) {
+  return getSupportedThinkingLevels(model).filter((level) =>
+    (THINKING_LEVELS as readonly string[]).includes(level),
+  );
+}
+
+function supportedThinkingText(model: any) {
+  const levels = availableThinkingLevels(model);
+  return levels.length > 0 ? `推理：${levels.join("/")}` : "";
+}
+
 function shortModelName(model: string) {
   const parts = model.split(/[\\/]/);
   return parts.at(-1) ?? model;
 }
 
 type MenuItem = SelectItem;
+type MenuOptions = {
+  summary?: string[];
+  maxVisible?: number;
+};
 
-async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[]) {
+async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[], options: MenuOptions = {}) {
   if (!ctx.hasUI) return undefined;
   if (ctx.mode !== "tui") {
     const selected = await ctx.ui.select(title, items.map((item) => item.label));
@@ -114,7 +129,7 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[])
 
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
     const container = new Container();
-    const list = new SelectList(items, Math.min(items.length, 10), {
+    const list = new SelectList(items, Math.min(items.length, options.maxVisible ?? 10), {
       selectedPrefix: (text) => theme.fg("accent", text),
       selectedText: (text) => theme.fg("accent", text),
       description: (text) => theme.fg("muted", text),
@@ -126,6 +141,9 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[])
 
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
     container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    if (options.summary?.length) {
+      container.addChild(new Text(theme.bg("selectedBg", theme.fg("text", options.summary.join("\n"))), 1, 0));
+    }
     container.addChild(new Text(theme.fg("dim", "↑↓ 选择 · Enter 确认 · Esc 返回"), 1, 0));
     container.addChild(list);
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
@@ -146,7 +164,7 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[])
 function formatParallelStatus(update: any) {
   const details = update.details;
   if (!details || typeof details !== "object" || !Array.isArray((details as { tasks?: unknown }).tasks)) {
-    return "并行开发 · 工作中";
+    return "● 并行开发 · 工作中";
   }
 
   const tasks = (details as {
@@ -158,7 +176,7 @@ function formatParallelStatus(update: any) {
   const failed = tasks.filter((task) => task.status === "failed").length;
   const active = tasks.find((task) => !terminal.has(task.status));
   const suffix = active ? ` · ${active.id}: ${active.current ?? active.status}` : "";
-  return `并行开发 · ${finished}/${tasks.length} 完成 · ${running} 运行${failed > 0 ? ` · ${failed} 失败` : ""}${suffix}`.slice(0, 180);
+  return `● 并行开发 · ${finished}/${tasks.length} 完成 · ${running} 运行${failed > 0 ? ` · ${failed} 失败` : ""}${suffix}`.slice(0, 180);
 }
 
 type RoleModelConfig = {
@@ -192,9 +210,13 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
     if (filtered.length === 0) {
       throw new Error(`没有匹配“${query.trim()}”的模型，请重新执行配置并调整搜索条件`);
     }
-    const labels = filtered.map((model) => `${model.provider}/${model.id}`);
+    const labels = filtered.map((model) => {
+      const support = supportedThinkingText(model);
+      return `${model.provider}/${model.id}${support ? ` · ${support}` : ""}`;
+    });
     const selected = await ctx.ui.select(`选择 ${roleLabel(role)} 模型`, labels);
-    return filtered.find((model) => `${model.provider}/${model.id}` === selected);
+    const index = selected === undefined ? -1 : labels.indexOf(selected);
+    return index >= 0 ? filtered[index] : undefined;
   }
 
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
@@ -207,7 +229,7 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
         items.map((model) => ({
           value: `${model.provider}/${model.id}`,
           label: `${model.id} [${model.provider}]`,
-          description: model.name ?? "",
+          description: [model.name, supportedThinkingText(model)].filter(Boolean).join(" · "),
         })),
         Math.min(items.length, 10),
         {
@@ -284,9 +306,7 @@ async function selectRoleModel(ctx: ExtensionContext, role: string) {
   const model = await selectModelWithSearch(ctx, role, models);
   if (!model) return undefined;
   const selectedModelLabel = `${model.provider}/${model.id}`;
-  const supportedThinkingLevels = getSupportedThinkingLevels(model).filter((level) =>
-    (THINKING_LEVELS as readonly string[]).includes(level),
-  );
+  const supportedThinkingLevels = availableThinkingLevels(model);
   if (supportedThinkingLevels.length === 0) {
     throw new Error(`模型 ${selectedModelLabel} 不支持任何可用的 Pi 推理强度`);
   }
@@ -381,15 +401,15 @@ function roleMenuItems(config: Record<string, RoleModelConfig>, mode: string) {
   return [
     {
       value: "mode",
-      label: `当前会话模式：${roleModeLabel(mode)}`,
+      label: `● 模式 · ${roleModeLabel(mode)}`,
       description: "只影响本次会话，不修改项目文件",
     },
     ...ROLE_NAMES.map((role) => ({
       value: role,
-      label: `${roleLabel(role)}：${shortModelName(config[role].model)}/${config[role].thinkingLevel}`,
+      label: `● ${roleLabel(role)} · ${shortModelName(config[role].model)}/${config[role].thinkingLevel}`,
       description: formatRoleModel(config[role]),
     })),
-    { value: "back", label: "返回", description: "不修改其他设置" },
+    { value: "back", label: "← 返回上一级", description: "不修改其他设置" },
   ];
 }
 
@@ -433,6 +453,13 @@ function formatResult(result: {
   }
 
   return lines.join("\n");
+}
+
+function formatCompactResult(result: ScaffoldOutcome) {
+  if (result.cancelled) return "已取消初始化";
+  const prefix = result.dryRun ? "预览" : "✓ 已生成";
+  const conflicts = result.conflicts.length > 0 ? ` · 覆盖 ${result.conflicts.length} 个文件` : " · 无文件冲突";
+  return `${prefix} ${result.files.length} 个文件${conflicts}\n${result.targetDir}`;
 }
 
 type ScaffoldResult = Awaited<ReturnType<typeof createScaffold>>;
@@ -530,7 +557,7 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
 }
 
 function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
-  ctx.ui.notify(formatResult(result), result.cancelled ? "warning" : "info");
+  ctx.ui.notify(formatCompactResult(result), result.cancelled ? "warning" : "info");
 }
 
 async function finishScaffold(ctx: ExtensionCommandContext, result: ScaffoldOutcome) {
@@ -550,15 +577,29 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     thinkingLevel: string;
   } | undefined;
   let sessionModeOverride: string | undefined;
+  let controlCenterGuideShown = false;
+
+  function activeRoleFor(ctx: ExtensionContext) {
+    if (
+      !activeRole ||
+      !ctx.model ||
+      activeRole.provider !== ctx.model.provider ||
+      activeRole.model !== ctx.model.id ||
+      activeRole.thinkingLevel !== pi.getThinkingLevel()
+    ) {
+      return undefined;
+    }
+    return activeRole;
+  }
 
   function setRoleStatus(ctx: ExtensionContext, mode: string) {
-    if (!activeRole) {
-      ctx.ui.setStatus("pi-init", `职责模式 · ${roleModeLabel(mode)}`);
-      return;
-    }
+    const role = activeRoleFor(ctx);
+    const model = ctx.model
+      ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
+      : "未选择模型";
     ctx.ui.setStatus(
       "pi-init",
-      `${roleModeLabel(mode)} · ${roleLabel(activeRole.role)} · ${shortModelName(activeRole.model)}/${activeRole.thinkingLevel}`,
+      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model}`,
     );
   }
 
@@ -789,25 +830,46 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
-    const mode = sessionModeOverride ?? config.mode;
-    const status = activeRole
-      ? `${roleModeLabel(mode)} · ${roleLabel(activeRole.role)} · ${shortModelName(activeRole.model)}/${activeRole.thinkingLevel}`
-      : `${roleModeLabel(mode)} · 尚未切换职责`;
-    const action = await showMenu(ctx, `Pi Init · ${status}`, [
-      { value: "quick", label: "快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
-      { value: "advanced", label: "高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
-      { value: "config", label: "职责与模型", description: "查看或修改三个职责的模型配置" },
-      { value: "role", label: "切换职责", description: "立即应用某个职责的模型和推理强度" },
-      { value: "mode", label: `切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
-      { value: "exit", label: "退出" },
-    ]);
-    if (!action || action === "exit") return;
-    if (action === "quick") return quickInit(".", ctx);
-    if (action === "advanced") return advancedInit(".", ctx);
-    if (action === "config") return configureRoleCenter(ctx);
-    if (action === "role") return switchRole(undefined, ctx);
-    if (action === "mode") return setSessionMode(undefined, ctx);
+    const showGuide = !controlCenterGuideShown;
+    controlCenterGuideShown = true;
+    while (true) {
+      const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+      const mode = sessionModeOverride ?? config.mode;
+      const role = activeRoleFor(ctx);
+      const currentModel = ctx.model
+        ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
+        : "未选择模型";
+      const summary = [
+        `模式  ${roleModeLabel(mode)}`,
+        role
+          ? `职责  ${roleLabel(role.role)}`
+          : "职责  尚未切换（按任务自动选择）",
+        `模型  ${currentModel}`,
+      ];
+      if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
+      const action = await showMenu(ctx, "Pi Init 控制中心", [
+        { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
+        { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
+        { value: "config", label: "◆ 职责 · 职责与模型", description: "查看或修改三个职责的模型配置" },
+        { value: "role", label: "◆ 职责 · 切换职责", description: "立即应用某个职责的模型和推理强度" },
+        { value: "mode", label: `◆ 职责 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
+        { value: "exit", label: "← 返回" },
+      ], { summary });
+      if (!action || action === "exit") return;
+      if (action === "quick") return quickInit(".", ctx);
+      if (action === "advanced") return advancedInit(".", ctx);
+      if (action === "config") {
+        await configureRoleCenter(ctx);
+        continue;
+      }
+      if (action === "role") {
+        await switchRole(undefined, ctx);
+        continue;
+      }
+      if (action === "mode") {
+        await setSessionMode(undefined, ctx);
+      }
+    }
   }
 
   pi.on("session_start", async (_event, ctx) => {
