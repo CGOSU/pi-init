@@ -60,3 +60,22 @@
 - 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 和 runner 通过。
 - 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
 - 遗留问题：尚未执行真实 LLM 子代理端到端演练。
+
+### 2026-08-06：配置职责模型、初始化选择和运行时持久修改
+
+- 完成内容：初始化和 `init_project` 支持按职责配置 provider、model、thinkingLevel；生成的中英文 Skill 表格与实际 `.pi/role-models.json` 同步。
+- 完成内容：新增 `/role-config [role]`，从当前可用模型及其支持的推理强度中选择，写回项目配置并立即应用；Pi 原生 `/model` 与 `Shift+Tab` 保持会话级临时切换。
+- 完成内容：并行编排器未返回结果；已检查两个隔离 worktree 的补丁、手动合并并清理 worktree。
+- 验证：`npm test`，10 项测试全部通过。
+- 验证：`printf '{"id":"commands","type":"get_commands"}\n' | pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc`，命令发现包含 `role-config`。
+- 验证：尝试执行 TypeScript 检查失败，环境未安装 TypeScript 编译器；未将其记录为通过。
+- 遗留问题：真实交互式初始化和 `/role-config` 选择流程尚未端到端演练。
+
+### 2026-08-06：并行子代理实时可观察性和故障接管
+
+- 完成内容：worker 改用 Pi JSON 事件流，实时上报模型输出、工具调用、任务状态、耗时和心跳；主界面状态栏显示完成/运行/失败任务及当前活动。
+- 完成内容：基础设施错误自动重试一次；代码或测试错误不盲目重试，失败时提示主开发测试工程师接管；失败 worktree、prompt 和 stdout/stderr 日志保留。
+- 验证：`node --check src/parallel-runner.js` 通过。
+- 验证：`npm test`，12 项测试全部通过，包含 JSON 事件解析、实时事件、心跳、自动重试和失败现场保留测试。
+- 验证：RPC 命令发现仍包含 `role-config`，扩展加载成功。
+- 遗留问题：尚未进行真实 LLM 子代理端到端演练。

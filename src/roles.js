@@ -25,7 +25,8 @@ export const DEFAULT_ROLE_CONFIG = {
   ...DEFAULT_ROLE_MODELS,
 };
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const THINKING_LEVEL_SET = new Set(THINKING_LEVELS);
 
 export function resolveRoleMode(config) {
   const mode = config?.mode ?? DEFAULT_ROLE_MODE;
@@ -52,9 +53,17 @@ export function resolveRoleModel(config, role) {
   if (typeof model !== "string" || !model.trim()) {
     throw new Error(`职责 ${role} 的 model 无效`);
   }
-  if (!THINKING_LEVELS.has(thinkingLevel)) {
+  if (!THINKING_LEVEL_SET.has(thinkingLevel)) {
     throw new Error(`职责 ${role} 的 thinkingLevel 无效：${thinkingLevel}`);
   }
 
   return { provider: provider.trim(), model: model.trim(), thinkingLevel };
+}
+
+export function resolveRoleConfig(config) {
+  const resolved = { mode: resolveRoleMode(config) };
+  for (const role of ROLE_NAMES) {
+    resolved[role] = resolveRoleModel(config, role);
+  }
+  return resolved;
 }

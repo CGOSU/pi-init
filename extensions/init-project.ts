@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { resolve, basename, join } from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { resolve, basename, dirname, join } from "node:path";
+import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
   CONFIG_DIR_NAME,
@@ -14,11 +14,24 @@ import { createScaffold } from "../src/scaffold.js";
 import {
   ROLE_MODES,
   ROLE_NAMES,
-  resolveRoleMode,
-  resolveRoleModel,
+  THINKING_LEVELS,
+  resolveRoleConfig,
 } from "../src/roles.js";
 import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
 import { runParallelDevelop } from "../src/parallel-runner.js";
+
+const roleModelSchema = Type.Object({
+  provider: Type.String({ description: "模型提供商 ID" }),
+  model: Type.String({ description: "模型 ID" }),
+  thinkingLevel: StringEnum(THINKING_LEVELS, {
+    description: "Pi 推理强度",
+  }),
+});
+const roleModelsSchema = Type.Object({
+  architect: Type.Optional(roleModelSchema),
+  "developer-test": Type.Optional(roleModelSchema),
+  "docs-commit": Type.Optional(roleModelSchema),
+});
 
 const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
@@ -28,6 +41,7 @@ const initProjectParameters = Type.Object({
   language: Type.Optional(Type.String({ description: "模板语言：zh-CN 或 en" })),
   testCommand: Type.Optional(Type.String({ description: "项目测试命令" })),
   dryRun: Type.Optional(Type.Boolean({ description: "只预览，不写入文件" })),
+  roleModels: Type.Optional(roleModelsSchema),
 });
 
 const roleNameSchema = StringEnum(ROLE_NAMES, {
@@ -69,9 +83,110 @@ function textOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatParallelStatus(update: any) {
+  const details = update.details;
+  if (!details || typeof details !== "object" || !Array.isArray((details as { tasks?: unknown }).tasks)) {
+    return "并行子代理：工作中";
+  }
+
+  const tasks = (details as {
+    tasks: Array<{ id: string; status: string; current?: string; elapsedMs?: number }>;
+  }).tasks;
+  const terminal = new Set(["completed", "failed", "cancelled"]);
+  const finished = tasks.filter((task) => terminal.has(task.status)).length;
+  const running = tasks.length - finished;
+  const failed = tasks.filter((task) => task.status === "failed").length;
+  const active = tasks.find((task) => !terminal.has(task.status));
+  const suffix = active ? ` · ${active.id}: ${active.current ?? active.status}` : "";
+  return `并行子代理：${finished}/${tasks.length} 完成 · ${running} 运行${failed > 0 ? ` · ${failed} 失败` : ""}${suffix}`.slice(0, 240);
+}
+
+type RoleModelConfig = {
+  provider: string;
+  model: string;
+  thinkingLevel: string;
+};
+
+function getAvailableRoleModels(ctx: ExtensionContext) {
+  const source =
+    ctx.scopedModels.length > 0
+      ? ctx.scopedModels.map(({ model }) => model)
+      : ctx.modelRegistry.getAvailable();
+  const unique = new Map<string, (typeof source)[number]>();
+  for (const model of source) {
+    unique.set(`${model.provider}/${model.id}`, model);
+  }
+  return [...unique.values()].sort((a, b) =>
+    `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`),
+  );
+}
+
+async function selectRoleModel(ctx: ExtensionContext, role: string) {
+  const models = getAvailableRoleModels(ctx);
+  if (models.length === 0) {
+    throw new Error("当前没有可用模型；请先配置模型凭据或调整模型范围");
+  }
+
+  const modelLabels = models.map((model) => `${model.provider}/${model.id}`);
+  const selectedModelLabel = await ctx.ui.select(`为 ${role} 选择模型`, modelLabels);
+  if (selectedModelLabel === undefined) return undefined;
+
+  const model = models.find(
+    (candidate) => `${candidate.provider}/${candidate.id}` === selectedModelLabel,
+  );
+  if (!model) throw new Error(`未知模型选择：${selectedModelLabel}`);
+
+  const supportedThinkingLevels = getSupportedThinkingLevels(model).filter((level) =>
+    (THINKING_LEVELS as readonly string[]).includes(level),
+  );
+  if (supportedThinkingLevels.length === 0) {
+    throw new Error(`模型 ${selectedModelLabel} 不支持任何可用的 Pi 推理强度`);
+  }
+
+  const thinkingLevel = await ctx.ui.select(
+    `为 ${role} 选择推理强度（${selectedModelLabel}）`,
+    supportedThinkingLevels,
+  );
+  if (thinkingLevel === undefined) return undefined;
+  if (!supportedThinkingLevels.includes(thinkingLevel as (typeof supportedThinkingLevels)[number])) {
+    throw new Error(`模型 ${selectedModelLabel} 不支持推理强度：${thinkingLevel}`);
+  }
+
+  return {
+    provider: model.provider,
+    model: model.id,
+    thinkingLevel,
+  } satisfies RoleModelConfig;
+}
+
+async function collectRoleModels(ctx: ExtensionContext) {
+  const roleModels: Record<string, RoleModelConfig> = {};
+  for (const role of ROLE_NAMES) {
+    const selection = await selectRoleModel(ctx, role);
+    if (!selection) return undefined;
+    roleModels[role] = selection;
+  }
+  return roleModels;
+}
+
 function normalizeTargetDir(value: string) {
   const target = value.trim();
   return target.startsWith("@") ? target.slice(1) : target;
+}
+
+async function writeRoleConfig(
+  ctx: ExtensionContext,
+  role: string,
+  selection: RoleModelConfig,
+) {
+  const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
+  return withFileMutationQueue(configPath, async () => {
+    const current = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, unknown>;
+    const next = resolveRoleConfig({ ...current, [role]: selection });
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    return next;
+  });
 }
 
 function formatResult(result: {
@@ -146,6 +261,11 @@ async function input(ctx: ExtensionCommandContext, title: string, placeholder: s
 }
 
 async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
+  const roleConfiguration = await ctx.ui.select("职责模型配置", ["使用默认配置", "逐个配置", "取消"]);
+  if (roleConfiguration === undefined || roleConfiguration === "取消") return undefined;
+  const roleModels = roleConfiguration === "逐个配置" ? await collectRoleModels(ctx) : undefined;
+  if (roleConfiguration === "逐个配置" && !roleModels) return undefined;
+
   const inferredName = basename(resolve(ctx.cwd, normalizeTargetDir(targetDir) || "."));
   const projectName = await input(ctx, "项目名称", inferredName);
   if (projectName === undefined) return undefined;
@@ -168,6 +288,7 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
     description: description || undefined,
     testCommand: testCommand || undefined,
     slug: slug || undefined,
+    ...(roleModels ? { roleModels } : {}),
   };
 }
 
@@ -189,7 +310,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   let sessionModeOverride: string | undefined;
 
   async function applyRole(role: string, ctx: ExtensionContext) {
-    const target = resolveRoleModel(await readRoleConfig(ctx), role);
+    const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig>;
+    const target = config[role];
+    if (!target) throw new Error(`未知职责：${role}`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
     if (!model) {
       throw new Error(
@@ -240,7 +363,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   async function automaticRole(role: string, ctx: ExtensionContext) {
-    const configuredMode = resolveRoleMode(await readRoleConfig(ctx));
+    const configuredMode = (resolveRoleConfig(await readRoleConfig(ctx)) as { mode: string }).mode;
     const mode = sessionModeOverride ?? configuredMode;
     if (mode === "auto") {
       return { mode, requestedRole: role, result: await applyRole(role, ctx) };
@@ -327,6 +450,50 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("role-config", {
+    description: "交互配置并立即应用职责对应的模型与推理强度",
+    getArgumentCompletions: (prefix) => {
+      const matches = ROLE_NAMES.filter((role) => role.startsWith(prefix));
+      return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
+    },
+    handler: async (args, ctx) => {
+      if (!ctx.isProjectTrusted()) {
+        ctx.ui.notify("/role-config 仅允许在受信任项目中运行；请先信任当前项目", "error");
+        return;
+      }
+      const requested = args.trim();
+      const role = requested || (ctx.hasUI ? await ctx.ui.select("选择要配置的职责", ROLE_NAMES) : undefined);
+      if (!role) {
+        ctx.ui.notify("用法：/role-config <architect|developer-test|docs-commit>", "error");
+        return;
+      }
+      if (!ROLE_NAMES.includes(role)) {
+        ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+        return;
+      }
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/role-config 需要交互式 UI", "error");
+        return;
+      }
+
+      try {
+        const selection = await selectRoleModel(ctx, role);
+        if (!selection) {
+          ctx.ui.notify("已取消职责配置，没有写入文件。", "warning");
+          return;
+        }
+        await writeRoleConfig(ctx, role, selection);
+        const result = await applyRole(role, ctx);
+        ctx.ui.notify(
+          `已更新并应用 ${result.role}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(textOf(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("init-project", {
     description: "初始化项目的 AI Coding 协作文件和智能职责 Skill",
     handler: async (args, ctx) => {
@@ -341,13 +508,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         return;
       }
 
-      const options = await collectOptions(ctx, targetDir);
-      if (!options) {
-        ctx.ui.notify("已取消项目初始化。", "warning");
-        return;
-      }
-
       try {
+        const options = await collectOptions(ctx, targetDir);
+        if (!options) {
+          ctx.ui.notify("已取消项目初始化。", "warning");
+          return;
+        }
         const result = await runScaffold(ctx, targetDir, options, "always");
         notifyResult(ctx, result);
       } catch (error) {
@@ -381,6 +547,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         language: params.language,
         testCommand: params.testCommand,
         dryRun: params.dryRun,
+        roleModels: params.roleModels,
       };
       const result = await runScaffold(ctx, targetDir, options, "conflicts");
       const text = formatResult(result);
@@ -419,42 +586,53 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
       const total = params.tasks.length;
       ctx.ui.setStatus("pi-init-parallel", `并行子代理：准备启动 0/${total}`);
-      const result = await runParallelDevelop({
-        exec: pi.exec.bind(pi),
-        cwd: ctx.cwd,
-        planInput: params.plan,
-        taskInput: params.tasks,
-        target: {
-          provider: role.provider,
-          model: role.model,
-          thinkingLevel: role.thinkingLevel,
-        },
-        signal,
-        onUpdate,
-        onStarted: ({ started: count, total: taskTotal, id }: { started: number; total: number; id: string }) => {
-          ctx.ui.setStatus("pi-init-parallel", `并行子代理：已启动 ${count}/${taskTotal}（${id}）`);
-        },
-      });
-      ctx.ui.setStatus("pi-init-parallel", `并行子代理：已完成 ${result.results.length}/${total}`);
-      const lines = [
-        `已启动并完成 ${result.results.length}/${total} 个并行开发测试任务。`,
-        `模型：${role.provider}/${role.model}，推理强度：${role.thinkingLevel}`,
-        ...result.results.map(
-          (worker) => `- ${worker.id}：${worker.changedFiles.length > 0 ? worker.changedFiles.join(", ") : "无文件修改"}\n  ${worker.output}`,
-        ),
-        "请检查合并后的 diff，并运行项目完整测试。",
-      ];
-      return {
-        content: [{ type: "text", text: lines.join("\n") }],
-        details: {
-          role: role.role,
-          mode: selection.mode,
-          provider: role.provider,
-          model: role.model,
-          thinkingLevel: role.thinkingLevel,
-          tasks: result.results.map(({ id, changedFiles, output }) => ({ id, changedFiles, output })),
-        },
+      const reportUpdate = (update: any) => {
+        ctx.ui.setStatus("pi-init-parallel", formatParallelStatus(update));
+        onUpdate?.(update);
       };
+
+      try {
+        const result = await runParallelDevelop({
+          exec: pi.exec.bind(pi),
+          cwd: ctx.cwd,
+          planInput: params.plan,
+          taskInput: params.tasks,
+          target: {
+            provider: role.provider,
+            model: role.model,
+            thinkingLevel: role.thinkingLevel,
+          },
+          signal,
+          onUpdate: reportUpdate,
+          onStarted: ({ started: count, total: taskTotal, id }: { started: number; total: number; id: string }) => {
+            ctx.ui.setStatus("pi-init-parallel", `并行子代理：已启动 ${count}/${taskTotal}（${id}）`);
+          },
+        });
+        ctx.ui.setStatus("pi-init-parallel", `并行子代理：已完成 ${result.results.length}/${total}`);
+        const lines = [
+          `已启动并完成 ${result.results.length}/${total} 个并行开发测试任务。`,
+          `模型：${role.provider}/${role.model}，推理强度：${role.thinkingLevel}`,
+          ...result.results.map(
+            (worker) => `- ${worker.id}：${worker.changedFiles.length > 0 ? worker.changedFiles.join(", ") : "无文件修改"}\n  ${worker.output}`,
+          ),
+          "请检查合并后的 diff，并运行项目完整测试。",
+        ];
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: {
+            role: role.role,
+            mode: selection.mode,
+            provider: role.provider,
+            model: role.model,
+            thinkingLevel: role.thinkingLevel,
+            tasks: result.tasks,
+            results: result.results.map(({ id, changedFiles, output }) => ({ id, changedFiles, output })),
+          },
+        };
+      } catch (error) {
+        ctx.ui.setStatus("pi-init-parallel", "并行子代理：失败，等待主开发测试工程师接管");
+        throw error;
+      }
     },
   });
 

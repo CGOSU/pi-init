@@ -11,9 +11,9 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 
 | Role | Technical level | Deliverables | Model type | Default model | Pi reasoning level |
 | --- | --- | --- | --- | --- | --- |
-| Architect | Expert (Staff / Principal): capable of system boundaries, trade-offs, data and API design, migrations, and non-functional risk analysis | Architecture decisions, constraints, risks, and acceptance criteria; no code changes by default | Frontier general reasoning model with long context and strong trade-off analysis | `openai-codex/gpt-5.6-sol` | `max` |
-| Development and Test Engineer | Senior (Senior / SDET): capable of implementation, debugging, refactoring, and unit, integration, and regression testing | Minimal code changes, tests, commands, and actual results | Code-specialized or strong tool-use model for code comprehension and testing | `openai-codex/gpt-5.6-luna` | `max` |
-| Documentation and Commit Engineer | Senior (Technical Writer / Release Engineer): capable of terminology control, change verification, and traceable commits | Documentation, change summary, commit boundaries, and commit message | Fast general model with strong instruction following and structured writing | `openai-codex/gpt-5.6-luna` | `medium` |
+| Architect | Expert (Staff / Principal): capable of system boundaries, trade-offs, data and API design, migrations, and non-functional risk analysis | Architecture decisions, constraints, risks, and acceptance criteria; no code changes by default | Frontier general reasoning model with long context and strong trade-off analysis | `{{ARCHITECT_PROVIDER}}/{{ARCHITECT_MODEL}}` | `{{ARCHITECT_THINKING_LEVEL}}` |
+| Development and Test Engineer | Senior (Senior / SDET): capable of implementation, debugging, refactoring, and unit, integration, and regression testing | Minimal code changes, tests, commands, and actual results | Code-specialized or strong tool-use model for code comprehension and testing | `{{DEVELOPER_TEST_PROVIDER}}/{{DEVELOPER_TEST_MODEL}}` | `{{DEVELOPER_TEST_THINKING_LEVEL}}` |
+| Documentation and Commit Engineer | Senior (Technical Writer / Release Engineer): capable of terminology control, change verification, and traceable commits | Documentation, change summary, commit boundaries, and commit message | Fast general model with strong instruction following and structured writing | `{{DOCS_COMMIT_PROVIDER}}/{{DOCS_COMMIT_MODEL}}` | `{{DOCS_COMMIT_THINKING_LEVEL}}` |
 
 ## Intelligent Assignment
 
@@ -35,11 +35,11 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Commit Engineer.
 - `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
-- Users can verify the same mapping with `/role <role ID>`; in manual mode, run `/role` and retry the automatic role boundary. Customize models only in `.pi/role-models.json`.
+- Users can verify the same mapping with `/role <role ID>`; in trusted projects, use `/role-config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/role` and retry the automatic role boundary.
 
 - After the Architect produces a plan with at least two independent work packages, call `parallel_develop` to run multiple Development and Test Engineers concurrently.
 - Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; tasks touching the same file must remain sequential.
-- `parallel_develop` runs only in trusted projects, uses isolated Git worktrees, and merges successful changes automatically; the status bar and tool progress show the started count (`x/y`); the main worktree must be clean, and workers must not commit or push. Workers use `--no-approve` and never promote project trust automatically.
+- `parallel_develop` runs only in trusted projects, uses isolated Git worktrees, and merges successful changes automatically; workers use Pi's JSON event stream, while the status bar and tool progress show each task's status, current tool, elapsed time, and last activity. Infrastructure failures are retried once automatically; code or test failures are handed to the main Development and Test Engineer. Failed worktrees and logs are preserved; the main worktree must be clean, and workers must not commit or push. Workers use `--no-approve` and never promote project trust automatically.
 - Skip `parallel_develop` for one small work package and use a single Development and Test Engineer.
 
 ## Handoff Contract

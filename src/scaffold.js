@@ -2,7 +2,7 @@ import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_ROLE_CONFIG } from "./roles.js";
+import { resolveRoleConfig } from "./roles.js";
 
 const TEMPLATE_ROOT = fileURLToPath(new URL("../templates/", import.meta.url));
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -116,12 +116,22 @@ export async function createScaffold(targetDir, options = {}) {
     : language === "en"
       ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Commit Engineer roles with explicit technical level, model type, and Pi reasoning level.`
       : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用；根据任务在架构师、开发测试工程师、文档与提交工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。`;
+  const roleConfig = resolveRoleConfig(options.roleModels);
   const variables = {
     PROJECT_NAME: projectName,
     PROJECT_SLUG: projectSlug,
     PROJECT_DESCRIPTION: projectDescription,
     SKILL_DESCRIPTION: JSON.stringify(skillDescription),
     TEST_COMMAND: escapeInlineCode(testCommand),
+    ARCHITECT_PROVIDER: roleConfig.architect.provider,
+    ARCHITECT_MODEL: roleConfig.architect.model,
+    ARCHITECT_THINKING_LEVEL: roleConfig.architect.thinkingLevel,
+    DEVELOPER_TEST_PROVIDER: roleConfig["developer-test"].provider,
+    DEVELOPER_TEST_MODEL: roleConfig["developer-test"].model,
+    DEVELOPER_TEST_THINKING_LEVEL: roleConfig["developer-test"].thinkingLevel,
+    DOCS_COMMIT_PROVIDER: roleConfig["docs-commit"].provider,
+    DOCS_COMMIT_MODEL: roleConfig["docs-commit"].model,
+    DOCS_COMMIT_THINKING_LEVEL: roleConfig["docs-commit"].thinkingLevel,
   };
 
   const files = await Promise.all(
@@ -140,7 +150,7 @@ export async function createScaffold(targetDir, options = {}) {
   files.splice(-1, 0, {
     relativePath: roleConfigPath,
     absolutePath: path.join(absoluteTarget, roleConfigPath),
-    content: `${JSON.stringify(DEFAULT_ROLE_CONFIG, null, 2)}\n`,
+    content: `${JSON.stringify(roleConfig, null, 2)}\n`,
   });
 
   const conflicts = [];

@@ -11,9 +11,9 @@ description: {{SKILL_DESCRIPTION}}
 
 | 职责 | 技术水平 | 交付范围 | 模型类型 | 默认模型 | Pi 推理强度 |
 | --- | --- | --- | --- | --- | --- |
-| 架构师 | 专家级（Staff / Principal）：能完成系统边界、技术权衡、数据与接口设计、迁移及非功能风险分析 | 架构决策、约束、风险和验收标准；默认不改代码 | 旗舰通用推理模型，长上下文且擅长复杂权衡 | `openai-codex/gpt-5.6-sol` | `max` |
-| 开发测试工程师 | 资深级（Senior / SDET）：能实现、调试、重构，并设计单元、集成和回归验证 | 最小代码改动、测试实现、命令与真实结果 | 代码专用或强工具调用模型，擅长代码理解与测试 | `openai-codex/gpt-5.6-luna` | `max` |
-| 文档与提交工程师 | 资深级（Technical Writer / Release Engineer）：能统一术语、核对变更并保证提交可追溯 | 文档、变更摘要、提交边界和提交信息 | 快速通用模型，指令遵循和结构化写作能力强 | `openai-codex/gpt-5.6-luna` | `medium` |
+| 架构师 | 专家级（Staff / Principal）：能完成系统边界、技术权衡、数据与接口设计、迁移及非功能风险分析 | 架构决策、约束、风险和验收标准；默认不改代码 | 旗舰通用推理模型，长上下文且擅长复杂权衡 | `{{ARCHITECT_PROVIDER}}/{{ARCHITECT_MODEL}}` | `{{ARCHITECT_THINKING_LEVEL}}` |
+| 开发测试工程师 | 资深级（Senior / SDET）：能实现、调试、重构，并设计单元、集成和回归验证 | 最小代码改动、测试实现、命令与真实结果 | 代码专用或强工具调用模型，擅长代码理解与测试 | `{{DEVELOPER_TEST_PROVIDER}}/{{DEVELOPER_TEST_MODEL}}` | `{{DEVELOPER_TEST_THINKING_LEVEL}}` |
+| 文档与提交工程师 | 资深级（Technical Writer / Release Engineer）：能统一术语、核对变更并保证提交可追溯 | 文档、变更摘要、提交边界和提交信息 | 快速通用模型，指令遵循和结构化写作能力强 | `{{DOCS_COMMIT_PROVIDER}}/{{DOCS_COMMIT_MODEL}}` | `{{DOCS_COMMIT_THINKING_LEVEL}}` |
 
 ## 智能分配
 
@@ -35,11 +35,11 @@ description: {{SKILL_DESCRIPTION}}
 - 职责 ID：架构师用 `architect`，开发测试工程师用 `developer-test`，文档与提交工程师用 `docs-commit`。
 - `switch_role` 从 `.pi/role-models.json` 读取项目映射，调用 Pi 的模型与推理强度 API，并返回实际生效结果。
 - 切换失败时立即停止该职责并报告错误，不得在错误模型下继续或伪报成功。
-- 用户可用 `/role <职责 ID>` 手动验证同一映射；手动模式下执行 `/role` 后再重试自动职责；自定义模型时只修改 `.pi/role-models.json`。
+- 用户可用 `/role <职责 ID>` 手动验证同一映射；在受信任项目中需要持久调整某一职责的模型或推理强度时，可使用 `/role-config [职责 ID]`；手动模式下执行 `/role` 后再重试自动职责。
 
 - 架构师完成规划且存在至少两个相互独立的工作包时，调用 `parallel_develop`，让多个开发测试工程师并行实现和测试。
 - 每个 `parallel_develop` 任务必须提供 `id`、`task` 和不重叠的 `files` 范围；同一文件上的任务必须串行。
-- `parallel_develop` 仅在受信任项目中运行，使用隔离 Git worktree，成功后自动合并修改；状态栏和工具进度显示已启动数量（`x/y`）；主工作区必须干净，开发测试工程师不得提交或推送。子代理使用 `--no-approve`，不会自动提升项目受信任级别。
+- `parallel_develop` 仅在受信任项目中运行，使用隔离 Git worktree，成功后自动合并修改；子代理使用 Pi JSON 事件流，状态栏和工具进度实时显示每个任务的状态、当前工具、耗时和最后活动。基础设施错误自动重试一次，代码或测试错误交由主开发测试工程师接管；失败现场和日志保留，主工作区必须干净，开发测试工程师不得提交或推送。子代理使用 `--no-approve`，不会自动提升项目受信任级别。
 - 只有一个简单工作包时跳过 `parallel_develop`，直接由开发测试工程师处理。
 
 ## 交接要求

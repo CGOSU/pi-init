@@ -10,6 +10,8 @@ import { createScaffold } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_MODELS,
+  THINKING_LEVELS,
+  resolveRoleConfig,
   resolveRoleMode,
   resolveRoleModel,
 } from "../src/roles.js";
@@ -18,7 +20,7 @@ import {
   MAX_PARALLEL_DEVELOPERS,
   validateParallelTasks,
 } from "../src/parallel.js";
-import { runParallelDevelop } from "../src/parallel-runner.js";
+import { runParallelDevelop, spawnPiWorker } from "../src/parallel-runner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +34,14 @@ async function withTempDirectory(run) {
     await run(directory);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+function assertSkillMatchesRoleConfig(skill, config) {
+  for (const role of ["architect", "developer-test", "docs-commit"]) {
+    const { provider, model, thinkingLevel } = config[role];
+    assert.match(skill, new RegExp("`" + provider + "/" + model + "`"));
+    assert.match(skill, new RegExp("`" + thinkingLevel + "`"));
   }
 }
 
@@ -51,7 +61,9 @@ test("生成默认文件结构和动态 Skill", async () => {
     ]);
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
     const roleModels = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
-    const skill = await readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8");
+    const skill = normalizeNewlines(
+      await readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8"),
+    );
     assert.match(agents, /^# Example App AI 协作指南/);
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
@@ -61,6 +73,8 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /开发测试工程师.+Senior \/ SDET/);
     assert.match(skill, /文档与提交工程师.+Technical Writer \/ Release Engineer/);
     assert.deepEqual(roleModels, DEFAULT_ROLE_CONFIG);
+    assert.deepEqual(resolveRoleConfig(undefined), DEFAULT_ROLE_CONFIG);
+    assert.deepEqual(THINKING_LEVELS, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     assert.equal(roleModels.mode, "auto");
     assert.deepEqual(DEFAULT_ROLE_MODELS["developer-test"], {
       provider: "openai-codex",
@@ -73,6 +87,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /`max`/);
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
+    assert.match(skill, /\/role-config/);
     assert.match(skill, /调用 `parallel_develop`/);
     assert.match(skill, /受信任项目/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);
@@ -80,6 +95,83 @@ test("生成默认文件结构和动态 Skill", async () => {
     for (const file of result.files) {
       assert.doesNotMatch(await readFile(path.join(target, file), "utf8"), /\{\{[A-Z_]+\}\}/);
     }
+  });
+});
+
+test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async () => {
+  await withTempDirectory(async (directory) => {
+    const target = path.join(directory, "custom-app");
+    const roleModels = {
+      mode: "confirm",
+      architect: {
+        provider: "provider-architect",
+        model: "model-architect",
+        thinkingLevel: "high",
+      },
+      "developer-test": {
+        provider: "provider-developer",
+        model: "model-developer",
+        thinkingLevel: "low",
+      },
+      "docs-commit": {
+        provider: "provider-docs",
+        model: "model-docs",
+        thinkingLevel: "minimal",
+      },
+    };
+
+    await createScaffold(target, { projectName: "Custom App", roleModels });
+
+    const config = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
+    const skill = normalizeNewlines(
+      await readFile(path.join(target, ".pi/skills/custom-app/SKILL.md"), "utf8"),
+    );
+    assert.deepEqual(config, resolveRoleConfig(roleModels));
+    assertSkillMatchesRoleConfig(skill, config);
+    assert.match(skill, /\/role-config/);
+  });
+});
+
+test("部分职责配置回退默认值并同步英文 Skill", async () => {
+  await withTempDirectory(async (directory) => {
+    const target = path.join(directory, "partial-app");
+    const roleModels = {
+      mode: "manual",
+      architect: {
+        provider: "provider-architect",
+        model: "model-architect",
+        thinkingLevel: "xhigh",
+      },
+    };
+
+    await createScaffold(target, { language: "en", roleModels });
+
+    const config = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
+    const skill = normalizeNewlines(
+      await readFile(path.join(target, ".pi/skills/partial-app/SKILL.md"), "utf8"),
+    );
+    assert.deepEqual(config, resolveRoleConfig(roleModels));
+    assert.deepEqual(config["developer-test"], DEFAULT_ROLE_MODELS["developer-test"]);
+    assert.deepEqual(config["docs-commit"], DEFAULT_ROLE_MODELS["docs-commit"]);
+    assertSkillMatchesRoleConfig(skill, config);
+    assert.match(skill, /\/role-config/);
+  });
+});
+
+test("无效职责配置会被拒绝", async () => {
+  await withTempDirectory(async (directory) => {
+    const target = path.join(directory, "invalid-app");
+    const roleModels = {
+      architect: {
+        provider: "provider",
+        model: "model",
+        thinkingLevel: "invalid",
+      },
+    };
+
+    assert.throws(() => resolveRoleConfig(roleModels), /thinkingLevel 无效/);
+    await assert.rejects(createScaffold(target, { roleModels }), /thinkingLevel 无效/);
+    await assert.rejects(readFile(path.join(target, ".pi/role-models.json"), "utf8"), { code: "ENOENT" });
   });
 });
 
@@ -148,19 +240,54 @@ test("并行开发任务要求独立且受限的文件范围", () => {
   assert.equal(MAX_PARALLEL_DEVELOPERS, 4);
 });
 
+test("子代理 JSON 事件流会实时解析工具活动和模型摘要", async () => {
+  await withTempDirectory(async (directory) => {
+    const event = {
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "完成摘要" }] },
+    };
+    const script = `console.log(JSON.stringify(${JSON.stringify(event)}))`;
+    const events = [];
+    const result = await spawnPiWorker(
+      { command: process.execPath, args: ["-e", script] },
+      { cwd: directory, timeout: 1000, onEvent: (value) => events.push(value) },
+    );
+
+    assert.equal(result.code, 0);
+    assert.equal(result.summary, "完成摘要");
+    assert.deepEqual(events, [event]);
+  });
+});
+
 async function git(cwd, args) {
   const result = await execFileAsync("git", args, { cwd, encoding: "utf8" });
   return result.stdout;
 }
 
-function fakeParallelExec(worker) {
+function fakeParallelExec() {
   return async (command, args, options = {}) => {
-    if (command !== "git") {
-      await worker(args, options.cwd);
-      return { stdout: "worker complete\n", stderr: "", code: 0, killed: false };
-    }
     const result = await execFileAsync(command, args, { cwd: options.cwd, encoding: "utf8" });
     return { stdout: result.stdout, stderr: result.stderr, code: 0, killed: false };
+  };
+}
+
+function fakeParallelSpawn(worker) {
+  return async (invocation, options) => {
+    await worker(invocation.args, options.cwd, options);
+    options.onEvent?.({ type: "tool_execution_start", toolName: "test", args: {} });
+    options.onEvent?.({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "worker complete" }] },
+    });
+    return {
+      stdout: "",
+      stderr: "",
+      summary: "worker complete",
+      code: 0,
+      killed: false,
+      aborted: false,
+      timedOut: false,
+    };
   };
 }
 
@@ -179,7 +306,8 @@ test("并行开发创建隔离 worktree 并合并独立修改", async () => {
     const started = [];
     const updates = [];
     const result = await runParallelDevelop({
-      exec: fakeParallelExec(async (args, cwd) => {
+      exec: fakeParallelExec(),
+      spawnWorker: fakeParallelSpawn(async (args, cwd) => {
         const file = args.at(-1).includes("task-a") ? "a.txt" : "b.txt";
         await writeFile(path.join(cwd, file), `${file}\n`, "utf8");
       }),
@@ -197,12 +325,76 @@ test("并行开发创建隔离 worktree 并合并独立修改", async () => {
     assert.deepEqual(started.map(({ started: count }) => count).sort(), [1, 2]);
     assert.ok(started.every(({ total }) => total === 2));
     assert.equal(updates[0].details.status, "starting");
-    assert.equal(updates.filter(({ details }) => details.status === "running").length, 2);
+    assert.ok(updates.filter(({ details }) => details.status === "running").length >= 2);
+    const finalTasks = updates.at(-1).details.tasks;
+    assert.deepEqual(finalTasks.map(({ id, status }) => ({ id, status })), [
+      { id: "a", status: "completed" },
+      { id: "b", status: "completed" },
+    ]);
     assert.equal(result.results.length, 2);
     assert.deepEqual(result.results.map(({ changedFiles }) => changedFiles), [["a.txt"], ["b.txt"]]);
     assert.equal(normalizeNewlines(await readFile(path.join(directory, "a.txt"), "utf8")), "a.txt\n");
     assert.equal(normalizeNewlines(await readFile(path.join(directory, "b.txt"), "utf8")), "b.txt\n");
     assert.equal((await git(directory, ["worktree", "list", "--porcelain"])).split("\nworktree ").length, 1);
+  });
+});
+
+test("并行开发报告实时事件、心跳并自动重试基础设施错误", async () => {
+  await withTempDirectory(async (directory) => {
+    await createGitFixture(directory);
+    const attempts = new Map();
+    const updates = [];
+    const result = await runParallelDevelop({
+      exec: fakeParallelExec(),
+      spawnWorker: async (invocation, options) => {
+        const id = invocation.args.at(-1).includes("task-a") ? "a" : "b";
+        const attempt = (attempts.get(id) ?? 0) + 1;
+        attempts.set(id, attempt);
+        if (id === "a" && attempt === 1) {
+          options.onEvent?.({ type: "auto_retry_start", attempt: 1, maxAttempts: 1 });
+          return {
+            stdout: "",
+            stderr: "429 too many requests",
+            summary: "",
+            code: 1,
+            killed: false,
+            aborted: false,
+            timedOut: false,
+          };
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        options.onEvent?.({ type: "tool_execution_start", toolName: "test", args: { id } });
+        await writeFile(path.join(options.cwd, `${id}.txt`), `${id}\n`, "utf8");
+        return {
+          stdout: "",
+          stderr: "",
+          summary: `completed ${id}`,
+          code: 0,
+          killed: false,
+          aborted: false,
+          timedOut: false,
+        };
+      },
+      cwd: directory,
+      planInput: "报告状态并重试基础设施错误",
+      taskInput: [
+        { id: "a", task: "task-a", files: ["a.txt"] },
+        { id: "b", task: "task-b", files: ["b.txt"] },
+      ],
+      target: { provider: "test", model: "model", thinkingLevel: "off" },
+      heartbeatMs: 5,
+      workerTimeoutMs: 1000,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    assert.deepEqual(Object.fromEntries(attempts), { a: 2, b: 1 });
+    assert.ok(updates.some(({ details }) => details.tasks?.some((task) => task.status === "retrying")));
+    assert.ok(updates.some(({ details }) => details.tasks?.some((task) => task.current?.includes("test"))));
+    assert.deepEqual(result.tasks.map(({ id, status }) => ({ id, status })), [
+      { id: "a", status: "completed" },
+      { id: "b", status: "completed" },
+    ]);
   });
 });
 
@@ -213,9 +405,11 @@ test("并行开发拒绝重命名导致的范围外删除", async () => {
     await git(directory, ["add", "outside.txt"]);
     await git(directory, ["commit", "-m", "outside"]);
 
-    await assert.rejects(
-      runParallelDevelop({
-        exec: fakeParallelExec(async (args, cwd) => {
+    let error;
+    try {
+      await runParallelDevelop({
+        exec: fakeParallelExec(),
+        spawnWorker: fakeParallelSpawn(async (args, cwd) => {
           if (args.at(-1).includes("rename-task")) {
             await git(cwd, ["mv", "outside.txt", "inside.txt"]);
           }
@@ -227,10 +421,21 @@ test("并行开发拒绝重命名导致的范围外删除", async () => {
           { id: "noop", task: "noop-task", files: ["noop.txt"] },
         ],
         target: { provider: "test", model: "model", thinkingLevel: "off" },
-      }),
-      /未声明范围：.*outside\.txt/,
-    );
+      });
+      assert.fail("应拒绝未声明范围的修改");
+    } catch (caught) {
+      error = caught;
+    }
 
+    assert.match(error.message, /未声明范围：.*outside\.txt/);
+    assert.match(error.message, /失败现场和日志已保留/);
+    for (const index of [1, 2]) {
+      await execFileAsync("git", ["worktree", "remove", "--force", path.join(error.tempRoot, `worktree-${index}`)], {
+        cwd: directory,
+        encoding: "utf8",
+      });
+    }
+    await rm(error.tempRoot, { recursive: true, force: true });
     assert.equal(normalizeNewlines(await readFile(path.join(directory, "outside.txt"), "utf8")), "outside\n");
     await assert.rejects(readFile(path.join(directory, "inside.txt"), "utf8"), { code: "ENOENT" });
     assert.equal(await git(directory, ["status", "--porcelain"]), "");
