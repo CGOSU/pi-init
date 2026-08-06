@@ -1,8 +1,38 @@
 # pi-init
 
-Pi extension for initializing a project's AI Coding collaboration context.
+Pi 扩展：为项目生成 AI Coding 协作上下文，并提供职责路由与并行开发子代理。
 
-生成：
+## 功能
+
+- 生成项目级 `AGENTS.md`、记忆文档和 `.pi/skills/<slug>/SKILL.md`。
+- 根据任务在架构、开发测试、文档提交三类职责之间切换模型。
+- 支持 `auto`、`confirm`、`manual` 三种职责切换模式。
+- 通过隔离 Git worktree 并行运行开发测试子代理。
+- 记录项目宿主环境、阶段耗时、token/cache/cost 和自动重试指标。
+
+## 安装与启动
+
+直接在本仓库启动扩展：
+
+```bash
+pi --no-extensions -e ./extensions/init-project.ts
+```
+
+然后在 Pi 中执行：
+
+```text
+/init-project
+```
+
+也可以将当前目录安装为 Pi package：
+
+```bash
+pi install .
+```
+
+`init_project` 工具的 `targetDir` 默认为当前工作目录，支持 `dryRun: true` 预览而不写入文件。
+
+## 生成内容
 
 ```text
 <project-root>/
@@ -19,43 +49,64 @@ Pi extension for initializing a project's AI Coding collaboration context.
             └── SKILL.md
 ```
 
-## 使用
+初始化时会询问项目名称、语言、项目定位、测试命令和 Skill 名称。生成的 `AGENTS.md` 会记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
 
-```bash
-pi --no-extensions -e ./extensions/init-project.ts
+默认模板面向 CGOSU 工作流，包含团队知识库和 Git 身份规则。其他团队使用前，请修改：
+
+- `templates/AGENTS.md`
+- `templates/en/AGENTS.md`
+
+## 职责路由
+
+项目级 Skill 按交付物选择职责：
+
+| 职责 | 默认模型 | 推理强度 |
+| --- | --- | --- |
+| 架构师 | `openai-codex/gpt-5.6-sol` | `max` |
+| 开发测试工程师 | `openai-codex/gpt-5.6-luna` | `max` |
+| 文档与提交工程师 | `openai-codex/gpt-5.6-luna` | `medium` |
+
+职责配置保存在项目的 `.pi/role-models.json`：
+
+- `auto`：自动切换。
+- `confirm`：切换前询问。
+- `manual`：只允许用户手动切换。
+
+常用命令：
+
+```text
+/role-mode <auto|confirm|manual>
+/role <architect|developer-test|docs-commit>
+/role-config [architect|developer-test|docs-commit]
 ```
 
-然后在 Pi 中执行 `/init-project`。命令会询问项目名称、语言、项目定位、测试命令和 Skill 名称，并在写入前确认。
+`/role-mode` 只临时覆盖当前会话；`/role-config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但职责自动切换以项目配置为准。
 
-生成的 `AGENTS.md` 会记录初始化时检测到的宿主系统、CPU 架构和对应的命令约定；如果实际执行转移到 WSL、容器或远程主机，应以当前环境重新检测为准。
+## 并行开发
 
-希望所有项目都遵守同一套主机规则时，使用 Pi 的全局上下文文件 `~/.pi/agent/AGENTS.md`；`settings.json` 主要用于配置，不适合承载这类自然语言指令。
+仅当工作包真正独立、契约已冻结且足够大时才使用 `parallel_develop`。共享 DOM、API 或测试契约的任务，即使文件范围不重叠，也应交给单个子代理。
 
-也可以安装当前目录作为 Pi package：
+运行规则：
 
-```bash
-pi install .
+- 最多接受 4 个任务，默认同时运行 2 个，其余排队。
+- 每个任务必须提供 `id`、`task` 和不重叠的 `files` 范围。
+- 仅在受信任项目中运行，使用隔离 Git worktree。
+- 高频模型进度按 250ms 节流；工具和阶段变化即时报告。
+- `terminated` 等基础设施错误自动重试一次；代码或测试错误交由主开发测试工程师处理。
+- 成功后才合并和清理；失败 worktree、prompt 及日志会保留。
+- 主工作区必须干净，子代理不会提交或推送。
+
+结果包含 worker 耗时、turn/token/cache/cost、自动重试次数，以及准备、worker、合并阶段耗时。
+
+## 全局协作规则
+
+如果所有项目都需要遵守同一套主机规则，可使用 Pi 全局上下文文件：
+
+```text
+~/.pi/agent/AGENTS.md
 ```
 
-`init_project` 工具可由模型调用，`targetDir` 默认为当前工作目录；支持 `dryRun: true` 预览。
-
-默认模板面向 CGOSU 工作流，包含团队知识库和仓库 Git 身份规则。其他团队使用时应先修改 `templates/AGENTS.md` 和 `templates/en/AGENTS.md`。
-
-项目级 Skill 以 `AGENTS.md` 为唯一规则入口，并按交付物智能分配三类职责：
-
-| 职责 | 技术水平 | 模型类型 | 默认模型 | Pi 推理强度 |
-| --- | --- | --- | --- | --- |
-| 架构师 | Staff / Principal | 旗舰长上下文通用推理模型 | `openai-codex/gpt-5.6-sol` | `max` |
-| 开发测试工程师 | Senior / SDET | 代码专用或强工具调用模型 | `openai-codex/gpt-5.6-luna` | `max` |
-| 文档与提交工程师 | Technical Writer / Release Engineer | 快速、强指令遵循的通用模型 | `openai-codex/gpt-5.6-luna` | `medium` |
-
-Skill 会在每个职责开始前调用 `switch_role`，由 Extension 读取 `.pi/role-models.json` 并自动执行 `pi.setModel()` 与 `pi.setThinkingLevel()`。初始化 `/init-project` 时可选择默认职责配置或逐个选择当前可用模型和兼容的推理强度；项目运行中可用 `/role-config [architect|developer-test|docs-commit]` 持久修改某个职责并立即应用。
-
-可用 `/role architect`、`/role developer-test`、`/role docs-commit` 手动验证。Pi 原生 `/model`、`Shift+Tab` 仍可用于当前会话的临时切换；职责自动切换仍以 `.pi/role-models.json` 为准。
-
-职责切换模式配置在 `.pi/role-models.json` 顶层：`auto` 自动切换，`confirm` 切换前询问（默认接受建议），`manual` 只允许用户通过 `/role` 切换。`/role-mode <mode>` 仅临时覆盖当前会话。
-
-架构师完成规划后，如果存在至少两个真正独立、契约已冻结且适合长时间执行的工作包，Skill 会在允许自动切换时调用 `parallel_develop`。该工具仅在受信任项目中运行，为多个 `developer-test` 子代理创建隔离 Git worktree；最多 4 个任务，默认同时运行 2 个，剩余任务排队，以避免模型服务限流。子代理使用 Pi JSON 事件流，状态栏和工具进度实时显示每个任务的运行状态、当前工具、耗时和最后活动；高频模型输出会节流。基础设施错误（包括 `terminated` 等传输中断）自动重试一次，代码/测试错误交由主开发测试工程师接管；结果包含 worker 的耗时、turn/token/cache/cost/重试指标。失败现场和日志保留，成功后才合并并清理。主工作区必须干净，子代理不会提交或推送，且不会自动提升项目受信任级别。
+`settings.json` 主要用于配置，不适合承载自然语言协作规则。
 
 ## 检查
 
