@@ -143,7 +143,8 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[],
     content.addChild(new Text(theme.fg("accent", theme.bold(title)), 0, 0));
     content.addChild(new Spacer(1));
     if (options.summary?.length) {
-      content.addChild(new Text(theme.bg("selectedBg", theme.fg("text", options.summary.join("\n"))), 0, 0));
+      const summaryText = options.summary.map((line) => ` ${line} `).join("\n");
+      content.addChild(new Text(theme.bg("selectedBg", theme.fg("text", summaryText)), 0, 0));
     }
     content.addChild(new Text(theme.fg("dim", "↑↓ 选择 · Enter 确认 · Esc 返回"), 0, 0));
     content.addChild(list);
