@@ -31,6 +31,11 @@ description: {{SKILL_DESCRIPTION}}
 - 切换失败时立即停止该职责并报告错误，不得在错误模型下继续或伪报成功。
 - 用户可用 `/role <职责 ID>` 手动验证同一映射；自定义模型时只修改 `.pi/role-models.json`。
 
+- 架构师完成规划且存在至少两个相互独立的工作包时，调用 `parallel_develop`，让多个开发测试工程师并行实现和测试。
+- 每个 `parallel_develop` 任务必须提供 `id`、`task` 和不重叠的 `files` 范围；同一文件上的任务必须串行。
+- `parallel_develop` 使用隔离 Git worktree，成功后自动合并修改；主工作区必须干净，开发测试工程师不得提交或推送。
+- 只有一个简单工作包时跳过 `parallel_develop`，直接由开发测试工程师处理。
+
 ## 交接要求
 
 - 架构师交付：决定、原因、约束、风险、验收标准。

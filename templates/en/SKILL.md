@@ -31,6 +31,11 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
 - Users can verify the same mapping with `/role <role ID>` and customize models only in `.pi/role-models.json`.
 
+- After the Architect produces a plan with at least two independent work packages, call `parallel_develop` to run multiple Development and Test Engineers concurrently.
+- Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; tasks touching the same file must remain sequential.
+- `parallel_develop` uses isolated Git worktrees and merges successful changes automatically; the main worktree must be clean, and workers must not commit or push.
+- Skip `parallel_develop` for one small work package and use a single Development and Test Engineer.
+
 ## Handoff Contract
 
 - Architect: decision, rationale, constraints, risks, and acceptance criteria.

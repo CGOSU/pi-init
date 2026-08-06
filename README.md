@@ -47,6 +47,8 @@ pi install .
 
 Skill 会在每个职责开始前调用 `switch_role`，由 Extension 读取 `.pi/role-models.json` 并自动执行 `pi.setModel()` 与 `pi.setThinkingLevel()`。可用 `/role architect`、`/role developer-test`、`/role docs-commit` 手动验证；需要其他模型时只修改该 JSON。
 
+架构师完成规划后，如果存在至少两个文件范围不重叠的工作包，Skill 会调用 `parallel_develop`。该工具为多个 `developer-test` 子代理创建隔离 Git worktree，并发执行 `gpt-5.6-luna/max`，成功后自动将修改合并回主工作区；主工作区必须干净，子代理不会提交或推送。
+
 ## 检查
 
 ```bash

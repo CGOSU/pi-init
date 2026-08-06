@@ -6,6 +6,11 @@ import test from "node:test";
 
 import { createScaffold } from "../src/scaffold.js";
 import { DEFAULT_ROLE_MODELS, resolveRoleModel } from "../src/roles.js";
+import {
+  isPathAllowed,
+  MAX_PARALLEL_DEVELOPERS,
+  validateParallelTasks,
+} from "../src/parallel.js";
 
 async function withTempDirectory(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-"));
@@ -53,6 +58,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /`max`/);
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
+    assert.match(skill, /调用 `parallel_develop`/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);
 
     for (const file of result.files) {
@@ -97,6 +103,32 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   );
 });
 
+test("并行开发任务要求独立且受限的文件范围", () => {
+  const tasks = validateParallelTasks([
+    { id: "api", task: "实现 API", files: ["src/api"] },
+    { id: "tests", task: "补充测试", files: ["test/api.test.js"] },
+  ]);
+
+  assert.equal(tasks.length, 2);
+  assert.equal(isPathAllowed("src/api/router.js", tasks[0].files), true);
+  assert.equal(isPathAllowed("src/other.js", tasks[0].files), false);
+  assert.throws(
+    () => validateParallelTasks([
+      { id: "one", task: "one", files: ["src"] },
+      { id: "two", task: "two", files: ["src/utils"] },
+    ]),
+    /文件范围重叠/,
+  );
+  assert.throws(
+    () => validateParallelTasks([
+      { id: "one", task: "one", files: ["src/*.js"] },
+      { id: "two", task: "two", files: ["test"] },
+    ]),
+    /不支持通配符/,
+  );
+  assert.equal(MAX_PARALLEL_DEVELOPERS, 4);
+});
+
 test("英文模板和显式中文项目 slug 可用", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "商城");
@@ -119,5 +151,6 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(skill, /Development and Test Engineer.+Senior \/ SDET/);
     assert.match(skill, /Documentation and Commit Engineer.+Technical Writer \/ Release Engineer/);
     assert.match(skill, /Call `switch_role` before every role starts/);
+    assert.match(skill, /call `parallel_develop`/);
   });
 });

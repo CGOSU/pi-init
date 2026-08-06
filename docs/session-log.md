@@ -32,3 +32,12 @@
 - 验证：`npm test`，4 项测试全部通过。
 - 验证：独立检查 `src/roles.js` 与 `.pi/role-models.json`，开发测试映射均为 `openai-codex/gpt-5.6-luna/max`。
 - 遗留问题：暂无。
+
+### 2026-08-06：增加并行开发测试编排
+
+- 完成内容：新增 `parallel_develop` 工具；架构规划后可为 2 至 4 个文件范围不重叠的任务创建隔离 Git worktree，使用 `developer-test` 的 Luna/max 模型并发执行，并自动合并补丁。
+- 完成内容：同步中英文项目 Skill、README、项目状态与设计决策；新增任务范围校验和测试。
+- 验证：`npm test`，5 项测试全部通过。
+- 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
+- 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
+- 遗留问题：尚未进行真实 LLM 子代理端到端演练；当前已覆盖任务校验、扩展加载和编译检查。
