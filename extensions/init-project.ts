@@ -15,6 +15,7 @@ import {
   ROLE_MODES,
   ROLE_NAMES,
   THINKING_LEVELS,
+  filterRoleModels,
   resolveRoleConfig,
 } from "../src/roles.js";
 import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
@@ -127,11 +128,22 @@ async function selectRoleModel(ctx: ExtensionContext, role: string) {
     throw new Error("当前没有可用模型；请先配置模型凭据或调整模型范围");
   }
 
-  const modelLabels = models.map((model) => `${model.provider}/${model.id}`);
+  const query = await ctx.ui.input(
+    `搜索 ${role} 的模型（可留空显示全部）`,
+    "provider/model 或模型名称",
+  );
+  if (query === undefined) return undefined;
+
+  const filteredModels = filterRoleModels(models, query);
+  if (filteredModels.length === 0) {
+    throw new Error(`没有匹配“${query.trim()}”的模型，请重新执行配置并调整搜索条件`);
+  }
+
+  const modelLabels = filteredModels.map((model) => `${model.provider}/${model.id}`);
   const selectedModelLabel = await ctx.ui.select(`为 ${role} 选择模型`, modelLabels);
   if (selectedModelLabel === undefined) return undefined;
 
-  const model = models.find(
+  const model = filteredModels.find(
     (candidate) => `${candidate.provider}/${candidate.id}` === selectedModelLabel,
   );
   if (!model) throw new Error(`未知模型选择：${selectedModelLabel}`);

@@ -11,6 +11,7 @@ import {
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_MODELS,
   THINKING_LEVELS,
+  filterRoleModels,
   resolveRoleConfig,
   resolveRoleMode,
   resolveRoleModel,
@@ -188,6 +189,18 @@ test("dry-run 不创建文件并报告冲突", async () => {
     assert.equal(await readFile(path.join(target, "AGENTS.md"), "utf8"), "keep?");
     await assert.rejects(readFile(path.join(target, "docs/current-state.md"), "utf8"), { code: "ENOENT" });
   });
+});
+
+test("职责模型搜索会按 provider、model 或名称过滤并保留空搜索结果", () => {
+  const models = [
+    { provider: "openai-codex", id: "gpt-5.6-luna", name: "Luna" },
+    { provider: "anthropic", id: "claude-sonnet", name: "Sonnet" },
+  ];
+
+  assert.deepEqual(filterRoleModels(models, "LUNA"), [models[0]]);
+  assert.deepEqual(filterRoleModels(models, "anthropic/"), [models[1]]);
+  assert.deepEqual(filterRoleModels(models, "  "), models);
+  assert.deepEqual(filterRoleModels(models, "missing"), []);
 });
 
 test("职责模型配置支持默认值、覆盖和校验", () => {

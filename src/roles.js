@@ -60,6 +60,15 @@ export function resolveRoleModel(config, role) {
   return { provider: provider.trim(), model: model.trim(), thinkingLevel };
 }
 
+export function filterRoleModels(models, query) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return models;
+
+  return models.filter((model) =>
+    `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(normalizedQuery),
+  );
+}
+
 export function resolveRoleConfig(config) {
   const resolved = { mode: resolveRoleMode(config) };
   for (const role of ROLE_NAMES) {
