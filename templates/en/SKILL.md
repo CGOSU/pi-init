@@ -13,14 +13,14 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 | --- | --- | --- | --- | --- | --- |
 | Architect | Expert (Staff / Principal): capable of system boundaries, trade-offs, data and API design, migrations, and non-functional risk analysis | Architecture decisions, constraints, risks, and acceptance criteria; no code changes by default | Frontier general reasoning model with long context and strong trade-off analysis | `{{ARCHITECT_PROVIDER}}/{{ARCHITECT_MODEL}}` | `{{ARCHITECT_THINKING_LEVEL}}` |
 | Development and Test Engineer | Senior (Senior / SDET): capable of implementation, debugging, refactoring, and unit, integration, and regression testing | Minimal code changes, tests, commands, and actual results | Code-specialized or strong tool-use model for code comprehension and testing | `{{DEVELOPER_TEST_PROVIDER}}/{{DEVELOPER_TEST_MODEL}}` | `{{DEVELOPER_TEST_THINKING_LEVEL}}` |
-| Documentation and Commit Engineer | Senior (Technical Writer / Release Engineer): capable of terminology control, change verification, and traceable commits | Documentation, change summary, commit boundaries, and commit message | Fast general model with strong instruction following and structured writing | `{{DOCS_COMMIT_PROVIDER}}/{{DOCS_COMMIT_MODEL}}` | `{{DOCS_COMMIT_THINKING_LEVEL}}` |
+| Documentation and Wrap-up Engineer | Senior (Technical Writer / Release Engineer): capable of documentation maintenance, version bumps, change verification, and release wrap-up | Documentation, version bumps, change summary, wrap-up checks, commit boundaries, and commit message | Fast general model with strong instruction following and structured writing | `{{DOCS_COMMIT_PROVIDER}}/{{DOCS_COMMIT_MODEL}}` | `{{DOCS_COMMIT_THINKING_LEVEL}}` |
 
 ## Intelligent Assignment
 
 1. Use the Architect first for cross-module boundaries, technology choices, data models, security, performance, or irreversible migrations. It returns decisions, constraints, and acceptance criteria.
 2. Route implementation, fixes, refactoring, debugging, and testing to the Development and Test Engineer. Skip the Architect for small, well-defined changes.
-3. Route documentation-only work directly to the Documentation and Commit Engineer. For code work, enter this phase only after verification.
-4. For mixed work, hand off sequentially: Architect → Development and Test Engineer → Documentation and Commit Engineer. Do not activate every role for a simple task.
+3. Route documentation-only work directly to the Documentation and Wrap-up Engineer. For code work, enter this phase only after verification.
+4. For mixed work, hand off sequentially: Architect → Development and Test Engineer → Documentation and Wrap-up Engineer. Do not activate every role for a simple task.
 5. Before committing, inspect the actual diff and verification results. Run `git commit` only when explicitly requested, and `git push` only when explicitly requested.
 
 ## Role Switching Modes
@@ -32,7 +32,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 ## Automatic Model Switching
 
 - Call `switch_role` before every role starts and again at each role boundary; changing tone is not a model switch.
-- Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Commit Engineer.
+- Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Wrap-up Engineer.
 - `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
 - Users can verify the same mapping with `/role <role ID>`; in trusted projects, use `/role-config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/role` and retry the automatic role boundary.
@@ -46,5 +46,5 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 
 - Architect: decision, rationale, constraints, risks, and acceptance criteria.
 - Development and Test Engineer: changed files, implementation summary, verification commands, and actual results.
-- Documentation and Commit Engineer: documentation changes, final diff summary, and authorized commit or push results.
+- Documentation and Wrap-up Engineer: documentation and version changes, final diff summary, wrap-up checks, and authorized commit or push results.
 - During wrap-up, update a project document only when there is a new fact to record, following `AGENTS.md`.

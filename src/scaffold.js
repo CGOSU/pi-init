@@ -171,11 +171,11 @@ export async function createScaffold(targetDir, options = {}) {
       : "待项目维护者补充。";
   const skillDescription = options.description
     ? language === "en"
-      ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Commit Engineer roles with explicit technical level, model type, and Pi reasoning level. Project purpose: ${projectDescription}`
-      : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用；根据任务在架构师、开发测试工程师、文档与提交工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。项目定位：${projectDescription}`
+      ? `Use when modifying, debugging, testing, maintaining documentation, updating versions, or wrapping up delivery for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Wrap-up Engineer roles with explicit technical level, model type, and Pi reasoning level. Project purpose: ${projectDescription}`
+      : `处理 ${projectName} 的代码修改、调试、测试、文档维护、版本号更新或交付收尾时使用；根据任务在架构师、开发测试工程师、文档与收尾工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。项目定位：${projectDescription}`
     : language === "en"
-      ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Commit Engineer roles with explicit technical level, model type, and Pi reasoning level.`
-      : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用；根据任务在架构师、开发测试工程师、文档与提交工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。`;
+      ? `Use when modifying, debugging, testing, maintaining documentation, updating versions, or wrapping up delivery for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Wrap-up Engineer roles with explicit technical level, model type, and Pi reasoning level.`
+      : `处理 ${projectName} 的代码修改、调试、测试、文档维护、版本号更新或交付收尾时使用；根据任务在架构师、开发测试工程师、文档与收尾工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。`;
   const roleConfig = resolveRoleConfig(options.roleModels);
   const variables = {
     PROJECT_NAME: projectName,

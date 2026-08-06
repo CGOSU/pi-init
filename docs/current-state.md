@@ -13,7 +13,7 @@
 
 - 提供 `/init-project` 交互命令和 `init_project` 模型工具。
 - 默认生成 `AGENTS.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`。
-- Skill 在架构师、开发测试工程师、文档与提交工程师之间选择最少职责。
+- Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色。
 - `switch_role` 工具和 `/role` 命令读取 `.pi/role-models.json`，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/role-mode` 可临时覆盖当前会话。
 - `parallel_develop` 工具在架构规划后，在允许自动切换且项目受信任时为多个开发测试任务创建隔离 worktree；最多接受 4 个任务，默认 2 个 worker 并发，其余排队。子代理通过 Pi JSON 事件流实时报告任务状态、当前工具、耗时和最后活动，高频模型 delta 会节流；结果包含 worker 和 setup/worker/merge 阶段的耗时、turn/token/cache/cost/自动重试指标。基础设施错误（包括 `terminated` 等传输中断）自动重试一次，代码/测试错误交由主开发测试工程师接管，失败现场和日志保留，全部成功后才合并和清理；当前已有确定性 worktree、合并、重命名范围、心跳和重试测试。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖。

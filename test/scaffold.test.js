@@ -93,7 +93,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /^---\nname: example-app\n/);
     assert.match(skill, /架构师.+Staff \/ Principal/);
     assert.match(skill, /开发测试工程师.+Senior \/ SDET/);
-    assert.match(skill, /文档与提交工程师.+Technical Writer \/ Release Engineer/);
+    assert.match(skill, /文档与收尾工程师.+Technical Writer \/ Release Engineer/);
     assert.deepEqual(roleModels, DEFAULT_ROLE_CONFIG);
     assert.deepEqual(resolveRoleConfig(undefined), DEFAULT_ROLE_CONFIG);
     assert.deepEqual(THINKING_LEVELS, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -105,7 +105,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     });
     assert.match(skill, /openai-codex\/gpt-5\.6-sol/);
     assert.match(skill, /开发测试工程师[^\n]+openai-codex\/gpt-5\.6-luna[^\n]+`max`/);
-    assert.match(skill, /文档与提交工程师[^\n]+openai-codex\/gpt-5\.6-luna/);
+    assert.match(skill, /文档与收尾工程师[^\n]+openai-codex\/gpt-5\.6-luna/);
     assert.match(skill, /`max`/);
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
@@ -572,7 +572,7 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(skill, /name: mall-app/);
     assert.match(skill, /Architect.+Staff \/ Principal/);
     assert.match(skill, /Development and Test Engineer.+Senior \/ SDET/);
-    assert.match(skill, /Documentation and Commit Engineer.+Technical Writer \/ Release Engineer/);
+    assert.match(skill, /Documentation and Wrap-up Engineer.+Technical Writer \/ Release Engineer/);
     assert.match(skill, /Call `switch_role` before every role starts/);
     assert.match(skill, /call `parallel_develop`/);
     assert.match(skill, /trusted projects/);

@@ -1,12 +1,12 @@
 # pi-init
 
-Pi 扩展：为项目生成 AI Coding 协作上下文，并提供职责路由与并行开发子代理。
+Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排与并行开发子代理。
 
 ## 功能
 
 - 生成项目级 `AGENTS.md`、记忆文档和 `.pi/skills/<slug>/SKILL.md`。
-- 根据任务在架构、开发测试、文档提交三类职责之间切换模型。
-- 支持 `auto`、`confirm`、`manual` 三种职责切换模式。
+- 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
+- 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 通过隔离 Git worktree 并行运行开发测试子代理。
 - 记录项目宿主环境、阶段耗时、token/cache/cost 和自动重试指标。
 
@@ -56,17 +56,17 @@ pi install .
 - `templates/AGENTS.md`
 - `templates/en/AGENTS.md`
 
-## 职责路由
+## 角色编排
 
-项目级 Skill 按交付物选择职责：
+项目级 Skill 按交付物选择角色：
 
-| 职责 | 默认模型 | 推理强度 |
+| 角色 | 默认模型 | 推理强度 |
 | --- | --- | --- |
 | 架构师 | `openai-codex/gpt-5.6-sol` | `max` |
 | 开发测试工程师 | `openai-codex/gpt-5.6-luna` | `max` |
-| 文档与提交工程师 | `openai-codex/gpt-5.6-luna` | `medium` |
+| 文档与收尾工程师 | `openai-codex/gpt-5.6-luna` | `medium` |
 
-职责配置保存在项目的 `.pi/role-models.json`：
+角色配置保存在项目的 `.pi/role-models.json`：
 
 - `auto`：自动切换。
 - `confirm`：切换前询问。
@@ -80,7 +80,7 @@ pi install .
 /role-config [architect|developer-test|docs-commit]
 ```
 
-`/role-mode` 只临时覆盖当前会话；`/role-config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但职责自动切换以项目配置为准。
+`/role-mode` 只临时覆盖当前会话；`/role-config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但角色自动切换以项目配置为准。
 
 ## 并行开发
 
