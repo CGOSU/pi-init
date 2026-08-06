@@ -8,8 +8,8 @@ export const DEFAULT_ROLE_MODELS = {
   },
   "developer-test": {
     provider: "openai-codex",
-    model: "gpt-5.6-terra",
-    thinkingLevel: "high",
+    model: "gpt-5.6-luna",
+    thinkingLevel: "max",
   },
   "docs-commit": {
     provider: "openai-codex",

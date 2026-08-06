@@ -15,7 +15,7 @@
 - 默认生成 `AGENTS.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`。
 - Skill 在架构师、开发测试工程师、文档与提交工程师之间选择最少职责。
 - `switch_role` 工具和 `/role` 命令读取 `.pi/role-models.json`，自动调用 Pi API 切换模型与推理强度。
-- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-terra/high`、`gpt-5.6-luna/medium`，项目可覆盖。
+- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 测试命令为 `npm test`。
 

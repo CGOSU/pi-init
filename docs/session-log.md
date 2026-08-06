@@ -25,3 +25,10 @@
 - 验证：生成临时项目后通过 `pi --no-session --no-extensions --no-skills --skill <path> --mode rpc` 发现 `skill:role-demo`。
 - 验证：`npm pack --dry-run` 成功，发布包预览包含 17 个预期文件。
 - 遗留问题：暂无。
+
+### 2026-08-06：调整开发测试模型
+
+- 完成内容：将开发测试工程师的默认模型改为 `openai-codex/gpt-5.6-luna`，Pi 推理强度改为 `max`，并同步中英文模板、README、默认配置与测试。
+- 验证：`npm test`，4 项测试全部通过。
+- 验证：独立检查 `src/roles.js` 与 `.pi/role-models.json`，开发测试映射均为 `openai-codex/gpt-5.6-luna/max`。
+- 遗留问题：暂无。

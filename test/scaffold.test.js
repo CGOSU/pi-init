@@ -42,11 +42,15 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /开发测试工程师.+Senior \/ SDET/);
     assert.match(skill, /文档与提交工程师.+Technical Writer \/ Release Engineer/);
     assert.deepEqual(roleModels, DEFAULT_ROLE_MODELS);
+    assert.deepEqual(DEFAULT_ROLE_MODELS["developer-test"], {
+      provider: "openai-codex",
+      model: "gpt-5.6-luna",
+      thinkingLevel: "max",
+    });
     assert.match(skill, /openai-codex\/gpt-5\.6-sol/);
-    assert.match(skill, /openai-codex\/gpt-5\.6-terra/);
-    assert.match(skill, /openai-codex\/gpt-5\.6-luna/);
+    assert.match(skill, /开发测试工程师[^\n]+openai-codex\/gpt-5\.6-luna[^\n]+`max`/);
+    assert.match(skill, /文档与提交工程师[^\n]+openai-codex\/gpt-5\.6-luna/);
     assert.match(skill, /`max`/);
-    assert.match(skill, /`high`/);
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);

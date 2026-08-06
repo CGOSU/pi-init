@@ -25,3 +25,9 @@
 - 决定：复用现有项目级 Skill 按交付物路由；默认将架构师映射到 `openai-codex/gpt-5.6-sol:max`、开发测试工程师映射到 `openai-codex/gpt-5.6-terra:high`、文档与提交工程师映射到 `openai-codex/gpt-5.6-luna:medium`。
 - 原因：明确映射才能通过 Extension API 全自动切换；`.pi/role-models.json` 允许项目在不修改 Skill 或扩展代码的情况下替换模型。
 - 约束：只读取已信任项目的映射；模型不存在、缺少凭据或配置无效时停止职责切换并报告错误。提交和推送仍需用户明确授权。
+
+### 2026-08-06：开发测试职责改用 Luna 模型
+
+- 决定：将开发测试工程师默认映射从 `openai-codex/gpt-5.6-terra:high` 改为 `openai-codex/gpt-5.6-luna:max`。
+- 原因：按当前工作流选择 Luna，并提高推理强度以支持实现、调试和测试。
+- 约束：架构师和文档与提交工程师的默认映射不变；项目仍可通过 `.pi/role-models.json` 覆盖。
