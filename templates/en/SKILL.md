@@ -26,8 +26,16 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 ## Role Switching Modes
 
 - The top-level `mode` in `.pi/role-models.json` can be `auto`, `confirm`, or `manual`; the default is `auto`.
-- `auto` applies automatic role changes immediately; `confirm` asks before an automatic change, with “Accept suggestion” selected by default and options to switch to manual mode or cancel; `manual` blocks automatic changes and requires `/role <role ID>` first.
-- `/role-mode <mode>` overrides the mode for the current session only; edit `.pi/role-models.json` to change the project default.
+- `auto` applies automatic role changes immediately; `confirm` asks before an automatic change, with “Accept suggestion” selected by default and options to switch to manual mode or cancel; `manual` blocks automatic changes and requires `/pi-init role <role ID>` first.
+- `/pi-init mode <mode>` overrides the mode for the current session only; edit `.pi/role-models.json` to change the project default.
+
+## User Entry Point
+
+- `/pi-init`: open the control center for quick/advanced initialization, role configuration, role switching, and mode switching.
+- `/pi-init init [directory]`: initialize from project metadata with one confirmation.
+- `/pi-init advanced [directory]`: edit the project name, language, test command, and Skill before initialization.
+- `/pi-init role <role ID>`: manually switch roles.
+- `/pi-init config [role ID]`: persistently change a role's model and reasoning level.
 
 ## Automatic Model Switching
 
@@ -35,7 +43,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Wrap-up Engineer.
 - `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
-- Users can verify the same mapping with `/role <role ID>`; in trusted projects, use `/role-config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/role` and retry the automatic role boundary.
+- Users can verify the same mapping with `/pi-init role <role ID>`; in trusted projects, use `/pi-init config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/pi-init role` and retry the automatic role boundary.
 
 - After the Architect produces a plan with at least two truly independent, contract-frozen work packages that are large enough to run for a while, call `parallel_develop` to run multiple Development and Test Engineers concurrently; use one engineer for small or semantically coupled files.
 - Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; non-overlapping files are not sufficient when tasks share a DOM, API, or test contract. Up to 4 tasks are accepted, with 2 workers running concurrently by default.

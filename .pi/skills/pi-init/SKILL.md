@@ -26,8 +26,16 @@ description: "处理 pi-init 的代码修改、调试、测试或文档维护时
 ## 职责切换模式
 
 - `.pi/role-models.json` 顶层的 `mode` 可设为 `auto`、`confirm` 或 `manual`，默认是 `auto`。
-- `auto` 直接执行自动职责切换；`confirm` 在自动切换时先询问，默认选中“采用建议”，也可切换为手动模式或取消；`manual` 阻止自动换角，必须先用 `/role <职责 ID>`。
-- `/role-mode <模式>` 只覆盖当前会话，不修改项目配置；要修改默认行为，编辑 `.pi/role-models.json`。
+- `auto` 直接执行自动职责切换；`confirm` 在自动切换时先询问，默认选中“采用建议”，也可切换为手动模式或取消；`manual` 阻止自动换角，必须先用 `/pi-init role <职责 ID>`。
+- `/pi-init mode <模式>` 只覆盖当前会话，不修改项目配置；要修改默认行为，编辑 `.pi/role-models.json`。
+
+## 用户入口
+
+- `/pi-init`：打开控制中心，提供快速初始化、高级初始化、职责配置、职责切换和模式切换。
+- `/pi-init init [目录]`：使用项目元数据快速初始化，只需确认一次。
+- `/pi-init advanced [目录]`：编辑项目名称、语言、测试命令和 Skill 后初始化。
+- `/pi-init role <职责 ID>`：手动切换职责。
+- `/pi-init config [职责 ID]`：持久修改职责模型与推理强度。
 
 ## 自动模型切换
 
@@ -35,7 +43,7 @@ description: "处理 pi-init 的代码修改、调试、测试或文档维护时
 - 职责 ID：架构师用 `architect`，开发测试工程师用 `developer-test`，文档与收尾工程师用 `docs-commit`。
 - `switch_role` 从 `.pi/role-models.json` 读取项目映射，调用 Pi 的模型与推理强度 API，并返回实际生效结果。
 - 切换失败时立即停止该职责并报告错误，不得在错误模型下继续或伪报成功。
-- 用户可用 `/role <职责 ID>` 手动验证同一映射；在受信任项目中需要持久调整某一职责的模型或推理强度时，可使用 `/role-config [职责 ID]`；手动模式下执行 `/role` 后再重试自动职责。
+- 用户可用 `/pi-init role <职责 ID>` 手动验证同一映射；在受信任项目中需要持久调整某一职责的模型或推理强度时，可使用 `/pi-init config [职责 ID]`；手动模式下执行 `/pi-init role` 后再重试自动职责。
 
 - 架构师完成规划且存在至少两个真正独立、契约已冻结且适合长时间执行的工作包时，调用 `parallel_develop`，让多个开发测试工程师并行实现和测试；小任务或语义耦合的文件应交给单个开发测试工程师。
 - 每个 `parallel_develop` 任务必须提供 `id`、`task` 和不重叠的 `files` 范围；文件不重叠不是充分条件，共享 DOM、接口或测试契约的任务仍应串行。最多 4 个任务，默认同时运行 2 个。

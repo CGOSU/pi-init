@@ -11,22 +11,23 @@
 
 ## 已知状态
 
-- 提供 `/init-project` 交互命令和 `init_project` 模型工具。
+- 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。
 - 默认生成 `AGENTS.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`。
 - Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色。
-- `switch_role` 工具和 `/role` 命令读取 `.pi/role-models.json`，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/role-mode` 可临时覆盖当前会话。
+- `switch_role` 工具和 `/pi-init role` 读取 `.pi/role-models.json`，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 可临时覆盖当前会话，`/pi-init config` 持久修改职责模型。
 - `parallel_develop` 工具在架构规划后，在允许自动切换且项目受信任时为多个开发测试任务创建隔离 worktree；最多接受 4 个任务，默认 2 个 worker 并发，其余排队。子代理通过 Pi JSON 事件流实时报告任务状态、当前工具、耗时和最后活动，高频模型 delta 会节流；结果包含 worker 和 setup/worker/merge 阶段的耗时、turn/token/cache/cost/自动重试指标。基础设施错误（包括 `terminated` 等传输中断）自动重试一次，代码/测试错误交由主开发测试工程师接管，失败现场和日志保留，全部成功后才合并和清理；当前已有确定性 worktree、合并、重命名范围、心跳和重试测试。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。
-- 初始化可选择默认职责配置或为每个职责选择当前可用模型与兼容的推理强度；模型选择支持按 provider、model ID 或模型名称搜索过滤。运行中 `/role-config` 可持久修改职责映射并立即应用，Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
+- 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令、Skill 名称和职责模型。
+- 模型选择在 TUI 中使用带即时筛选的搜索列表，并使用友好的职责和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
 - 测试命令为 `npm test`。
 
 ## 待处理
 
-- 真实 LLM 子代理端到端演练尚未执行；当前已完成任务校验、扩展加载和编译检查。
+- 真实 LLM 子代理端到端演练尚未执行；当前已完成任务校验、扩展加载和 RPC 命令检查，独立 TypeScript 检查仍受环境未安装 `tsc` 限制。
 - 第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性；本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
 
-- 2026-08-06：并行子代理默认并发调整为 2，增加高频事件节流、真实阶段/worker 指标和 `terminated` 模型错误识别重试；此前已增加职责模型搜索过滤、宿主环境和跨平台命令约定，以及可配置职责模型、初始化选择和运行时持久配置命令。
+- 2026-08-06：统一 `/pi-init` 控制中心，增加快速/高级初始化、友好状态摘要、TUI 即时模型搜索、工具紧凑渲染和当前项目自动 reload；并行子代理默认并发调整为 2，增加高频事件节流、真实阶段/worker 指标和 `terminated` 模型错误识别重试。

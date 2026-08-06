@@ -10,6 +10,8 @@ import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.j
 import {
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_MODELS,
+  ROLE_LABELS,
+  ROLE_MODE_LABELS,
   THINKING_LEVELS,
   filterRoleModels,
   resolveRoleConfig,
@@ -109,7 +111,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /`max`/);
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
-    assert.match(skill, /\/role-config/);
+    assert.match(skill, /\/pi-init config/);
     assert.match(skill, /调用 `parallel_develop`/);
     assert.match(skill, /受信任项目/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);
@@ -150,7 +152,7 @@ test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async ()
     );
     assert.deepEqual(config, resolveRoleConfig(roleModels));
     assertSkillMatchesRoleConfig(skill, config);
-    assert.match(skill, /\/role-config/);
+    assert.match(skill, /\/pi-init config/);
   });
 });
 
@@ -176,7 +178,7 @@ test("部分职责配置回退默认值并同步英文 Skill", async () => {
     assert.deepEqual(config["developer-test"], DEFAULT_ROLE_MODELS["developer-test"]);
     assert.deepEqual(config["docs-commit"], DEFAULT_ROLE_MODELS["docs-commit"]);
     assertSkillMatchesRoleConfig(skill, config);
-    assert.match(skill, /\/role-config/);
+    assert.match(skill, /\/pi-init config/);
   });
 });
 
@@ -210,6 +212,11 @@ test("dry-run 不创建文件并报告冲突", async () => {
     assert.equal(await readFile(path.join(target, "AGENTS.md"), "utf8"), "keep?");
     await assert.rejects(readFile(path.join(target, "docs/current-state.md"), "utf8"), { code: "ENOENT" });
   });
+});
+
+test("职责显示标签保留内部 ID 并提供友好中文名称", () => {
+  assert.equal(ROLE_LABELS.architect, "架构设计");
+  assert.equal(ROLE_MODE_LABELS.auto, "自动（推荐）");
 });
 
 test("职责模型搜索会按 provider、model 或名称过滤并保留空搜索结果", () => {

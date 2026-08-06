@@ -2,6 +2,26 @@ export const ROLE_NAMES = ["architect", "developer-test", "docs-commit"];
 export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
 
+export const ROLE_LABELS = {
+  architect: "架构设计",
+  "developer-test": "开发测试",
+  "docs-commit": "文档收尾",
+};
+
+export const ROLE_MODE_LABELS = {
+  auto: "自动（推荐）",
+  confirm: "确认后切换",
+  manual: "手动控制",
+};
+
+export function roleLabel(role) {
+  return ROLE_LABELS[role] ?? role;
+}
+
+export function roleModeLabel(mode) {
+  return ROLE_MODE_LABELS[mode] ?? mode;
+}
+
 export const DEFAULT_ROLE_MODELS = {
   architect: {
     provider: "openai-codex",

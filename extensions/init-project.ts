@@ -4,6 +4,7 @@ import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
   CONFIG_DIR_NAME,
+  DynamicBorder,
   withFileMutationQueue,
   type ExtensionAPI,
   type ExtensionCommandContext,
@@ -17,9 +18,12 @@ import {
   THINKING_LEVELS,
   filterRoleModels,
   resolveRoleConfig,
+  roleLabel,
+  roleModeLabel,
 } from "../src/roles.js";
 import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
 import { runParallelDevelop } from "../src/parallel-runner.js";
+import { Container, Input, Key, matchesKey, SelectList, Text, type SelectItem } from "@earendil-works/pi-tui";
 
 const roleModelSchema = Type.Object({
   provider: Type.String({ description: "模型提供商 ID" }),
@@ -90,10 +94,59 @@ function formatElapsed(milliseconds: number) {
   return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
 }
 
+function formatRoleModel(config: RoleModelConfig) {
+  return `${config.provider}/${config.model} · ${config.thinkingLevel}`;
+}
+
+function shortModelName(model: string) {
+  const parts = model.split(/[\\/]/);
+  return parts.at(-1) ?? model;
+}
+
+type MenuItem = SelectItem;
+
+async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[]) {
+  if (!ctx.hasUI) return undefined;
+  if (ctx.mode !== "tui") {
+    const selected = await ctx.ui.select(title, items.map((item) => item.label));
+    return items.find((item) => item.label === selected)?.value;
+  }
+
+  const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+    const container = new Container();
+    const list = new SelectList(items, Math.min(items.length, 10), {
+      selectedPrefix: (text) => theme.fg("accent", text),
+      selectedText: (text) => theme.fg("accent", text),
+      description: (text) => theme.fg("muted", text),
+      scrollInfo: (text) => theme.fg("dim", text),
+      noMatch: (text) => theme.fg("warning", text),
+    });
+    list.onSelect = (item) => done(item.value);
+    list.onCancel = () => done(null);
+
+    container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    container.addChild(new Text(theme.fg("dim", "↑↓ 选择 · Enter 确认 · Esc 返回"), 1, 0));
+    container.addChild(list);
+    container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+
+    return {
+      render: (width: number) => container.render(width),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        list.handleInput(data);
+        tui.requestRender();
+      },
+    };
+  });
+
+  return result ?? undefined;
+}
+
 function formatParallelStatus(update: any) {
   const details = update.details;
   if (!details || typeof details !== "object" || !Array.isArray((details as { tasks?: unknown }).tasks)) {
-    return "并行子代理：工作中";
+    return "并行开发 · 工作中";
   }
 
   const tasks = (details as {
@@ -105,7 +158,7 @@ function formatParallelStatus(update: any) {
   const failed = tasks.filter((task) => task.status === "failed").length;
   const active = tasks.find((task) => !terminal.has(task.status));
   const suffix = active ? ` · ${active.id}: ${active.current ?? active.status}` : "";
-  return `并行子代理：${finished}/${tasks.length} 完成 · ${running} 运行${failed > 0 ? ` · ${failed} 失败` : ""}${suffix}`.slice(0, 240);
+  return `并行开发 · ${finished}/${tasks.length} 完成 · ${running} 运行${failed > 0 ? ` · ${failed} 失败` : ""}${suffix}`.slice(0, 180);
 }
 
 type RoleModelConfig = {
@@ -128,32 +181,109 @@ function getAvailableRoleModels(ctx: ExtensionContext) {
   );
 }
 
+async function selectModelWithSearch(ctx: ExtensionContext, role: string, models: any[]) {
+  if (ctx.mode !== "tui") {
+    const query = await ctx.ui.input(
+      `搜索 ${roleLabel(role)} 的模型（可留空显示全部）`,
+      "provider/model 或模型名称",
+    );
+    if (query === undefined) return undefined;
+    const filtered = filterRoleModels(models, query);
+    if (filtered.length === 0) {
+      throw new Error(`没有匹配“${query.trim()}”的模型，请重新执行配置并调整搜索条件`);
+    }
+    const labels = filtered.map((model) => `${model.provider}/${model.id}`);
+    const selected = await ctx.ui.select(`选择 ${roleLabel(role)} 模型`, labels);
+    return filtered.find((model) => `${model.provider}/${model.id}` === selected);
+  }
+
+  const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+    let filteredModels = models;
+    let list: SelectList;
+    const search = new Input();
+
+    const createList = (items: any[]) => {
+      const next = new SelectList(
+        items.map((model) => ({
+          value: `${model.provider}/${model.id}`,
+          label: `${model.id} [${model.provider}]`,
+          description: model.name ?? "",
+        })),
+        Math.min(items.length, 10),
+        {
+          selectedPrefix: (text) => theme.fg("accent", text),
+          selectedText: (text) => theme.fg("accent", text),
+          description: (text) => theme.fg("muted", text),
+          scrollInfo: (text) => theme.fg("dim", text),
+          noMatch: (text) => theme.fg("warning", text),
+        },
+      );
+      next.onSelect = (item) => done(item.value);
+      next.onCancel = () => done(null);
+      return next;
+    };
+
+    list = createList(filteredModels);
+    search.onSubmit = () => {
+      const selected = list.getSelectedItem();
+      done(selected?.value ?? null);
+    };
+    search.onEscape = () => done(null);
+
+    const render = (width: number) => {
+      const innerWidth = Math.max(1, width - 2);
+      return [
+        ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
+        ...new Text(theme.fg("accent", theme.bold(`选择 ${roleLabel(role)} 模型`)), 1, 0).render(width),
+        new Text(theme.fg("dim", "输入关键词即时筛选 · ↑↓ 选择 · Enter 确认 · Esc 返回"), 1, 0).render(width)[0] ?? "",
+        ...search.render(innerWidth).map((line) => ` ${line}`),
+        ...list.render(innerWidth).map((line) => ` ${line}`),
+        ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
+      ];
+    };
+
+    let focused = false;
+    return {
+      get focused() {
+        return focused;
+      },
+      set focused(value: boolean) {
+        focused = value;
+        search.focused = value;
+      },
+      render,
+      invalidate: () => {
+        search.invalidate();
+        list.invalidate();
+      },
+      handleInput: (data: string) => {
+        if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
+          list.handleInput(data);
+        } else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+          done(null);
+        } else {
+          search.handleInput(data);
+          filteredModels = filterRoleModels(models, search.getValue());
+          list = createList(filteredModels);
+        }
+        tui.requestRender();
+      },
+    };
+  });
+
+  if (!result) return undefined;
+  return models.find((model) => `${model.provider}/${model.id}` === result);
+}
+
 async function selectRoleModel(ctx: ExtensionContext, role: string) {
   const models = getAvailableRoleModels(ctx);
   if (models.length === 0) {
     throw new Error("当前没有可用模型；请先配置模型凭据或调整模型范围");
   }
 
-  const query = await ctx.ui.input(
-    `搜索 ${role} 的模型（可留空显示全部）`,
-    "provider/model 或模型名称",
-  );
-  if (query === undefined) return undefined;
-
-  const filteredModels = filterRoleModels(models, query);
-  if (filteredModels.length === 0) {
-    throw new Error(`没有匹配“${query.trim()}”的模型，请重新执行配置并调整搜索条件`);
-  }
-
-  const modelLabels = filteredModels.map((model) => `${model.provider}/${model.id}`);
-  const selectedModelLabel = await ctx.ui.select(`为 ${role} 选择模型`, modelLabels);
-  if (selectedModelLabel === undefined) return undefined;
-
-  const model = filteredModels.find(
-    (candidate) => `${candidate.provider}/${candidate.id}` === selectedModelLabel,
-  );
-  if (!model) throw new Error(`未知模型选择：${selectedModelLabel}`);
-
+  const model = await selectModelWithSearch(ctx, role, models);
+  if (!model) return undefined;
+  const selectedModelLabel = `${model.provider}/${model.id}`;
   const supportedThinkingLevels = getSupportedThinkingLevels(model).filter((level) =>
     (THINKING_LEVELS as readonly string[]).includes(level),
   );
@@ -161,9 +291,14 @@ async function selectRoleModel(ctx: ExtensionContext, role: string) {
     throw new Error(`模型 ${selectedModelLabel} 不支持任何可用的 Pi 推理强度`);
   }
 
-  const thinkingLevel = await ctx.ui.select(
-    `为 ${role} 选择推理强度（${selectedModelLabel}）`,
-    supportedThinkingLevels,
+  const thinkingLevel = await showMenu(
+    ctx,
+    `推理强度 · ${shortModelName(model.id)}`,
+    supportedThinkingLevels.map((level) => ({
+      value: level,
+      label: level,
+      description: level === "max" ? "最高推理强度，耗时和成本也最高" : undefined,
+    })),
   );
   if (thinkingLevel === undefined) return undefined;
   if (!supportedThinkingLevels.includes(thinkingLevel as (typeof supportedThinkingLevels)[number])) {
@@ -190,6 +325,72 @@ async function collectRoleModels(ctx: ExtensionContext) {
 function normalizeTargetDir(value: string) {
   const target = value.trim();
   return target.startsWith("@") ? target.slice(1) : target;
+}
+
+async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
+  const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
+  let packageJson: {
+    name?: unknown;
+    description?: unknown;
+    packageManager?: unknown;
+    scripts?: Record<string, unknown>;
+  } = {};
+  try {
+    const parsed = JSON.parse(await readFile(join(absoluteTarget, "package.json"), "utf8"));
+    if (parsed && typeof parsed === "object") packageJson = parsed;
+  } catch {
+    // package.json is optional; directory-name defaults still make quick init useful.
+  }
+
+  let packageManager = "npm";
+  if (typeof packageJson.packageManager === "string") {
+    packageManager = packageJson.packageManager.split("@")[0] || packageManager;
+  } else {
+    for (const [lockfile, manager] of [
+      ["pnpm-lock.yaml", "pnpm"],
+      ["yarn.lock", "yarn"],
+      ["bun.lockb", "bun"],
+      ["bun.lock", "bun"],
+    ] as const) {
+      try {
+        await readFile(join(absoluteTarget, lockfile));
+        packageManager = manager;
+        break;
+      } catch {
+        // Try the next package manager marker.
+      }
+    }
+  }
+
+  const scripts = packageJson.scripts ?? {};
+  const scriptName = ["test", "check", "lint"].find((name) => typeof scripts[name] === "string");
+  const inferredName = basename(absoluteTarget);
+  return {
+    projectName: typeof packageJson.name === "string" && packageJson.name.trim()
+      ? packageJson.name.trim()
+      : inferredName,
+    description:
+      typeof packageJson.description === "string" && packageJson.description.trim()
+        ? packageJson.description.trim()
+        : undefined,
+    testCommand: scriptName ? `${packageManager} ${scriptName}` : undefined,
+  };
+}
+
+function roleMenuItems(config: Record<string, RoleModelConfig>, mode: string) {
+  return [
+    {
+      value: "mode",
+      label: `当前会话模式：${roleModeLabel(mode)}`,
+      description: "只影响本次会话，不修改项目文件",
+    },
+    ...ROLE_NAMES.map((role) => ({
+      value: role,
+      label: `${roleLabel(role)}：${shortModelName(config[role].model)}/${config[role].thinkingLevel}`,
+      description: formatRoleModel(config[role]),
+    })),
+    { value: "back", label: "返回", description: "不修改其他设置" },
+  ];
 }
 
 async function writeRoleConfig(
@@ -259,10 +460,16 @@ async function runScaffold(
         return { ...preview, cancelled: true };
       }
       const message = [
-        `将在 ${preview.targetDir} 生成 ${preview.files.length} 个文件。`,
+        `项目：${preview.projectName}`,
+        `语言：${preview.language} · Skill：${preview.projectSlug}`,
+        ...(typeof options.testCommand === "string" && options.testCommand
+          ? [`测试：${options.testCommand}`]
+          : []),
+        `目录：${preview.targetDir}`,
+        `将生成 ${preview.files.length} 个文件。`,
         ...(preview.conflicts.length > 0
           ? [`已有文件将被覆盖：${preview.conflicts.join(", ")}`]
-          : []),
+          : ["无文件冲突"]),
       ].join("\n");
       if (!(await ctx.ui.confirm("确认初始化项目？", message))) {
         return { ...preview, cancelled: true };
@@ -279,29 +486,41 @@ async function input(ctx: ExtensionCommandContext, title: string, placeholder: s
 }
 
 async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
-  const roleConfiguration = await ctx.ui.select("职责模型配置", ["使用默认配置", "逐个配置", "取消"]);
-  if (roleConfiguration === undefined || roleConfiguration === "取消") return undefined;
-  const roleModels = roleConfiguration === "逐个配置" ? await collectRoleModels(ctx) : undefined;
-  if (roleConfiguration === "逐个配置" && !roleModels) return undefined;
-
-  const inferredName = basename(resolve(ctx.cwd, normalizeTargetDir(targetDir) || "."));
-  const projectName = await input(ctx, "项目名称", inferredName);
+  const metadata = await readProjectMetadata(ctx, targetDir);
+  const projectName = await input(ctx, "项目名称", metadata.projectName);
   if (projectName === undefined) return undefined;
 
-  const language = await ctx.ui.select("模板语言", ["zh-CN", "en"]);
-  if (language === undefined) return undefined;
+  const language = await showMenu(ctx, "模板语言", [
+    { value: "zh-CN", label: "简体中文", description: "生成中文协作文档" },
+    { value: "en", label: "English", description: "Generate English collaboration docs" },
+    { value: "cancel", label: "取消" },
+  ]);
+  if (!language || language === "cancel") return undefined;
 
-  const description = await input(ctx, "项目定位（可留空）", "例如：客户账户管理门户");
+  const description = await input(
+    ctx,
+    "项目定位（可留空）",
+    metadata.description ?? "例如：客户账户管理门户",
+  );
   if (description === undefined) return undefined;
 
-  const testCommand = await input(ctx, "测试命令（可留空）", "例如：npm test");
+  const testCommand = await input(ctx, "测试命令（可留空）", metadata.testCommand ?? "例如：npm test");
   if (testCommand === undefined) return undefined;
 
-  const slug = await input(ctx, "Skill 名称（可留空自动生成）", "例如：my-project");
+  const slug = await input(ctx, "Skill 名称（可留空自动生成）", metadata.projectName);
   if (slug === undefined) return undefined;
 
+  const roleConfiguration = await showMenu(ctx, "职责模型", [
+    { value: "default", label: "使用默认配置", description: "推荐，后续可在 /pi-init config 中修改" },
+    { value: "custom", label: "逐个配置", description: "为三个职责选择模型和推理强度" },
+    { value: "cancel", label: "取消" },
+  ]);
+  if (!roleConfiguration || roleConfiguration === "cancel") return undefined;
+  const roleModels = roleConfiguration === "custom" ? await collectRoleModels(ctx) : undefined;
+  if (roleConfiguration === "custom" && !roleModels) return undefined;
+
   return {
-    projectName: projectName || inferredName,
+    projectName: projectName || metadata.projectName,
     language,
     description: description || undefined,
     testCommand: testCommand || undefined,
@@ -311,11 +530,16 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
 }
 
 function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
+  ctx.ui.notify(formatResult(result), result.cancelled ? "warning" : "info");
+}
+
+async function finishScaffold(ctx: ExtensionCommandContext, result: ScaffoldOutcome) {
+  notifyResult(ctx, result);
   const isCurrentProject = result.targetDir === resolve(ctx.cwd, ".");
-  const suffix = isCurrentProject && !result.dryRun && !result.cancelled
-    ? "\n如需立即加载新 Skill，请执行 /reload。"
-    : "";
-  ctx.ui.notify(formatResult(result) + suffix, result.cancelled ? "warning" : "info");
+  if (isCurrentProject && !result.dryRun && !result.cancelled) {
+    ctx.ui.notify("当前项目已更新，正在重新加载 Skill。", "info");
+    await ctx.reload();
+  }
 }
 
 export default function initProjectExtension(pi: ExtensionAPI) {
@@ -327,18 +551,29 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   } | undefined;
   let sessionModeOverride: string | undefined;
 
+  function setRoleStatus(ctx: ExtensionContext, mode: string) {
+    if (!activeRole) {
+      ctx.ui.setStatus("pi-init", `职责模式 · ${roleModeLabel(mode)}`);
+      return;
+    }
+    ctx.ui.setStatus(
+      "pi-init",
+      `${roleModeLabel(mode)} · ${roleLabel(activeRole.role)} · ${shortModelName(activeRole.model)}/${activeRole.thinkingLevel}`,
+    );
+  }
+
   async function applyRole(role: string, ctx: ExtensionContext) {
-    const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig>;
+    const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
     const target = config[role];
     if (!target) throw new Error(`未知职责：${role}`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
     if (!model) {
       throw new Error(
-        `职责 ${role} 配置的模型不存在：${target.provider}/${target.model}；请修改 ${CONFIG_DIR_NAME}/role-models.json`,
+        `职责 ${roleLabel(role)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
       );
     }
     if (!(await pi.setModel(model))) {
-      throw new Error(`职责 ${role} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
+      throw new Error(`职责 ${roleLabel(role)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
     }
 
     pi.setThinkingLevel(
@@ -351,10 +586,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       thinkingLevel: pi.getThinkingLevel(),
     };
     activeRole = result;
-    ctx.ui.setStatus(
-      "pi-init-role",
-      `${role}: ${target.provider}/${target.model} · ${result.thinkingLevel}`,
-    );
+    setRoleStatus(ctx, sessionModeOverride ?? config.mode);
     return result;
   }
 
@@ -375,7 +607,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       activeRole.model !== result.model ||
       activeRole.thinkingLevel !== result.thinkingLevel
     ) {
-      throw new Error(`当前为手动模式，请先执行 /role ${role}`);
+      throw new Error(`当前为手动模式，请先执行 /pi-init role ${role}`);
     }
     return result;
   }
@@ -398,20 +630,25 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
     }
     if (!ctx.hasUI) {
-      throw new Error(`职责切换模式为 confirm，但当前环境无法确认；请先执行 /role ${role} 或 /role-mode auto`);
+      throw new Error(`职责切换模式为确认后切换，但当前环境无法确认；请先执行 /pi-init role ${role} 或 /pi-init mode auto`);
     }
 
-    const decision = await ctx.ui.select(
-      `自动建议切换到 ${role}，请选择`,
-      ["采用建议", "切换为手动模式", "取消"],
-    );
-    if (decision === "采用建议") {
+    const decision = await showMenu(ctx, `建议切换到「${roleLabel(role)}」`, [
+      { value: "accept", label: "采用建议", description: "切换到项目配置的模型" },
+      { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角" },
+      { value: "cancel", label: "取消" },
+    ]);
+    if (decision === "accept") {
       return { mode, requestedRole: role, result: await applyRole(role, ctx) };
     }
-    if (decision === "切换为手动模式") {
+    if (decision === "manual") {
       sessionModeOverride = "manual";
-      ctx.ui.setStatus("pi-init-mode", "职责模式：manual");
-      const selected = await ctx.ui.select("手动选择职责", ROLE_NAMES);
+      setRoleStatus(ctx, "manual");
+      const selected = await showMenu(
+        ctx,
+        "手动选择职责",
+        ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
+      );
       if (!selected) throw new Error("已取消手动职责选择");
       return {
         mode: "manual",
@@ -422,118 +659,192 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     throw new Error("已取消职责切换");
   }
 
-  pi.registerCommand("role-mode", {
-    description: "设置职责自动切换模式（当前会话临时生效）",
-    getArgumentCompletions: (prefix) => {
-      const matches = ROLE_MODES.filter((mode) => mode.startsWith(prefix));
-      return matches.length > 0 ? matches.map((mode) => ({ value: mode, label: mode })) : null;
-    },
-    handler: async (args, ctx) => {
-      const requested = args.trim();
-      const mode = requested || (ctx.hasUI ? await ctx.ui.select("职责切换模式", ROLE_MODES) : undefined);
-      if (!mode) return;
-      if (!ROLE_MODES.includes(mode)) {
-        ctx.ui.notify(`未知职责模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
+  async function setSessionMode(requested: string | undefined, ctx: ExtensionCommandContext) {
+    const mode = requested || await showMenu(
+      ctx,
+      "职责切换模式",
+      ROLE_MODES.map((value) => ({
+        value,
+        label: roleModeLabel(value),
+        description: value === "auto" ? "按任务自动选择职责和模型" : undefined,
+      })),
+    );
+    if (!mode) return undefined;
+    if (!ROLE_MODES.includes(mode)) {
+      ctx.ui.notify(`未知职责模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
+      return undefined;
+    }
+    sessionModeOverride = mode;
+    setRoleStatus(ctx, mode);
+    ctx.ui.notify(`当前会话职责模式：${roleModeLabel(mode)}`, "info");
+    return mode;
+  }
+
+  async function switchRole(requested: string | undefined, ctx: ExtensionCommandContext) {
+    const role = requested || await showMenu(
+      ctx,
+      "切换职责",
+      ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
+    );
+    if (!role) return;
+    if (!ROLE_NAMES.includes(role)) {
+      ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+      return;
+    }
+    try {
+      const result = await applyRole(role, ctx);
+      ctx.ui.notify(
+        `已切换到 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}`,
+        "info",
+      );
+    } catch (error) {
+      ctx.ui.notify(textOf(error), "error");
+    }
+  }
+
+  async function configureRole(requested: string | undefined, ctx: ExtensionCommandContext) {
+    if (!ctx.isProjectTrusted()) {
+      ctx.ui.notify("/pi-init config 仅允许在受信任项目中运行；请先信任当前项目", "error");
+      return;
+    }
+    const role = requested || await showMenu(
+      ctx,
+      "配置职责模型",
+      ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
+    );
+    if (!role) return;
+    if (!ROLE_NAMES.includes(role)) {
+      ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+      return;
+    }
+    if (!ctx.hasUI) {
+      ctx.ui.notify("/pi-init config 需要交互式 UI", "error");
+      return;
+    }
+
+    try {
+      const selection = await selectRoleModel(ctx, role);
+      if (!selection) {
+        ctx.ui.notify("已取消职责配置，没有写入文件。", "warning");
         return;
       }
-      sessionModeOverride = mode;
-      ctx.ui.setStatus("pi-init-mode", `职责模式：${mode}`);
-      ctx.ui.notify(`当前会话职责模式已设为 ${mode}`, "info");
-    },
+      await writeRoleConfig(ctx, role, selection);
+      const result = await applyRole(role, ctx);
+      ctx.ui.notify(
+        `已更新 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}`,
+        "info",
+      );
+    } catch (error) {
+      ctx.ui.notify(textOf(error), "error");
+    }
+  }
+
+  async function configureRoleCenter(ctx: ExtensionCommandContext) {
+    if (!ctx.isProjectTrusted()) {
+      ctx.ui.notify("/pi-init config 仅允许在受信任项目中运行；请先信任当前项目", "error");
+      return;
+    }
+
+    let config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+    while (true) {
+      const mode = sessionModeOverride ?? config.mode;
+      const action = await showMenu(ctx, "职责与模型", roleMenuItems(config, mode));
+      if (!action || action === "back") return;
+      if (action === "mode") {
+        await setSessionMode(undefined, ctx);
+        continue;
+      }
+      await configureRole(action, ctx);
+      config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+    }
+  }
+
+  async function quickInit(targetDir: string, ctx: ExtensionCommandContext) {
+    const metadata = await readProjectMetadata(ctx, targetDir);
+    const result = await runScaffold(
+      ctx,
+      targetDir,
+      { ...metadata, language: "zh-CN" },
+      ctx.hasUI ? "always" : "conflicts",
+    );
+    await finishScaffold(ctx, result);
+  }
+
+  async function advancedInit(targetDir: string, ctx: ExtensionCommandContext) {
+    if (!ctx.hasUI) {
+      throw new Error("高级初始化需要交互式 UI；无 UI 环境请使用 /pi-init init <目录>");
+    }
+    const options = await collectOptions(ctx, targetDir);
+    if (!options) {
+      ctx.ui.notify("已取消项目初始化。", "warning");
+      return;
+    }
+    const result = await runScaffold(ctx, targetDir, options, "always");
+    await finishScaffold(ctx, result);
+  }
+
+  async function showControlCenter(ctx: ExtensionCommandContext) {
+    if (ctx.mode !== "tui") {
+      await quickInit(".", ctx);
+      return;
+    }
+
+    const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+    const mode = sessionModeOverride ?? config.mode;
+    const status = activeRole
+      ? `${roleModeLabel(mode)} · ${roleLabel(activeRole.role)} · ${shortModelName(activeRole.model)}/${activeRole.thinkingLevel}`
+      : `${roleModeLabel(mode)} · 尚未切换职责`;
+    const action = await showMenu(ctx, `Pi Init · ${status}`, [
+      { value: "quick", label: "快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
+      { value: "advanced", label: "高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
+      { value: "config", label: "职责与模型", description: "查看或修改三个职责的模型配置" },
+      { value: "role", label: "切换职责", description: "立即应用某个职责的模型和推理强度" },
+      { value: "mode", label: `切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
+      { value: "exit", label: "退出" },
+    ]);
+    if (!action || action === "exit") return;
+    if (action === "quick") return quickInit(".", ctx);
+    if (action === "advanced") return advancedInit(".", ctx);
+    if (action === "config") return configureRoleCenter(ctx);
+    if (action === "role") return switchRole(undefined, ctx);
+    if (action === "mode") return setSessionMode(undefined, ctx);
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      const config = resolveRoleConfig(await readRoleConfig(ctx)) as { mode: string };
+      setRoleStatus(ctx, sessionModeOverride ?? config.mode);
+    } catch (error) {
+      ctx.ui.notify(textOf(error), "error");
+    }
   });
 
-  pi.registerCommand("role", {
-    description: "切换职责对应的模型与推理强度",
+  pi.registerCommand("pi-init", {
+    description: "打开 Pi Init 控制中心：初始化项目、配置职责和切换模型",
     getArgumentCompletions: (prefix) => {
-      const matches = ROLE_NAMES.filter((role) => role.startsWith(prefix));
-      return matches.length > 0 ? matches.map((role) => ({ value: role, label: role })) : null;
-    },
-    handler: async (args, ctx) => {
-      const requested = args.trim();
-      const role = requested || (ctx.hasUI ? await ctx.ui.select("选择职责", ROLE_NAMES) : undefined);
-      if (!role) return;
-      if (!ROLE_NAMES.includes(role)) {
-        ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
-        return;
+      const tokens = prefix.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length <= 1 && !prefix.endsWith(" ")) {
+        const values = ["init", "advanced", "config", "role", "mode"];
+        const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
+        return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
-      try {
-        const result = await applyRole(role, ctx);
-        ctx.ui.notify(
-          `已切换到 ${result.role}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}`,
-          "info",
-        );
-      } catch (error) {
-        ctx.ui.notify(textOf(error), "error");
-      }
-    },
-  });
-
-  pi.registerCommand("role-config", {
-    description: "交互配置并立即应用职责对应的模型与推理强度",
-    getArgumentCompletions: (prefix) => {
-      const matches = ROLE_NAMES.filter((role) => role.startsWith(prefix));
+      const action = tokens[0];
+      const values = action === "role" || action === "config" ? ROLE_NAMES : action === "mode" ? ROLE_MODES : [];
+      const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
+      const matches = values.filter((value) => value.startsWith(partial));
       return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
     },
     handler: async (args, ctx) => {
-      if (!ctx.isProjectTrusted()) {
-        ctx.ui.notify("/role-config 仅允许在受信任项目中运行；请先信任当前项目", "error");
-        return;
-      }
-      const requested = args.trim();
-      const role = requested || (ctx.hasUI ? await ctx.ui.select("选择要配置的职责", ROLE_NAMES) : undefined);
-      if (!role) {
-        ctx.ui.notify("用法：/role-config <architect|developer-test|docs-commit>", "error");
-        return;
-      }
-      if (!ROLE_NAMES.includes(role)) {
-        ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
-        return;
-      }
-      if (!ctx.hasUI) {
-        ctx.ui.notify("/role-config 需要交互式 UI", "error");
-        return;
-      }
-
+      const tokens = args.trim().split(/\s+/).filter(Boolean);
+      const action = tokens.shift();
       try {
-        const selection = await selectRoleModel(ctx, role);
-        if (!selection) {
-          ctx.ui.notify("已取消职责配置，没有写入文件。", "warning");
-          return;
-        }
-        await writeRoleConfig(ctx, role, selection);
-        const result = await applyRole(role, ctx);
-        ctx.ui.notify(
-          `已更新并应用 ${result.role}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}`,
-          "info",
-        );
-      } catch (error) {
-        ctx.ui.notify(textOf(error), "error");
-      }
-    },
-  });
-
-  pi.registerCommand("init-project", {
-    description: "初始化项目的 AI Coding 协作文件和智能职责 Skill",
-    handler: async (args, ctx) => {
-      const targetDir = args.trim() || ".";
-      if (!ctx.hasUI) {
-        try {
-          const result = await runScaffold(ctx, targetDir, {}, "conflicts");
-          notifyResult(ctx, result);
-        } catch (error) {
-          ctx.ui.notify(textOf(error), "error");
-        }
-        return;
-      }
-
-      try {
-        const options = await collectOptions(ctx, targetDir);
-        if (!options) {
-          ctx.ui.notify("已取消项目初始化。", "warning");
-          return;
-        }
-        const result = await runScaffold(ctx, targetDir, options, "always");
-        notifyResult(ctx, result);
+        if (!action) return showControlCenter(ctx);
+        if (action === "init") return quickInit(tokens.join(" ") || ".", ctx);
+        if (action === "advanced") return advancedInit(tokens.join(" ") || ".", ctx);
+        if (action === "config") return configureRole(tokens[0], ctx);
+        if (action === "role") return switchRole(tokens[0], ctx);
+        if (action === "mode") return setSessionMode(tokens[0], ctx);
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|role|mode] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");
       }
@@ -553,6 +864,28 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "Use init_project with dryRun=true first when the target project may already contain generated files.",
     ],
     parameters: initProjectParameters,
+    renderCall(args, theme) {
+      const target = typeof args.targetDir === "string" ? args.targetDir : ".";
+      return new Text(
+        theme.fg("toolTitle", theme.bold("pi-init ")) + theme.fg("muted", `初始化 ${target}`),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { expanded }, theme) {
+      const details = result.details as ScaffoldOutcome | undefined;
+      if (!details || !Array.isArray(details.files)) return new Text(theme.fg("error", "初始化失败"), 0, 0);
+      if (details.cancelled) return new Text(theme.fg("warning", "已取消初始化"), 0, 0);
+      const prefix = details.dryRun ? "预览" : "已生成";
+      const lines = [
+        theme.fg("success", `✓ ${prefix} ${details.files.length} 个文件`),
+        details.conflicts.length > 0
+          ? theme.fg("warning", `覆盖 ${details.conflicts.length} 个已有文件`)
+          : theme.fg("muted", "无文件冲突"),
+      ];
+      if (expanded) lines.push(...details.files.map((file) => theme.fg("dim", `  ${file}`)));
+      return new Text(lines.join("\n"), 0, 0);
+    },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "已取消，没有写入文件。" }], details: {} };
@@ -590,6 +923,35 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "parallel_develop runs only in trusted projects, uses isolated worktrees, throttles high-frequency progress updates, retries transient transport failures such as terminated once, and merges successful patches into the main worktree; inspect the metrics and merged diff, then run the full test command afterward.",
     ],
     parameters: parallelDevelopParameters,
+    renderCall(args, theme) {
+      const count = Array.isArray(args.tasks) ? args.tasks.length : 0;
+      return new Text(
+        theme.fg("toolTitle", theme.bold("并行开发 ")) + theme.fg("muted", `${count} 个工作包`),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { expanded }, theme) {
+      const details = result.details as {
+        results?: Array<{ id: string; changedFiles?: string[]; metrics?: { elapsedMs?: number } }>;
+        metrics?: { totalMs?: number };
+      } | undefined;
+      if (result.isError) return new Text(theme.fg("error", "并行开发失败，请由主开发测试工程师接管"), 0, 0);
+      const results = details?.results ?? [];
+      const changedFiles = results.reduce((count, worker) => count + (worker.changedFiles?.length ?? 0), 0);
+      const lines = [
+        theme.fg("success", `✓ ${results.length} 个工作包完成`),
+        theme.fg("muted", `${changedFiles} 个文件 · ${formatElapsed(details?.metrics?.totalMs ?? 0)}`),
+      ];
+      if (expanded) {
+        lines.push(
+          ...results.map((worker) =>
+            theme.fg("dim", `  ${worker.id} · ${worker.changedFiles?.join(", ") || "无文件修改"}`),
+          ),
+        );
+      }
+      return new Text(lines.join("\n"), 0, 0);
+    },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       if (signal?.aborted) {
@@ -601,10 +963,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const selection = await automaticRole("developer-test", ctx);
       const role = selection.result;
       if (role.role !== "developer-test") {
-        throw new Error("parallel_develop 需要 developer-test 职责；请执行 /role developer-test 后重试");
+        throw new Error("parallel_develop 需要开发测试职责；请执行 /pi-init role developer-test 后重试");
       }
       const total = params.tasks.length;
-      ctx.ui.setStatus("pi-init-parallel", `并行子代理：准备启动 0/${total}`);
+      ctx.ui.setStatus("pi-init-parallel", `并行开发 · 准备启动 0/${total}`);
       const reportUpdate = (update: any) => {
         ctx.ui.setStatus("pi-init-parallel", formatParallelStatus(update));
         onUpdate?.(update);
@@ -624,10 +986,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           signal,
           onUpdate: reportUpdate,
           onStarted: ({ started: count, total: taskTotal, id }: { started: number; total: number; id: string }) => {
-            ctx.ui.setStatus("pi-init-parallel", `并行子代理：已启动 ${count}/${taskTotal}（${id}）`);
+            ctx.ui.setStatus("pi-init-parallel", `并行开发 · 已启动 ${count}/${taskTotal}（${id}）`);
           },
         });
-        ctx.ui.setStatus("pi-init-parallel", `并行子代理：已完成 ${result.results.length}/${total}`);
+        ctx.ui.setStatus("pi-init-parallel", `并行开发 · 已完成 ${result.results.length}/${total}`);
         const lines = [
           `已启动并完成 ${result.results.length}/${total} 个并行开发测试任务。`,
           `模型：${role.provider}/${role.model}，推理强度：${role.thinkingLevel}`,
@@ -659,8 +1021,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           },
         };
       } catch (error) {
-        ctx.ui.setStatus("pi-init-parallel", "并行子代理：失败，等待主开发测试工程师接管");
+        ctx.ui.setStatus("pi-init-parallel", "并行开发 · 失败，等待主开发测试工程师接管");
         throw error;
+      } finally {
+        ctx.ui.setStatus("pi-init-parallel", undefined);
       }
     },
   });
@@ -669,14 +1033,27 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "switch_role",
     label: "Switch Role",
     description:
-      "Switch the active Pi model and reasoning level for a responsibility. Reads the mode and trusted project overrides from .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /role. Defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
+      "Switch the active Pi model and reasoning level for a responsibility. Reads the mode and trusted project overrides from .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /pi-init role. Defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
     promptSnippet: "Switch model and reasoning level for architect, developer-test, or docs-commit work",
     promptGuidelines: [
       "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
       "Use switch_role role=architect for architecture, role=developer-test for implementation and testing, and role=docs-commit for documentation or authorized Git operations.",
-      "In manual mode, switch_role does not change models; ask the user to run /role <role> and retry.",
+      "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
     ],
     parameters: switchRoleParameters,
+    renderCall(args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("职责切换 ")) + theme.fg("muted", roleLabel(args.role)), 0, 0);
+    },
+    renderResult(result, _options, theme) {
+      if (result.isError) return new Text(theme.fg("error", "职责切换失败"), 0, 0);
+      const details = result.details as { role?: string; model?: string; thinkingLevel?: string } | undefined;
+      return new Text(
+        theme.fg("success", "✓ ") + theme.fg("accent", roleLabel(details?.role ?? "")) +
+          theme.fg("muted", ` · ${shortModelName(details?.model ?? "")}/${details?.thinkingLevel ?? "off"}`),
+        0,
+        0,
+      );
+    },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) {

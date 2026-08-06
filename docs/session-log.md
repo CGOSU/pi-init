@@ -8,6 +8,11 @@
 
 ## 会话
 
+### 2026-08-06：版本 1.0.1 发布准备
+
+- 完成内容：将 `package.json` 版本从 `1.0.0` 更新为 `1.0.1`，同步整理 README 的初始化流程说明。
+- 遗留问题：提交已完成，推送待本次会话完成后执行。
+
 ### 2026-08-06：记录宿主系统和跨平台命令约定
 
 - 完成内容：`init_project` 生成的中英文 `AGENTS.md` 增加初始化宿主系统、CPU 架构和平台命令约定；Windows 规则覆盖 `where.exe`、`.cmd` shim、`pi.exec` 直接启动进程及安装前复核 CLI。
@@ -86,6 +91,16 @@
 - 验证：`npm test`，13 项测试全部通过。
 - 验证：`git diff --check` 和 `node --check src/roles.js` 通过。
 - 遗留问题：暂无。
+
+### 2026-08-06：统一控制中心和紧凑 TUI
+
+- 完成内容：将用户命令统一为 `/pi-init`，提供控制中心、快速/高级初始化、职责与模型配置、职责切换和会话模式切换；删除四个旧的独立命令注册。
+- 完成内容：快速初始化从 `package.json`、锁文件和目录名推断项目元数据；当前项目生成成功后自动调用 `ctx.reload()`；状态栏改为模式、职责、模型和推理强度的紧凑摘要。
+- 完成内容：TUI 菜单使用 Pi 原生边框、选择列表和主题；模型配置增加即时搜索列表；初始化、职责切换和并行开发工具增加紧凑的自定义结果渲染；将 `@earendil-works/pi-tui` 声明为运行时 peer dependency。
+- 验证：`npm test`，16 项测试全部通过；`node --check extensions/init-project.ts`、`node --check src/roles.js`、`git diff --check` 和 `npm pack --dry-run` 通过。
+- 验证：RPC 扩展加载和命令发现成功，仅发现 `pi-init`（另有环境中的 `llama` 扩展）；`/pi-init mode auto` 执行成功。
+- 验证：Windows 临时项目 RPC 流程执行 `/pi-init init .`，自动确认后生成 `AGENTS.md`，项目元数据和测试命令推断成功；Pi 子进程在自动 reload 后正常退出，验证脚本删除临时工作目录时遇到 Windows `EBUSY` 文件锁。
+- 遗留问题：尚未在真实交互式终端中进行视觉截图验收；当前环境未安装 `tsc`，未执行独立 TypeScript 类型检查。
 
 ### 2026-08-06：并行子代理性能和传输错误处理优化
 
