@@ -23,13 +23,19 @@ description: "处理 pi-init 的代码修改、调试、测试或文档维护时
 4. 混合任务按“架构师 → 开发测试工程师 → 文档与提交工程师”串行交接，不为简单任务启动全部职责。
 5. 提交前必须检查实际 diff 和验证结果；只有用户明确要求提交时才执行 `git commit`，明确要求推送时才执行 `git push`。
 
+## 职责切换模式
+
+- `.pi/role-models.json` 顶层的 `mode` 可设为 `auto`、`confirm` 或 `manual`，默认是 `auto`。
+- `auto` 直接执行自动职责切换；`confirm` 在自动切换时先询问，默认选中“采用建议”，也可切换为手动模式或取消；`manual` 阻止自动换角，必须先用 `/role <职责 ID>`。
+- `/role-mode <模式>` 只覆盖当前会话，不修改项目配置；要修改默认行为，编辑 `.pi/role-models.json`。
+
 ## 自动模型切换
 
 - 每个职责开始前必须先调用 `switch_role`；跨职责时再次调用，不能只改变口吻。
 - 职责 ID：架构师用 `architect`，开发测试工程师用 `developer-test`，文档与提交工程师用 `docs-commit`。
 - `switch_role` 从 `.pi/role-models.json` 读取项目映射，调用 Pi 的模型与推理强度 API，并返回实际生效结果。
 - 切换失败时立即停止该职责并报告错误，不得在错误模型下继续或伪报成功。
-- 用户可用 `/role <职责 ID>` 手动验证同一映射；自定义模型时只修改 `.pi/role-models.json`。
+- 用户可用 `/role <职责 ID>` 手动验证同一映射；手动模式下执行 `/role` 后再重试自动职责；自定义模型时只修改 `.pi/role-models.json`。
 
 - 架构师完成规划且存在至少两个相互独立的工作包时，调用 `parallel_develop`，让多个开发测试工程师并行实现和测试。
 - 每个 `parallel_develop` 任务必须提供 `id`、`task` 和不重叠的 `files` 范围；同一文件上的任务必须串行。

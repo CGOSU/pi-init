@@ -41,3 +41,12 @@
 - 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
 - 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
 - 遗留问题：尚未进行真实 LLM 子代理端到端演练；当前已覆盖任务校验、扩展加载和编译检查。
+
+### 2026-08-06：增加职责切换模式
+
+- 完成内容：增加项目级 `mode` 配置和 `/role-mode` 会话命令，支持 `auto`、`confirm`、`manual`；确认模式默认接受自动建议，手动模式要求先执行 `/role`。
+- 完成内容：`switch_role` 与 `parallel_develop` 遵守当前模式，避免手动模式下静默覆盖用户选择。
+- 验证：`npm test`，5 项测试全部通过。
+- 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
+- 验证：RPC 命令发现包含 `role-mode`，手动模式下执行 `/role architect` 后模型为 `gpt-5.6-sol/max`。
+- 遗留问题：暂无。

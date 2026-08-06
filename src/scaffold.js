@@ -2,7 +2,7 @@ import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_ROLE_MODELS } from "./roles.js";
+import { DEFAULT_ROLE_CONFIG } from "./roles.js";
 
 const TEMPLATE_ROOT = fileURLToPath(new URL("../templates/", import.meta.url));
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -140,7 +140,7 @@ export async function createScaffold(targetDir, options = {}) {
   files.splice(-1, 0, {
     relativePath: roleConfigPath,
     absolutePath: path.join(absoluteTarget, roleConfigPath),
-    content: `${JSON.stringify(DEFAULT_ROLE_MODELS, null, 2)}\n`,
+    content: `${JSON.stringify(DEFAULT_ROLE_CONFIG, null, 2)}\n`,
   });
 
   const conflicts = [];

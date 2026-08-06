@@ -14,7 +14,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { createScaffold } from "../src/scaffold.js";
-import { ROLE_NAMES, resolveRoleModel } from "../src/roles.js";
+import {
+  ROLE_MODES,
+  ROLE_NAMES,
+  resolveRoleMode,
+  resolveRoleModel,
+} from "../src/roles.js";
 import {
   isPathAllowed,
   MAX_PARALLEL_DEVELOPERS,
@@ -35,6 +40,10 @@ const roleNameSchema = StringEnum(ROLE_NAMES, {
   description: "要切换的职责：architect、developer-test 或 docs-commit",
 });
 const switchRoleParameters = Type.Object({ role: roleNameSchema });
+const roleModeSchema = StringEnum(ROLE_MODES, {
+  description: "职责切换模式：auto、confirm 或 manual",
+});
+const roleModeParameters = Type.Object({ mode: roleModeSchema });
 const parallelTaskSchema = Type.Object({
   id: Type.String({ description: "唯一任务 ID" }),
   task: Type.String({ description: "开发测试任务和验收要求" }),
@@ -424,6 +433,9 @@ async function runParallelDevelop(
 }
 
 export default function initProjectExtension(pi: ExtensionAPI) {
+  let activeRole: string | undefined;
+  let sessionModeOverride: string | undefined;
+
   async function applyRole(role: string, ctx: ExtensionContext) {
     const target = resolveRoleModel(await readRoleConfig(ctx), role);
     const model = ctx.modelRegistry.find(target.provider, target.model);
@@ -439,6 +451,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     pi.setThinkingLevel(
       target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0],
     );
+    activeRole = role;
     const result = {
       role,
       provider: target.provider,
@@ -451,6 +464,76 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     );
     return result;
   }
+
+  async function currentRole(role: string, ctx: ExtensionContext) {
+    if (!activeRole || activeRole !== role || !ctx.model) {
+      throw new Error(`当前为手动模式，请先执行 /role ${role}`);
+    }
+    return {
+      role,
+      provider: ctx.model.provider,
+      model: ctx.model.id,
+      thinkingLevel: pi.getThinkingLevel(),
+    };
+  }
+
+  async function automaticRole(role: string, ctx: ExtensionContext) {
+    const configuredMode = resolveRoleMode(await readRoleConfig(ctx));
+    const mode = sessionModeOverride ?? configuredMode;
+    if (mode === "auto") {
+      return { mode, requestedRole: role, result: await applyRole(role, ctx) };
+    }
+    if (mode === "manual") {
+      return { mode, requestedRole: role, result: await currentRole(role, ctx) };
+    }
+
+    if (activeRole === role) {
+      return { mode, requestedRole: role, result: await currentRole(role, ctx) };
+    }
+    if (!ctx.hasUI) {
+      throw new Error(`职责切换模式为 confirm，但当前环境无法确认；请先执行 /role ${role} 或 /role-mode auto`);
+    }
+
+    const decision = await ctx.ui.select(
+      `自动建议切换到 ${role}，请选择`,
+      ["采用建议", "切换为手动模式", "取消"],
+    );
+    if (decision === "采用建议") {
+      return { mode, requestedRole: role, result: await applyRole(role, ctx) };
+    }
+    if (decision === "切换为手动模式") {
+      sessionModeOverride = "manual";
+      ctx.ui.setStatus("pi-init-mode", "职责模式：manual");
+      const selected = await ctx.ui.select("手动选择职责", ROLE_NAMES);
+      if (!selected) throw new Error("已取消手动职责选择");
+      return {
+        mode: "manual",
+        requestedRole: role,
+        result: await applyRole(selected, ctx),
+      };
+    }
+    throw new Error("已取消职责切换");
+  }
+
+  pi.registerCommand("role-mode", {
+    description: "设置职责自动切换模式（当前会话临时生效）",
+    getArgumentCompletions: (prefix) => {
+      const matches = ROLE_MODES.filter((mode) => mode.startsWith(prefix));
+      return matches.length > 0 ? matches.map((mode) => ({ value: mode, label: mode })) : null;
+    },
+    handler: async (args, ctx) => {
+      const requested = args.trim();
+      const mode = requested || (ctx.hasUI ? await ctx.ui.select("职责切换模式", ROLE_MODES) : undefined);
+      if (!mode) return;
+      if (!ROLE_MODES.includes(mode)) {
+        ctx.ui.notify(`未知职责模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
+        return;
+      }
+      sessionModeOverride = mode;
+      ctx.ui.setStatus("pi-init-mode", `职责模式：${mode}`);
+      ctx.ui.notify(`当前会话职责模式已设为 ${mode}`, "info");
+    },
+  });
 
   pi.registerCommand("role", {
     description: "切换职责对应的模型与推理强度",
@@ -560,7 +643,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "并行开发已取消。" }], details: {} };
       }
-      const role = await applyRole("developer-test", ctx);
+      const selection = await automaticRole("developer-test", ctx);
+      const role = selection.result;
+      if (role.role !== "developer-test") {
+        throw new Error("parallel_develop 需要 developer-test 职责；请执行 /role developer-test 后重试");
+      }
       const result = await runParallelDevelop(pi, ctx, params.plan, params.tasks, signal, onUpdate);
       const lines = [
         `已完成 ${result.results.length} 个并行开发测试任务。`,
@@ -574,6 +661,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
           role: role.role,
+          mode: selection.mode,
           provider: role.provider,
           model: role.model,
           thinkingLevel: role.thinkingLevel,
@@ -587,11 +675,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "switch_role",
     label: "Switch Role",
     description:
-      "Switch the active Pi model and reasoning level for a responsibility. Reads trusted project overrides from .pi/role-models.json; defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
+      "Switch the active Pi model and reasoning level for a responsibility. Reads the mode and trusted project overrides from .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /role. Defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
     promptSnippet: "Switch model and reasoning level for architect, developer-test, or docs-commit work",
     promptGuidelines: [
       "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
       "Use switch_role role=architect for architecture, role=developer-test for implementation and testing, and role=docs-commit for documentation or authorized Git operations.",
+      "In manual mode, switch_role does not change models; ask the user to run /role <role> and retry.",
     ],
     parameters: switchRoleParameters,
     executionMode: "sequential",
@@ -599,15 +688,17 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "职责切换已取消。" }], details: {} };
       }
-      const result = await applyRole(params.role, ctx);
+      const selection = await automaticRole(params.role, ctx);
+      const result = selection.result;
+      const prefix = selection.requestedRole === result.role ? "已切换到" : `已按确认选择切换到 ${result.role}（建议为 ${selection.requestedRole}）`;
       return {
         content: [
           {
             type: "text",
-            text: `已切换到 ${result.role}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}`,
+            text: `${prefix}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}`,
           },
         ],
-        details: result,
+        details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole },
       };
     },
   });

@@ -23,13 +23,19 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 4. For mixed work, hand off sequentially: Architect → Development and Test Engineer → Documentation and Commit Engineer. Do not activate every role for a simple task.
 5. Before committing, inspect the actual diff and verification results. Run `git commit` only when explicitly requested, and `git push` only when explicitly requested.
 
+## Role Switching Modes
+
+- The top-level `mode` in `.pi/role-models.json` can be `auto`, `confirm`, or `manual`; the default is `auto`.
+- `auto` applies automatic role changes immediately; `confirm` asks before an automatic change, with “Accept suggestion” selected by default and options to switch to manual mode or cancel; `manual` blocks automatic changes and requires `/role <role ID>` first.
+- `/role-mode <mode>` overrides the mode for the current session only; edit `.pi/role-models.json` to change the project default.
+
 ## Automatic Model Switching
 
 - Call `switch_role` before every role starts and again at each role boundary; changing tone is not a model switch.
 - Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Commit Engineer.
 - `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
-- Users can verify the same mapping with `/role <role ID>` and customize models only in `.pi/role-models.json`.
+- Users can verify the same mapping with `/role <role ID>`; in manual mode, run `/role` and retry the automatic role boundary. Customize models only in `.pi/role-models.json`.
 
 - After the Architect produces a plan with at least two independent work packages, call `parallel_develop` to run multiple Development and Test Engineers concurrently.
 - Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; tasks touching the same file must remain sequential.

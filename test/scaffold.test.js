@@ -5,7 +5,12 @@ import path from "node:path";
 import test from "node:test";
 
 import { createScaffold } from "../src/scaffold.js";
-import { DEFAULT_ROLE_MODELS, resolveRoleModel } from "../src/roles.js";
+import {
+  DEFAULT_ROLE_CONFIG,
+  DEFAULT_ROLE_MODELS,
+  resolveRoleMode,
+  resolveRoleModel,
+} from "../src/roles.js";
 import {
   isPathAllowed,
   MAX_PARALLEL_DEVELOPERS,
@@ -46,7 +51,8 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /架构师.+Staff \/ Principal/);
     assert.match(skill, /开发测试工程师.+Senior \/ SDET/);
     assert.match(skill, /文档与提交工程师.+Technical Writer \/ Release Engineer/);
-    assert.deepEqual(roleModels, DEFAULT_ROLE_MODELS);
+    assert.deepEqual(roleModels, DEFAULT_ROLE_CONFIG);
+    assert.equal(roleModels.mode, "auto");
     assert.deepEqual(DEFAULT_ROLE_MODELS["developer-test"], {
       provider: "openai-codex",
       model: "gpt-5.6-luna",
@@ -83,6 +89,9 @@ test("dry-run 不创建文件并报告冲突", async () => {
 });
 
 test("职责模型配置支持默认值、覆盖和校验", () => {
+  assert.equal(resolveRoleMode(undefined), "auto");
+  assert.equal(resolveRoleMode({ mode: "manual" }), "manual");
+  assert.throws(() => resolveRoleMode({ mode: "sometimes" }), /职责切换模式无效/);
   assert.deepEqual(resolveRoleModel(undefined, "architect"), DEFAULT_ROLE_MODELS.architect);
   assert.deepEqual(
     resolveRoleModel(

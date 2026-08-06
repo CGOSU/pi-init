@@ -1,4 +1,6 @@
 export const ROLE_NAMES = ["architect", "developer-test", "docs-commit"];
+export const ROLE_MODES = ["auto", "confirm", "manual"];
+export const DEFAULT_ROLE_MODE = "auto";
 
 export const DEFAULT_ROLE_MODELS = {
   architect: {
@@ -18,7 +20,20 @@ export const DEFAULT_ROLE_MODELS = {
   },
 };
 
+export const DEFAULT_ROLE_CONFIG = {
+  mode: DEFAULT_ROLE_MODE,
+  ...DEFAULT_ROLE_MODELS,
+};
+
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+export function resolveRoleMode(config) {
+  const mode = config?.mode ?? DEFAULT_ROLE_MODE;
+  if (!ROLE_MODES.includes(mode)) {
+    throw new Error(`职责切换模式无效：${mode}`);
+  }
+  return mode;
+}
 
 export function resolveRoleModel(config, role) {
   if (!ROLE_NAMES.includes(role)) {
