@@ -2,6 +2,8 @@ import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_ROLE_MODELS } from "./roles.js";
+
 const TEMPLATE_ROOT = fileURLToPath(new URL("../templates/", import.meta.url));
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SUPPORTED_LANGUAGES = new Set(["zh-CN", "en"]);
@@ -109,11 +111,11 @@ export async function createScaffold(targetDir, options = {}) {
       : "待项目维护者补充。";
   const skillDescription = options.description
     ? language === "en"
-      ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}: ${projectDescription}`
-      : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用。项目定位：${projectDescription}`
+      ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Commit Engineer roles with explicit technical level, model type, and Pi reasoning level. Project purpose: ${projectDescription}`
+      : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用；根据任务在架构师、开发测试工程师、文档与提交工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。项目定位：${projectDescription}`
     : language === "en"
-      ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}. Load its long-term rules, current state, design decisions, and known pitfalls.`
-      : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用。加载项目长期规则、当前状态、设计决策和历史踩坑，确保任务遵循项目约定。`;
+      ? `Use when modifying, debugging, testing, or maintaining documentation for ${projectName}; automatically route work and switch models among Architect, Development and Test Engineer, and Documentation and Commit Engineer roles with explicit technical level, model type, and Pi reasoning level.`
+      : `处理 ${projectName} 的代码修改、调试、测试或文档维护时使用；根据任务在架构师、开发测试工程师、文档与提交工程师之间智能分配职责并自动切换模型，同时指定技术水平、模型类型和 Pi 推理强度。`;
   const variables = {
     PROJECT_NAME: projectName,
     PROJECT_SLUG: projectSlug,
@@ -134,6 +136,12 @@ export async function createScaffold(targetDir, options = {}) {
       };
     }),
   );
+  const roleConfigPath = ".pi/role-models.json";
+  files.splice(-1, 0, {
+    relativePath: roleConfigPath,
+    absolutePath: path.join(absoluteTarget, roleConfigPath),
+    content: `${JSON.stringify(DEFAULT_ROLE_MODELS, null, 2)}\n`,
+  });
 
   const conflicts = [];
   for (const file of files) {

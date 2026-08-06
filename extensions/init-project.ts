@@ -1,6 +1,9 @@
-import { resolve, basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve, basename, join } from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
+  CONFIG_DIR_NAME,
   withFileMutationQueue,
   type ExtensionAPI,
   type ExtensionCommandContext,
@@ -8,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { createScaffold } from "../src/scaffold.js";
+import { ROLE_NAMES, resolveRoleModel } from "../src/roles.js";
 
 const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
@@ -18,6 +22,25 @@ const initProjectParameters = Type.Object({
   testCommand: Type.Optional(Type.String({ description: "项目测试命令" })),
   dryRun: Type.Optional(Type.Boolean({ description: "只预览，不写入文件" })),
 });
+
+const roleNameSchema = StringEnum(ROLE_NAMES, {
+  description: "要切换的职责：architect、developer-test 或 docs-commit",
+});
+const switchRoleParameters = Type.Object({ role: roleNameSchema });
+
+async function readRoleConfig(ctx: ExtensionContext) {
+  if (!ctx.isProjectTrusted()) return undefined;
+
+  const configPath = join(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
+  try {
+    return JSON.parse(await readFile(configPath, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw new Error(`无法读取职责模型配置 ${configPath}：${textOf(error)}`);
+  }
+}
 
 function textOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -134,8 +157,62 @@ function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
 }
 
 export default function initProjectExtension(pi: ExtensionAPI) {
+  async function applyRole(role: string, ctx: ExtensionContext) {
+    const target = resolveRoleModel(await readRoleConfig(ctx), role);
+    const model = ctx.modelRegistry.find(target.provider, target.model);
+    if (!model) {
+      throw new Error(
+        `职责 ${role} 配置的模型不存在：${target.provider}/${target.model}；请修改 ${CONFIG_DIR_NAME}/role-models.json`,
+      );
+    }
+    if (!(await pi.setModel(model))) {
+      throw new Error(`职责 ${role} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
+    }
+
+    pi.setThinkingLevel(
+      target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0],
+    );
+    const result = {
+      role,
+      provider: target.provider,
+      model: target.model,
+      thinkingLevel: pi.getThinkingLevel(),
+    };
+    ctx.ui.setStatus(
+      "pi-init-role",
+      `${role}: ${target.provider}/${target.model} · ${result.thinkingLevel}`,
+    );
+    return result;
+  }
+
+  pi.registerCommand("role", {
+    description: "切换职责对应的模型与推理强度",
+    getArgumentCompletions: (prefix) => {
+      const matches = ROLE_NAMES.filter((role) => role.startsWith(prefix));
+      return matches.length > 0 ? matches.map((role) => ({ value: role, label: role })) : null;
+    },
+    handler: async (args, ctx) => {
+      const requested = args.trim();
+      const role = requested || (ctx.hasUI ? await ctx.ui.select("选择职责", ROLE_NAMES) : undefined);
+      if (!role) return;
+      if (!ROLE_NAMES.includes(role)) {
+        ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+        return;
+      }
+      try {
+        const result = await applyRole(role, ctx);
+        ctx.ui.notify(
+          `已切换到 ${result.role}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(textOf(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("init-project", {
-    description: "初始化项目的 AI Coding 协作文件和 Pi Skill",
+    description: "初始化项目的 AI Coding 协作文件和智能职责 Skill",
     handler: async (args, ctx) => {
       const targetDir = args.trim() || ".";
       if (!ctx.hasUI) {
@@ -167,8 +244,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "init_project",
     label: "Initialize Project",
     description:
-      "Generate AGENTS.md, four docs memory files, and .pi/skills/<slug>/SKILL.md in a project. Existing generated files may be overwritten after confirmation.",
-    promptSnippet: "Initialize a project's AI Coding context files and Pi Skill",
+      "Generate AGENTS.md, four docs memory files, .pi/role-models.json, and a role-routing .pi/skills/<slug>/SKILL.md in a project. The Skill defines technical level, model type, and Pi reasoning level for architecture, development/testing, and documentation/commit work. Existing generated files may be overwritten after confirmation.",
+    promptSnippet: "Initialize project context files and an intelligent responsibility-routing Skill",
     promptGuidelines: [
       "Use init_project when the user asks to initialize a project with AI Coding collaboration context.",
       "Before calling init_project, inspect available project metadata and provide description and testCommand when known.",
@@ -194,6 +271,35 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
       return {
         content: [{ type: "text", text }],
+        details: result,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "switch_role",
+    label: "Switch Role",
+    description:
+      "Switch the active Pi model and reasoning level for a responsibility. Reads trusted project overrides from .pi/role-models.json; defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-terra:high, docs-commit=openai-codex/gpt-5.6-luna:medium.",
+    promptSnippet: "Switch model and reasoning level for architect, developer-test, or docs-commit work",
+    promptGuidelines: [
+      "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
+      "Use switch_role role=architect for architecture, role=developer-test for implementation and testing, and role=docs-commit for documentation or authorized Git operations.",
+    ],
+    parameters: switchRoleParameters,
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (signal?.aborted) {
+        return { content: [{ type: "text", text: "职责切换已取消。" }], details: {} };
+      }
+      const result = await applyRole(params.role, ctx);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `已切换到 ${result.role}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}`,
+          },
+        ],
         details: result,
       };
     },

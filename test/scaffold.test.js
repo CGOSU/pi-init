@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createScaffold } from "../src/scaffold.js";
+import { DEFAULT_ROLE_MODELS, resolveRoleModel } from "../src/roles.js";
 
 async function withTempDirectory(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-"));
@@ -26,15 +27,28 @@ test("生成默认文件结构和动态 Skill", async () => {
       "docs/decisions.md",
       "docs/session-log.md",
       "docs/pitfalls.md",
+      ".pi/role-models.json",
       ".pi/skills/example-app/SKILL.md",
     ]);
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
+    const roleModels = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
     const skill = await readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8");
     assert.match(agents, /^# Example App AI 协作指南/);
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
     assert.doesNotMatch(agents, /知识库地址远程地址/);
     assert.match(skill, /^---\nname: example-app\n/);
+    assert.match(skill, /架构师.+Staff \/ Principal/);
+    assert.match(skill, /开发测试工程师.+Senior \/ SDET/);
+    assert.match(skill, /文档与提交工程师.+Technical Writer \/ Release Engineer/);
+    assert.deepEqual(roleModels, DEFAULT_ROLE_MODELS);
+    assert.match(skill, /openai-codex\/gpt-5\.6-sol/);
+    assert.match(skill, /openai-codex\/gpt-5\.6-terra/);
+    assert.match(skill, /openai-codex\/gpt-5\.6-luna/);
+    assert.match(skill, /`max`/);
+    assert.match(skill, /`high`/);
+    assert.match(skill, /`medium`/);
+    assert.match(skill, /必须先调用 `switch_role`/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);
 
     for (const file of result.files) {
@@ -58,6 +72,27 @@ test("dry-run 不创建文件并报告冲突", async () => {
   });
 });
 
+test("职责模型配置支持默认值、覆盖和校验", () => {
+  assert.deepEqual(resolveRoleModel(undefined, "architect"), DEFAULT_ROLE_MODELS.architect);
+  assert.deepEqual(
+    resolveRoleModel(
+      {
+        "docs-commit": {
+          provider: "custom",
+          model: "writer",
+          thinkingLevel: "low",
+        },
+      },
+      "docs-commit",
+    ),
+    { provider: "custom", model: "writer", thinkingLevel: "low" },
+  );
+  assert.throws(
+    () => resolveRoleModel({ architect: { provider: "", model: "x", thinkingLevel: "max" } }, "architect"),
+    /provider 无效/,
+  );
+});
+
 test("英文模板和显式中文项目 slug 可用", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "商城");
@@ -70,10 +105,15 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     });
 
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
+    const skill = await readFile(path.join(target, ".pi/skills/mall-app/SKILL.md"), "utf8");
     assert.match(agents, /## Project Purpose/);
     assert.match(agents, /- Test: `npm test`/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);
-    assert.match(await readFile(path.join(target, ".pi/skills/mall-app/SKILL.md"), "utf8"), /name: mall-app/);
+    assert.match(skill, /name: mall-app/);
+    assert.match(skill, /Architect.+Staff \/ Principal/);
+    assert.match(skill, /Development and Test Engineer.+Senior \/ SDET/);
+    assert.match(skill, /Documentation and Commit Engineer.+Technical Writer \/ Release Engineer/);
+    assert.match(skill, /Call `switch_role` before every role starts/);
   });
 });

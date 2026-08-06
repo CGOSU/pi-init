@@ -15,3 +15,13 @@
 - 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
 - 验证：`npm pack --dry-run` 成功，发布包预览包含 16 个预期文件。
 - 遗留问题：暂无。
+
+### 2026-08-04：智能职责路由与全自动模型切换
+
+- 完成内容：在中英文项目 Skill 中增加架构师、开发测试工程师、文档与提交工程师三类职责；新增 `.pi/role-models.json`、`switch_role` 工具和 `/role` 命令，在职责边界自动切换具体模型与 Pi 推理强度。
+- 验证：`npm test`，4 项测试全部通过，覆盖中英文职责、默认映射、项目覆盖和无效配置。
+- 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
+- 验证：RPC 依次切换 `architect`、`developer-test`、`docs-commit`，会话状态分别为 `gpt-5.6-sol/max`、`gpt-5.6-terra/high`、`gpt-5.6-luna/medium`。
+- 验证：生成临时项目后通过 `pi --no-session --no-extensions --no-skills --skill <path> --mode rpc` 发现 `skill:role-demo`。
+- 验证：`npm pack --dry-run` 成功，发布包预览包含 17 个预期文件。
+- 遗留问题：暂无。

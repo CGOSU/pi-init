@@ -27,3 +27,10 @@
 - 根因：Pi 同时加载了用户级已安装包和命令行指定的本地扩展。
 - 修复：开发验证时使用 `--no-extensions -e ./extensions/init-project.ts`，只加载当前文件。
 - 验证：见 `docs/session-log.md` 中 2026-08-04 的 extension 加载检查。
+
+### 2026-08-04：Skill 指令本身不会切换模型
+
+- 现象：Skill 可以声明职责、模型和推理强度，但仅加载 Skill 不会自动调用 `pi.setModel()`。
+- 根因：Pi Skill 是按需加载的工作流说明；运行时模型切换属于 Extension API。
+- 修复：由 Skill 在职责边界调用 `switch_role`，Extension 从受信任项目的 `.pi/role-models.json` 读取映射并执行 `pi.setModel()` 与 `pi.setThinkingLevel()`。
+- 验证：RPC 中依次执行 `/role architect`、`/role developer-test`、`/role docs-commit`，读取会话状态确认三个模型与推理强度均正确生效。
