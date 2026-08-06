@@ -23,7 +23,7 @@ import {
 } from "../src/roles.js";
 import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
 import { runParallelDevelop } from "../src/parallel-runner.js";
-import { Container, Input, Key, matchesKey, SelectList, Text, type SelectItem } from "@earendil-works/pi-tui";
+import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text, type SelectItem } from "@earendil-works/pi-tui";
 
 const roleModelSchema = Type.Object({
   provider: Type.String({ description: "模型提供商 ID" }),
@@ -50,7 +50,7 @@ const initProjectParameters = Type.Object({
 });
 
 const roleNameSchema = StringEnum(ROLE_NAMES, {
-  description: "要切换的职责：architect、developer-test 或 docs-commit",
+  description: "要切换的角色：architect、developer-test 或 docs-commit",
 });
 const switchRoleParameters = Type.Object({ role: roleNameSchema });
 const parallelTaskSchema = Type.Object({
@@ -80,7 +80,7 @@ async function readRoleConfig(ctx: ExtensionContext) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return undefined;
     }
-    throw new Error(`无法读取职责模型配置 ${configPath}：${textOf(error)}`);
+    throw new Error(`无法读取角色模型配置 ${configPath}：${textOf(error)}`);
   }
 }
 
@@ -139,13 +139,17 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[],
     list.onSelect = (item) => done(item.value);
     list.onCancel = () => done(null);
 
-    container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
-    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    const content = new Box(2, 0);
+    content.addChild(new Text(theme.fg("accent", theme.bold(title)), 0, 0));
+    content.addChild(new Spacer(1));
     if (options.summary?.length) {
-      container.addChild(new Text(theme.bg("selectedBg", theme.fg("text", options.summary.join("\n"))), 1, 0));
+      content.addChild(new Text(theme.bg("selectedBg", theme.fg("text", options.summary.join("\n"))), 0, 0));
     }
-    container.addChild(new Text(theme.fg("dim", "↑↓ 选择 · Enter 确认 · Esc 返回"), 1, 0));
-    container.addChild(list);
+    content.addChild(new Text(theme.fg("dim", "↑↓ 选择 · Enter 确认 · Esc 返回"), 0, 0));
+    content.addChild(list);
+
+    container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+    container.addChild(content);
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
 
     return {
@@ -537,9 +541,9 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
   const slug = await input(ctx, "Skill 名称（可留空自动生成）", metadata.projectName);
   if (slug === undefined) return undefined;
 
-  const roleConfiguration = await showMenu(ctx, "职责模型", [
+  const roleConfiguration = await showMenu(ctx, "角色模型", [
     { value: "default", label: "使用默认配置", description: "推荐，后续可在 /pi-init config 中修改" },
-    { value: "custom", label: "逐个配置", description: "为三个职责选择模型和推理强度" },
+    { value: "custom", label: "逐个配置", description: "为三个角色选择模型和推理强度" },
     { value: "cancel", label: "取消" },
   ]);
   if (!roleConfiguration || roleConfiguration === "cancel") return undefined;
@@ -606,15 +610,15 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   async function applyRole(role: string, ctx: ExtensionContext) {
     const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
     const target = config[role];
-    if (!target) throw new Error(`未知职责：${role}`);
+    if (!target) throw new Error(`未知角色：${role}`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
     if (!model) {
       throw new Error(
-        `职责 ${roleLabel(role)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
+        `角色 ${roleLabel(role)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
       );
     }
     if (!(await pi.setModel(model))) {
-      throw new Error(`职责 ${roleLabel(role)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
+      throw new Error(`角色 ${roleLabel(role)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
     }
 
     pi.setThinkingLevel(
@@ -671,7 +675,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
     }
     if (!ctx.hasUI) {
-      throw new Error(`职责切换模式为确认后切换，但当前环境无法确认；请先执行 /pi-init role ${role} 或 /pi-init mode auto`);
+      throw new Error(`角色切换模式为确认后切换，但当前环境无法确认；请先执行 /pi-init role ${role} 或 /pi-init mode auto`);
     }
 
     const decision = await showMenu(ctx, `建议切换到「${roleLabel(role)}」`, [
@@ -687,49 +691,49 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       setRoleStatus(ctx, "manual");
       const selected = await showMenu(
         ctx,
-        "手动选择职责",
+        "手动选择角色",
         ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
       );
-      if (!selected) throw new Error("已取消手动职责选择");
+      if (!selected) throw new Error("已取消手动角色选择");
       return {
         mode: "manual",
         requestedRole: role,
         result: await applyRole(selected, ctx),
       };
     }
-    throw new Error("已取消职责切换");
+    throw new Error("已取消角色切换");
   }
 
   async function setSessionMode(requested: string | undefined, ctx: ExtensionCommandContext) {
     const mode = requested || await showMenu(
       ctx,
-      "职责切换模式",
+      "角色切换模式",
       ROLE_MODES.map((value) => ({
         value,
         label: roleModeLabel(value),
-        description: value === "auto" ? "按任务自动选择职责和模型" : undefined,
+        description: value === "auto" ? "按任务自动选择角色和模型" : undefined,
       })),
     );
     if (!mode) return undefined;
     if (!ROLE_MODES.includes(mode)) {
-      ctx.ui.notify(`未知职责模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
+      ctx.ui.notify(`未知角色模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
       return undefined;
     }
     sessionModeOverride = mode;
     setRoleStatus(ctx, mode);
-    ctx.ui.notify(`当前会话职责模式：${roleModeLabel(mode)}`, "info");
+    ctx.ui.notify(`当前会话角色模式：${roleModeLabel(mode)}`, "info");
     return mode;
   }
 
   async function switchRole(requested: string | undefined, ctx: ExtensionCommandContext) {
     const role = requested || await showMenu(
       ctx,
-      "切换职责",
+      "切换角色",
       ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
     );
     if (!role) return;
     if (!ROLE_NAMES.includes(role)) {
-      ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+      ctx.ui.notify(`未知角色：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
       return;
     }
     try {
@@ -750,12 +754,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
     const role = requested || await showMenu(
       ctx,
-      "配置职责模型",
+      "配置角色模型",
       ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
     );
     if (!role) return;
     if (!ROLE_NAMES.includes(role)) {
-      ctx.ui.notify(`未知职责：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+      ctx.ui.notify(`未知角色：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
       return;
     }
     if (!ctx.hasUI) {
@@ -766,7 +770,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     try {
       const selection = await selectRoleModel(ctx, role);
       if (!selection) {
-        ctx.ui.notify("已取消职责配置，没有写入文件。", "warning");
+        ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
       }
       await writeRoleConfig(ctx, role, selection);
@@ -789,7 +793,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     let config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
     while (true) {
       const mode = sessionModeOverride ?? config.mode;
-      const action = await showMenu(ctx, "职责与模型", roleMenuItems(config, mode));
+      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode));
       if (!action || action === "back") return;
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
@@ -842,17 +846,17 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const summary = [
         `模式  ${roleModeLabel(mode)}`,
         role
-          ? `职责  ${roleLabel(role.role)}`
-          : "职责  尚未切换（按任务自动选择）",
+          ? `角色  ${roleLabel(role.role)}`
+          : "角色  尚未切换（按任务自动选择）",
         `模型  ${currentModel}`,
       ];
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
       const action = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
         { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
-        { value: "config", label: "◆ 职责 · 职责与模型", description: "查看或修改三个职责的模型配置" },
-        { value: "role", label: "◆ 职责 · 切换职责", description: "立即应用某个职责的模型和推理强度" },
-        { value: "mode", label: `◆ 职责 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
+        { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或修改三个角色的模型配置" },
+        { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
+        { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
         { value: "exit", label: "← 返回" },
       ], { summary });
       if (!action || action === "exit") return;
@@ -882,7 +886,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("pi-init", {
-    description: "打开 Pi Init 控制中心：初始化项目、配置职责和切换模型",
+    description: "打开 Pi Init 控制中心：初始化项目、配置角色和切换模型",
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
@@ -1025,7 +1029,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const selection = await automaticRole("developer-test", ctx);
       const role = selection.result;
       if (role.role !== "developer-test") {
-        throw new Error("parallel_develop 需要开发测试职责；请执行 /pi-init role developer-test 后重试");
+        throw new Error("parallel_develop 需要开发测试角色；请执行 /pi-init role developer-test 后重试");
       }
       const total = params.tasks.length;
       ctx.ui.setStatus("pi-init-parallel", `并行开发 · 准备启动 0/${total}`);
@@ -1104,10 +1108,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     ],
     parameters: switchRoleParameters,
     renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold("职责切换 ")) + theme.fg("muted", roleLabel(args.role)), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold("角色切换 ")) + theme.fg("muted", roleLabel(args.role)), 0, 0);
     },
     renderResult(result, _options, theme) {
-      if (result.isError) return new Text(theme.fg("error", "职责切换失败"), 0, 0);
+      if (result.isError) return new Text(theme.fg("error", "角色切换失败"), 0, 0);
       const details = result.details as { role?: string; model?: string; thinkingLevel?: string } | undefined;
       return new Text(
         theme.fg("success", "✓ ") + theme.fg("accent", roleLabel(details?.role ?? "")) +
@@ -1119,7 +1123,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) {
-        return { content: [{ type: "text", text: "职责切换已取消。" }], details: {} };
+        return { content: [{ type: "text", text: "角色切换已取消。" }], details: {} };
       }
       const selection = await automaticRole(params.role, ctx);
       const result = selection.result;

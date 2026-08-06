@@ -5,7 +5,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排与
 ## 功能
 
 - 生成项目级 `AGENTS.md`、记忆文档和 `.pi/skills/<slug>/SKILL.md`。
-- 通过统一的 `/pi-init` 控制中心完成初始化、职责配置和模型切换。
+- 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
 - 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 通过隔离 Git worktree 并行运行开发测试子代理。
@@ -91,13 +91,30 @@ pi install .
 - `confirm`：切换前询问。
 - `manual`：只允许用户手动切换。
 
+角色、模型和模式的关系：
+
+```mermaid
+flowchart LR
+  TASK[当前任务] --> MODE[模式<br/>auto / confirm / manual]
+  MODE -->|auto：自动决定| ROLE[角色<br/>架构师 / 开发测试 / 文档与收尾]
+  MODE -->|confirm：先询问| CONFIRM[用户确认]
+  CONFIRM --> ROLE
+  MODE -->|manual：手动指定| COMMAND["/pi-init role"]
+  COMMAND --> ROLE
+  ROLE --> CONFIG[角色配置<br/>.pi/role-models.json]
+  CONFIG --> MODEL[模型<br/>provider/model]
+  CONFIG --> THINKING[推理强度<br/>off ... max]
+  MODEL --> SESSION[当前会话]
+  THINKING --> SESSION
+```
+
 用户只需记住一个入口：
 
 ```text
 /pi-init
 ```
 
-控制中心提供快速初始化、高级初始化、职责与模型配置、职责切换和模式切换。熟悉命令行时也可以直接使用：
+控制中心提供快速初始化、高级初始化、角色与模型配置、角色切换和模式切换。熟悉命令行时也可以直接使用：
 
 ```text
 /pi-init init [目录]
