@@ -24,7 +24,25 @@ pi --no-extensions -e ./extensions/init-project.ts
 /init-project
 ```
 
-也可以将当前目录安装为 Pi package：
+可以直接从 GitHub 安装为 Pi package：
+
+```bash
+pi install https://github.com/CGOSU/pi-init
+```
+
+也可以使用 Git shorthand：
+
+```bash
+pi install git:github.com/CGOSU/pi-init
+```
+
+仅当前会话临时使用：
+
+```bash
+pi -e https://github.com/CGOSU/pi-init
+```
+
+本地开发时，也可以从当前目录安装：
 
 ```bash
 pi install .
