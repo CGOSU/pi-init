@@ -52,6 +52,32 @@ pi install .
 
 `init_project` 工具的 `targetDir` 默认为当前工作目录，支持 `dryRun: true` 预览而不写入文件。
 
+### 可选：离线启动与扩展更新
+
+如果全局设置了 `PI_OFFLINE=1`，Pi 启动时不会访问网络，也不会检查扩展更新。仓库提供跨平台启动器，把启动和升级分开：
+
+Windows PowerShell：
+
+```powershell
+pwsh -File .\scripts\install-launchers.ps1
+pi-fast
+pi-update
+```
+
+POSIX shell（Linux/macOS/WSL）：
+
+```bash
+sh ./scripts/install-launchers.sh
+pi-fast
+pi-update
+```
+
+- `pi-fast` 只为当前 Pi 子进程设置 `PI_OFFLINE=1`，日常启动不联网。
+- `pi-update` 只为更新子进程清除 `PI_OFFLINE`；无参数更新所有扩展，也可传入具体包源。
+- 更新结束后在当前 Pi 会话执行 `/reload`，或重启 Pi，使已加载扩展使用新文件。
+- 安装器会把启动器放到 Pi 所在的可执行目录；POSIX 若无写权限则使用 `${XDG_BIN_HOME:-$HOME/.local/bin}`，并提示将其加入 `PATH`。
+- 这两个启动器是可选工具，不会修改系统全局环境变量；换电脑时从仓库重新执行安装器即可。
+
 ## 生成内容
 
 ```text

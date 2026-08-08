@@ -65,6 +65,22 @@ test("运行环境说明按平台生成", () => {
   assert.doesNotMatch(linux, /where\.exe/);
 });
 
+test("跨平台 Pi 启动器分离离线启动和扩展更新", async () => {
+  const files = {
+    windowsFast: await readFile(path.join(process.cwd(), "scripts", "pi-fast.cmd"), "utf8"),
+    windowsUpdate: await readFile(path.join(process.cwd(), "scripts", "pi-update.cmd"), "utf8"),
+    posixFast: await readFile(path.join(process.cwd(), "scripts", "pi-fast.sh"), "utf8"),
+    posixUpdate: await readFile(path.join(process.cwd(), "scripts", "pi-update.sh"), "utf8"),
+  };
+
+  assert.match(files.windowsFast, /set "PI_OFFLINE=1"/);
+  assert.match(files.windowsUpdate, /set "PI_OFFLINE="/);
+  assert.match(files.windowsUpdate, /update --extensions/);
+  assert.match(files.posixFast, /export PI_OFFLINE=1/);
+  assert.match(files.posixUpdate, /unset PI_OFFLINE/);
+  assert.match(files.posixUpdate, /update --extensions/);
+});
+
 test("生成默认文件结构和动态 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "example-app");

@@ -9,6 +9,7 @@
     "extensions",
     "src",
     "templates",
+    "scripts",
     "README.md"
   ],
   "scripts": {

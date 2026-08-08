@@ -8,6 +8,13 @@
 
 ## 会话
 
+### 2026-08-06：增加跨平台离线启动和扩展更新脚本
+
+- 完成内容：新增 Windows `.cmd`、POSIX `.sh` 启动器，以及 PowerShell/POSIX 安装器；启动和升级分别控制 `PI_OFFLINE`，脚本纳入发布包。
+- 完成内容：Windows 安装器将脚本复制到 `pi.cmd` 所在的 npm 可执行目录，修复脚本只存在于未持久 PATH 的用户 bin 导致 PowerShell 无法识别的问题。
+- 验证：`npm test`，23 项测试全部通过；`bash -n scripts/*.sh`、`node --check test/scaffold.test.js`、`git diff --check`、`npm pack --dry-run` 通过；PowerShell 下 `pi-fast.cmd --version` 实际返回 `0.84.1`。
+- 遗留问题：本次改动尚未提交或推送。
+
 ### 2026-08-06：恢复会话角色状态以支持跨日压缩
 
 - 完成内容：`session_start`、resume 和 reload 时，根据当前 provider/model 与实际推理强度唯一匹配并恢复角色；重复配置或无法匹配时保持未知。
