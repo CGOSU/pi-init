@@ -43,11 +43,13 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Wrap-up Engineer.
 - `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
+- In auto mode, only a real role boundary at 50% or more context usage triggers one compaction after the current turn; it preserves the goal, decisions, progress, files, verification results, and next steps, then resumes the task on success. Confirm, manual, first-role, same-role, and unknown-context switches do not trigger extra compaction.
 - Users can verify the same mapping with `/pi-init role <role ID>`; in trusted projects, use `/pi-init config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/pi-init role` and retry the automatic role boundary.
 
 - After the Architect produces a plan with at least two truly independent, contract-frozen work packages that are large enough to run for a while, call `parallel_develop` to run multiple Development and Test Engineers concurrently; use one engineer for small or semantically coupled files.
 - Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; non-overlapping files are not sufficient when tasks share a DOM, API, or test contract. Up to 4 tasks are accepted, with 2 workers running concurrently by default.
 - `parallel_develop` runs only in trusted projects, uses isolated Git worktrees, and merges successful changes automatically; workers use Pi's JSON event stream, while the status bar and tool progress show each task's status, current tool, elapsed time, and last activity, with high-frequency model updates throttled. Infrastructure failures, including `terminated` transport interruptions, are retried once automatically; results include elapsed time, token/cache/cost/retry metrics. Code or test failures are handed to the main Development and Test Engineer. Failed worktrees and logs are preserved; the main worktree must be clean, and workers must not commit or push. Workers use `--no-approve` and never promote project trust automatically.
+- `parallel_develop` follows Git `core.ignorecase` for filesystem case sensitivity; on Windows it launches npm `.cmd` shims safely through `cmd.exe` and terminates the entire process tree on cancellation or timeout.
 - Skip `parallel_develop` for one small work package and use a single Development and Test Engineer.
 
 ## Handoff Contract

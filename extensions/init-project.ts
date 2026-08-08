@@ -20,6 +20,7 @@ import {
   resolveRoleConfig,
   roleLabel,
   roleModeLabel,
+  shouldCompactOnRoleSwitch,
 } from "../src/roles.js";
 import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
 import { runParallelDevelop } from "../src/parallel-runner.js";
@@ -37,6 +38,13 @@ const roleModelsSchema = Type.Object({
   "developer-test": Type.Optional(roleModelSchema),
   "docs-commit": Type.Optional(roleModelSchema),
 });
+
+const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
+  "这是自动角色切换触发的上下文压缩。",
+  "请保留后续角色继续工作所需的完整信息：用户目标与约束、关键决策及原因、已完成/进行中/阻塞事项、读取和修改的文件、实际执行的验证命令与结果、下一步。",
+  "不要把未完成事项写成已完成；保持项目路径、错误信息和待处理问题的准确性。",
+].join("\n");
+const ROLE_SWITCH_CONTINUATION_TYPE = "pi-init-role-transition";
 
 const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
@@ -585,6 +593,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   } | undefined;
   let sessionModeOverride: string | undefined;
   let controlCenterGuideShown = false;
+  let pendingRoleCompaction: { fromRole: string; toRole: string } | undefined;
+  let roleCompactionInFlight = false;
 
   function activeRoleFor(ctx: ExtensionContext) {
     if (
@@ -608,6 +618,40 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "pi-init",
       `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model}`,
     );
+  }
+
+  function startPendingRoleCompaction(ctx: ExtensionContext) {
+    if (!pendingRoleCompaction || roleCompactionInFlight) return;
+
+    const transition = pendingRoleCompaction;
+    pendingRoleCompaction = undefined;
+    roleCompactionInFlight = true;
+    ctx.ui.setStatus("pi-init-compaction", "● 角色切换 · 正在压缩上下文");
+    ctx.compact({
+      customInstructions: ROLE_SWITCH_COMPACTION_INSTRUCTIONS,
+      onComplete: () => {
+        roleCompactionInFlight = false;
+        ctx.ui.setStatus("pi-init-compaction", undefined);
+        try {
+          pi.sendMessage(
+            {
+              customType: ROLE_SWITCH_CONTINUATION_TYPE,
+              content: `已完成从${roleLabel(transition.fromRole)}到${roleLabel(transition.toRole)}的自动角色切换和上下文压缩。请继续当前任务。`,
+              display: false,
+              details: transition,
+            },
+            { triggerTurn: true },
+          );
+        } catch (error) {
+          ctx.ui.notify(`上下文压缩已完成，但无法自动继续：${textOf(error)}`, "warning");
+        }
+      },
+      onError: (error) => {
+        roleCompactionInFlight = false;
+        ctx.ui.setStatus("pi-init-compaction", undefined);
+        ctx.ui.notify(`角色切换后的上下文压缩失败：${error.message}`, "warning");
+      },
+    });
   }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
@@ -664,7 +708,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const configuredMode = (resolveRoleConfig(await readRoleConfig(ctx)) as { mode: string }).mode;
     const mode = sessionModeOverride ?? configuredMode;
     if (mode === "auto") {
-      return { mode, requestedRole: role, result: await applyRole(role, ctx) };
+      const previousRole = activeRoleFor(ctx)?.role;
+      const compactAfterSwitch = shouldCompactOnRoleSwitch({
+        mode,
+        previousRole,
+        nextRole: role,
+        contextUsage: ctx.getContextUsage(),
+      });
+      const result = await applyRole(role, ctx);
+      if (compactAfterSwitch && previousRole) {
+        pendingRoleCompaction = { fromRole: previousRole, toRole: result.role };
+      }
+      return { mode, requestedRole: role, result };
     }
     if (mode === "manual") {
       return { mode, requestedRole: role, result: currentRole(role, ctx) };
@@ -878,6 +933,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
     }
   }
+
+  pi.on("turn_end", async (_event, ctx) => {
+    startPendingRoleCompaction(ctx);
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     try {

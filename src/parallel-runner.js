@@ -2,7 +2,7 @@ import { spawn as spawnProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, win32 as win32Path } from "node:path";
 
 import {
   DEFAULT_PARALLEL_CONCURRENCY,
@@ -50,18 +50,45 @@ function textOf(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function getPiInvocation(args) {
-  const currentScript = process.argv[1];
+const CMD_META_CHARS = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdCommand(value) {
+  return value.replace(CMD_META_CHARS, "^$1");
+}
+
+function escapeCmdArgument(value) {
+  let argument = `${value}`;
+  argument = argument.replace(/(?=(\\+?)?)\1"/g, "$1$1\\\"");
+  argument = argument.replace(/(?=(\\+?)?)\1$/, "$1$1");
+  argument = `"${argument}"`;
+  return argument.replace(CMD_META_CHARS, "^$1");
+}
+
+function getWindowsPiInvocation(args) {
+  const shellCommand = ["pi.cmd", ...args]
+    .map((value, index) => (index === 0 ? escapeCmdCommand(value) : escapeCmdArgument(value)))
+    .join(" ");
+  return {
+    command: process.env.ComSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", `"${shellCommand}"`],
+    windowsVerbatimArguments: true,
+  };
+}
+
+export function getPiInvocation(
+  args,
+  { currentScript = process.argv[1], execPath = process.execPath, platform = process.platform } = {},
+) {
   const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
   if (currentScript && !isBunVirtualScript && existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] };
+    return { command: execPath, args: [currentScript, ...args] };
   }
 
-  const executable = basename(process.execPath).toLowerCase();
+  const executable = (platform === "win32" ? win32Path.basename(execPath) : basename(execPath)).toLowerCase();
   if (!/^(node|bun)(\.exe)?$/.test(executable)) {
-    return { command: process.execPath, args };
+    return { command: execPath, args };
   }
-  return { command: process.platform === "win32" ? "pi.cmd" : "pi", args };
+  return platform === "win32" ? getWindowsPiInvocation(args) : { command: "pi", args };
 }
 
 async function runGit(exec, cwd, args, signal) {
@@ -71,6 +98,11 @@ async function runGit(exec, cwd, args, signal) {
     throw new Error(`git ${args.join(" ")} 失败（退出码 ${result.code}）${output ? `：${output}` : ""}`);
   }
   return result.stdout;
+}
+
+async function gitUsesCaseInsensitivePaths(exec, cwd, signal) {
+  const result = await exec("git", ["config", "--bool", "--get", "core.ignorecase"], { cwd, signal });
+  return result.code === 0 && result.stdout.trim().toLowerCase() === "true";
 }
 
 function truncateText(value, maxBytes = 8000) {
@@ -237,12 +269,43 @@ function parseJsonLines(buffer, onEvent) {
   return remaining;
 }
 
-function terminateProcess(child) {
+function terminateProcess(child, force = false) {
   if (child.exitCode !== null) return;
+
+  if (process.platform === "win32" && child.pid) {
+    try {
+      const killer = spawnProcess("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("error", () => {
+        try {
+          child.kill();
+        } catch {
+          // The process may have exited between the checks.
+        }
+      });
+      return;
+    } catch {
+      // Fall through to the portable child.kill() fallback.
+    }
+  }
+
   try {
-    child.kill("SIGTERM");
+    if (process.platform !== "win32" && child.pid) {
+      process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+    } else {
+      child.kill(force ? "SIGKILL" : "SIGTERM");
+    }
+    return;
   } catch {
-    // The process may have exited between the check and kill.
+    // Fall through to killing only the direct child.
+  }
+
+  try {
+    child.kill(force ? "SIGKILL" : "SIGTERM");
+  } catch {
+    // The process may have exited between the checks.
   }
 }
 
@@ -301,13 +364,19 @@ export async function spawnPiWorker(invocation, { cwd, signal, timeout, onEvent 
     const abort = () => {
       aborted = true;
       terminateProcess(child);
-      forceKillId = setTimeout(() => finish(-1, true), 2000);
+      forceKillId = setTimeout(() => {
+        terminateProcess(child, true);
+        finish(-1, true);
+      }, 2000);
     };
 
     try {
       child = spawnProcess(invocation.command, invocation.args, {
         cwd,
         shell: false,
+        detached: process.platform !== "win32",
+        windowsHide: process.platform === "win32",
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments === true,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
@@ -363,7 +432,10 @@ export async function spawnPiWorker(invocation, { cwd, signal, timeout, onEvent 
       timeoutId = setTimeout(() => {
         timedOut = true;
         terminateProcess(child);
-        forceKillId = setTimeout(() => finish(-1, true), 2000);
+        forceKillId = setTimeout(() => {
+          terminateProcess(child, true);
+          finish(-1, true);
+        }, 2000);
       }, timeout);
     }
     if (signal) {
@@ -397,6 +469,7 @@ async function runDeveloperWorker(
   plan,
   task,
   target,
+  ignoreCase,
   index,
   total,
   progress,
@@ -518,7 +591,7 @@ async function runDeveloperWorker(
       ))
         .split("\0")
         .filter(Boolean);
-      const unauthorized = changedFiles.filter((file) => !isPathAllowed(file, task.files));
+      const unauthorized = changedFiles.filter((file) => !isPathAllowed(file, task.files, { ignoreCase }));
       if (unauthorized.length > 0) {
         lastError = createError(`任务 ${task.id} 修改了未声明范围：${unauthorized.join(", ")}`, {
           category: "scope",
@@ -602,8 +675,9 @@ export async function runParallelDevelop({
   const runStartedAt = Date.now();
   const plan = planInput.trim();
   if (!plan) throw new Error("parallel_develop 缺少架构规划");
-  const tasks = validateParallelTasks(taskInput);
   const repoRoot = (await runGit(exec, cwd, ["rev-parse", "--show-toplevel"], signal)).trim();
+  const ignoreCase = await gitUsesCaseInsensitivePaths(exec, repoRoot, signal);
+  const tasks = validateParallelTasks(taskInput, { ignoreCase });
   const status = await runGit(exec, repoRoot, ["status", "--porcelain", "--untracked-files=all"], signal);
   if (status.trim()) {
     throw new Error("parallel_develop 要求主工作区干净；请先处理现有修改，再启动并行开发");
@@ -652,6 +726,7 @@ export async function runParallelDevelop({
         plan,
         task,
         target,
+        ignoreCase,
         index,
         tasks.length,
         progress,

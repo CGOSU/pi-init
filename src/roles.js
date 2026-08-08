@@ -1,6 +1,7 @@
 export const ROLE_NAMES = ["architect", "developer-test", "docs-commit"];
 export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
+export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
 
 export const ROLE_LABELS = {
   architect: "架构设计",
@@ -20,6 +21,16 @@ export function roleLabel(role) {
 
 export function roleModeLabel(mode) {
   return ROLE_MODE_LABELS[mode] ?? mode;
+}
+
+export function shouldCompactOnRoleSwitch({ mode, previousRole, nextRole, contextUsage }) {
+  return (
+    mode === "auto" &&
+    typeof previousRole === "string" &&
+    previousRole !== nextRole &&
+    contextUsage?.percent != null &&
+    contextUsage.percent >= ROLE_SWITCH_COMPACTION_THRESHOLD
+  );
 }
 
 export const DEFAULT_ROLE_MODELS = {

@@ -12,11 +12,13 @@ import {
   DEFAULT_ROLE_MODELS,
   ROLE_LABELS,
   ROLE_MODE_LABELS,
+  ROLE_SWITCH_COMPACTION_THRESHOLD,
   THINKING_LEVELS,
   filterRoleModels,
   resolveRoleConfig,
   resolveRoleMode,
   resolveRoleModel,
+  shouldCompactOnRoleSwitch,
 } from "../src/roles.js";
 import {
   DEFAULT_PARALLEL_CONCURRENCY,
@@ -24,7 +26,7 @@ import {
   MAX_PARALLEL_DEVELOPERS,
   validateParallelTasks,
 } from "../src/parallel.js";
-import { runParallelDevelop, spawnPiWorker } from "../src/parallel-runner.js";
+import { getPiInvocation, runParallelDevelop, spawnPiWorker } from "../src/parallel-runner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -231,6 +233,66 @@ test("职责模型搜索会按 provider、model 或名称过滤并保留空搜�
   assert.deepEqual(filterRoleModels(models, "missing"), []);
 });
 
+test("自动跨角色且上下文达到阈值时才触发压缩", () => {
+  assert.equal(ROLE_SWITCH_COMPACTION_THRESHOLD, 50);
+  const usage = { percent: 50 };
+
+  assert.equal(
+    shouldCompactOnRoleSwitch({
+      mode: "auto",
+      previousRole: "architect",
+      nextRole: "developer-test",
+      contextUsage: usage,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldCompactOnRoleSwitch({
+      mode: "auto",
+      previousRole: "architect",
+      nextRole: "architect",
+      contextUsage: { percent: 90 },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldCompactOnRoleSwitch({
+      mode: "auto",
+      previousRole: undefined,
+      nextRole: "architect",
+      contextUsage: usage,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldCompactOnRoleSwitch({
+      mode: "confirm",
+      previousRole: "architect",
+      nextRole: "developer-test",
+      contextUsage: { percent: 90 },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldCompactOnRoleSwitch({
+      mode: "auto",
+      previousRole: "architect",
+      nextRole: "developer-test",
+      contextUsage: { percent: 49.9 },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldCompactOnRoleSwitch({
+      mode: "auto",
+      previousRole: "architect",
+      nextRole: "developer-test",
+      contextUsage: { percent: null },
+    }),
+    false,
+  );
+});
+
 test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.equal(resolveRoleMode(undefined), "auto");
   assert.equal(resolveRoleMode({ mode: "manual" }), "manual");
@@ -253,6 +315,31 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     () => resolveRoleModel({ architect: { provider: "", model: "x", thinkingLevel: "max" } }, "architect"),
     /provider 无效/,
   );
+});
+
+test("并行开发任务按目标文件系统处理大小写", () => {
+  assert.doesNotThrow(() =>
+    validateParallelTasks(
+      [
+        { id: "upper", task: "upper", files: ["src/Foo"] },
+        { id: "lower", task: "lower", files: ["src/foo"] },
+      ],
+      { ignoreCase: false },
+    ),
+  );
+  assert.throws(
+    () =>
+      validateParallelTasks(
+        [
+          { id: "upper", task: "upper", files: ["src/Foo"] },
+          { id: "lower", task: "lower", files: ["src/foo"] },
+        ],
+        { ignoreCase: true },
+      ),
+    /文件范围重叠/,
+  );
+  assert.equal(isPathAllowed("src/Foo", ["src/foo"], { ignoreCase: true }), true);
+  assert.equal(isPathAllowed("src/Foo", ["src/foo"], { ignoreCase: false }), false);
 });
 
 test("并行开发任务要求独立且受限的文件范围", () => {
@@ -280,6 +367,76 @@ test("并行开发任务要求独立且受限的文件范围", () => {
   );
   assert.equal(MAX_PARALLEL_DEVELOPERS, 4);
   assert.equal(DEFAULT_PARALLEL_CONCURRENCY, 2);
+});
+
+test("Windows Node/Bun 备用入口通过 cmd.exe 安全传参", () => {
+  const invocation = getPiInvocation(["--model", "model name", "x&y"], {
+    currentScript: "C:\\missing\\pi-entry.js",
+    execPath: "C:\\Program Files\\nodejs\\node.exe",
+    platform: "win32",
+  });
+
+  assert.equal(invocation.command, process.env.ComSpec || "cmd.exe");
+  assert.equal(invocation.windowsVerbatimArguments, true);
+  assert.deepEqual(invocation.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.match(invocation.args[3], /model\^ name/);
+  assert.match(invocation.args[3], /x\^&y/);
+});
+
+test("Windows 备用入口可以实际启动 Pi CLI", async () => {
+  if (process.platform !== "win32") return;
+
+  const invocation = getPiInvocation(["--version"], {
+    currentScript: "C:\\missing\\pi-entry.js",
+    execPath: process.execPath,
+    platform: "win32",
+  });
+  const result = await spawnPiWorker(invocation, { cwd: process.cwd(), timeout: 5000 });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.spawnError, undefined);
+  assert.match(result.stdout, /\d+\.\d+\.\d+/);
+});
+
+test("子代理超时时会终止整个进程树", async () => {
+  await withTempDirectory(async (directory) => {
+    const pidFile = path.join(directory, "child.pid");
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const { writeFileSync } = require("node:fs");',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+      `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const result = await spawnPiWorker(
+      { command: process.execPath, args: ["-e", script] },
+      { cwd: directory, timeout: 100 },
+    );
+
+    assert.equal(result.timedOut, true);
+    const childPid = Number(await readFile(pidFile, "utf8"));
+    let alive = true;
+    for (let attempt = 0; attempt < 10 && alive; attempt += 1) {
+      try {
+        process.kill(childPid, 0);
+      } catch (error) {
+        alive = error.code === "EPERM";
+      }
+      if (alive) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (alive) {
+      if (process.platform === "win32") {
+        await execFileAsync("taskkill.exe", ["/pid", String(childPid), "/t", "/f"]);
+      } else {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The child may exit during cleanup.
+        }
+      }
+    }
+    assert.equal(alive, false, `子进程 ${childPid} 仍在运行`);
+  });
 });
 
 test("子代理 JSON 事件流会实时解析工具活动、摘要和指标", async () => {

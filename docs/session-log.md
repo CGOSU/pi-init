@@ -8,6 +8,20 @@
 
 ## 会话
 
+### 2026-08-06：修复并行 worker 跨平台兼容性
+
+- 完成内容：Windows Node/Bun 备用入口改为通过 `cmd.exe` 安全转义启动 `pi.cmd`；POSIX worker 使用独立进程组，Windows 使用 `taskkill /t /f`，取消和超时均终止整个进程树。
+- 完成内容：文件范围校验读取 Git `core.ignorecase`，统一处理 Windows/macOS 默认大小写不敏感文件系统；新增 Ubuntu、macOS、Windows GitHub Actions 测试矩阵。
+- 验证：`npm test`，21 项测试全部通过；`node --check src/parallel.js`、`node --check src/parallel-runner.js` 和 `git diff --check` 通过；Windows `.cmd` 备用入口实际启动 Pi CLI 成功。
+- 遗留问题：Linux、macOS CI 尚未在本地执行，待 GitHub Actions 验证。
+
+### 2026-08-06：自动角色切换增加上下文压缩
+
+- 完成内容：自动模式下，真实跨角色且切换前上下文使用率达到 50% 时，在当前回合结束后触发一次定制压缩；摘要保留目标、决策、进度、文件、验证结果和下一步，成功后通过隐藏续跑消息自动继续任务。
+- 完成内容：确认、手动、首次选角、同角色重复切换和未知上下文不触发额外压缩；压缩失败只提示，不回滚已切换角色。
+- 验证：`npm test`，17 项测试全部通过；`node --check src/roles.js`、`node --check test/scaffold.test.js`、`node --check extensions/init-project.ts`、`git diff --check` 和 RPC 扩展命令发现检查通过。
+- 遗留问题：尚未使用真实模型端到端验证压缩后的自动续跑流程。
+
 ### 2026-08-06：状态卡片增加文字内边距
 
 - 完成内容：状态卡片每行文字左右增加 1 格内边距，避免背景色紧贴文字；保留控制中心整体 2 格 padding。

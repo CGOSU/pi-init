@@ -24,11 +24,15 @@ function normalizePath(value) {
   return path;
 }
 
-function pathsOverlap(left, right) {
+function pathsOverlap(left, right, ignoreCase = false) {
+  if (ignoreCase) {
+    left = left.toLowerCase();
+    right = right.toLowerCase();
+  }
   return left === "." || right === "." || left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-export function validateParallelTasks(tasks) {
+export function validateParallelTasks(tasks, { ignoreCase = false } = {}) {
   if (!Array.isArray(tasks) || tasks.length < 2) {
     throw new Error("parallel_develop 至少需要 2 个开发测试任务");
   }
@@ -62,7 +66,7 @@ export function validateParallelTasks(tasks) {
       const right = normalized[j];
       for (const leftPath of left.files) {
         for (const rightPath of right.files) {
-          if (pathsOverlap(leftPath, rightPath)) {
+          if (pathsOverlap(leftPath, rightPath, ignoreCase)) {
             throw new Error(`任务 ${left.id} 与 ${right.id} 的文件范围重叠：${leftPath} / ${rightPath}`);
           }
         }
@@ -73,7 +77,11 @@ export function validateParallelTasks(tasks) {
   return normalized;
 }
 
-export function isPathAllowed(file, scopes) {
+export function isPathAllowed(file, scopes, { ignoreCase = false } = {}) {
   const normalized = normalizePath(file);
-  return scopes.some((scope) => scope === "." || normalized === scope || normalized.startsWith(`${scope}/`));
+  const candidate = ignoreCase ? normalized.toLowerCase() : normalized;
+  return scopes.some((scope) => {
+    const allowed = ignoreCase ? scope.toLowerCase() : scope;
+    return allowed === "." || candidate === allowed || candidate.startsWith(`${allowed}/`);
+  });
 }
