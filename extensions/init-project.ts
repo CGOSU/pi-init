@@ -17,6 +17,7 @@ import {
   ROLE_NAMES,
   THINKING_LEVELS,
   filterRoleModels,
+  findMatchingRole,
   resolveRoleConfig,
   roleLabel,
   roleModeLabel,
@@ -940,7 +941,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     try {
-      const config = resolveRoleConfig(await readRoleConfig(ctx)) as { mode: string };
+      const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+      const role = findMatchingRole(config, ctx.model, pi.getThinkingLevel());
+      activeRole = role && ctx.model
+        ? {
+            role,
+            provider: ctx.model.provider,
+            model: ctx.model.id,
+            thinkingLevel: pi.getThinkingLevel(),
+          }
+        : undefined;
       setRoleStatus(ctx, sessionModeOverride ?? config.mode);
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");

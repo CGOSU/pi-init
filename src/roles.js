@@ -33,6 +33,20 @@ export function shouldCompactOnRoleSwitch({ mode, previousRole, nextRole, contex
   );
 }
 
+export function findMatchingRole(config, model, thinkingLevel) {
+  if (!model) return undefined;
+
+  const matches = ROLE_NAMES.filter((role) => {
+    const value = config?.[role];
+    return (
+      value?.provider === model.provider &&
+      value?.model === model.id &&
+      value?.thinkingLevel === thinkingLevel
+    );
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export const DEFAULT_ROLE_MODELS = {
   architect: {
     provider: "openai-codex",

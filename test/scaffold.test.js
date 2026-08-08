@@ -15,6 +15,7 @@ import {
   ROLE_SWITCH_COMPACTION_THRESHOLD,
   THINKING_LEVELS,
   filterRoleModels,
+  findMatchingRole,
   resolveRoleConfig,
   resolveRoleMode,
   resolveRoleModel,
@@ -231,6 +232,29 @@ test("职责模型搜索会按 provider、model 或名称过滤并保留空搜�
   assert.deepEqual(filterRoleModels(models, "anthropic/"), [models[1]]);
   assert.deepEqual(filterRoleModels(models, "  "), models);
   assert.deepEqual(filterRoleModels(models, "missing"), []);
+});
+
+test("恢复会话角色要求模型和推理强度唯一匹配", () => {
+  const config = {
+    architect: { provider: "p", model: "m-architect", thinkingLevel: "max" },
+    "developer-test": { provider: "p", model: "m-developer", thinkingLevel: "max" },
+    "docs-commit": { provider: "p", model: "m-docs", thinkingLevel: "medium" },
+  };
+
+  assert.equal(findMatchingRole(config, { provider: "p", id: "m-developer" }, "max"), "developer-test");
+  assert.equal(findMatchingRole(config, { provider: "p", id: "m-developer" }, "medium"), undefined);
+  assert.equal(findMatchingRole(config, undefined, "max"), undefined);
+  assert.equal(
+    findMatchingRole(
+      {
+        ...config,
+        architect: { provider: "p", model: "m-developer", thinkingLevel: "max" },
+      },
+      { provider: "p", id: "m-developer" },
+      "max",
+    ),
+    undefined,
+  );
 });
 
 test("自动跨角色且上下文达到阈值时才触发压缩", () => {

@@ -8,6 +8,13 @@
 
 ## 会话
 
+### 2026-08-06：恢复会话角色状态以支持跨日压缩
+
+- 完成内容：`session_start`、resume 和 reload 时，根据当前 provider/model 与实际推理强度唯一匹配并恢复角色；重复配置或无法匹配时保持未知。
+- 完成内容：补充角色恢复单元测试，避免会话重启后第一次真实跨角色被误判为首次选角。
+- 验证：`npm test`，22 项测试全部通过；`node --check src/roles.js`、`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 通过。
+- 遗留问题：尚未使用真实模型验证跨日 resume 后的自动压缩续跑。
+
 ### 2026-08-06：修复并行 worker 跨平台兼容性
 
 - 完成内容：Windows Node/Bun 备用入口改为通过 `cmd.exe` 安全转义启动 `pi.cmd`；POSIX worker 使用独立进程组，Windows 使用 `taskkill /t /f`，取消和超时均终止整个进程树。

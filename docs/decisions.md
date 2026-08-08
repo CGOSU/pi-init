@@ -115,3 +115,9 @@
 - 决定：Windows 的 Node/Bun 备用入口通过 `cmd.exe` 加转义参数启动 `pi.cmd`；POSIX worker 使用独立进程组，Windows 使用 `taskkill /t /f` 终止子进程树；文件范围比较读取 Git `core.ignorecase`。
 - 原因：Node `spawn(..., { shell: false })` 不能直接启动 Windows `.cmd`，大小写敏感性由实际文件系统和 Git 配置决定，单独杀父进程会遗留工具子进程。
 - 约束：不引入新的运行时依赖；三平台回归由 GitHub Actions 矩阵执行，当前本地只完成 Windows 验证。
+
+### 2026-08-06：会话恢复时只恢复唯一匹配的角色
+
+- 决定：`session_start` 根据当前 provider/model 和实际推理强度恢复角色；多个角色配置相同或无法匹配时保持未知，不猜测角色。
+- 原因：角色状态原先只存在扩展内存中，reload、resume 或次日重新打开会丢失，导致第一次真实跨角色无法触发上下文压缩。
+- 约束：恢复只识别身份，不主动覆盖用户当前模型或推理强度；手动改过模型/推理强度时继续视为未知角色。
