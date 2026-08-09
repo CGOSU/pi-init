@@ -128,6 +128,12 @@
 - 原因：当前 Pi session JSONL 没有统一的模型调用开始/结束事件，只能基于带时间戳的消息和工具事件进行可解释的近似估算。
 - 约束：模型等待时长不是精确的 API 延迟，也不代表用户实际操作时间；session 跨度仅作参考。
 
+### 2026-08-09：角色切换压缩等待 agent_settled
+
+- 决定：自动角色切换的定制压缩只在 Pi 的 `agent_settled` 事件中启动，不再使用 `turn_end`。
+- 原因：`turn_end` 时 agent run 仍可能处于活动状态，而 `ctx.compact()` 会先 abort 当前 agent；`agent_settled` 已等待自动重试、自动压缩和队列续跑完成，避免生命周期竞争。
+- 约束：仍保留待压缩状态，压缩成功后才注入隐藏续跑消息；压缩失败不回滚已完成的模型切换。
+
 ### 2026-08-09：用 DuckDB 汇总跨 session 用量和 Git 代码变化
 
 - 决定：增加 `pi-usage [YYYY-MM-DD] [--db <path>]`，将 Pi JSONL 中的 usage 事件导入 DuckDB，按模型汇总 input、output、cache token、调用次数和费用；工具内部摘要单独归为 `Tools/summaries`。

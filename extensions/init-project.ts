@@ -935,7 +935,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
   }
 
-  pi.on("turn_end", async (_event, ctx) => {
+  pi.on("agent_settled", (_event, ctx) => {
     startPendingRoleCompaction(ctx);
   });
 

@@ -357,6 +357,15 @@ test("恢复会话角色要求模型和推理强度唯一匹配", () => {
   );
 });
 
+test("角色切换压缩等待 agent 完全结束而不是回合结束", async () => {
+  const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
+  assert.match(
+    extension,
+    /pi\.on\("agent_settled",\s*\(_event, ctx\) => \{\s*startPendingRoleCompaction\(ctx\);\s*\}\);/,
+  );
+  assert.doesNotMatch(extension, /pi\.on\("turn_end"[\\s\\S]{0,160}startPendingRoleCompaction/);
+});
+
 test("自动跨角色且上下文达到阈值时才触发压缩", () => {
   assert.equal(ROLE_SWITCH_COMPACTION_THRESHOLD, 50);
   const usage = { percent: 50 };

@@ -14,12 +14,12 @@
 
 ## 已知问题
 
-### 2026-08-06：职责切换压缩必须延迟到回合结束
+### 2026-08-09：职责切换压缩必须等待 agent 完全 settled
 
-- 现象：在 `switch_role` 工具执行期间直接调用 `ctx.compact()` 会中止当前 agent 操作，可能让角色切换结果无法自然续跑。
-- 根因：Pi 的 `compact()` 会先 abort 当前 agent；工具仍处于当前回合时，压缩与 agent 生命周期存在竞争。
-- 修复：只记录待压缩的角色边界，在 `turn_end` 事件中启动压缩；成功后发送隐藏自定义消息并触发一个新的 agent turn，失败不回滚模型切换。
-- 验证：`npm test` 17 项通过；真实模型端到端续跑尚未演练。
+- 现象：角色切换后触发压缩时，会额外写入 `This operation was aborted` 的 assistant 错误，随后压缩可能仍继续完成。
+- 根因：Pi 的 `ctx.compact()` 内部会先 abort 当前 agent；`turn_end` 发生时 agent run 仍处于活动状态，压缩会与当前回合及其后续重试/续跑竞争。
+- 修复：只记录待压缩的角色边界，在 `agent_settled` 事件中启动压缩；该事件表示 agent run、自动重试、自动压缩和队列续跑均已结束。成功后发送隐藏自定义消息并触发新的 agent turn，失败不回滚模型切换。
+- 验证：`npm test` 25 项通过；`node --check extensions/init-project.ts` 和 `git diff --check` 通过；真实模型端到端续跑尚未演练。
 
 ### 2026-08-06：Windows `.cmd` 不能用 Node 的 shell-free spawn 直接启动
 
