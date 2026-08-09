@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const DUCKDB_PACKAGE = "@duckdb/node-api";
 const DUCKDB_VERSION = "1.5.5-r.3";
 const FIELDS = ["input", "output", "cacheRead", "cacheWrite"];
+const ACTIVE_GAP_MS = 5 * 60 * 1000;
+const MODEL_WAIT_GAP_MS = 30 * 60 * 1000;
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -62,6 +64,26 @@ function usageForEntry(entry) {
   return undefined;
 }
 
+function parseActivityEvent(entry, sourceFile, lineNumber, cwd) {
+  const date = entryDate(entry);
+  if (!date) return undefined;
+  const message = entry.message;
+  const role = message?.role;
+  const model =
+    role === "assistant"
+      ? `${message.provider ?? "unknown"}/${message.responseModel ?? message.model ?? "unknown"}`
+      : "";
+  return {
+    sourceFile,
+    entryKey: String(lineNumber),
+    eventTimestamp: date.toISOString(),
+    eventDate: localDateString(date),
+    eventType: role || entry.type || "unknown",
+    model,
+    cwd,
+  };
+}
+
 function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
   const date = entryDate(entry);
   const value = usageForEntry(entry);
@@ -81,7 +103,7 @@ function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
   };
 }
 
-function scanFile(file, events) {
+function scanFile(file, events, activityEvents) {
   let cwd = "";
   const lines = readFileSync(file, "utf8").split(/\r?\n/);
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
@@ -96,12 +118,14 @@ function scanFile(file, events) {
     if (entry.type === "session" && entry.cwd) {
       cwd = String(entry.cwd);
     }
+    const activityEvent = parseActivityEvent(entry, file, lineNumber, cwd);
+    if (activityEvent) activityEvents.push(activityEvent);
     const event = parseUsageEvent(entry, file, lineNumber, cwd);
     if (event) events.push(event);
   }
 }
 
-function scanDirectory(directory, events) {
+function scanDirectory(directory, events, activityEvents) {
   let entries;
   try {
     entries = readdirSync(directory, { withFileTypes: true });
@@ -111,15 +135,16 @@ function scanDirectory(directory, events) {
   }
   for (const entry of entries) {
     const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) scanDirectory(file, events);
-    else if (entry.isFile() && entry.name.endsWith(".jsonl")) scanFile(file, events);
+    if (entry.isDirectory()) scanDirectory(file, events, activityEvents);
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) scanFile(file, events, activityEvents);
   }
 }
 
 function collectUsageEvents(sessionsDirectory) {
   const events = [];
-  scanDirectory(sessionsDirectory, events);
-  return { events };
+  const activityEvents = [];
+  scanDirectory(sessionsDirectory, events, activityEvents);
+  return { events, activityEvents };
 }
 
 function resolveDuckDb(runtimeDirectory) {
@@ -170,6 +195,54 @@ async function loadDuckDb(runtimeDirectory) {
   return import(pathToFileURL(modulePath).href);
 }
 
+function calculateDuration(activityEvents, range) {
+  const sessions = new Map();
+  for (const event of activityEvents) {
+    if (event.eventDate !== range.date) continue;
+    const timestamp = Date.parse(event.eventTimestamp);
+    if (!Number.isFinite(timestamp)) continue;
+    const session = sessions.get(event.sourceFile) ?? [];
+    session.push({ ...event, timestamp });
+    sessions.set(event.sourceFile, session);
+  }
+
+  let activeSeconds = 0;
+  let sessionSpanSeconds = 0;
+  const modelWaitSeconds = new Map();
+  for (const session of sessions.values()) {
+    session.sort((left, right) => left.timestamp - right.timestamp);
+    if (session.length > 1) {
+      sessionSpanSeconds += (session.at(-1).timestamp - session[0].timestamp) / 1000;
+    }
+    for (let index = 1; index < session.length; index += 1) {
+      const previous = session[index - 1];
+      const current = session[index];
+      const gap = current.timestamp - previous.timestamp;
+      if (gap > 0 && gap <= ACTIVE_GAP_MS) activeSeconds += gap / 1000;
+      if (
+        current.eventType === "assistant" &&
+        previous.eventType !== "assistant" &&
+        current.model &&
+        gap > 0 &&
+        gap <= MODEL_WAIT_GAP_MS
+      ) {
+        modelWaitSeconds.set(
+          current.model,
+          (modelWaitSeconds.get(current.model) ?? 0) + gap / 1000,
+        );
+      }
+    }
+  }
+
+  return {
+    sessions: sessions.size,
+    activeSeconds,
+    sessionSpanSeconds,
+    modelWaitSeconds: [...modelWaitSeconds.entries()].map(([model, seconds]) => ({ model, seconds })),
+    modelWaitTotalSeconds: [...modelWaitSeconds.values()].reduce((total, seconds) => total + seconds, 0),
+  };
+}
+
 async function initializeDatabase(connection) {
   await connection.run(`
     CREATE TABLE IF NOT EXISTS usage_events (
@@ -186,6 +259,18 @@ async function initializeDatabase(connection) {
       cost DOUBLE,
       cwd VARCHAR,
       PRIMARY KEY (source_file, entry_key)
+    )
+  `);
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS duration_summaries (
+      report_date VARCHAR,
+      scope VARCHAR,
+      model VARCHAR,
+      sessions INTEGER,
+      active_seconds DOUBLE,
+      model_wait_seconds DOUBLE,
+      session_span_seconds DOUBLE,
+      PRIMARY KEY (report_date, scope, model)
     )
   `);
   await connection.run(`
@@ -230,6 +315,41 @@ async function refreshUsageEvents(connection, events) {
         cwd: event.cwd,
       },
     );
+  }
+}
+
+async function refreshDurationSummary(connection, range, duration) {
+  await connection.run("DELETE FROM duration_summaries WHERE report_date = $date", { date: range.date });
+  const insert = async (scope, model, values) => {
+    await connection.run(
+      `
+        INSERT INTO duration_summaries VALUES (
+          $report_date, $scope, $model, $sessions,
+          $active_seconds, $model_wait_seconds, $session_span_seconds
+        )
+      `,
+      {
+        report_date: range.date,
+        scope,
+        model,
+        sessions: duration.sessions,
+        active_seconds: values.activeSeconds,
+        model_wait_seconds: values.modelWaitSeconds,
+        session_span_seconds: values.sessionSpanSeconds,
+      },
+    );
+  };
+  await insert("overall", "", {
+    activeSeconds: duration.activeSeconds,
+    modelWaitSeconds: duration.modelWaitTotalSeconds,
+    sessionSpanSeconds: duration.sessionSpanSeconds,
+  });
+  for (const model of duration.modelWaitSeconds) {
+    await insert("model", model.model, {
+      activeSeconds: 0,
+      modelWaitSeconds: model.seconds,
+      sessionSpanSeconds: 0,
+    });
   }
 }
 
@@ -350,6 +470,10 @@ async function readSummary(connection, range) {
     "SELECT COUNT(DISTINCT source_file) AS sessions FROM usage_events WHERE event_date = $date",
     { date: range.date },
   );
+  const durationReader = await connection.runAndReadAll(
+    "SELECT * FROM duration_summaries WHERE report_date = $date AND scope = 'overall'",
+    { date: range.date },
+  );
   const codeReader = await connection.runAndReadAll(
     "SELECT * FROM code_changes WHERE report_date = $date ORDER BY repository",
     { date: range.date },
@@ -364,6 +488,13 @@ async function readSummary(connection, range) {
     tokens: numberValue(row.tokens),
     cost: numberValue(row.cost),
   }));
+  const durationRow = durationReader.getRowObjects()[0];
+  const duration = {
+    sessions: numberValue(durationRow?.sessions),
+    activeSeconds: numberValue(durationRow?.active_seconds),
+    modelWaitSeconds: numberValue(durationRow?.model_wait_seconds),
+    sessionSpanSeconds: numberValue(durationRow?.session_span_seconds),
+  };
   const codeChanges = codeReader.getRowObjects().map((row) => ({
     repository: row.repository,
     commits: numberValue(row.commits),
@@ -378,6 +509,7 @@ async function readSummary(connection, range) {
     date: range.date,
     sessions: numberValue(sessionsReader.getRowObjects()[0]?.sessions),
     rows,
+    duration,
     codeChanges,
   };
 }
@@ -395,7 +527,8 @@ export async function summarizeUsage(
   runtimeDirectory = path.join(os.homedir(), ".pi", "agent", "pi-usage-runtime"),
 ) {
   const range = dateRange(date);
-  const { events } = collectUsageEvents(sessionsDirectory);
+  const { events, activityEvents } = collectUsageEvents(sessionsDirectory);
+  const duration = calculateDuration(activityEvents, range);
   const directories = [
     ...new Set(events.filter((event) => event.eventDate === range.date).map((event) => event.cwd).filter(Boolean)),
   ];
@@ -406,6 +539,7 @@ export async function summarizeUsage(
   try {
     await initializeDatabase(connection);
     await refreshUsageEvents(connection, events);
+    await refreshDurationSummary(connection, range, duration);
     await refreshCodeChanges(connection, range, directories);
     return await readSummary(connection, range);
   } finally {
@@ -419,6 +553,25 @@ function formatNumber(value) {
 
 function formatCost(value) {
   return `$${value.toFixed(4)}`;
+}
+
+function formatDuration(seconds) {
+  let remaining = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(remaining / 3600);
+  remaining %= 3600;
+  const minutes = Math.floor(remaining / 60);
+  const rest = remaining % 60;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${rest}s`;
+  return `${rest}s`;
+}
+
+function paint(value, code, enabled) {
+  return enabled ? `\u001b[${code}m${value}\u001b[0m` : value;
+}
+
+function supportsColor() {
+  return Boolean(process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb");
 }
 
 function formatTable(rows, headers, alignments = []) {
@@ -468,8 +621,8 @@ function codeChangeRow(change) {
   ];
 }
 
-function formatCodeChanges(changes) {
-  if (changes.length === 0) return ["Git changes", "No repositories found."].join("\n");
+function formatCodeChanges(changes, color) {
+  if (changes.length === 0) return [paint("Git changes", "35;1", color), "No repositories found."].join("\n");
   const total = changes.reduce(
     (result, change) => {
       for (const field of [
@@ -496,7 +649,7 @@ function formatCodeChanges(changes) {
     },
   );
   return [
-    "Git changes",
+    paint("Git changes", "35;1", color),
     formatTable(
       [...changes, { repository: "Total", ...total }].map(codeChangeRow),
       ["Repository", "Commits", "Selected-day commits", "Current working tree"],
@@ -506,7 +659,8 @@ function formatCodeChanges(changes) {
   ].join("\n");
 }
 
-export function formatReport(summary) {
+export function formatReport(summary, options = {}) {
+  const color = options.color ?? false;
   const total = summary.rows.reduce((result, row) => {
     for (const field of ["calls", ...FIELDS, "tokens", "cost"]) result[field] += row[field];
     return result;
@@ -514,14 +668,21 @@ export function formatReport(summary) {
   const usage = summary.rows.length
     ? formatUsageTable([...summary.rows, { model: "Total", ...total }])
     : "No usage recorded.";
+  const duration = summary.duration ?? {
+    activeSeconds: 0,
+    modelWaitSeconds: 0,
+    sessionSpanSeconds: 0,
+  };
   return [
-    `Pi usage · ${summary.date}`,
+    paint(`Pi usage · ${summary.date}`, "36;1", color),
     `${summary.sessions} session${summary.sessions === 1 ? "" : "s"}`,
     "",
-    "Models",
+    paint("Models", "34;1", color),
     usage,
     "",
-    formatCodeChanges(summary.codeChanges ?? []),
+    `${paint("Time", "32;1", color)}  Active ${paint(formatDuration(duration.activeSeconds), "32", color)} · Model wait ${paint(formatDuration(duration.modelWaitSeconds), "33", color)} · Session span ${formatDuration(duration.sessionSpanSeconds)}`,
+    "",
+    formatCodeChanges(summary.codeChanges ?? [], color),
   ].join("\n");
 }
 
@@ -548,13 +709,14 @@ async function main() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
   const { date, databasePath } = parseArguments(process.argv.slice(2), agentDir);
   const sessionsDirectory = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(agentDir, "sessions");
+  if (process.stderr.isTTY) console.error("正在扫描 session、更新 DuckDB 和 Git 统计...");
   const summary = await summarizeUsage(
     sessionsDirectory,
     date,
     databasePath,
     path.join(agentDir, "pi-usage-runtime"),
   );
-  console.log(formatReport(summary));
+  console.log(formatReport(summary, { color: supportsColor() }));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {

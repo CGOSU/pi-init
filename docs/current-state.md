@@ -34,4 +34,4 @@
 
 ## 最近一次更新
 
-- 2026-08-09：新增基于 DuckDB 的 `pi-usage [YYYY-MM-DD]`，扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用和关联 Git 代码变化；缺少 DuckDB 时自动安装用户目录运行时。
+- 2026-08-09：新增基于 DuckDB 的 `pi-usage [YYYY-MM-DD]`，扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用、关联 Git 代码变化和近似使用时长；缺少 DuckDB 时自动安装用户目录运行时。

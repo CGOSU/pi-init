@@ -147,6 +147,9 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     assert.match(report, /15/);
     assert.match(report, /Git changes/);
     assert.match(report, /pi-init/);
+    assert.match(report, /Active 0s/);
+    assert.doesNotMatch(report, /\u001b\[/);
+    assert.match(formatReport(summary, { color: true }), /\u001b\[36;1m/);
     assert.doesNotMatch(report, /old\/model/);
     await assert.rejects(
       summarizeUsage(sessions, "not-a-date", path.join(directory, "usage.duckdb")),
