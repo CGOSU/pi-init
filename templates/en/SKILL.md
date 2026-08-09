@@ -7,6 +7,14 @@ description: {{SKILL_DESCRIPTION}}
 
 For tasks in this project, treat the repository-root `AGENTS.md` as the single rules entrypoint. Select the fewest roles needed for the deliverable, then read only project documents relevant to the task.
 
+## Exact String Replacement
+
+- Read the latest file contents before editing; use exact `oldText` → `newText` replacement rather than fuzzy matching, regular expressions, or line-number-only positioning.
+- `oldText` must match exactly once in the original file; if it matches zero or multiple times, stop, reread the file, and adjust the context instead of guessing.
+- Keep `oldText` to the smallest context that makes the match unique; preserve unchanged text and avoid rewriting the whole file.
+- For multiple non-adjacent changes in one file, submit multiple non-overlapping replacements in one edit operation; each replacement is matched against the original file.
+- Inspect the actual diff after editing, confirm there are no unintended changes, then run relevant verification.
+
 ## Role Profiles
 
 | Role | Technical level | Deliverables | Model type | Default model | Pi reasoning level |

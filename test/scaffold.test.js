@@ -133,6 +133,10 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /\/pi-init config/);
     assert.match(skill, /调用 `parallel_develop`/);
     assert.match(skill, /受信任项目/);
+    assert.match(skill, /## 精确字符串替换/);
+    assert.match(skill, /`oldText` → `newText`/);
+    assert.match(skill, /必须在原始文件中唯一匹配/);
+    assert.match(skill, /多个不相邻改动应在一次编辑中提交/);
     assert.doesNotMatch(skill, /docs\/current-state\.md/);
 
     for (const file of result.files) {
@@ -780,5 +784,9 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(skill, /Call `switch_role` before every role starts/);
     assert.match(skill, /call `parallel_develop`/);
     assert.match(skill, /trusted projects/);
+    assert.match(skill, /## Exact String Replacement/);
+    assert.match(skill, /`oldText` → `newText`/);
+    assert.match(skill, /must match exactly once in the original file/);
+    assert.match(skill, /multiple non-overlapping replacements in one edit operation/);
   });
 });
