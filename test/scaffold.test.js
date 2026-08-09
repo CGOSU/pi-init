@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { formatReport, queryUsage, summarizeUsage } from "../scripts/pi-usage.js";
+import { dateRange, formatReport, queryUsage, summarizeUsage } from "../scripts/pi-usage.js";
 import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
@@ -84,6 +84,17 @@ test("跨平台 Pi 启动器分离离线启动和扩展更新", async () => {
   assert.match(files.posixUpdate, /update --extensions/);
   assert.match(files.windowsUsage, /pi-usage\.js/);
   assert.match(files.posixUsage, /pi-usage\.js/);
+});
+
+test("pi-usage 默认日期范围从本地午夜开始", () => {
+  const range = dateRange();
+  const now = new Date();
+  assert.equal(range.date, now.toLocaleDateString("sv-SE"));
+  assert.equal(range.start.getHours(), 0);
+  assert.equal(range.start.getMinutes(), 0);
+  assert.equal(range.start.getSeconds(), 0);
+  assert.equal(range.start.getMilliseconds(), 0);
+  assert.equal(range.end.getTime() - range.start.getTime(), 24 * 60 * 60 * 1000);
 });
 
 test("pi-usage 汇总指定日期的 session 用量并按模型分组", async () => {

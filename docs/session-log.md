@@ -253,3 +253,10 @@
 - 完成内容：补入当前项目缺失的 `docs/clean-code.md`；同步模板 Skill 中的 `agent_settled` 压缩生命周期描述。
 - 验证：`npm test`，25 项测试全部通过；配置解析、`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
 - 遗留问题：本次改动尚未提交或推送。
+
+### 2026-08-09：按 Clean Code 规则清理 pi-usage
+
+- 完成内容：修复默认日期范围从当前时刻开始的问题，改为本地当天 `00:00`；删除数据库增量导入后已无调用方的旧 JSONL 扫描函数。
+- 完成内容：为默认日期边界补充回归测试，避免 Git 当日统计漏掉午夜至当前时刻之间的提交。
+- 验证：`npm test`，26 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送；大型模块拆分暂不执行，待有明确边界或维护痛点时再处理。

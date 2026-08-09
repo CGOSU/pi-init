@@ -21,12 +21,13 @@ function localDateString(date) {
     .join("-");
 }
 
-function dateRange(value) {
+export function dateRange(value) {
   const parts = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (value && !parts) throw new Error("日期必须是 YYYY-MM-DD");
   const date = parts
     ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
     : new Date();
+  if (!parts) date.setHours(0, 0, 0, 0);
   if (
     Number.isNaN(date.getTime()) ||
     (parts &&
@@ -139,28 +140,6 @@ function listSessionFiles(directory, files = []) {
     else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(file);
   }
   return files;
-}
-
-function scanDirectory(directory, events, activityEvents) {
-  let entries;
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  for (const entry of entries) {
-    const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) scanDirectory(file, events, activityEvents);
-    else if (entry.isFile() && entry.name.endsWith(".jsonl")) scanFile(file, events, activityEvents);
-  }
-}
-
-function collectUsageEvents(sessionsDirectory) {
-  const events = [];
-  const activityEvents = [];
-  scanDirectory(sessionsDirectory, events, activityEvents);
-  return { events, activityEvents };
 }
 
 function resolveDuckDb(runtimeDirectory) {
