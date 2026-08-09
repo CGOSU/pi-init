@@ -10,6 +10,7 @@ const DUCKDB_VERSION = "1.5.5-r.3";
 const FIELDS = ["input", "output", "cacheRead", "cacheWrite"];
 const ACTIVE_GAP_MS = 5 * 60 * 1000;
 const MODEL_WAIT_GAP_MS = 30 * 60 * 1000;
+const AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -19,6 +20,14 @@ function localDateString(date) {
   return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
     .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")))
     .join("-");
+}
+
+export function shouldRefreshUsage(state, now = new Date()) {
+  if (!state || !Number.isFinite(state.checkedMs)) return true;
+  return (
+    state.checkedDate !== localDateString(now) ||
+    now.getTime() - state.checkedMs >= AUTO_REFRESH_INTERVAL_MS
+  );
 }
 
 export function dateRange(value) {
@@ -240,6 +249,13 @@ function calculateDuration(activityEvents, range) {
 
 async function initializeDatabase(connection) {
   await connection.run(`
+    CREATE TABLE IF NOT EXISTS usage_state (
+      state_key VARCHAR PRIMARY KEY,
+      checked_ms BIGINT,
+      checked_date VARCHAR
+    )
+  `);
+  await connection.run(`
     CREATE TABLE IF NOT EXISTS session_files (
       source_file VARCHAR PRIMARY KEY,
       file_size BIGINT,
@@ -315,6 +331,37 @@ function scanSessionFile(file) {
   };
 }
 
+async function readUsageState(connection) {
+  const reader = await connection.runAndReadAll(
+    "SELECT checked_ms, checked_date FROM usage_state WHERE state_key = 'refresh'",
+  );
+  const row = reader.getRowObjects()[0];
+  return row
+    ? { checkedMs: Number(row.checked_ms), checkedDate: row.checked_date }
+    : undefined;
+}
+
+async function markUsageChecked(connection, now = new Date()) {
+  await connection.run(
+    `
+      INSERT OR REPLACE INTO usage_state VALUES ('refresh', $checked_ms, $checked_date)
+    `,
+    { checked_ms: now.getTime(), checked_date: localDateString(now) },
+  );
+}
+
+async function readEventDates(connection, sourceFile) {
+  const reader = await connection.runAndReadAll(
+    `
+      SELECT event_date FROM usage_events WHERE source_file = $source_file
+      UNION
+      SELECT event_date FROM activity_events WHERE source_file = $source_file
+    `,
+    { source_file: sourceFile },
+  );
+  return reader.getRowObjects().map((row) => row.event_date).filter(Boolean);
+}
+
 async function refreshSessionFiles(connection, sessionsDirectory) {
   const storedReader = await connection.runAndReadAll("SELECT source_file, file_size, modified_ms FROM session_files");
   const stored = new Map(
@@ -325,11 +372,14 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
   );
   const files = listSessionFiles(sessionsDirectory);
   const seen = new Set(files);
+  const affectedDates = new Set();
   for (const file of files) {
     const metadata = statSync(file);
     const previous = stored.get(file);
     if (previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs) continue;
+    for (const date of await readEventDates(connection, file)) affectedDates.add(date);
     const parsed = scanSessionFile(file);
+    for (const event of [...parsed.events, ...parsed.activityEvents]) affectedDates.add(event.eventDate);
     await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
     await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
     for (const event of parsed.events) {
@@ -387,10 +437,12 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
   }
   for (const sourceFile of stored.keys()) {
     if (seen.has(sourceFile)) continue;
+    for (const date of await readEventDates(connection, sourceFile)) affectedDates.add(date);
     await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: sourceFile });
     await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: sourceFile });
     await connection.run("DELETE FROM session_files WHERE source_file = $source_file", { source_file: sourceFile });
   }
+  return { affectedDates };
 }
 
 async function refreshDurationSummary(connection, range, duration) {
@@ -643,6 +695,15 @@ async function withDatabase(databasePath, runtimeDirectory, callback) {
   }
 }
 
+async function refreshUsage(connection, sessionsDirectory, range) {
+  const { affectedDates } = await refreshSessionFiles(connection, sessionsDirectory);
+  const dates = new Set([range.date, ...affectedDates]);
+  for (const date of dates) {
+    await refreshDerivedSummaries(connection, dateRange(date));
+  }
+  await markUsageChecked(connection);
+}
+
 export async function summarizeUsage(
   sessionsDirectory,
   date,
@@ -651,8 +712,7 @@ export async function summarizeUsage(
 ) {
   const range = dateRange(date);
   return withDatabase(databasePath, runtimeDirectory, async (connection) => {
-    await refreshSessionFiles(connection, sessionsDirectory);
-    await refreshDerivedSummaries(connection, range);
+    await refreshUsage(connection, sessionsDirectory, range);
     return readSummary(connection, range);
   });
 }
@@ -661,9 +721,16 @@ export async function queryUsage(
   date,
   databasePath,
   runtimeDirectory,
+  sessionsDirectory,
 ) {
   const range = dateRange(date);
-  return withDatabase(databasePath, runtimeDirectory, (connection) => readSummary(connection, range));
+  return withDatabase(databasePath, runtimeDirectory, async (connection) => {
+    const state = await readUsageState(connection);
+    if (sessionsDirectory && shouldRefreshUsage(state)) {
+      await refreshUsage(connection, sessionsDirectory, range);
+    }
+    return readSummary(connection, range);
+  });
 }
 
 function formatNumber(value) {
@@ -881,7 +948,7 @@ async function main() {
   if (update && process.stderr.isTTY) console.error("正在扫描 session、增量更新 DuckDB 和 Git 统计...");
   const summary = update
     ? await summarizeUsage(sessionsDirectory, date, databasePath, runtimeDirectory)
-    : await queryUsage(date, databasePath, runtimeDirectory);
+    : await queryUsage(date, databasePath, runtimeDirectory, sessionsDirectory);
   console.log(formatReport(summary, { color: supportsColor() }));
 }
 

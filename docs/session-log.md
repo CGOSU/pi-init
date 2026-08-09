@@ -260,3 +260,10 @@
 - 完成内容：为默认日期边界补充回归测试，避免 Git 当日统计漏掉午夜至当前时刻之间的提交。
 - 验证：`npm test`，26 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
 - 遗留问题：本次改动尚未提交或推送；大型模块拆分暂不执行，待有明确边界或维护痛点时再处理。
+
+### 2026-08-09：为 pi-usage 增加一小时自动检查
+
+- 完成内容：普通查询首次、距上次检查超过一小时或跨自然日时自动执行增量检查；未过期时直接读取 DuckDB，`--update` 仍然强制检查。
+- 完成内容：新增 `usage_state` 检查状态，并让文件变化影响的历史日期一并刷新派生汇总。
+- 验证：`npm test`，27 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送。

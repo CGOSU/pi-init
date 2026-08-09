@@ -76,10 +76,10 @@ pi-usage
 
 - `pi-fast` 只为当前 Pi 子进程设置 `PI_OFFLINE=1`，日常启动不联网。
 - `pi-update` 只为更新子进程清除 `PI_OFFLINE`；无参数更新所有扩展，也可传入具体包源。
-- `pi-usage` 默认只查询 DuckDB；使用 `pi-usage --update` 扫描并增量导入 session JSONL，之后可传入 `YYYY-MM-DD` 查询指定日期，也可用 `--db <路径>` 指定数据库。默认数据库为 `~/.pi/agent/pi-usage.duckdb`，未安装 DuckDB 时会自动安装到用户目录。
+- `pi-usage` 默认查询 DuckDB；首次查询、距离上次检查超过 1 小时或跨自然日时，会自动扫描并增量导入 session JSONL；使用 `pi-usage --update` 可强制立即检查，之后可传入 `YYYY-MM-DD` 查询指定日期，也可用 `--db <路径>` 指定数据库。默认数据库为 `~/.pi/agent/pi-usage.duckdb`，未安装 DuckDB 时会自动安装到用户目录。
 - `pi-usage` 同时统计关联 Git 仓库的当天 commit 变化，以及当前已跟踪文件的未提交变化；未提交变化不能精确归因到某个模型。
 - `pi-usage` 还显示活跃时长、模型等待时长和 session 跨度；Overview、Models、Time 和 Git changes 均使用带边框的对齐表格，交互终端默认使用 ANSI 颜色，设置 `NO_COLOR=1` 可关闭。活跃时长只连接间隔不超过 5 分钟的事件，避免空闲时间被计入。
-- `--update` 会扫描 session JSONL、更新 DuckDB 派生表并执行 Git 查询，因此 session 很多或首次自动安装 DuckDB 时会短暂等待；普通查询只打开数据库，交互终端会显示更新进度提示。
+- `--update` 会强制扫描 session JSONL、更新 DuckDB 派生表并执行 Git 查询；自动检查只在上述缓存过期时执行，未过期的普通查询直接读取数据库。session 很多或首次自动安装 DuckDB 时会短暂等待，交互终端会显示手动更新进度提示。
 - 更新结束后在当前 Pi 会话执行 `/reload`，或重启 Pi，使已加载扩展使用新文件。
 - 安装器会把启动器放到 Pi 所在的可执行目录；POSIX 若无写权限则使用 `${XDG_BIN_HOME:-$HOME/.local/bin}`，并提示将其加入 `PATH`。
 - 这些辅助命令是可选工具，不会修改系统全局环境变量；换电脑时从仓库重新执行安装器即可。

@@ -6,7 +6,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { dateRange, formatReport, queryUsage, summarizeUsage } from "../scripts/pi-usage.js";
+import {
+  dateRange,
+  formatReport,
+  queryUsage,
+  shouldRefreshUsage,
+  summarizeUsage,
+} from "../scripts/pi-usage.js";
 import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
@@ -97,6 +103,23 @@ test("pi-usage 默认日期范围从本地午夜开始", () => {
   assert.equal(range.end.getTime() - range.start.getTime(), 24 * 60 * 60 * 1000);
 });
 
+test("pi-usage 仅在超过一小时或跨自然日时自动检查", () => {
+  const now = new Date(2026, 7, 9, 12, 0, 0, 0);
+  const sameDay = now.toLocaleDateString("sv-SE");
+  assert.equal(
+    shouldRefreshUsage({ checkedMs: now.getTime() - 59 * 60 * 1000, checkedDate: sameDay }, now),
+    false,
+  );
+  assert.equal(
+    shouldRefreshUsage({ checkedMs: now.getTime() - 60 * 60 * 1000, checkedDate: sameDay }, now),
+    true,
+  );
+  assert.equal(
+    shouldRefreshUsage({ checkedMs: now.getTime() - 5 * 60 * 1000, checkedDate: "2026-08-08" }, now),
+    true,
+  );
+});
+
 test("pi-usage 汇总指定日期的 session 用量并按模型分组", async () => {
   await withTempDirectory(async (directory) => {
     const sessions = path.join(directory, "sessions");
@@ -167,6 +190,27 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     assert.match(coloredReport, /\u001b\[36;1m│ Metric/);
     assert.match(coloredReport, /\u001b\[33;1m│ Total/);
     assert.doesNotMatch(report, /old\/model/);
+    const changedFile = path.join(sessions, "project-a", "a.jsonl");
+    await writeFile(
+      changedFile,
+      `${await readFile(changedFile, "utf8")}\n${JSON.stringify({
+        type: "message",
+        timestamp: todayAtNoon.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "provider",
+          model: "model",
+          responseModel: "response-model",
+          usage: usage(100, 0, 1),
+        },
+      })}`,
+      "utf8",
+    );
+    const cachedAfterChange = await queryUsage(date, path.join(directory, "usage.duckdb"), undefined, sessions);
+    assert.equal(cachedAfterChange.rows.find((row) => row.model === "provider/response-model").input, 10);
+    await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
+    const refreshed = await queryUsage(date, path.join(directory, "usage.duckdb"));
+    assert.equal(refreshed.rows.find((row) => row.model === "provider/response-model").input, 110);
     await rm(sessions, { recursive: true, force: true });
     const cached = await queryUsage(date, path.join(directory, "usage.duckdb"));
     assert.equal(cached.sessions, 2);
