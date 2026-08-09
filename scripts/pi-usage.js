@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -125,6 +125,22 @@ function scanFile(file, events, activityEvents) {
   }
 }
 
+function listSessionFiles(directory, files = []) {
+  let entries;
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return files;
+    throw error;
+  }
+  for (const entry of entries) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) listSessionFiles(file, files);
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(file);
+  }
+  return files;
+}
+
 function scanDirectory(directory, events, activityEvents) {
   let entries;
   try {
@@ -245,6 +261,25 @@ function calculateDuration(activityEvents, range) {
 
 async function initializeDatabase(connection) {
   await connection.run(`
+    CREATE TABLE IF NOT EXISTS session_files (
+      source_file VARCHAR PRIMARY KEY,
+      file_size BIGINT,
+      modified_ms DOUBLE
+    )
+  `);
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS activity_events (
+      source_file VARCHAR,
+      entry_key VARCHAR,
+      event_timestamp VARCHAR,
+      event_date VARCHAR,
+      event_type VARCHAR,
+      model VARCHAR,
+      cwd VARCHAR,
+      PRIMARY KEY (source_file, entry_key)
+    )
+  `);
+  await connection.run(`
     CREATE TABLE IF NOT EXISTS usage_events (
       source_file VARCHAR,
       entry_key VARCHAR,
@@ -289,32 +324,93 @@ async function initializeDatabase(connection) {
   `);
 }
 
-async function refreshUsageEvents(connection, events) {
-  await connection.run("DELETE FROM usage_events");
-  for (const event of events) {
+function scanSessionFile(file) {
+  const events = [];
+  const activityEvents = [];
+  scanFile(file, events, activityEvents);
+  const metadata = statSync(file);
+  return {
+    metadata: { sourceFile: file, fileSize: metadata.size, modifiedMs: metadata.mtimeMs },
+    events,
+    activityEvents,
+  };
+}
+
+async function refreshSessionFiles(connection, sessionsDirectory) {
+  const storedReader = await connection.runAndReadAll("SELECT source_file, file_size, modified_ms FROM session_files");
+  const stored = new Map(
+    storedReader.getRowObjects().map((row) => [
+      row.source_file,
+      { fileSize: numberValue(row.file_size), modifiedMs: numberValue(row.modified_ms) },
+    ]),
+  );
+  const files = listSessionFiles(sessionsDirectory);
+  const seen = new Set(files);
+  for (const file of files) {
+    const metadata = statSync(file);
+    const previous = stored.get(file);
+    if (previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs) continue;
+    const parsed = scanSessionFile(file);
+    await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
+    await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
+    for (const event of parsed.events) {
+      await connection.run(
+        `
+          INSERT INTO usage_events VALUES (
+            $source_file, $entry_key, $event_timestamp, $event_date, $model,
+            $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens,
+            $total_tokens, $cost, $cwd
+          )
+        `,
+        {
+          source_file: event.sourceFile,
+          entry_key: event.entryKey,
+          event_timestamp: event.eventTimestamp,
+          event_date: event.eventDate,
+          model: event.model,
+          input_tokens: event.input,
+          output_tokens: event.output,
+          cache_read_tokens: event.cacheRead,
+          cache_write_tokens: event.cacheWrite,
+          total_tokens: event.tokens,
+          cost: event.cost,
+          cwd: event.cwd,
+        },
+      );
+    }
+    for (const event of parsed.activityEvents) {
+      await connection.run(
+        `
+          INSERT INTO activity_events VALUES (
+            $source_file, $entry_key, $event_timestamp, $event_date,
+            $event_type, $model, $cwd
+          )
+        `,
+        {
+          source_file: event.sourceFile,
+          entry_key: event.entryKey,
+          event_timestamp: event.eventTimestamp,
+          event_date: event.eventDate,
+          event_type: event.eventType,
+          model: event.model,
+          cwd: event.cwd,
+        },
+      );
+    }
     await connection.run(
-      `
-        INSERT INTO usage_events VALUES (
-          $source_file, $entry_key, $event_timestamp, $event_date, $model,
-          $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens,
-          $total_tokens, $cost, $cwd
-        )
-      `,
+      `INSERT OR REPLACE INTO session_files VALUES ($source_file, $file_size, $modified_ms)`,
       {
-        source_file: event.sourceFile,
-        entry_key: event.entryKey,
-        event_timestamp: event.eventTimestamp,
-        event_date: event.eventDate,
-        model: event.model,
-        input_tokens: event.input,
-        output_tokens: event.output,
-        cache_read_tokens: event.cacheRead,
-        cache_write_tokens: event.cacheWrite,
-        total_tokens: event.tokens,
-        cost: event.cost,
-        cwd: event.cwd,
+        source_file: parsed.metadata.sourceFile,
+        file_size: parsed.metadata.fileSize,
+        modified_ms: parsed.metadata.modifiedMs,
       },
     );
+  }
+  for (const sourceFile of stored.keys()) {
+    if (seen.has(sourceFile)) continue;
+    await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: sourceFile });
+    await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: sourceFile });
+    await connection.run("DELETE FROM session_files WHERE source_file = $source_file", { source_file: sourceFile });
   }
 }
 
@@ -449,6 +545,41 @@ function numberValue(value) {
   return Number(value) || 0;
 }
 
+async function readActivityEvents(connection, range) {
+  const reader = await connection.runAndReadAll(
+    `
+      SELECT source_file, entry_key, event_timestamp, event_date, event_type, model, cwd
+      FROM activity_events
+      WHERE event_date = $date
+      ORDER BY source_file, event_timestamp, entry_key
+    `,
+    { date: range.date },
+  );
+  return reader.getRowObjects().map((row) => ({
+    sourceFile: row.source_file,
+    entryKey: row.entry_key,
+    eventTimestamp: row.event_timestamp,
+    eventDate: row.event_date,
+    eventType: row.event_type,
+    model: row.model,
+    cwd: row.cwd,
+  }));
+}
+
+async function readDirectories(connection, range) {
+  const reader = await connection.runAndReadAll(
+    "SELECT DISTINCT cwd FROM usage_events WHERE event_date = $date AND cwd <> ''",
+    { date: range.date },
+  );
+  return reader.getRowObjects().map((row) => row.cwd).filter(Boolean);
+}
+
+async function refreshDerivedSummaries(connection, range) {
+  const duration = calculateDuration(await readActivityEvents(connection, range), range);
+  await refreshDurationSummary(connection, range, duration);
+  await refreshCodeChanges(connection, range, await readDirectories(connection, range));
+}
+
 async function readSummary(connection, range) {
   const rowsReader = await connection.runAndReadAll(
     `
@@ -520,6 +651,19 @@ async function closeDatabase(connection, instance) {
   instance.closeSync?.();
 }
 
+async function withDatabase(databasePath, runtimeDirectory, callback) {
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const duckdb = await loadDuckDb(runtimeDirectory);
+  const instance = await duckdb.DuckDBInstance.create(databasePath);
+  const connection = await instance.connect();
+  try {
+    await initializeDatabase(connection);
+    return await callback(connection);
+  } finally {
+    await closeDatabase(connection, instance);
+  }
+}
+
 export async function summarizeUsage(
   sessionsDirectory,
   date,
@@ -527,24 +671,20 @@ export async function summarizeUsage(
   runtimeDirectory = path.join(os.homedir(), ".pi", "agent", "pi-usage-runtime"),
 ) {
   const range = dateRange(date);
-  const { events, activityEvents } = collectUsageEvents(sessionsDirectory);
-  const duration = calculateDuration(activityEvents, range);
-  const directories = [
-    ...new Set(events.filter((event) => event.eventDate === range.date).map((event) => event.cwd).filter(Boolean)),
-  ];
-  mkdirSync(path.dirname(databasePath), { recursive: true });
-  const duckdb = await loadDuckDb(runtimeDirectory);
-  const instance = await duckdb.DuckDBInstance.create(databasePath);
-  const connection = await instance.connect();
-  try {
-    await initializeDatabase(connection);
-    await refreshUsageEvents(connection, events);
-    await refreshDurationSummary(connection, range, duration);
-    await refreshCodeChanges(connection, range, directories);
-    return await readSummary(connection, range);
-  } finally {
-    await closeDatabase(connection, instance);
-  }
+  return withDatabase(databasePath, runtimeDirectory, async (connection) => {
+    await refreshSessionFiles(connection, sessionsDirectory);
+    await refreshDerivedSummaries(connection, range);
+    return readSummary(connection, range);
+  });
+}
+
+export async function queryUsage(
+  date,
+  databasePath,
+  runtimeDirectory,
+) {
+  const range = dateRange(date);
+  return withDatabase(databasePath, runtimeDirectory, (connection) => readSummary(connection, range));
 }
 
 function formatNumber(value) {
@@ -667,7 +807,7 @@ export function formatReport(summary, options = {}) {
   }, emptyUsage());
   const usage = summary.rows.length
     ? formatUsageTable([...summary.rows, { model: "Total", ...total }])
-    : "No usage recorded.";
+    : "No usage recorded. Run `pi-usage --update` to import session JSONL.";
   const duration = summary.duration ?? {
     activeSeconds: 0,
     modelWaitSeconds: 0,
@@ -688,10 +828,13 @@ export function formatReport(summary, options = {}) {
 
 function parseArguments(args, agentDir) {
   let date;
+  let update = false;
   let databasePath = process.env.PI_USAGE_DB || path.join(agentDir, "pi-usage.duckdb");
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    if (argument === "--db") {
+    if (argument === "--update") {
+      update = true;
+    } else if (argument === "--db") {
       databasePath = args[++index];
       if (!databasePath) throw new Error("--db 需要数据库路径");
     } else if (argument.startsWith("--")) {
@@ -702,20 +845,18 @@ function parseArguments(args, agentDir) {
       date = argument;
     }
   }
-  return { date, databasePath };
+  return { date, databasePath, update };
 }
 
 async function main() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  const { date, databasePath } = parseArguments(process.argv.slice(2), agentDir);
+  const { date, databasePath, update } = parseArguments(process.argv.slice(2), agentDir);
   const sessionsDirectory = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(agentDir, "sessions");
-  if (process.stderr.isTTY) console.error("正在扫描 session、更新 DuckDB 和 Git 统计...");
-  const summary = await summarizeUsage(
-    sessionsDirectory,
-    date,
-    databasePath,
-    path.join(agentDir, "pi-usage-runtime"),
-  );
+  const runtimeDirectory = path.join(agentDir, "pi-usage-runtime");
+  if (update && process.stderr.isTTY) console.error("正在扫描 session、增量更新 DuckDB 和 Git 统计...");
+  const summary = update
+    ? await summarizeUsage(sessionsDirectory, date, databasePath, runtimeDirectory)
+    : await queryUsage(date, databasePath, runtimeDirectory);
   console.log(formatReport(summary, { color: supportsColor() }));
 }
 

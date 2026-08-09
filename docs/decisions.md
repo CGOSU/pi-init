@@ -132,7 +132,8 @@
 
 - 决定：增加 `pi-usage [YYYY-MM-DD] [--db <path>]`，将 Pi JSONL 中的 usage 事件导入 DuckDB，按模型汇总 input、output、cache token、调用次数和费用；工具内部摘要单独归为 `Tools/summaries`。
 - 决定：从 session 的 `cwd` 关联 Git 仓库，额外统计指定日期的 commit 变化和当前已跟踪文件的未提交变化；未提交变化只作仓库级指标，不归因到模型。
-- 原因：DuckDB 适合本地分析且不需要独立数据库服务；JSONL 仍是事实来源，每次运行重建派生统计表，避免重复导入和脏数据。
+- 原因：DuckDB 适合本地分析且不需要独立数据库服务；JSONL 仍是事实来源，默认命令只查询数据库，`--update` 只重读新增或文件大小/修改时间变化的 JSONL 文件。
+- 约束：增量更新通过 `session_files` 保存文件大小和修改时间；变化文件会删除后重导其 usage/activity 事件，删除的 session 文件也会同步清理。
 - 约束：默认数据库为 `~/.pi/agent/pi-usage.duckdb`；若项目或用户运行时没有 DuckDB，首次执行会安装固定版本到 `~/.pi/agent/pi-usage-runtime`；支持 `PI_CODING_AGENT_DIR` 和 `PI_CODING_AGENT_SESSION_DIR` 覆盖位置。
 
 ### 2026-08-06：生成的 Skill 使用精确字符串替换规则

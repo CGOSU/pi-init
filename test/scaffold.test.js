@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { formatReport, summarizeUsage } from "../scripts/pi-usage.js";
+import { formatReport, queryUsage, summarizeUsage } from "../scripts/pi-usage.js";
 import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
@@ -151,6 +151,9 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     assert.doesNotMatch(report, /\u001b\[/);
     assert.match(formatReport(summary, { color: true }), /\u001b\[36;1m/);
     assert.doesNotMatch(report, /old\/model/);
+    await rm(sessions, { recursive: true, force: true });
+    const cached = await queryUsage(date, path.join(directory, "usage.duckdb"));
+    assert.equal(cached.sessions, 2);
     await assert.rejects(
       summarizeUsage(sessions, "not-a-date", path.join(directory, "usage.duckdb")),
       /日期必须是 YYYY-MM-DD/,
