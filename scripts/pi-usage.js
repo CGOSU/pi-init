@@ -142,19 +142,20 @@ function installDuckDb(runtimeDirectory) {
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   console.error(`未检测到 DuckDB，正在安装 ${DUCKDB_PACKAGE}@${DUCKDB_VERSION}...`);
   try {
+    const args = [
+      "install",
+      "--prefix",
+      runtimeDirectory,
+      "--no-save",
+      "--no-package-lock",
+      "--no-fund",
+      "--no-audit",
+      `${DUCKDB_PACKAGE}@${DUCKDB_VERSION}`,
+    ];
     execFileSync(
-      npm,
-      [
-        "install",
-        "--prefix",
-        runtimeDirectory,
-        "--no-save",
-        "--no-package-lock",
-        "--no-fund",
-        "--no-audit",
-        `${DUCKDB_PACKAGE}@${DUCKDB_VERSION}`,
-      ],
-      { stdio: "inherit", shell: process.platform === "win32" },
+      process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : npm,
+      process.platform === "win32" ? ["/d", "/s", "/c", npm, ...args] : args,
+      { stdio: "inherit" },
     );
   } catch (error) {
     throw new Error(`DuckDB 自动安装失败，请手动执行 npm install ${DUCKDB_PACKAGE}: ${error.message}`);
