@@ -147,9 +147,14 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     assert.match(report, /15/);
     assert.match(report, /Git changes/);
     assert.match(report, /pi-init/);
-    assert.match(report, /Active 0s/);
+    assert.match(report, /Active\s+│\s+0s/);
+    assert.match(report, /Metric\s+│\s+Duration/);
+    assert.equal((report.match(/┌/g) ?? []).length, 4);
+    assert.equal((report.match(/└/g) ?? []).length, 4);
     assert.doesNotMatch(report, /\u001b\[/);
-    assert.match(formatReport(summary, { color: true }), /\u001b\[36;1m/);
+    const coloredReport = formatReport(summary, { color: true });
+    assert.match(coloredReport, /\u001b\[36;1m│ Metric/);
+    assert.match(coloredReport, /\u001b\[33;1m│ Total/);
     assert.doesNotMatch(report, /old\/model/);
     await rm(sessions, { recursive: true, force: true });
     const cached = await queryUsage(date, path.join(directory, "usage.duckdb"));
@@ -168,6 +173,7 @@ test("生成默认文件结构和动态 Skill", async () => {
 
     assert.deepEqual(result.files, [
       "AGENTS.md",
+      "docs/clean-code.md",
       "docs/current-state.md",
       "docs/decisions.md",
       "docs/session-log.md",
@@ -176,6 +182,7 @@ test("生成默认文件结构和动态 Skill", async () => {
       ".pi/skills/example-app/SKILL.md",
     ]);
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
+    const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
     const roleModels = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
     const skill = normalizeNewlines(
       await readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8"),
@@ -190,6 +197,10 @@ test("生成默认文件结构和动态 Skill", async () => {
     }
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
+    assert.match(agents, /docs\/clean-code\.md/);
+    assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
+    assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
+    assert.match(cleanCode, /## Hard rules/);
     assert.doesNotMatch(agents, /知识库地址远程地址/);
     assert.match(skill, /^---\nname: example-app\n/);
     assert.match(skill, /架构师.+Staff \/ Principal/);
@@ -859,11 +870,14 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     });
 
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
+    const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
     const skill = await readFile(path.join(target, ".pi/skills/mall-app/SKILL.md"), "utf8");
     assert.match(agents, /## Project Purpose/);
     assert.match(agents, /## Runtime Environment and Command Conventions/);
     assert.match(agents, new RegExp("`" + process.platform + "`"));
     assert.match(agents, /- Test: `npm test`/);
+    assert.match(agents, /docs\/clean-code\.md/);
+    assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(skill, /name: mall-app/);

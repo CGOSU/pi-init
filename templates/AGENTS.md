@@ -2,12 +2,13 @@
 
 本文件定义本项目长期有效的 AI Coding 协作规则。开始任务前先阅读本文件，并按顺序读取：
 
-1. `docs/current-state.md`：当前目标、已知状态和未完成事项；
-2. `docs/decisions.md`：已经确认的设计决策；
-3. `docs/session-log.md` 中最近的相关记录；
-4. `docs/pitfalls.md` 中与当前任务相关的历史问题；
-5. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
-6. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+1. `docs/clean-code.md`：代码、测试、重构、审查和文档修改的 Clean Code 规则；
+2. `docs/current-state.md`：当前目标、已知状态和未完成事项；
+3. `docs/decisions.md`：已经确认的设计决策；
+4. `docs/session-log.md` 中最近的相关记录；
+5. `docs/pitfalls.md` 中与当前任务相关的历史问题；
+6. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
+7. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
 
 ## 项目定位
 

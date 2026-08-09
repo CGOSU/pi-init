@@ -21,6 +21,7 @@ const PLATFORM_NAMES = {
 
 const TEMPLATE_FILES = [
   ["AGENTS.md", () => "AGENTS.md"],
+  ["docs/clean-code.md", () => "docs/clean-code.md"],
   ["docs/current-state.md", () => "docs/current-state.md"],
   ["docs/decisions.md", () => "docs/decisions.md"],
   ["docs/session-log.md", () => "docs/session-log.md"],
@@ -142,7 +143,7 @@ function renderTemplate(source, variables, templatePath) {
 }
 
 /**
- * Generate the six long-term AI collaboration files for a project.
+ * Generate the seven long-term AI collaboration files for a project.
  * Existing generated files are intentionally overwritten; unrelated files are untouched.
  */
 export async function createScaffold(targetDir, options = {}) {

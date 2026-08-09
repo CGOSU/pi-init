@@ -8,7 +8,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排与
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
 - 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
-- 自动模式在真实跨角色且上下文使用率达到 50% 时，于当前回合结束后压缩上下文并自动继续任务。
+- 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
 - 通过隔离 Git worktree 并行运行开发测试子代理。
 - 记录项目宿主环境、阶段耗时、token/cache/cost 和自动重试指标。
 
@@ -78,7 +78,7 @@ pi-usage
 - `pi-update` 只为更新子进程清除 `PI_OFFLINE`；无参数更新所有扩展，也可传入具体包源。
 - `pi-usage` 默认只查询 DuckDB；使用 `pi-usage --update` 扫描并增量导入 session JSONL，之后可传入 `YYYY-MM-DD` 查询指定日期，也可用 `--db <路径>` 指定数据库。默认数据库为 `~/.pi/agent/pi-usage.duckdb`，未安装 DuckDB 时会自动安装到用户目录。
 - `pi-usage` 同时统计关联 Git 仓库的当天 commit 变化，以及当前已跟踪文件的未提交变化；未提交变化不能精确归因到某个模型。
-- `pi-usage` 还显示活跃时长、模型等待时长和 session 跨度；交互终端默认使用 ANSI 颜色，设置 `NO_COLOR=1` 可关闭。活跃时长只连接间隔不超过 5 分钟的事件，避免空闲时间被计入。
+- `pi-usage` 还显示活跃时长、模型等待时长和 session 跨度；Overview、Models、Time 和 Git changes 均使用带边框的对齐表格，交互终端默认使用 ANSI 颜色，设置 `NO_COLOR=1` 可关闭。活跃时长只连接间隔不超过 5 分钟的事件，避免空闲时间被计入。
 - `--update` 会扫描 session JSONL、更新 DuckDB 派生表并执行 Git 查询，因此 session 很多或首次自动安装 DuckDB 时会短暂等待；普通查询只打开数据库，交互终端会显示更新进度提示。
 - 更新结束后在当前 Pi 会话执行 `/reload`，或重启 Pi，使已加载扩展使用新文件。
 - 安装器会把启动器放到 Pi 所在的可执行目录；POSIX 若无写权限则使用 `${XDG_BIN_HOME:-$HOME/.local/bin}`，并提示将其加入 `PATH`。
@@ -90,6 +90,7 @@ pi-usage
 <project-root>/
 ├── AGENTS.md
 ├── docs/
+│   ├── clean-code.md
 │   ├── current-state.md
 │   ├── decisions.md
 │   ├── session-log.md
@@ -101,7 +102,7 @@ pi-usage
             └── SKILL.md
 ```
 
-初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径才会询问项目名称、语言、项目定位、测试命令和 Skill 名称。当前项目初始化完成后会自动 reload。生成的 `AGENTS.md` 会记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
+初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径才会询问项目名称、语言、项目定位、测试命令和 Skill 名称。当前项目初始化完成后会自动 reload。生成的 `AGENTS.md` 会要求先读取随模板生成的 `docs/clean-code.md`，并记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
 
 默认模板面向 CGOSU 工作流，包含团队知识库和 Git 身份规则。其他团队使用前，请修改：
 

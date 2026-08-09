@@ -12,7 +12,7 @@
 ## 已知状态
 
 - 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。
-- 默认生成 `AGENTS.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`。
+- 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`；`AGENTS.md` 要求任务开始前先读取 Clean Code 规则。
 - 生成的中英文项目 Skill 均包含精确字符串替换规则：读取最新内容、要求唯一匹配、使用最小上下文、支持同一编辑中的多个非重叠替换，并在修改后检查 diff。
 - Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色。
 - `switch_role` 工具和 `/pi-init role` 读取 `.pi/role-models.json`，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 可临时覆盖当前会话，`/pi-init config` 持久修改职责模型。
@@ -34,4 +34,4 @@
 
 ## 最近一次更新
 
-- 2026-08-09：新增基于 DuckDB 的 `pi-usage [YYYY-MM-DD]`，扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用、关联 Git 代码变化和近似使用时长；缺少 DuckDB 时自动安装用户目录运行时。
+- 2026-08-09：新增基于 DuckDB 的 `pi-usage [YYYY-MM-DD]`，扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用、关联 Git 代码变化和近似使用时长；报告的 Overview、Models、Time 和 Git changes 均使用带边框的对齐表格，交互终端为表头和汇总行提供 ANSI 颜色；缺少 DuckDB 时自动安装用户目录运行时。

@@ -2,12 +2,13 @@
 
 This file defines the long-term AI coding rules for this project. Before starting a task, read this file and then review:
 
-1. `docs/current-state.md` for current goals, known state, and unfinished work;
-2. `docs/decisions.md` for confirmed design decisions;
-3. the latest relevant entries in `docs/session-log.md`;
-4. relevant historical issues in `docs/pitfalls.md`;
-5. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then commit in Chinese and run `git push`;
-6. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
+1. `docs/clean-code.md` for Clean Code rules covering code, tests, refactoring, review, and documentation changes;
+2. `docs/current-state.md` for current goals, known state, and unfinished work;
+3. `docs/decisions.md` for confirmed design decisions;
+4. the latest relevant entries in `docs/session-log.md`;
+5. relevant historical issues in `docs/pitfalls.md`;
+6. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then commit in Chinese and run `git push`;
+7. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
 
 ## Project Purpose
 

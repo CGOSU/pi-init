@@ -714,23 +714,50 @@ function supportsColor() {
   return Boolean(process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb");
 }
 
-function formatTable(rows, headers, alignments = []) {
+function formatTable(rows, headers, alignments = [], options = {}) {
   const values = rows.map((row) => row.map(String));
   const widths = headers.map((header, index) =>
     Math.max(header.length, ...values.map((row) => row[index].length)),
   );
+  const border = (left, middle, right) =>
+    left + widths.map((width) => "─".repeat(width + 2)).join(middle) + right;
   const line = (row) =>
-    row
+    `│ ${row
       .map((value, index) => {
-        if (index === row.length - 1) return value;
         const align = alignments[index] ?? (index === 0 ? "left" : "right");
         return align === "left" ? value.padEnd(widths[index]) : value.padStart(widths[index]);
       })
-      .join("  ");
-  return [line(headers), line(widths.map((width) => "-".repeat(width))), ...values.map(line)].join("\n");
+      .join(" │ ")} │`;
+  const lines = [
+    border("┌", "┬", "┐"),
+    line(headers),
+    border("├", "┼", "┤"),
+    ...values.map(line),
+    border("└", "┴", "┘"),
+  ];
+  return lines
+    .map((value, index) => {
+      if (!options.color) return value;
+      if (index === 1) return paint(value, "36;1", true);
+      if (index === 2) return paint(value, "90", true);
+      if (options.highlightLast && values.length > 0 && index === lines.length - 2) {
+        return paint(value, "33;1", true);
+      }
+      return value;
+    })
+    .join("\n");
 }
 
-function formatUsageTable(rows) {
+function formatOverviewTable(summary, color) {
+  return formatTable(
+    [["Sessions", formatNumber(summary.sessions)]],
+    ["Metric", "Value"],
+    ["left", "right"],
+    { color },
+  );
+}
+
+function formatUsageTable(rows, color) {
   return formatTable(
     rows.map((row) => [
       row.model,
@@ -743,6 +770,21 @@ function formatUsageTable(rows) {
       formatCost(row.cost),
     ]),
     ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cost"],
+    [],
+    { color, highlightLast: true },
+  );
+}
+
+function formatDurationTable(duration, color) {
+  return formatTable(
+    [
+      ["Active", formatDuration(duration.activeSeconds)],
+      ["Model wait", formatDuration(duration.modelWaitSeconds)],
+      ["Session span", formatDuration(duration.sessionSpanSeconds)],
+    ],
+    ["Metric", "Duration"],
+    ["left", "right"],
+    { color },
   );
 }
 
@@ -794,6 +836,7 @@ function formatCodeChanges(changes, color) {
       [...changes, { repository: "Total", ...total }].map(codeChangeRow),
       ["Repository", "Commits", "Selected-day commits", "Current working tree"],
       ["left", "right", "left", "left"],
+      { color, highlightLast: true },
     ),
     "Selected-day commits; working tree = current tracked uncommitted diff.",
   ].join("\n");
@@ -806,7 +849,7 @@ export function formatReport(summary, options = {}) {
     return result;
   }, emptyUsage());
   const usage = summary.rows.length
-    ? formatUsageTable([...summary.rows, { model: "Total", ...total }])
+    ? formatUsageTable([...summary.rows, { model: "Total", ...total }], color)
     : "No usage recorded. Run `pi-usage --update` to import session JSONL.";
   const duration = summary.duration ?? {
     activeSeconds: 0,
@@ -815,12 +858,15 @@ export function formatReport(summary, options = {}) {
   };
   return [
     paint(`Pi usage · ${summary.date}`, "36;1", color),
-    `${summary.sessions} session${summary.sessions === 1 ? "" : "s"}`,
+    "",
+    paint("Overview", "33;1", color),
+    formatOverviewTable(summary, color),
     "",
     paint("Models", "34;1", color),
     usage,
     "",
-    `${paint("Time", "32;1", color)}  Active ${paint(formatDuration(duration.activeSeconds), "32", color)} · Model wait ${paint(formatDuration(duration.modelWaitSeconds), "33", color)} · Session span ${formatDuration(duration.sessionSpanSeconds)}`,
+    paint("Time", "32;1", color),
+    formatDurationTable(duration, color),
     "",
     formatCodeChanges(summary.codeChanges ?? [], color),
   ].join("\n");
