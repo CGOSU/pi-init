@@ -140,12 +140,12 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     const summary = await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
     const report = formatReport(summary);
     assert.equal(summary.sessions, 2);
-    assert.match(report, new RegExp(`Pi usage for ${date}`));
+    assert.match(report, new RegExp(`Pi usage · ${date}`));
     assert.match(report, /provider\/response-model/);
     assert.match(report, /Tools\/summaries/);
     assert.match(report, /Total/);
     assert.match(report, /15/);
-    assert.match(report, /Code changes \(Git\)/);
+    assert.match(report, /Git changes/);
     assert.match(report, /pi-init/);
     assert.doesNotMatch(report, /old\/model/);
     await assert.rejects(

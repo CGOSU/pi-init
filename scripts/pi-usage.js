@@ -421,12 +421,19 @@ function formatCost(value) {
   return `$${value.toFixed(4)}`;
 }
 
-function formatTable(rows, headers) {
+function formatTable(rows, headers, alignments = []) {
   const values = rows.map((row) => row.map(String));
   const widths = headers.map((header, index) =>
     Math.max(header.length, ...values.map((row) => row[index].length)),
   );
-  const line = (row) => row.map((value, index) => value.padStart(widths[index])).join("  ");
+  const line = (row) =>
+    row
+      .map((value, index) => {
+        if (index === row.length - 1) return value;
+        const align = alignments[index] ?? (index === 0 ? "left" : "right");
+        return align === "left" ? value.padEnd(widths[index]) : value.padStart(widths[index]);
+      })
+      .join("  ");
   return [line(headers), line(widths.map((width) => "-".repeat(width))), ...values.map(line)].join("\n");
 }
 
@@ -442,22 +449,27 @@ function formatUsageTable(rows) {
       formatNumber(row.tokens),
       formatCost(row.cost),
     ]),
-    ["Model", "Calls", "Input", "Output", "Cache Read", "Cache Write", "Total", "Cost"],
+    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cost"],
   );
 }
 
-function formatCodeChanges(changes) {
-  if (changes.length === 0) return ["Code changes (Git)", "No repositories found."].join("\n");
-  const rows = changes.map((change) => [
-    change.repository,
+function displayRepository(repository) {
+  const normalized = repository.replaceAll("\\\\", "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.length > 2 ? parts.slice(-2).join("/") : normalized;
+}
+
+function codeChangeRow(change) {
+  return [
+    change.repository === "Total" ? "Total" : displayRepository(change.repository),
     formatNumber(change.commits),
-    formatNumber(change.committedFiles),
-    `+${formatNumber(change.committedInsertions)}`,
-    `-${formatNumber(change.committedDeletions)}`,
-    formatNumber(change.uncommittedFiles),
-    `+${formatNumber(change.uncommittedInsertions)}`,
-    `-${formatNumber(change.uncommittedDeletions)}`,
-  ]);
+    `${formatNumber(change.committedFiles)} files +${formatNumber(change.committedInsertions)}/-${formatNumber(change.committedDeletions)}`,
+    `${formatNumber(change.uncommittedFiles)} files +${formatNumber(change.uncommittedInsertions)}/-${formatNumber(change.uncommittedDeletions)}`,
+  ];
+}
+
+function formatCodeChanges(changes) {
+  if (changes.length === 0) return ["Git changes", "No repositories found."].join("\n");
   const total = changes.reduce(
     (result, change) => {
       for (const field of [
@@ -474,7 +486,6 @@ function formatCodeChanges(changes) {
       return result;
     },
     {
-      repository: "Total",
       commits: 0,
       committedFiles: 0,
       committedInsertions: 0,
@@ -484,20 +495,14 @@ function formatCodeChanges(changes) {
       uncommittedDeletions: 0,
     },
   );
-  rows.push([
-    total.repository,
-    formatNumber(total.commits),
-    formatNumber(total.committedFiles),
-    `+${formatNumber(total.committedInsertions)}`,
-    `-${formatNumber(total.committedDeletions)}`,
-    formatNumber(total.uncommittedFiles),
-    `+${formatNumber(total.uncommittedInsertions)}`,
-    `-${formatNumber(total.uncommittedDeletions)}`,
-  ]);
   return [
-    "Code changes (Git)",
-    formatTable(rows, ["Repository", "Commits", "Committed files", "Added", "Deleted", "Uncommitted files", "Added", "Deleted"]),
-    "Committed = selected day's commits; uncommitted = current tracked working-tree diff.",
+    "Git changes",
+    formatTable(
+      [...changes, { repository: "Total", ...total }].map(codeChangeRow),
+      ["Repository", "Commits", "Selected-day commits", "Current working tree"],
+      ["left", "right", "left", "left"],
+    ),
+    "Selected-day commits; working tree = current tracked uncommitted diff.",
   ].join("\n");
 }
 
@@ -507,15 +512,15 @@ export function formatReport(summary) {
     return result;
   }, emptyUsage());
   const usage = summary.rows.length
-    ? formatUsageTable([
-        ...summary.rows,
-        { model: "Total", ...total },
-      ])
+    ? formatUsageTable([...summary.rows, { model: "Total", ...total }])
     : "No usage recorded.";
   return [
-    `Pi usage for ${summary.date}`,
-    `Sessions: ${summary.sessions}`,
+    `Pi usage · ${summary.date}`,
+    `${summary.sessions} session${summary.sessions === 1 ? "" : "s"}`,
+    "",
+    "Models",
     usage,
+    "",
     formatCodeChanges(summary.codeChanges ?? []),
   ].join("\n");
 }
