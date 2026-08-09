@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
+import { formatReport, summarizeUsage } from "../scripts/pi-usage.js";
 import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
@@ -69,8 +70,10 @@ test("跨平台 Pi 启动器分离离线启动和扩展更新", async () => {
   const files = {
     windowsFast: await readFile(path.join(process.cwd(), "scripts", "pi-fast.cmd"), "utf8"),
     windowsUpdate: await readFile(path.join(process.cwd(), "scripts", "pi-update.cmd"), "utf8"),
+    windowsUsage: await readFile(path.join(process.cwd(), "scripts", "pi-usage.cmd"), "utf8"),
     posixFast: await readFile(path.join(process.cwd(), "scripts", "pi-fast.sh"), "utf8"),
     posixUpdate: await readFile(path.join(process.cwd(), "scripts", "pi-update.sh"), "utf8"),
+    posixUsage: await readFile(path.join(process.cwd(), "scripts", "pi-usage.sh"), "utf8"),
   };
 
   assert.match(files.windowsFast, /set "PI_OFFLINE=1"/);
@@ -79,6 +82,77 @@ test("跨平台 Pi 启动器分离离线启动和扩展更新", async () => {
   assert.match(files.posixFast, /export PI_OFFLINE=1/);
   assert.match(files.posixUpdate, /unset PI_OFFLINE/);
   assert.match(files.posixUpdate, /update --extensions/);
+  assert.match(files.windowsUsage, /pi-usage\.js/);
+  assert.match(files.posixUsage, /pi-usage\.js/);
+});
+
+test("pi-usage 汇总指定日期的 session 用量并按模型分组", async () => {
+  await withTempDirectory(async (directory) => {
+    const sessions = path.join(directory, "sessions");
+    const today = new Date();
+    const todayAtNoon = new Date(today);
+    todayAtNoon.setHours(12, 0, 0, 0);
+    const yesterdayAtNoon = new Date(todayAtNoon);
+    yesterdayAtNoon.setDate(yesterdayAtNoon.getDate() - 1);
+    const date = todayAtNoon.toLocaleDateString("sv-SE");
+    const usage = (input, output, total) => ({
+      input,
+      output,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: { total },
+    });
+    await mkdir(path.join(sessions, "project-a"), { recursive: true });
+    await mkdir(path.join(sessions, "project-b"), { recursive: true });
+    await writeFile(
+      path.join(sessions, "project-a", "a.jsonl"),
+      [
+        JSON.stringify({ type: "session", cwd: process.cwd() }),
+        JSON.stringify({
+          type: "message",
+          timestamp: todayAtNoon.toISOString(),
+          message: {
+            role: "assistant",
+            provider: "provider",
+            model: "model",
+            responseModel: "response-model",
+            usage: usage(10, 5, 0.1),
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: yesterdayAtNoon.toISOString(),
+          message: { role: "assistant", provider: "old", model: "model", usage: usage(99, 99, 9) },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(sessions, "project-b", "b.jsonl"),
+      JSON.stringify({
+        type: "message",
+        timestamp: todayAtNoon.toISOString(),
+        message: { role: "toolResult", usage: usage(2, 3, 0.02) },
+      }),
+      "utf8",
+    );
+
+    const summary = await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
+    const report = formatReport(summary);
+    assert.equal(summary.sessions, 2);
+    assert.match(report, new RegExp(`Pi usage for ${date}`));
+    assert.match(report, /provider\/response-model/);
+    assert.match(report, /Tools\/summaries/);
+    assert.match(report, /Total/);
+    assert.match(report, /15/);
+    assert.match(report, /Code changes \(Git\)/);
+    assert.match(report, /pi-init/);
+    assert.doesNotMatch(report, /old\/model/);
+    await assert.rejects(
+      summarizeUsage(sessions, "not-a-date", path.join(directory, "usage.duckdb")),
+      /日期必须是 YYYY-MM-DD/,
+    );
+  });
 });
 
 test("生成默认文件结构和动态 Skill", async () => {

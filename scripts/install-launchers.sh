@@ -20,4 +20,6 @@ fi
 
 install -m 755 "$source_dir/pi-fast.sh" "$pi_dir/pi-fast"
 install -m 755 "$source_dir/pi-update.sh" "$pi_dir/pi-update"
-printf '已安装到：%s\n日常启动：pi-fast\n更新扩展：pi-update\n' "$pi_dir"
+install -m 755 "$source_dir/pi-usage.sh" "$pi_dir/pi-usage"
+install -m 644 "$source_dir/pi-usage.js" "$pi_dir/pi-usage.js"
+printf '已安装到：%s\n日常启动：pi-fast\n更新扩展：pi-update\n统计用量：pi-usage\n' "$pi_dir"

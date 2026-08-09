@@ -122,6 +122,13 @@
 - 原因：角色状态原先只存在扩展内存中，reload、resume 或次日重新打开会丢失，导致第一次真实跨角色无法触发上下文压缩。
 - 约束：恢复只识别身份，不主动覆盖用户当前模型或推理强度；手动改过模型/推理强度时继续视为未知角色。
 
+### 2026-08-09：用 DuckDB 汇总跨 session 用量和 Git 代码变化
+
+- 决定：增加 `pi-usage [YYYY-MM-DD] [--db <path>]`，将 Pi JSONL 中的 usage 事件导入 DuckDB，按模型汇总 input、output、cache token、调用次数和费用；工具内部摘要单独归为 `Tools/summaries`。
+- 决定：从 session 的 `cwd` 关联 Git 仓库，额外统计指定日期的 commit 变化和当前已跟踪文件的未提交变化；未提交变化只作仓库级指标，不归因到模型。
+- 原因：DuckDB 适合本地分析且不需要独立数据库服务；JSONL 仍是事实来源，每次运行重建派生统计表，避免重复导入和脏数据。
+- 约束：默认数据库为 `~/.pi/agent/pi-usage.duckdb`；若项目或用户运行时没有 DuckDB，首次执行会安装固定版本到 `~/.pi/agent/pi-usage-runtime`；支持 `PI_CODING_AGENT_DIR` 和 `PI_CODING_AGENT_SESSION_DIR` 覆盖位置。
+
 ### 2026-08-06：生成的 Skill 使用精确字符串替换规则
 
 - 决定：中英文项目 Skill 都要求先读取最新文件，并使用唯一匹配的 `oldText` → `newText` 替换；匹配失败或不唯一时停止修改。

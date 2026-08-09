@@ -185,3 +185,17 @@
 - 验证：`npm test`，12 项测试全部通过，包含 JSON 事件解析、实时事件、心跳、自动重试和失败现场保留测试。
 - 验证：RPC 命令发现仍包含 `role-config`，扩展加载成功。
 - 遗留问题：尚未进行真实 LLM 子代理端到端演练。
+
+### 2026-08-09：增加 pi-usage 日用量统计命令
+
+- 完成内容：新增跨平台 `pi-usage` 启动器和 Node.js 汇总脚本，支持默认当天或指定 `YYYY-MM-DD`，按模型统计调用次数、input/output/cache token、总 token 和费用；摘要调用单列为 `Tools/summaries`。
+- 完成内容：更新 Windows/POSIX 安装器、README 和相关测试。
+- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`bash -n scripts/*.sh`、`git diff --check` 和 `npm pack --dry-run` 通过；脚本实际读取当前 session JSONL 并输出汇总。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-09：将 pi-usage 改为 DuckDB 统计并加入 Git 变化
+
+- 完成内容：引入 `@duckdb/node-api`，将 JSONL usage 导入 `~/.pi/agent/pi-usage.duckdb`；缺少依赖时自动安装用户目录运行时。
+- 完成内容：按 session `cwd` 关联 Git 仓库，增加当天 commit 变化和当前已跟踪未提交变化统计；README、安装说明和测试同步更新。
+- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`bash -n scripts/*.sh`、`git diff --check` 通过；实际运行 DuckDB 汇总、临时目录自动安装 DuckDB fallback 均通过。
+- 遗留问题：尚未提交或推送。

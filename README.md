@@ -62,6 +62,7 @@ Windows PowerShell：
 pwsh -File .\scripts\install-launchers.ps1
 pi-fast
 pi-update
+pi-usage
 ```
 
 POSIX shell（Linux/macOS/WSL）：
@@ -70,13 +71,16 @@ POSIX shell（Linux/macOS/WSL）：
 sh ./scripts/install-launchers.sh
 pi-fast
 pi-update
+pi-usage
 ```
 
 - `pi-fast` 只为当前 Pi 子进程设置 `PI_OFFLINE=1`，日常启动不联网。
 - `pi-update` 只为更新子进程清除 `PI_OFFLINE`；无参数更新所有扩展，也可传入具体包源。
+- `pi-usage` 使用 DuckDB 汇总当天所有 session 的模型、调用次数、输入/输出/cache token 和费用；可传入 `YYYY-MM-DD` 查询指定日期，也可用 `--db <路径>` 指定数据库。默认数据库为 `~/.pi/agent/pi-usage.duckdb`，未安装 DuckDB 时会自动安装到用户目录。
+- `pi-usage` 同时统计关联 Git 仓库的当天 commit 变化，以及当前已跟踪文件的未提交变化；未提交变化不能精确归因到某个模型。
 - 更新结束后在当前 Pi 会话执行 `/reload`，或重启 Pi，使已加载扩展使用新文件。
 - 安装器会把启动器放到 Pi 所在的可执行目录；POSIX 若无写权限则使用 `${XDG_BIN_HOME:-$HOME/.local/bin}`，并提示将其加入 `PATH`。
-- 这两个启动器是可选工具，不会修改系统全局环境变量；换电脑时从仓库重新执行安装器即可。
+- 这些辅助命令是可选工具，不会修改系统全局环境变量；换电脑时从仓库重新执行安装器即可。
 
 ## 生成内容
 

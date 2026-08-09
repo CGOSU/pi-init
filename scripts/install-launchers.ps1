@@ -12,7 +12,10 @@ $sourceDir = Split-Path -Parent $PSScriptRoot
 $targetDir = Split-Path -Parent $piCommand.Source
 Copy-Item (Join-Path $sourceDir "scripts\pi-fast.cmd") (Join-Path $targetDir "pi-fast.cmd") -Force
 Copy-Item (Join-Path $sourceDir "scripts\pi-update.cmd") (Join-Path $targetDir "pi-update.cmd") -Force
+Copy-Item (Join-Path $sourceDir "scripts\pi-usage.cmd") (Join-Path $targetDir "pi-usage.cmd") -Force
+Copy-Item (Join-Path $sourceDir "scripts\pi-usage.js") (Join-Path $targetDir "pi-usage.js") -Force
 
 Write-Host "已安装到：$targetDir"
 Write-Host "日常启动：pi-fast"
 Write-Host "更新扩展：pi-update"
+Write-Host "统计用量：pi-usage"
