@@ -2,16 +2,26 @@
 
 本文件定义本项目长期有效的 AI Coding 协作规则。开始任务前先阅读本文件，并按顺序读取：
 
-1. `docs/current-state.md`：当前目标、已知状态和未完成事项；
-2. `docs/decisions.md`：已经确认的设计决策；
-3. `docs/session-log.md` 中最近的相关记录；
-4. `docs/pitfalls.md` 中与当前任务相关的历史问题；
-5. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
-6. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+1. `docs/clean-code.md`：代码、测试、重构、审查和文档修改的 Clean Code 规则；
+2. `docs/current-state.md`：当前目标、已知状态和未完成事项；
+3. `docs/decisions.md`：已经确认的设计决策；
+4. `docs/session-log.md` 中最近的相关记录；
+5. `docs/pitfalls.md` 中与当前任务相关的历史问题；
+6. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
+7. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
 
 ## 项目定位
 
-用于 Pi 的项目初始化扩展，生成 `AGENTS.md`、项目记忆文档，以及支持智能职责路由和自动模型切换的项目级 Skill。
+用于 Pi 的项目初始化扩展，生成 AGENTS.md、项目记忆文档，以及支持智能职责路由和自动模型切换的项目级 Skill。
+
+## 运行环境与命令约定
+
+- 初始化时检测到的宿主系统：Windows (`win32`)，CPU 架构：`x64`。
+- 这是运行 Pi 的宿主环境快照，不一定是项目部署目标；如果实际执行发生在 WSL、容器、远程主机或其他环境中，应重新检测并以当前环境为准。
+- Pi 的内置 `bash` 工具在 Windows 上通常通过 Bash 执行；扩展使用 `pi.exec` 时是直接启动进程，不会经过 Bash。
+- 查找命令优先使用 `where.exe` 或当前 shell 支持的 `command -v`；不要把 Linux-only 的 `which` 作为唯一检查。
+- npm 全局 CLI 可能通过 Windows `.cmd` shim 暴露；直接启动时要选择当前平台可用的执行入口。
+- 如果工具提示 CLI 不存在，先用 `where.exe <command>`（以及对应的 `.cmd` shim）核实，再决定是否安装。
 
 ## 常用命令
 

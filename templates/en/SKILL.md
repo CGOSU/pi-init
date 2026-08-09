@@ -51,7 +51,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Wrap-up Engineer.
 - `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
-- In auto mode, only a real role boundary at 50% or more context usage triggers one compaction after the current turn; it preserves the goal, decisions, progress, files, verification results, and next steps, then resumes the task on success. Confirm, manual, first-role, same-role, and unknown-context switches do not trigger extra compaction.
+- In auto mode, only a real role boundary at 50% or more context usage triggers one compaction after the agent is fully settled; it preserves the goal, decisions, progress, files, verification results, and next steps, then resumes the task on success. Confirm, manual, first-role, same-role, and unknown-context switches do not trigger extra compaction.
 - At session start, resume, or reload, restore a role only when the current model and thinking level uniquely match its configuration; otherwise keep the role unknown.
 - Users can verify the same mapping with `/pi-init role <role ID>`; in trusted projects, use `/pi-init config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/pi-init role` and retry the automatic role boundary.
 
