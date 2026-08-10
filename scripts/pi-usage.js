@@ -11,6 +11,7 @@ const FIELDS = ["input", "output", "cacheRead", "cacheWrite"];
 const ACTIVE_GAP_MS = 5 * 60 * 1000;
 const MODEL_WAIT_GAP_MS = 30 * 60 * 1000;
 const AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+const MODEL_BAR_WIDTH = 24;
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -303,20 +304,6 @@ async function initializeDatabase(connection) {
       PRIMARY KEY (report_date, scope, model)
     )
   `);
-  await connection.run(`
-    CREATE TABLE IF NOT EXISTS code_changes (
-      report_date VARCHAR,
-      repository VARCHAR,
-      commits INTEGER,
-      committed_files INTEGER,
-      committed_insertions BIGINT,
-      committed_deletions BIGINT,
-      uncommitted_files INTEGER,
-      uncommitted_insertions BIGINT,
-      uncommitted_deletions BIGINT,
-      PRIMARY KEY (report_date, repository)
-    )
-  `);
 }
 
 function scanSessionFile(file) {
@@ -480,97 +467,6 @@ async function refreshDurationSummary(connection, range, duration) {
   }
 }
 
-function runGit(repository, args) {
-  try {
-    return execFileSync("git", ["-C", repository, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-function gitRoot(directory) {
-  return directory ? runGit(directory, ["rev-parse", "--show-toplevel"]) : undefined;
-}
-
-function parseNumstat(output) {
-  const result = { files: 0, insertions: 0, deletions: 0 };
-  for (const line of (output ?? "").split(/\r?\n/)) {
-    const [insertions, deletions] = line.split("\t");
-    if (deletions === undefined) continue;
-    result.files += 1;
-    if (insertions !== "-") result.insertions += Number(insertions) || 0;
-    if (deletions !== "-") result.deletions += Number(deletions) || 0;
-  }
-  return result;
-}
-
-function collectGitChanges(repository, range) {
-  const commits = Number(
-    runGit(repository, [
-      "rev-list",
-      "--count",
-      `--since=${range.start.toISOString()}`,
-      `--until=${range.end.toISOString()}`,
-      "HEAD",
-    ]) ?? 0,
-  );
-  const committed = parseNumstat(
-    runGit(repository, [
-      "log",
-      "--format=",
-      "--numstat",
-      `--since=${range.start.toISOString()}`,
-      `--until=${range.end.toISOString()}`,
-    ]),
-  );
-  const uncommitted = parseNumstat(runGit(repository, ["diff", "HEAD", "--numstat"]));
-  const status = runGit(repository, ["status", "--porcelain"]);
-  return {
-    repository,
-    commits,
-    committedFiles: committed.files,
-    committedInsertions: committed.insertions,
-    committedDeletions: committed.deletions,
-    uncommittedFiles: status ? status.split(/\r?\n/).filter(Boolean).length : 0,
-    uncommittedInsertions: uncommitted.insertions,
-    uncommittedDeletions: uncommitted.deletions,
-  };
-}
-
-async function refreshCodeChanges(connection, range, directories) {
-  const repositories = new Set();
-  for (const directory of directories) {
-    const root = gitRoot(directory);
-    if (root) repositories.add(root);
-  }
-  await connection.run("DELETE FROM code_changes WHERE report_date = $date", { date: range.date });
-  for (const repository of repositories) {
-    const change = collectGitChanges(repository, range);
-    await connection.run(
-      `
-        INSERT INTO code_changes VALUES (
-          $report_date, $repository, $commits, $committed_files,
-          $committed_insertions, $committed_deletions, $uncommitted_files,
-          $uncommitted_insertions, $uncommitted_deletions
-        )
-      `,
-      {
-        report_date: range.date,
-        repository: change.repository,
-        commits: change.commits,
-        committed_files: change.committedFiles,
-        committed_insertions: change.committedInsertions,
-        committed_deletions: change.committedDeletions,
-        uncommitted_files: change.uncommittedFiles,
-        uncommitted_insertions: change.uncommittedInsertions,
-        uncommitted_deletions: change.uncommittedDeletions,
-      },
-    );
-  }
-}
 
 function numberValue(value) {
   return Number(value) || 0;
@@ -597,18 +493,9 @@ async function readActivityEvents(connection, range) {
   }));
 }
 
-async function readDirectories(connection, range) {
-  const reader = await connection.runAndReadAll(
-    "SELECT DISTINCT cwd FROM usage_events WHERE event_date = $date AND cwd <> ''",
-    { date: range.date },
-  );
-  return reader.getRowObjects().map((row) => row.cwd).filter(Boolean);
-}
-
 async function refreshDerivedSummaries(connection, range) {
   const duration = calculateDuration(await readActivityEvents(connection, range), range);
   await refreshDurationSummary(connection, range, duration);
-  await refreshCodeChanges(connection, range, await readDirectories(connection, range));
 }
 
 async function readSummary(connection, range) {
@@ -636,10 +523,6 @@ async function readSummary(connection, range) {
     "SELECT * FROM duration_summaries WHERE report_date = $date AND scope = 'overall'",
     { date: range.date },
   );
-  const codeReader = await connection.runAndReadAll(
-    "SELECT * FROM code_changes WHERE report_date = $date ORDER BY repository",
-    { date: range.date },
-  );
   const rows = rowsReader.getRowObjects().map((row) => ({
     model: row.model,
     calls: numberValue(row.calls),
@@ -657,22 +540,11 @@ async function readSummary(connection, range) {
     modelWaitSeconds: numberValue(durationRow?.model_wait_seconds),
     sessionSpanSeconds: numberValue(durationRow?.session_span_seconds),
   };
-  const codeChanges = codeReader.getRowObjects().map((row) => ({
-    repository: row.repository,
-    commits: numberValue(row.commits),
-    committedFiles: numberValue(row.committed_files),
-    committedInsertions: numberValue(row.committed_insertions),
-    committedDeletions: numberValue(row.committed_deletions),
-    uncommittedFiles: numberValue(row.uncommitted_files),
-    uncommittedInsertions: numberValue(row.uncommitted_insertions),
-    uncommittedDeletions: numberValue(row.uncommitted_deletions),
-  }));
   return {
     date: range.date,
     sessions: numberValue(sessionsReader.getRowObjects()[0]?.sessions),
     rows,
     duration,
-    codeChanges,
   };
 }
 
@@ -752,6 +624,20 @@ function formatDuration(seconds) {
   return `${rest}s`;
 }
 
+export function calculateCacheRatio(usage) {
+  const cacheTokens = numberValue(usage?.cacheRead) + numberValue(usage?.cacheWrite);
+  const totalTokens = numberValue(usage?.tokens);
+  return {
+    cacheTokens,
+    totalTokens,
+    ratio: totalTokens > 0 ? cacheTokens / totalTokens : 0,
+  };
+}
+
+function formatPercentage(ratio) {
+  return `${(ratio * 100).toFixed(1)}%`;
+}
+
 function paint(value, code, enabled) {
   return enabled ? `\u001b[${code}m${value}\u001b[0m` : value;
 }
@@ -794,9 +680,17 @@ function formatTable(rows, headers, alignments = [], options = {}) {
     .join("\n");
 }
 
-function formatOverviewTable(summary, color) {
+function formatOverviewTable(summary, total, color) {
+  const cache = calculateCacheRatio(total);
   return formatTable(
-    [["Sessions", formatNumber(summary.sessions)]],
+    [
+      ["Sessions", formatNumber(summary.sessions)],
+      ["Total tokens", formatNumber(total.tokens)],
+      [
+        "Cache ratio",
+        `${formatNumber(cache.cacheTokens)} / ${formatNumber(cache.totalTokens)} (${formatPercentage(cache.ratio)})`,
+      ],
+    ],
     ["Metric", "Value"],
     ["left", "right"],
     { color },
@@ -834,58 +728,21 @@ function formatDurationTable(duration, color) {
   );
 }
 
-function displayRepository(repository) {
-  const normalized = repository.replaceAll("\\\\", "/");
-  const parts = normalized.split("/").filter(Boolean);
-  return parts.length > 2 ? parts.slice(-2).join("/") : normalized;
-}
-
-function codeChangeRow(change) {
-  return [
-    change.repository === "Total" ? "Total" : displayRepository(change.repository),
-    formatNumber(change.commits),
-    `${formatNumber(change.committedFiles)} files +${formatNumber(change.committedInsertions)}/-${formatNumber(change.committedDeletions)}`,
-    `${formatNumber(change.uncommittedFiles)} files +${formatNumber(change.uncommittedInsertions)}/-${formatNumber(change.uncommittedDeletions)}`,
-  ];
-}
-
-function formatCodeChanges(changes, color) {
-  if (changes.length === 0) return [paint("Git changes", "35;1", color), "No repositories found."].join("\n");
-  const total = changes.reduce(
-    (result, change) => {
-      for (const field of [
-        "commits",
-        "committedFiles",
-        "committedInsertions",
-        "committedDeletions",
-        "uncommittedFiles",
-        "uncommittedInsertions",
-        "uncommittedDeletions",
-      ]) {
-        result[field] += change[field];
-      }
-      return result;
-    },
-    {
-      commits: 0,
-      committedFiles: 0,
-      committedInsertions: 0,
-      committedDeletions: 0,
-      uncommittedFiles: 0,
-      uncommittedInsertions: 0,
-      uncommittedDeletions: 0,
-    },
-  );
-  return [
-    paint("Git changes", "35;1", color),
-    formatTable(
-      [...changes, { repository: "Total", ...total }].map(codeChangeRow),
-      ["Repository", "Commits", "Selected-day commits", "Current working tree"],
-      ["left", "right", "left", "left"],
-      { color, highlightLast: true },
-    ),
-    "Selected-day commits; working tree = current tracked uncommitted diff.",
-  ].join("\n");
+function formatModelUsageChart(rows, color) {
+  if (rows.length === 0) return "No model usage recorded.";
+  const chartRows = [...rows].sort((left, right) => right.tokens - left.tokens);
+  const labelWidth = Math.max(...chartRows.map((row) => row.model.length));
+  const maxTokens = Math.max(...chartRows.map((row) => row.tokens));
+  return chartRows
+    .map((row) => {
+      const barLength =
+        maxTokens > 0 && row.tokens > 0
+          ? Math.max(1, Math.round((row.tokens / maxTokens) * MODEL_BAR_WIDTH))
+          : 0;
+      const bar = "█".repeat(barLength).padEnd(MODEL_BAR_WIDTH);
+      return `${row.model.padEnd(labelWidth)} ${paint(bar, "34", color)} ${formatNumber(row.tokens)}`;
+    })
+    .join("\n");
 }
 
 export function formatReport(summary, options = {}) {
@@ -906,15 +763,16 @@ export function formatReport(summary, options = {}) {
     paint(`Pi usage · ${summary.date}`, "36;1", color),
     "",
     paint("Overview", "33;1", color),
-    formatOverviewTable(summary, color),
+    formatOverviewTable(summary, total, color),
     "",
     paint("Models", "34;1", color),
     usage,
     "",
+    paint("Model usage (tokens)", "34;1", color),
+    formatModelUsageChart(summary.rows, color),
+    "",
     paint("Time", "32;1", color),
     formatDurationTable(duration, color),
-    "",
-    formatCodeChanges(summary.codeChanges ?? [], color),
   ].join("\n");
 }
 
@@ -945,7 +803,7 @@ async function main() {
   const { date, databasePath, update } = parseArguments(process.argv.slice(2), agentDir);
   const sessionsDirectory = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(agentDir, "sessions");
   const runtimeDirectory = path.join(agentDir, "pi-usage-runtime");
-  if (update && process.stderr.isTTY) console.error("正在扫描 session、增量更新 DuckDB 和 Git 统计...");
+  if (update && process.stderr.isTTY) console.error("正在扫描 session、增量更新 DuckDB...");
   const summary = update
     ? await summarizeUsage(sessionsDirectory, date, databasePath, runtimeDirectory)
     : await queryUsage(date, databasePath, runtimeDirectory, sessionsDirectory);

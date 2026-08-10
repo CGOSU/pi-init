@@ -34,4 +34,4 @@
 
 ## 最近一次更新
 
-- 2026-08-09：新增基于 DuckDB 的 `pi-usage [YYYY-MM-DD]`，扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用、关联 Git 代码变化和近似使用时长；报告的 Overview、Models、Time 和 Git changes 均使用带边框的对齐表格，交互终端为表头和汇总行提供 ANSI 颜色；缺少 DuckDB 时自动安装用户目录运行时；普通查询增加 1 小时缓存和跨自然日自动检查。
+- 2026-08-10：`pi-usage` 基于 DuckDB 扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用和近似使用时长；报告移除 Git changes，增加按模型总 token 缩放的柱状图，并在 Overview 显示缓存占比；缺少 DuckDB 时自动安装用户目录运行时；普通查询增加 1 小时缓存和跨自然日自动检查。

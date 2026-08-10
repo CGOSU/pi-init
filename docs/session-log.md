@@ -8,6 +8,13 @@
 
 ## 会话
 
+### 2026-08-10：优化 pi-usage 模型用量展示
+
+- 完成内容：移除 Git changes 的扫描、数据库汇总和报告展示；增加按模型总 token 缩放的 Unicode 柱状图。
+- 完成内容：在 Overview 增加缓存占比结果，按 `(Cache R + Cache W) / Total` 计算并显示缓存 token、总 token和百分比；补充 pi-usage 回归断言。
+- 验证：`node --test test/scaffold.test.js`，27 项测试全部通过；`node --check scripts/pi-usage.js` 和 `git diff --check` 通过。完整测试在 `npm test` 下偶发 Windows Pi CLI 启动测试失败（26/27），单独重跑该测试通过；`node --test --test-concurrency=1` 全部通过。
+- 遗留问题：`npm test` 的 Windows Pi CLI 启动测试仍有环境相关偶发失败；尚未提交或推送。
+
 ### 2026-08-06：为生成的 Skill 增加精确字符串替换说明
 
 - 完成内容：中英文 Skill 模板增加类似 Claude Code Edit 的精确 `oldText` → `newText` 替换规则，覆盖唯一匹配、最小上下文、多个非重叠替换和修改后 diff 检查。

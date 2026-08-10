@@ -150,6 +150,12 @@
 - 决定：将 session 数量、模型用量、时长和 Git 变化统一输出为带边框的对齐表格；交互终端为表头、分隔线和 Total 行增加 ANSI 颜色。
 - 原因：比混合的行内文本更容易扫描和比较，同时保留非 TTY 和 `NO_COLOR=1` 下的纯文本输出。
 
+### 2026-08-10：pi-usage 移除 Git 展示并增加模型用量图表
+
+- 决定：`pi-usage` 不再扫描或展示 Git 代码变化；报告增加按模型总 token 缩放的 Unicode 柱状图，并在 Overview 显示缓存占比。
+- 原因：Git 变化与模型用量没有直接归因关系，移除无关统计可缩短更新路径；柱状图和缓存占比让 token 使用情况更易比较。
+- 约束：缓存占比固定按 `(cacheRead + cacheWrite) / totalTokens` 计算并显示为百分比；柱状图以当天模型总 token 为量纲，非 TTY 和 `NO_COLOR=1` 保持纯文本。
+
 ### 2026-08-09：角色切换压缩等待 agent_settled
 
 - 决定：自动角色切换的定制压缩只在 Pi 的 `agent_settled` 事件中启动，不再使用 `turn_end`。

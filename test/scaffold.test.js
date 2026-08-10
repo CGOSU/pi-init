@@ -129,11 +129,11 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     const yesterdayAtNoon = new Date(todayAtNoon);
     yesterdayAtNoon.setDate(yesterdayAtNoon.getDate() - 1);
     const date = todayAtNoon.toLocaleDateString("sv-SE");
-    const usage = (input, output, total) => ({
+    const usage = (input, output, total, cacheRead = 0, cacheWrite = 0) => ({
       input,
       output,
-      cacheRead: 0,
-      cacheWrite: 0,
+      cacheRead,
+      cacheWrite,
       cost: { total },
     });
     await mkdir(path.join(sessions, "project-a"), { recursive: true });
@@ -150,7 +150,7 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
             provider: "provider",
             model: "model",
             responseModel: "response-model",
-            usage: usage(10, 5, 0.1),
+            usage: usage(10, 5, 0.1, 20, 5),
           },
         }),
         JSON.stringify({
@@ -178,13 +178,15 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     assert.match(report, /provider\/response-model/);
     assert.match(report, /Tools\/summaries/);
     assert.match(report, /Total/);
-    assert.match(report, /15/);
-    assert.match(report, /Git changes/);
-    assert.match(report, /pi-init/);
+    assert.match(report, /40/);
+    assert.match(report, /Cache ratio\s+│\s+25 \/ 45 \(55\.6%\)/);
+    assert.match(report, /Model usage \(tokens\)/);
+    assert.match(report, /provider\/response-model\s+█+\s+40/);
+    assert.doesNotMatch(report, /Git changes/);
     assert.match(report, /Active\s+│\s+0s/);
     assert.match(report, /Metric\s+│\s+Duration/);
-    assert.equal((report.match(/┌/g) ?? []).length, 4);
-    assert.equal((report.match(/└/g) ?? []).length, 4);
+    assert.equal((report.match(/┌/g) ?? []).length, 3);
+    assert.equal((report.match(/└/g) ?? []).length, 3);
     assert.doesNotMatch(report, /\u001b\[/);
     const coloredReport = formatReport(summary, { color: true });
     assert.match(coloredReport, /\u001b\[36;1m│ Metric/);
