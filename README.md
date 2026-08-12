@@ -52,16 +52,14 @@ pi install .
 
 `init_project` 工具的 `targetDir` 默认为当前工作目录，支持 `dryRun: true` 预览而不写入文件。
 
-### 可选：离线启动与扩展更新
+### 可选：用量统计
 
-如果全局设置了 `PI_OFFLINE=1`，Pi 启动时不会访问网络，也不会检查扩展更新。仓库提供跨平台启动器，把启动和升级分开：
+仓库提供跨平台的 `pi-usage` 命令，用于查看 Pi 的模型用量：
 
 Windows PowerShell：
 
 ```powershell
 pwsh -File .\scripts\install-launchers.ps1
-pi-fast
-pi-update
 pi-usage
 ```
 
@@ -69,13 +67,9 @@ POSIX shell（Linux/macOS/WSL）：
 
 ```bash
 sh ./scripts/install-launchers.sh
-pi-fast
-pi-update
 pi-usage
 ```
 
-- `pi-fast` 只为当前 Pi 子进程设置 `PI_OFFLINE=1`，日常启动不联网。
-- `pi-update` 只为更新子进程清除 `PI_OFFLINE`；无参数更新所有扩展，也可传入具体包源。
 - `pi-usage` 默认查询 DuckDB；首次查询、距离上次检查超过 1 小时或跨自然日时，会自动扫描并增量导入 session JSONL；使用 `pi-usage --update` 可强制立即检查，之后可传入 `YYYY-MM-DD` 查询指定日期，也可用 `--db <路径>` 指定数据库。默认数据库为 `~/.pi/agent/pi-usage.duckdb`，未安装 DuckDB 时会自动安装到用户目录。
 - `pi-usage` 还显示活跃时长、模型等待时长和 session 跨度；Overview、Models 和 Time 使用带边框的对齐表格，并额外显示按模型总 token 缩放的柱状图及整体缓存占比（`(Cache R + Cache W) / Total`）。交互终端默认使用 ANSI 颜色，设置 `NO_COLOR=1` 可关闭。活跃时长只连接间隔不超过 5 分钟的事件，避免空闲时间被计入。
 - `--update` 会强制扫描 session JSONL 并更新 DuckDB 派生表；自动检查只在上述缓存过期时执行，未过期的普通查询直接读取数据库。session 很多或首次自动安装 DuckDB 时会短暂等待，交互终端会显示手动更新进度提示。
