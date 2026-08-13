@@ -8,6 +8,13 @@
 
 本文件按时间追加每次工作的完成内容、实际验证和遗留问题，不记录敏感信息或未经验证的结果。
 
+### 2026-08-14：增加 task_workflow 全局开关
+
+- 完成内容：新增顶层 `workflowEnabled` 配置，默认关闭；`/pi-init config workflow` 可持久启用或关闭，`task_workflow(action=plan)` 关闭时拒绝，既有工作流收尾操作不受影响。
+- 完成内容：同步中英文 `AGENTS.md`、Skill、README、当前项目配置和设计决策，明确启用前提及直接编辑 `.pi/role-models.json` 的路径。
+- 验证：`npm test`，24 项测试全部通过；`node --check extensions/init-project.ts`、`git diff --check` 和 RPC 扩展命令发现检查通过。
+- 遗留问题：尚未在真实交互式 TUI 中演练开关菜单；未提交或推送。
+
 ### 2026-08-14：移除自研 parallel_develop
 
 - 完成内容：删除 `parallel_develop` 运行时工具及 `src/parallel.js`、`src/parallel-runner.js`；清理 README、模板、项目 Skill、AGENTS.md 和测试中的自研并行开发说明、导入、fixture 与契约断言。保留 `task_workflow`、`switch_role`、角色模型配置和脚手架生成。

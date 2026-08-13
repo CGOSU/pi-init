@@ -33,9 +33,9 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 
 ## Architecture Decomposition and Automatic Task Workflow
 
-- Default to a continuous flow: Architect analysis → call `task_workflow(action=plan)` to freeze tasks → Development and Test Engineer completes tasks one by one → automatically start the next task → Documentation and Wrap-up Engineer finishes. Do not ask the user to choose between tasks.
+- The project task workflow is disabled by default. Only when top-level `workflowEnabled` in `.pi/role-models.json` is `true`, use the continuous flow: Architect analysis → call `task_workflow(action=plan)` to freeze tasks → Development and Test Engineer completes tasks one by one → automatically start the next task → Documentation and Wrap-up Engineer finishes. Enable it persistently with `/pi-init config workflow`; do not call `plan` while disabled.
 - Every Architect-created task must include a unique `id`, a goal in `task`, allowed `files`, verifiable `acceptanceCriteria`, and `dependsOn` when ordering matters; tasks run sequentially when their dependencies are ready.
-- Set `reviewRequired` to `true` only when the user's initial request explicitly asks to see or review the architecture first. The workflow then pauses after saving the plan and resumes with `/pi-init workflow resume`; the default is automatic advancement.
+- When the workflow is enabled, set `reviewRequired` to `true` only when the user's initial request explicitly asks to see or review the architecture first. The workflow then pauses after saving the plan and resumes with `/pi-init workflow resume`; the default is automatic advancement.
 - After receiving a task, the Development and Test Engineer should implement, test, and fix directly instead of pausing for optional preferences. On completion, call `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`; the verification list may contain only commands actually run and their real results.
 - If a product decision, permission/credential, destructive-operation approval, unrecoverable failure, or genuinely blocking fact is missing, call `task_workflow(action=block, taskId=..., reason=...)` instead of guessing completion; after resolution, use `/pi-init workflow retry <taskId>`.
 - After completion, the extension switches the configured role/model and starts the next task through a hidden continuation message. Do not manually reassign the next task or ask the user to trigger it. If the model forgets the completion action, the system nudges it a limited number of times and then pauses.
@@ -53,6 +53,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - `/pi-init advanced [directory]`: edit the project name, language, test command, and Skill before initialization.
 - `/pi-init role <role ID>`: manually switch roles.
 - `/pi-init config [role ID]`: persistently change a role's model and reasoning level.
+- `/pi-init config workflow`: persistently enable or disable the task workflow; you can also edit `workflowEnabled` in `.pi/role-models.json` directly.
 
 ## Automatic Model Switching
 

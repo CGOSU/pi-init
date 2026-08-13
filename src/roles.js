@@ -1,6 +1,7 @@
 export const ROLE_NAMES = ["architect", "developer-test", "docs-commit"];
 export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
+export const DEFAULT_WORKFLOW_ENABLED = false;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
 
 export const ROLE_LABELS = {
@@ -67,6 +68,7 @@ export const DEFAULT_ROLE_MODELS = {
 
 export const DEFAULT_ROLE_CONFIG = {
   mode: DEFAULT_ROLE_MODE,
+  workflowEnabled: DEFAULT_WORKFLOW_ENABLED,
   ...DEFAULT_ROLE_MODELS,
 };
 
@@ -79,6 +81,15 @@ export function resolveRoleMode(config) {
     throw new Error(`职责切换模式无效：${mode}`);
   }
   return mode;
+}
+
+export function resolveWorkflowEnabled(config) {
+  const value = config?.workflowEnabled;
+  if (value === undefined) return DEFAULT_WORKFLOW_ENABLED;
+  if (typeof value !== "boolean") {
+    throw new Error(`工作流开关 workflowEnabled 必须是布尔值：${value}`);
+  }
+  return value;
 }
 
 export function resolveRoleModel(config, role) {
@@ -115,7 +126,10 @@ export function filterRoleModels(models, query) {
 }
 
 export function resolveRoleConfig(config) {
-  const resolved = { mode: resolveRoleMode(config) };
+  const resolved = {
+    mode: resolveRoleMode(config),
+    workflowEnabled: resolveWorkflowEnabled(config),
+  };
   for (const role of ROLE_NAMES) {
     resolved[role] = resolveRoleModel(config, role);
   }

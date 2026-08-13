@@ -17,10 +17,10 @@ This file defines the long-term AI coding rules for this project. Before startin
 ## Task Execution Workflow
 
 - By default, run a continuous pipeline: Architecture analysis → task decomposition → sequential development/testing → documentation and wrap-up. Unless the user explicitly asks at the beginning to review the architecture first, the Architect must not stop to ask which next step to choose.
-- For cross-module or non-trivial work, the Architect must call `task_workflow` with `plan`, splitting the work into ordered tasks with dependencies, file scopes, and acceptance criteria. Do not leave only a vague prose plan that cannot drive execution.
-- After each task, the Development and Test Engineer must run real verification and call `task_workflow` with `complete`, including the implementation summary and actual results. The workflow automatically switches to the assigned role and starts the next ready task.
+- The project task workflow is disabled by default. Only when `workflowEnabled` is `true` in `.pi/role-models.json` should the Architect call `task_workflow` with `plan` for cross-module or non-trivial work. Enable it persistently with `/pi-init config workflow`, or edit that configuration field directly; do not call `plan` while it is disabled.
+- After each task in an enabled workflow, the Development and Test Engineer must run real verification and call `task_workflow` with `complete`, including the implementation summary and actual results. The workflow automatically switches to the assigned role and starts the next ready task.
 - Do not ask about preferences, style, or optional alternatives mid-task. Pause only for an explicit architecture review request, missing product decisions, permissions/credentials, approval for destructive operations, unrecoverable failures, or genuinely blocking information; record reasonable assumptions in the task result.
-- When the user explicitly asks to see the architecture first, the Architect sets `reviewRequired` to `true` and pauses after saving the plan; after review, run `/pi-init workflow resume`. Blocked tasks use `block`; after the cause is resolved, use `/pi-init workflow retry <taskId>`.
+- When the user explicitly asks to see the architecture first and the workflow is enabled, the Architect sets `reviewRequired` to `true` and pauses after saving the plan; after review, run `/pi-init workflow resume`. Blocked tasks use `block`; after the cause is resolved, use `/pi-init workflow retry <taskId>`.
 
 ## Runtime Environment and Command Conventions
 

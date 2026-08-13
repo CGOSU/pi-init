@@ -15,6 +15,7 @@ import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.j
 import {
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_MODELS,
+  DEFAULT_WORKFLOW_ENABLED,
   ROLE_LABELS,
   ROLE_MODE_LABELS,
   ROLE_SWITCH_COMPACTION_THRESHOLD,
@@ -23,6 +24,7 @@ import {
   findMatchingRole,
   resolveRoleConfig,
   resolveRoleMode,
+  resolveWorkflowEnabled,
   resolveRoleModel,
   shouldCompactOnRoleSwitch,
 } from "../src/roles.js";
@@ -377,6 +379,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.deepEqual(resolveRoleConfig(undefined), DEFAULT_ROLE_CONFIG);
     assert.deepEqual(THINKING_LEVELS, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     assert.equal(roleModels.mode, "auto");
+    assert.equal(roleModels.workflowEnabled, false);
     assert.deepEqual(DEFAULT_ROLE_MODELS["developer-test"], {
       provider: "openai-codex",
       model: "gpt-5.6-luna",
@@ -412,6 +415,7 @@ test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async ()
     const target = path.join(directory, "custom-app");
     const roleModels = {
       mode: "confirm",
+      workflowEnabled: true,
       architect: {
         provider: "provider-architect",
         model: "model-architect",
@@ -436,6 +440,7 @@ test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async ()
       await readFile(path.join(target, ".pi/skills/custom-app/SKILL.md"), "utf8"),
     );
     assert.deepEqual(config, resolveRoleConfig(roleModels));
+    assert.equal(config.workflowEnabled, true);
     assertSkillMatchesRoleConfig(skill, config);
     assert.match(skill, /\/pi-init config/);
   });
@@ -462,6 +467,7 @@ test("部分职责配置回退默认值并同步英文 Skill", async () => {
     assert.deepEqual(config, resolveRoleConfig(roleModels));
     assert.deepEqual(config["developer-test"], DEFAULT_ROLE_MODELS["developer-test"]);
     assert.deepEqual(config["docs-commit"], DEFAULT_ROLE_MODELS["docs-commit"]);
+    assert.equal(config.workflowEnabled, false);
     assertSkillMatchesRoleConfig(skill, config);
     assert.match(skill, /\/pi-init config/);
   });
@@ -552,6 +558,13 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
   assert.match(extension, /name: "task_workflow"/);
   assert.match(extension, /action: StringEnum\(\["plan", "status", "complete", "block", "resume", "retry", "cancel"\]/);
+  assert.match(extension, /workflowEnabled: Type\.Optional\(Type\.Boolean/);
+  assert.match(extension, /async function configureWorkflow\(ctx: ExtensionCommandContext\)/);
+  assert.match(extension, /requested === "workflow"/);
+  assert.match(extension, /value: "workflow"[\s\S]*?持久控制是否允许架构角色创建/);
+  assert.match(extension, /params\.action === "plan"[\s\S]*?config\.workflowEnabled[\s\S]*?\/pi-init config workflow/);
+  assert.match(extension, /params\.action === "plan"[\s\S]*?if \(activeRoleFor\(ctx\)\?\.role !== "architect"\)/);
+  assert.match(extension, /if \(params\.action === "plan"\)[\s\S]*?switch \(params\.action\)/);
   assert.match(extension, /reviewRequired=true only when the user's initial request explicitly asks/);
   assert.match(extension, /自动进入任务/);
   assert.match(extension, /\/pi-init workflow retry/);
@@ -631,6 +644,13 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.equal(resolveRoleMode(undefined), "auto");
   assert.equal(resolveRoleMode({ mode: "manual" }), "manual");
   assert.throws(() => resolveRoleMode({ mode: "sometimes" }), /职责切换模式无效/);
+  assert.equal(resolveWorkflowEnabled(undefined), DEFAULT_WORKFLOW_ENABLED);
+  assert.equal(resolveWorkflowEnabled({ workflowEnabled: true }), true);
+  assert.equal(resolveWorkflowEnabled({ workflowEnabled: false }), false);
+  assert.throws(
+    () => resolveWorkflowEnabled({ workflowEnabled: "yes" }),
+    /workflowEnabled.*布尔值/,
+  );
   assert.deepEqual(resolveRoleModel(undefined, "architect"), DEFAULT_ROLE_MODELS.architect);
   assert.deepEqual(
     resolveRoleModel(

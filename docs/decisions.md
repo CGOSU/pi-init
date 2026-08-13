@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-14：任务工作流默认关闭并显式启用
+
+- 决定：在 `.pi/role-models.json` 增加顶层布尔字段 `workflowEnabled`，默认值为 `false`；只有通过 `/pi-init config workflow` 或直接修改该字段启用后，`task_workflow(action=plan)` 才允许创建新规划。
+- 原因：任务编排会自动切换角色、发送续跑消息并持久化会话状态，默认关闭可避免在未明确选择时改变普通任务流程。
+- 约束：缺失字段按 `false` 兼容旧项目；关闭只阻止新 `plan`，不阻止 `status` 或既有工作流的完成、阻塞、恢复、重试和取消；中英文模板必须明确说明启用前提。
+
 ### 2026-08-14：移除自研并行开发实现并保留顺序工作流
 
 - 决定：删除 `parallel_develop` 工具、隔离 Git worktree/Pi worker 运行时代码及其专用测试、fixture、模板和文档说明；不添加或配置第三方替代品。保留 `task_workflow`、`switch_role`、角色模型配置和脚手架生成。

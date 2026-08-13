@@ -48,6 +48,7 @@ const roleModelSchema = Type.Object({
   }),
 });
 const roleModelsSchema = Type.Object({
+  workflowEnabled: Type.Optional(Type.Boolean({ description: "是否允许架构角色创建 task_workflow 规划" })),
   architect: Type.Optional(roleModelSchema),
   "developer-test": Type.Optional(roleModelSchema),
   "docs-commit": Type.Optional(roleModelSchema),
@@ -213,6 +214,11 @@ type RoleModelConfig = {
   provider: string;
   model: string;
   thinkingLevel: string;
+};
+
+type ResolvedRoleConfig = Record<string, RoleModelConfig> & {
+  mode: string;
+  workflowEnabled: boolean;
 };
 
 function getAvailableRoleModels(ctx: ExtensionContext) {
@@ -427,12 +433,17 @@ async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
   };
 }
 
-function roleMenuItems(config: Record<string, RoleModelConfig>, mode: string) {
+function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
   return [
     {
       value: "mode",
       label: `● 模式 · ${roleModeLabel(mode)}`,
       description: "只影响本次会话，不修改项目文件",
+    },
+    {
+      value: "workflow",
+      label: `● 工作流 · ${config.workflowEnabled ? "已启用" : "已关闭"}`,
+      description: "持久控制是否允许架构角色创建 task_workflow 规划",
     },
     ...ROLE_NAMES.map((role) => ({
       value: role,
@@ -443,19 +454,27 @@ function roleMenuItems(config: Record<string, RoleModelConfig>, mode: string) {
   ];
 }
 
+async function updateRoleConfig(ctx: ExtensionContext, changes: Record<string, unknown>) {
+  const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
+  return withFileMutationQueue(configPath, async () => {
+    const current = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, unknown>;
+    const next = resolveRoleConfig({ ...current, ...changes });
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    return next;
+  });
+}
+
 async function writeRoleConfig(
   ctx: ExtensionContext,
   role: string,
   selection: RoleModelConfig,
 ) {
-  const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
-  return withFileMutationQueue(configPath, async () => {
-    const current = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, unknown>;
-    const next = resolveRoleConfig({ ...current, [role]: selection });
-    await mkdir(dirname(configPath), { recursive: true });
-    await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-    return next;
-  });
+  return updateRoleConfig(ctx, { [role]: selection });
+}
+
+async function writeWorkflowConfig(ctx: ExtensionContext, workflowEnabled: boolean) {
+  return updateRoleConfig(ctx, { workflowEnabled });
 }
 
 function formatResult(result: {
@@ -701,7 +720,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
-    const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+    const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
     const target = config[role];
     if (!target) throw new Error(`未知角色：${role}`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
@@ -751,7 +770,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   async function automaticRole(role: string, ctx: ExtensionContext) {
-    const configuredMode = (resolveRoleConfig(await readRoleConfig(ctx)) as { mode: string }).mode;
+    const configuredMode = (resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig).mode;
     const mode = sessionModeOverride ?? configuredMode;
     if (mode === "auto") {
       const previousRole = activeRoleFor(ctx)?.role;
@@ -997,6 +1016,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (params.action !== "status" && !ctx.isProjectTrusted()) {
       throw new Error("task_workflow 仅允许在受信任项目中运行；请先信任当前项目");
     }
+    if (params.action === "plan") {
+      const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      if (!config.workflowEnabled) {
+        throw new Error(
+          "task_workflow 当前未启用；请先执行 /pi-init config workflow 启用，或在 .pi/role-models.json 中将 workflowEnabled 设为 true",
+        );
+      }
+    }
 
     switch (params.action) {
       case "plan": {
@@ -1122,7 +1149,46 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
   }
 
+  async function configureWorkflow(ctx: ExtensionCommandContext) {
+    if (!ctx.isProjectTrusted()) {
+      ctx.ui.notify("/pi-init config 仅允许在受信任项目中运行；请先信任当前项目", "error");
+      return;
+    }
+    if (!ctx.hasUI) {
+      ctx.ui.notify("/pi-init config workflow 需要交互式 UI", "error");
+      return;
+    }
+
+    const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+    const choice = await showMenu(ctx, "任务工作流开关", [
+      {
+        value: "enable",
+        label: config.workflowEnabled ? "保持启用" : "启用工作流",
+        description: "允许架构角色创建 task_workflow 规划",
+      },
+      {
+        value: "disable",
+        label: config.workflowEnabled ? "关闭工作流" : "保持关闭",
+        description: "阻止新规划，已开始的工作流仍可查看和收尾",
+      },
+      { value: "back", label: "← 返回上一级" },
+    ]);
+    if (!choice || choice === "back") return;
+
+    const next = await writeWorkflowConfig(ctx, choice === "enable");
+    ctx.ui.notify(
+      next.workflowEnabled
+        ? "项目任务工作流已启用；架构角色现在可以创建 task_workflow 规划。"
+        : "项目任务工作流已关闭；新规划将被拒绝，已开始的工作流仍可查看和收尾。",
+      "info",
+    );
+  }
+
   async function configureRole(requested: string | undefined, ctx: ExtensionCommandContext) {
+    if (requested === "workflow") {
+      await configureWorkflow(ctx);
+      return;
+    }
     if (!ctx.isProjectTrusted()) {
       ctx.ui.notify("/pi-init config 仅允许在受信任项目中运行；请先信任当前项目", "error");
       return;
@@ -1165,7 +1231,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return;
     }
 
-    let config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+    let config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
     while (true) {
       const mode = sessionModeOverride ?? config.mode;
       const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode));
@@ -1174,8 +1240,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         await setSessionMode(undefined, ctx);
         continue;
       }
+      if (action === "workflow") {
+        await configureWorkflow(ctx);
+        config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+        continue;
+      }
       await configureRole(action, ctx);
-      config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+      config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
     }
   }
 
@@ -1213,7 +1284,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     controlCenterGuideShown = true;
     let selectedAction: string | undefined;
     while (true) {
-      const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+      const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
       const mode = sessionModeOverride ?? config.mode;
       const role = activeRoleFor(ctx);
       const currentModel = ctx.model
@@ -1225,11 +1296,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           ? `角色  ${roleLabel(role.role)}`
           : "角色  尚未切换（按任务自动选择）",
         `模型  ${currentModel}`,
+        `工作流开关  ${config.workflowEnabled ? "已启用" : "已关闭"}`,
       ];
       if (workflowState && !["completed", "cancelled"].includes(workflowState.status)) {
         const progress = workflowProgress(workflowState);
         const workflowLabel = progress.currentTaskId ?? (workflowState.status === "paused" ? "暂停" : "待调度");
-        summary.push(`工作流  ${progress.completed}/${progress.total} · ${workflowLabel}`);
+        summary.push(`工作流进度  ${progress.completed}/${progress.total} · ${workflowLabel}`);
       }
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
       const action = await showMenu(ctx, "Pi Init 控制中心", [
@@ -1269,7 +1341,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     try {
-      const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
+      const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
       const role = findMatchingRole(config, ctx.model, pi.getThinkingLevel());
       activeRole = role && ctx.model
         ? {
@@ -1301,9 +1373,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
       const action = tokens[0];
-      const values = action === "role" || action === "config"
+      const values = action === "role"
         ? ROLE_NAMES
-        : action === "mode"
+        : action === "config"
+          ? [...ROLE_NAMES, "workflow"]
+          : action === "mode"
           ? ROLE_MODES
           : action === "workflow"
             ? ["status", "resume", "retry", "cancel"]
