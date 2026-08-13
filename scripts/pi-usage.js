@@ -376,6 +376,30 @@ function scanSessionFile(file) {
   };
 }
 
+function scanSpeedEvents(file) {
+  let cwd = "";
+  let sessionRead = false;
+  const speedEvents = [];
+  const lines = readFileSync(file, "utf8").split(/\r?\n/);
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
+    const line = lines[lineNumber];
+    if (!line || (sessionRead && !line.includes(TOKEN_SPEED_CUSTOM_TYPE))) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type === "session") {
+      cwd = entry.cwd ? String(entry.cwd) : "";
+      sessionRead = true;
+    }
+    const speedEvent = parseSpeedEvent(entry, file, lineNumber, cwd);
+    if (speedEvent) speedEvents.push(speedEvent);
+  }
+  return speedEvents;
+}
+
 async function readUsageState(connection) {
   const reader = await connection.runAndReadAll(
     "SELECT checked_ms, checked_date FROM usage_state WHERE state_key = 'refresh'",
@@ -392,6 +416,11 @@ async function readUsageSchemaVersion(connection) {
   );
   const row = reader.getRowObjects()[0];
   return row ? numberValue(row.schema_version) : undefined;
+}
+
+async function hasStoredSessionFiles(connection) {
+  const reader = await connection.runAndReadAll("SELECT COUNT(*) AS count FROM session_files");
+  return numberValue(reader.getRowObjects()[0]?.count) > 0;
 }
 
 async function markUsageChecked(connection, now = new Date()) {
@@ -423,7 +452,37 @@ async function readEventDates(connection, sourceFile) {
   return reader.getRowObjects().map((row) => row.event_date).filter(Boolean);
 }
 
-async function refreshSessionFiles(connection, sessionsDirectory, forceRefresh = false) {
+async function insertSpeedEvents(connection, speedEvents) {
+  for (const event of speedEvents) {
+    await connection.run(
+      `
+        INSERT INTO speed_events VALUES (
+          $source_file, $entry_key, $event_timestamp, $event_date,
+          $model, $output_tokens, $generation_seconds, $cwd
+        )
+      `,
+      {
+        source_file: event.sourceFile,
+        entry_key: event.entryKey,
+        event_timestamp: event.eventTimestamp,
+        event_date: event.eventDate,
+        model: event.model,
+        output_tokens: event.outputTokens,
+        generation_seconds: event.generationSeconds,
+        cwd: event.cwd,
+      },
+    );
+  }
+}
+
+async function refreshSpeedEvents(connection, sessionsDirectory) {
+  await connection.run("DELETE FROM speed_events");
+  for (const file of listSessionFiles(sessionsDirectory)) {
+    await insertSpeedEvents(connection, scanSpeedEvents(file));
+  }
+}
+
+async function refreshSessionFiles(connection, sessionsDirectory) {
   const storedReader = await connection.runAndReadAll("SELECT source_file, file_size, modified_ms FROM session_files");
   const stored = new Map(
     storedReader.getRowObjects().map((row) => [
@@ -437,12 +496,7 @@ async function refreshSessionFiles(connection, sessionsDirectory, forceRefresh =
   for (const file of files) {
     const metadata = statSync(file);
     const previous = stored.get(file);
-    if (
-      !forceRefresh &&
-      previous &&
-      previous.fileSize === metadata.size &&
-      previous.modifiedMs === metadata.mtimeMs
-    ) {
+    if (previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs) {
       continue;
     }
     for (const date of await readEventDates(connection, file)) affectedDates.add(date);
@@ -501,26 +555,7 @@ async function refreshSessionFiles(connection, sessionsDirectory, forceRefresh =
         },
       );
     }
-    for (const event of parsed.speedEvents) {
-      await connection.run(
-        `
-          INSERT INTO speed_events VALUES (
-            $source_file, $entry_key, $event_timestamp, $event_date,
-            $model, $output_tokens, $generation_seconds, $cwd
-          )
-        `,
-        {
-          source_file: event.sourceFile,
-          entry_key: event.entryKey,
-          event_timestamp: event.eventTimestamp,
-          event_date: event.eventDate,
-          model: event.model,
-          output_tokens: event.outputTokens,
-          generation_seconds: event.generationSeconds,
-          cwd: event.cwd,
-        },
-      );
-    }
+    await insertSpeedEvents(connection, parsed.speedEvents);
     await connection.run(
       `INSERT OR REPLACE INTO session_files VALUES ($source_file, $file_size, $modified_ms)`,
       {
@@ -712,11 +747,10 @@ async function withDatabase(databasePath, runtimeDirectory, callback) {
 
 async function refreshUsage(connection, sessionsDirectory, range) {
   const schemaVersion = await readUsageSchemaVersion(connection);
-  const { affectedDates } = await refreshSessionFiles(
-    connection,
-    sessionsDirectory,
-    schemaVersion !== USAGE_SCHEMA_VERSION,
-  );
+  if (schemaVersion !== USAGE_SCHEMA_VERSION && (await hasStoredSessionFiles(connection))) {
+    await refreshSpeedEvents(connection, sessionsDirectory);
+  }
+  const { affectedDates } = await refreshSessionFiles(connection, sessionsDirectory);
   const dates = new Set([range.date, ...affectedDates]);
   for (const date of dates) {
     await refreshDerivedSummaries(connection, dateRange(date));

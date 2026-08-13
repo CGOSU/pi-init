@@ -12,7 +12,7 @@
 
 - 决定：`pi-token-speed` 在每个成功的 assistant 响应完成后，通过 `pi.appendEntry("pi-token-speed", data)` 持久化 provider、实际响应模型、输出 token 和有效生成毫秒数；`pi-usage` 增加 `speed_events` 表并按 provider/model 汇总 `输出 token总数 / 有效生成秒数总数`。
 - 原因：Pi 原生 assistant usage 有 token 数，但没有可直接复用的有效生成时长；扩展已有暂停 prompt-processing tool 计时的逻辑，能提供与实时 TPS 一致的时长口径。加权吞吐量比每次响应 TPS 的算术平均更适合跨不同响应长度比较。
-- 约束：错误、中止、空输出或无有效时长的响应不写入速度采样；自定义 entry 不进入模型上下文；旧 session 没有采样时 Models 表显示 `--`；DuckDB schema 版本变化必须强制重扫已有 session；样本在 `message_end` 记录，`agent_end` 只作兜底且不得重复记录。
+- 约束：错误、中止、空输出或无有效时长的响应不写入速度采样；自定义 entry 不进入模型上下文；旧 session 没有采样时 Models 表显示 `--`；DuckDB schema 升级只回填新增的 `speed_events`，不得重建既有用量和活动数据；样本在 `message_end` 记录，`agent_end` 只作兜底且不得重复记录。
 
 ### 2026-08-09：初始化模板内置 Clean Code 规则
 

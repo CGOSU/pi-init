@@ -14,6 +14,13 @@
 
 ## 会话
 
+### 2026-08-13：修复 pi-usage TPS schema 升级导致更新变慢
+
+- 完成内容：schema 从旧版本升级时只扫描 session JSONL 中的 `pi-token-speed` 样本并回填 `speed_events`，不再强制删除和重导全部 `usage_events`、`activity_events`。
+- 完成内容：增加回归测试，确认迁移会保留已有 usage 数据并恢复平均 TPS；修正当前状态、设计决策和踩坑记录。
+- 验证：89 个 session、约 161 MB 数据的旧库迁移基准从约 60 秒降至约 2.2 秒；`npm test` 29 项通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`git diff --check` 通过；实际 `node scripts/pi-usage.js --update` 成功。
+- 遗留问题：未提交或推送。
+
 ### 2026-08-13：展示按模型统计的平均 token 速度
 
 - 后续修正：发现 `done` assistant stream event 发生在扩展的 `message_end` 之前，而 Pi 会在 `message_end` 后才持久化最终消息；改为在 assistant `message_start` 开始计时、`message_end` 使用最终 provider usage 立即写样本，`agent_end` 仅作兼容兜底并防重复。

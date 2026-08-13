@@ -275,6 +275,58 @@ test("pi-usage 按模型汇总加权平均 token 速度", async () => {
   });
 });
 
+test("pi-usage TPS schema migration only backfills speed samples", async () => {
+  await withTempDirectory(async (directory) => {
+    const sessions = path.join(directory, "sessions");
+    const databasePath = path.join(directory, "usage.duckdb");
+    const timestamp = new Date();
+    timestamp.setHours(12, 0, 0, 0);
+    const date = timestamp.toLocaleDateString("sv-SE");
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, "speed.jsonl"),
+      [
+        JSON.stringify({ type: "session", cwd: process.cwd() }),
+        JSON.stringify({
+          type: "message",
+          timestamp: timestamp.toISOString(),
+          message: {
+            role: "assistant",
+            provider: "provider",
+            model: "model",
+            usage: { input: 1, output: 100, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+          },
+        }),
+        JSON.stringify({
+          type: "custom",
+          timestamp: timestamp.toISOString(),
+          customType: "pi-token-speed",
+          data: { version: 1, provider: "provider", model: "model", outputTokens: 100, elapsedMs: 10_000 },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    await summarizeUsage(sessions, date, databasePath);
+    const { DuckDBInstance } = await import("@duckdb/node-api");
+    const instance = await DuckDBInstance.create(databasePath);
+    const connection = await instance.connect();
+    try {
+      await connection.run("DELETE FROM speed_events");
+      await connection.run("UPDATE usage_events SET input_tokens = 999 WHERE model = 'provider/model'");
+      await connection.run("UPDATE usage_schema SET schema_version = 1 WHERE schema_key = 'usage'");
+    } finally {
+      connection.disconnectSync();
+      instance.closeSync();
+    }
+
+    const summary = await summarizeUsage(sessions, date, databasePath);
+    const row = summary.rows.find((value) => value.model === "provider/model");
+    assert.equal(row.input, 999);
+    assert.equal(row.avgTps, 10);
+  });
+});
+
 test("生成默认文件结构和动态 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "example-app");

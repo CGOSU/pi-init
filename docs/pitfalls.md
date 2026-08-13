@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-08-13：DuckDB schema 升级不应重建历史事件
+
+- 现象：增加 `pi-token-speed` 后，`pi-usage --update` 明显变慢。
+- 根因：schema 版本变化把所有历史 session 当作已修改文件，删除并逐条重导既有 `usage_events`、`activity_events`，放大了 DuckDB 写入成本。
+- 修复：迁移时只扫描 JSONL 并回填新增的 `speed_events`；正常变更文件仍按文件大小和修改时间执行完整增量重导。
+- 验证：89 个 session、约 161 MB 数据的迁移基准从约 60 秒降至约 2.2 秒；`npm test` 29 项通过。
+
 ### 2026-08-09：职责切换压缩必须等待 agent 完全 settled
 
 - 现象：角色切换后触发压缩时，会额外写入 `This operation was aborted` 的 assistant 错误，随后压缩可能仍继续完成。
