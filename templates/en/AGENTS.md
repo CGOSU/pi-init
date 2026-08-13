@@ -21,7 +21,6 @@ This file defines the long-term AI coding rules for this project. Before startin
 - After each task, the Development and Test Engineer must run real verification and call `task_workflow` with `complete`, including the implementation summary and actual results. The workflow automatically switches to the assigned role and starts the next ready task.
 - Do not ask about preferences, style, or optional alternatives mid-task. Pause only for an explicit architecture review request, missing product decisions, permissions/credentials, approval for destructive operations, unrecoverable failures, or genuinely blocking information; record reasonable assumptions in the task result.
 - When the user explicitly asks to see the architecture first, the Architect sets `reviewRequired` to `true` and pauses after saving the plan; after review, run `/pi-init workflow resume`. Blocked tasks use `block`; after the cause is resolved, use `/pi-init workflow retry <taskId>`.
-- Use `parallel_develop` only when tasks are truly independent, their contracts are frozen, and parallelism has clear value. Shared interfaces, test contracts, or ordering dependencies belong in the sequential workflow above.
 
 ## Runtime Environment and Command Conventions
 

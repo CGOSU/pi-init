@@ -8,6 +8,12 @@
 
 本文件按时间追加每次工作的完成内容、实际验证和遗留问题，不记录敏感信息或未经验证的结果。
 
+### 2026-08-14：移除自研 parallel_develop
+
+- 完成内容：删除 `parallel_develop` 运行时工具及 `src/parallel.js`、`src/parallel-runner.js`；清理 README、模板、项目 Skill、AGENTS.md 和测试中的自研并行开发说明、导入、fixture 与契约断言。保留 `task_workflow`、`switch_role`、角色模型配置和脚手架生成。
+- 验证：`npm test`，24 项测试全部通过；`node --check test/scaffold.test.js` 通过；退休实现引用扫描无结果；`git diff --check` 通过，仅有预期的 CRLF 转换警告。
+- 遗留问题：未配置第三方并行开发替代品；`task_workflow` 真实模型连续多任务端到端演练仍未执行；未提交或推送。
+
 ## 记录格式
 
 每次记录应包含日期、完成内容、实际执行的验证及遗留问题。

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
 
 import {
@@ -29,13 +27,6 @@ import {
   shouldCompactOnRoleSwitch,
 } from "../src/roles.js";
 import {
-  DEFAULT_PARALLEL_CONCURRENCY,
-  isPathAllowed,
-  MAX_PARALLEL_DEVELOPERS,
-  validateParallelTasks,
-} from "../src/parallel.js";
-import { getPiInvocation, runParallelDevelop, spawnPiWorker } from "../src/parallel-runner.js";
-import {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
@@ -50,8 +41,6 @@ import {
   validateWorkflowPlan,
   workflowProgress,
 } from "../src/workflow.js";
-
-const execFileAsync = promisify(execFile);
 
 function normalizeNewlines(value) {
   return value.replaceAll("\r\n", "\n");
@@ -404,7 +393,7 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /task_workflow\(action=complete/);
     assert.match(skill, /\/pi-init workflow resume/);
     assert.match(skill, /\/pi-init config/);
-    assert.match(skill, /调用 `parallel_develop`/);
+    assert.doesNotMatch(skill, /parallel_develop/);
     assert.match(skill, /受信任项目/);
     assert.match(skill, /## 精确字符串替换/);
     assert.match(skill, /`oldText` → `newText`/);
@@ -566,6 +555,16 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /reviewRequired=true only when the user's initial request explicitly asks/);
   assert.match(extension, /自动进入任务/);
   assert.match(extension, /\/pi-init workflow retry/);
+  assert.match(extension, /name: "switch_role"/);
+  assert.doesNotMatch(extension, /parallel_develop/);
+  assert.match(
+    extension,
+    /const selectedIndex = options\.selectedValue === undefined[\s\S]*?list\.setSelectedIndex\(selectedIndex\);/,
+  );
+  assert.match(
+    extension,
+    /let selectedAction: string \| undefined;[\s\S]*?\], \{ summary, selectedValue: selectedAction \}\);[\s\S]*?selectedAction = action;/,
+  );
 });
 
 test("自动跨角色且上下文达到阈值时才触发压缩", () => {
@@ -785,403 +784,6 @@ test("架构工作流拒绝重复任务、未知依赖和循环依赖", () => {
   );
 });
 
-test("并行开发任务按目标文件系统处理大小写", () => {
-  assert.doesNotThrow(() =>
-    validateParallelTasks(
-      [
-        { id: "upper", task: "upper", files: ["src/Foo"] },
-        { id: "lower", task: "lower", files: ["src/foo"] },
-      ],
-      { ignoreCase: false },
-    ),
-  );
-  assert.throws(
-    () =>
-      validateParallelTasks(
-        [
-          { id: "upper", task: "upper", files: ["src/Foo"] },
-          { id: "lower", task: "lower", files: ["src/foo"] },
-        ],
-        { ignoreCase: true },
-      ),
-    /文件范围重叠/,
-  );
-  assert.equal(isPathAllowed("src/Foo", ["src/foo"], { ignoreCase: true }), true);
-  assert.equal(isPathAllowed("src/Foo", ["src/foo"], { ignoreCase: false }), false);
-});
-
-test("并行开发任务要求独立且受限的文件范围", () => {
-  const tasks = validateParallelTasks([
-    { id: "api", task: "实现 API", files: ["src/api"] },
-    { id: "tests", task: "补充测试", files: ["test/api.test.js"] },
-  ]);
-
-  assert.equal(tasks.length, 2);
-  assert.equal(isPathAllowed("src/api/router.js", tasks[0].files), true);
-  assert.equal(isPathAllowed("src/other.js", tasks[0].files), false);
-  assert.throws(
-    () => validateParallelTasks([
-      { id: "one", task: "one", files: ["src"] },
-      { id: "two", task: "two", files: ["src/utils"] },
-    ]),
-    /文件范围重叠/,
-  );
-  assert.throws(
-    () => validateParallelTasks([
-      { id: "one", task: "one", files: ["src/*.js"] },
-      { id: "two", task: "two", files: ["test"] },
-    ]),
-    /不支持通配符/,
-  );
-  assert.equal(MAX_PARALLEL_DEVELOPERS, 4);
-  assert.equal(DEFAULT_PARALLEL_CONCURRENCY, 2);
-});
-
-test("Windows Node/Bun 备用入口通过 cmd.exe 安全传参", () => {
-  const invocation = getPiInvocation(["--model", "model name", "x&y"], {
-    currentScript: "C:\\missing\\pi-entry.js",
-    execPath: "C:\\Program Files\\nodejs\\node.exe",
-    platform: "win32",
-  });
-
-  assert.equal(invocation.command, process.env.ComSpec || "cmd.exe");
-  assert.equal(invocation.windowsVerbatimArguments, true);
-  assert.deepEqual(invocation.args.slice(0, 3), ["/d", "/s", "/c"]);
-  assert.match(invocation.args[3], /model\^ name/);
-  assert.match(invocation.args[3], /x\^&y/);
-});
-
-test("Windows 备用入口可以实际启动 Pi CLI", async () => {
-  if (process.platform !== "win32") return;
-
-  const invocation = getPiInvocation(["--version"], {
-    currentScript: "C:\\missing\\pi-entry.js",
-    execPath: process.execPath,
-    platform: "win32",
-  });
-  const result = await spawnPiWorker(invocation, { cwd: process.cwd(), timeout: 5000 });
-
-  assert.equal(result.code, 0);
-  assert.equal(result.spawnError, undefined);
-  assert.match(result.stdout, /\d+\.\d+\.\d+/);
-});
-
-test("子代理超时时会终止整个进程树", async () => {
-  await withTempDirectory(async (directory) => {
-    const pidFile = path.join(directory, "child.pid");
-    const script = [
-      'const { spawn } = require("node:child_process");',
-      'const { writeFileSync } = require("node:fs");',
-      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
-      `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-    const result = await spawnPiWorker(
-      { command: process.execPath, args: ["-e", script] },
-      { cwd: directory, timeout: 100 },
-    );
-
-    assert.equal(result.timedOut, true);
-    const childPid = Number(await readFile(pidFile, "utf8"));
-    let alive = true;
-    for (let attempt = 0; attempt < 10 && alive; attempt += 1) {
-      try {
-        process.kill(childPid, 0);
-      } catch (error) {
-        alive = error.code === "EPERM";
-      }
-      if (alive) await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (alive) {
-      if (process.platform === "win32") {
-        await execFileAsync("taskkill.exe", ["/pid", String(childPid), "/t", "/f"]);
-      } else {
-        try {
-          process.kill(childPid, "SIGKILL");
-        } catch {
-          // The child may exit during cleanup.
-        }
-      }
-    }
-    assert.equal(alive, false, `子进程 ${childPid} 仍在运行`);
-  });
-});
-
-test("子代理 JSON 事件流会实时解析工具活动、摘要和指标", async () => {
-  await withTempDirectory(async (directory) => {
-    const retry = { type: "auto_retry_start", attempt: 1, maxAttempts: 1 };
-    const event = {
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "完成摘要" }],
-        stopReason: "stop",
-        usage: {
-          input: 10,
-          output: 20,
-          cacheRead: 3,
-          cacheWrite: 4,
-          totalTokens: 30,
-          cost: { total: 0.05 },
-        },
-      },
-    };
-    const script = [retry, event].map((value) => `console.log(JSON.stringify(${JSON.stringify(value)}))`).join(";");
-    const events = [];
-    const result = await spawnPiWorker(
-      { command: process.execPath, args: ["-e", script] },
-      { cwd: directory, timeout: 1000, onEvent: (value) => events.push(value) },
-    );
-
-    assert.equal(result.code, 0);
-    assert.equal(result.summary, "完成摘要");
-    assert.deepEqual(events, [retry, event]);
-    assert.deepEqual(result.metrics, {
-      elapsedMs: 0,
-      turns: 1,
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheReadTokens: 3,
-      cacheWriteTokens: 4,
-      totalTokens: 30,
-      cost: 0.05,
-      autoRetries: 1,
-    });
-  });
-});
-
-async function git(cwd, args) {
-  const result = await execFileAsync("git", args, { cwd, encoding: "utf8" });
-  return result.stdout;
-}
-
-function fakeParallelExec() {
-  return async (command, args, options = {}) => {
-    const result = await execFileAsync(command, args, { cwd: options.cwd, encoding: "utf8" });
-    return { stdout: result.stdout, stderr: result.stderr, code: 0, killed: false };
-  };
-}
-
-function fakeParallelSpawn(worker) {
-  return async (invocation, options) => {
-    await worker(invocation.args, options.cwd, options);
-    options.onEvent?.({ type: "tool_execution_start", toolName: "test", args: {} });
-    options.onEvent?.({
-      type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "worker complete" }] },
-    });
-    return {
-      stdout: "",
-      stderr: "",
-      summary: "worker complete",
-      code: 0,
-      killed: false,
-      aborted: false,
-      timedOut: false,
-    };
-  };
-}
-
-async function createGitFixture(directory) {
-  await git(directory, ["init"]);
-  await git(directory, ["config", "user.name", "test"]);
-  await git(directory, ["config", "user.email", "test@example.com"]);
-  await writeFile(path.join(directory, "base.txt"), "base\n", "utf8");
-  await git(directory, ["add", "."]);
-  await git(directory, ["commit", "-m", "init"]);
-}
-
-test("并行开发创建隔离 worktree 并合并独立修改", async () => {
-  await withTempDirectory(async (directory) => {
-    await createGitFixture(directory);
-    const started = [];
-    const updates = [];
-    const result = await runParallelDevelop({
-      exec: fakeParallelExec(),
-      spawnWorker: fakeParallelSpawn(async (args, cwd) => {
-        const file = args.at(-1).includes("task-a") ? "a.txt" : "b.txt";
-        await writeFile(path.join(cwd, file), `${file}\n`, "utf8");
-      }),
-      cwd: directory,
-      planInput: "实现两个互不冲突的文件",
-      taskInput: [
-        { id: "a", task: "task-a", files: ["a.txt"] },
-        { id: "b", task: "task-b", files: ["b.txt"] },
-      ],
-      target: { provider: "test", model: "model", thinkingLevel: "off" },
-      onStarted: (event) => started.push(event),
-      onUpdate: (update) => updates.push(update),
-    });
-
-    assert.deepEqual(started.map(({ started: count }) => count).sort(), [1, 2]);
-    assert.ok(started.every(({ total }) => total === 2));
-    assert.equal(updates[0].details.status, "starting");
-    assert.ok(updates.filter(({ details }) => details.status === "running").length >= 2);
-    const finalTasks = updates.at(-1).details.tasks;
-    assert.deepEqual(finalTasks.map(({ id, status }) => ({ id, status })), [
-      { id: "a", status: "completed" },
-      { id: "b", status: "completed" },
-    ]);
-    assert.equal(result.results.length, 2);
-    assert.deepEqual(result.results.map(({ changedFiles }) => changedFiles), [["a.txt"], ["b.txt"]]);
-    assert.equal(normalizeNewlines(await readFile(path.join(directory, "a.txt"), "utf8")), "a.txt\n");
-    assert.equal(normalizeNewlines(await readFile(path.join(directory, "b.txt"), "utf8")), "b.txt\n");
-    assert.equal((await git(directory, ["worktree", "list", "--porcelain"])).split("\nworktree ").length, 1);
-  });
-});
-
-test("并行开发默认限制同时运行 worker 数量并返回阶段耗时", async () => {
-  await withTempDirectory(async (directory) => {
-    await createGitFixture(directory);
-    let active = 0;
-    let maxActive = 0;
-    const result = await runParallelDevelop({
-      exec: fakeParallelExec(),
-      cwd: directory,
-      planInput: "实现三个互不冲突的文件",
-      taskInput: [
-        { id: "a", task: "task-a", files: ["a.txt"] },
-        { id: "b", task: "task-b", files: ["b.txt"] },
-        { id: "c", task: "task-c", files: ["c.txt"] },
-      ],
-      target: { provider: "test", model: "model", thinkingLevel: "off" },
-      heartbeatMs: 0,
-      spawnWorker: async (invocation, options) => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        const task = invocation.args.at(-1);
-        const file = `${task.at(-1)}.txt`;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        await writeFile(path.join(options.cwd, file), `${file}\n`, "utf8");
-        active -= 1;
-        return {
-          stdout: "",
-          stderr: "",
-          summary: "worker complete",
-          code: 0,
-          killed: false,
-          aborted: false,
-          timedOut: false,
-          metrics: { turns: 1, outputTokens: 5 },
-        };
-      },
-    });
-
-    assert.equal(maxActive, DEFAULT_PARALLEL_CONCURRENCY);
-    assert.equal(result.results.length, 3);
-    assert.ok(result.metrics.setupMs >= 0);
-    assert.ok(result.metrics.workersMs >= 20);
-    assert.ok(result.metrics.mergeMs >= 0);
-    assert.ok(result.metrics.totalMs >= result.metrics.workersMs);
-    assert.ok(result.tasks.every((task) => task.metrics.elapsedMs >= 20));
-  });
-});
-
-test("并行开发报告实时事件、心跳并自动重试基础设施错误", async () => {
-  await withTempDirectory(async (directory) => {
-    await createGitFixture(directory);
-    const attempts = new Map();
-    const updates = [];
-    const result = await runParallelDevelop({
-      exec: fakeParallelExec(),
-      spawnWorker: async (invocation, options) => {
-        const id = invocation.args.at(-1).includes("task-a") ? "a" : "b";
-        const attempt = (attempts.get(id) ?? 0) + 1;
-        attempts.set(id, attempt);
-        if (id === "a" && attempt === 1) {
-          options.onEvent?.({ type: "auto_retry_start", attempt: 1, maxAttempts: 1 });
-          return {
-            stdout: "",
-            stderr: "",
-            summary: "",
-            stopReason: "error",
-            errorMessage: "terminated",
-            code: 0,
-            killed: false,
-            aborted: false,
-            timedOut: false,
-          };
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        options.onEvent?.({ type: "tool_execution_start", toolName: "test", args: { id } });
-        await writeFile(path.join(options.cwd, `${id}.txt`), `${id}\n`, "utf8");
-        return {
-          stdout: "",
-          stderr: "",
-          summary: `completed ${id}`,
-          code: 0,
-          killed: false,
-          aborted: false,
-          timedOut: false,
-        };
-      },
-      cwd: directory,
-      planInput: "报告状态并重试基础设施错误",
-      taskInput: [
-        { id: "a", task: "task-a", files: ["a.txt"] },
-        { id: "b", task: "task-b", files: ["b.txt"] },
-      ],
-      target: { provider: "test", model: "model", thinkingLevel: "off" },
-      heartbeatMs: 5,
-      workerTimeoutMs: 1000,
-      onUpdate: (update) => updates.push(update),
-    });
-
-    assert.deepEqual(Object.fromEntries(attempts), { a: 2, b: 1 });
-    assert.ok(updates.some(({ details }) => details.tasks?.some((task) => task.status === "retrying")));
-    assert.ok(updates.some(({ details }) => details.tasks?.some((task) => task.current?.includes("test"))));
-    assert.deepEqual(result.tasks.map(({ id, status }) => ({ id, status })), [
-      { id: "a", status: "completed" },
-      { id: "b", status: "completed" },
-    ]);
-  });
-});
-
-test("并行开发拒绝重命名导致的范围外删除", async () => {
-  await withTempDirectory(async (directory) => {
-    await createGitFixture(directory);
-    await writeFile(path.join(directory, "outside.txt"), "outside\n", "utf8");
-    await git(directory, ["add", "outside.txt"]);
-    await git(directory, ["commit", "-m", "outside"]);
-
-    let error;
-    try {
-      await runParallelDevelop({
-        exec: fakeParallelExec(),
-        spawnWorker: fakeParallelSpawn(async (args, cwd) => {
-          if (args.at(-1).includes("rename-task")) {
-            await git(cwd, ["mv", "outside.txt", "inside.txt"]);
-          }
-        }),
-        cwd: directory,
-        planInput: "限制每个任务只能修改声明范围",
-        taskInput: [
-          { id: "rename", task: "rename-task", files: ["inside.txt"] },
-          { id: "noop", task: "noop-task", files: ["noop.txt"] },
-        ],
-        target: { provider: "test", model: "model", thinkingLevel: "off" },
-      });
-      assert.fail("应拒绝未声明范围的修改");
-    } catch (caught) {
-      error = caught;
-    }
-
-    assert.match(error.message, /未声明范围：.*outside\.txt/);
-    assert.match(error.message, /失败现场和日志已保留/);
-    for (const index of [1, 2]) {
-      await execFileAsync("git", ["worktree", "remove", "--force", path.join(error.tempRoot, `worktree-${index}`)], {
-        cwd: directory,
-        encoding: "utf8",
-      });
-    }
-    await rm(error.tempRoot, { recursive: true, force: true });
-    assert.equal(normalizeNewlines(await readFile(path.join(directory, "outside.txt"), "utf8")), "outside\n");
-    await assert.rejects(readFile(path.join(directory, "inside.txt"), "utf8"), { code: "ENOENT" });
-    assert.equal(await git(directory, ["status", "--porcelain"]), "");
-  });
-});
-
 test("英文模板和显式中文项目 slug 可用", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "商城");
@@ -1215,7 +817,7 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(skill, /reviewRequired/);
     assert.match(skill, /task_workflow\(action=complete/);
     assert.match(skill, /\/pi-init workflow resume/);
-    assert.match(skill, /call `parallel_develop`/);
+    assert.doesNotMatch(skill, /parallel_develop/);
     assert.match(skill, /trusted projects/);
     assert.match(skill, /## Exact String Replacement/);
     assert.match(skill, /`oldText` → `newText`/);

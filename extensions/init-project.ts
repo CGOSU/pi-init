@@ -23,8 +23,6 @@ import {
   roleModeLabel,
   shouldCompactOnRoleSwitch,
 } from "../src/roles.js";
-import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
-import { runParallelDevelop } from "../src/parallel-runner.js";
 import {
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
@@ -77,22 +75,6 @@ const roleNameSchema = StringEnum(ROLE_NAMES, {
   description: "要切换的角色：architect、developer-test 或 docs-commit",
 });
 const switchRoleParameters = Type.Object({ role: roleNameSchema });
-const parallelTaskSchema = Type.Object({
-  id: Type.String({ description: "唯一任务 ID" }),
-  task: Type.String({ description: "开发测试任务和验收要求" }),
-  files: Type.Array(Type.String(), {
-    minItems: 1,
-    description: "允许修改的项目内文件或目录；不同任务不能重叠",
-  }),
-});
-const parallelDevelopParameters = Type.Object({
-  plan: Type.String({ description: "架构师完成的规划、约束和验收标准" }),
-  tasks: Type.Array(parallelTaskSchema, {
-    minItems: 2,
-    maxItems: MAX_PARALLEL_DEVELOPERS,
-    description: `并行开发任务，最多 ${MAX_PARALLEL_DEVELOPERS} 个`,
-  }),
-});
 const workflowTaskRoleSchema = StringEnum(["developer-test", "docs-commit"] as const, {
   description: "任务执行角色；默认使用 developer-test",
 });
@@ -148,12 +130,6 @@ function textOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatElapsed(milliseconds: number) {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
-}
-
 function formatRoleModel(config: RoleModelConfig) {
   return `${config.provider}/${config.model} · ${config.thinkingLevel}`;
 }
@@ -178,6 +154,7 @@ type MenuItem = SelectItem;
 type MenuOptions = {
   summary?: string[];
   maxVisible?: number;
+  selectedValue?: string;
 };
 
 async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[], options: MenuOptions = {}) {
@@ -196,6 +173,10 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[],
       scrollInfo: (text) => theme.fg("dim", text),
       noMatch: (text) => theme.fg("warning", text),
     });
+    const selectedIndex = options.selectedValue === undefined
+      ? -1
+      : items.findIndex((item) => item.value === options.selectedValue);
+    if (selectedIndex >= 0) list.setSelectedIndex(selectedIndex);
     list.onSelect = (item) => done(item.value);
     list.onCancel = () => done(null);
 
@@ -226,24 +207,6 @@ async function showMenu(ctx: ExtensionContext, title: string, items: MenuItem[],
   });
 
   return result ?? undefined;
-}
-
-function formatParallelStatus(update: any) {
-  const details = update.details;
-  if (!details || typeof details !== "object" || !Array.isArray((details as { tasks?: unknown }).tasks)) {
-    return "● 并行开发 · 工作中";
-  }
-
-  const tasks = (details as {
-    tasks: Array<{ id: string; status: string; current?: string; elapsedMs?: number }>;
-  }).tasks;
-  const terminal = new Set(["completed", "failed", "cancelled"]);
-  const finished = tasks.filter((task) => terminal.has(task.status)).length;
-  const running = tasks.length - finished;
-  const failed = tasks.filter((task) => task.status === "failed").length;
-  const active = tasks.find((task) => !terminal.has(task.status));
-  const suffix = active ? ` · ${active.id}: ${active.current ?? active.status}` : "";
-  return `● 并行开发 · ${finished}/${tasks.length} 完成 · ${running} 运行${failed > 0 ? ` · ${failed} 失败` : ""}${suffix}`.slice(0, 180);
 }
 
 type RoleModelConfig = {
@@ -1248,6 +1211,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     const showGuide = !controlCenterGuideShown;
     controlCenterGuideShown = true;
+    let selectedAction: string | undefined;
     while (true) {
       const config = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, RoleModelConfig> & { mode: string };
       const mode = sessionModeOverride ?? config.mode;
@@ -1276,10 +1240,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
-      ], { summary });
+      ], { summary, selectedValue: selectedAction });
       if (!action || action === "exit") return;
       if (action === "quick") return quickInit(".", ctx);
       if (action === "advanced") return advancedInit(".", ctx);
+      selectedAction = action;
       if (action === "config") {
         await configureRoleCenter(ctx);
         continue;
@@ -1461,124 +1426,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       return runTaskWorkflowAction(params, signal, ctx);
-    },
-  });
-
-  pi.registerTool({
-    name: "parallel_develop",
-    label: "Parallel Development",
-    description:
-      `Run ${MAX_PARALLEL_DEVELOPERS} or fewer independent development/test workers with isolated Git worktrees, using the active developer-test role model; two workers run concurrently by default, then successful non-overlapping patches are merged into the main worktree. Only run in trusted projects; the main worktree must be clean, and workers do not commit or push.`,
-    promptSnippet: "Run independent development and test work packages concurrently after architecture planning",
-    promptGuidelines: [
-      "Use parallel_develop only after an architecture plan has split the work into at least two truly independent, contract-frozen packages that are large enough to run for a while; use one worker for small or semantically coupled work.",
-      "Each parallel_develop task must declare non-overlapping files; non-overlapping files are not sufficient when tasks share a DOM, API, or test contract. The runner accepts up to four tasks and defaults to two concurrent workers.",
-      "parallel_develop runs only in trusted projects, uses isolated worktrees, throttles high-frequency progress updates, retries transient transport failures such as terminated once, and merges successful patches into the main worktree; inspect the metrics and merged diff, then run the full test command afterward.",
-    ],
-    parameters: parallelDevelopParameters,
-    renderCall(args, theme) {
-      const count = Array.isArray(args.tasks) ? args.tasks.length : 0;
-      return new Text(
-        theme.fg("toolTitle", theme.bold("并行开发 ")) + theme.fg("muted", `${count} 个工作包`),
-        0,
-        0,
-      );
-    },
-    renderResult(result, { expanded }, theme) {
-      const details = result.details as {
-        results?: Array<{ id: string; changedFiles?: string[]; metrics?: { elapsedMs?: number } }>;
-        metrics?: { totalMs?: number };
-      } | undefined;
-      if (result.isError) return new Text(theme.fg("error", "并行开发失败，请由主开发测试工程师接管"), 0, 0);
-      const results = details?.results ?? [];
-      const changedFiles = results.reduce((count, worker) => count + (worker.changedFiles?.length ?? 0), 0);
-      const lines = [
-        theme.fg("success", `✓ ${results.length} 个工作包完成`),
-        theme.fg("muted", `${changedFiles} 个文件 · ${formatElapsed(details?.metrics?.totalMs ?? 0)}`),
-      ];
-      if (expanded) {
-        lines.push(
-          ...results.map((worker) =>
-            theme.fg("dim", `  ${worker.id} · ${worker.changedFiles?.join(", ") || "无文件修改"}`),
-          ),
-        );
-      }
-      return new Text(lines.join("\n"), 0, 0);
-    },
-    executionMode: "sequential",
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      if (signal?.aborted) {
-        return { content: [{ type: "text", text: "并行开发已取消。" }], details: {} };
-      }
-      if (!ctx.isProjectTrusted()) {
-        throw new Error("parallel_develop 仅允许在受信任项目中运行；请先信任当前项目");
-      }
-      const selection = await automaticRole("developer-test", ctx);
-      const role = selection.result;
-      if (role.role !== "developer-test") {
-        throw new Error("parallel_develop 需要开发测试角色；请执行 /pi-init role developer-test 后重试");
-      }
-      const total = params.tasks.length;
-      ctx.ui.setStatus("pi-init-parallel", `并行开发 · 准备启动 0/${total}`);
-      const reportUpdate = (update: any) => {
-        ctx.ui.setStatus("pi-init-parallel", formatParallelStatus(update));
-        onUpdate?.(update);
-      };
-
-      try {
-        const result = await runParallelDevelop({
-          exec: pi.exec.bind(pi),
-          cwd: ctx.cwd,
-          planInput: params.plan,
-          taskInput: params.tasks,
-          target: {
-            provider: role.provider,
-            model: role.model,
-            thinkingLevel: role.thinkingLevel,
-          },
-          signal,
-          onUpdate: reportUpdate,
-          onStarted: ({ started: count, total: taskTotal, id }: { started: number; total: number; id: string }) => {
-            ctx.ui.setStatus("pi-init-parallel", `并行开发 · 已启动 ${count}/${taskTotal}（${id}）`);
-          },
-        });
-        ctx.ui.setStatus("pi-init-parallel", `并行开发 · 已完成 ${result.results.length}/${total}`);
-        const lines = [
-          `已启动并完成 ${result.results.length}/${total} 个并行开发测试任务。`,
-          `模型：${role.provider}/${role.model}，推理强度：${role.thinkingLevel}`,
-          ...result.results.map(
-            (worker) =>
-              `- ${worker.id}：${worker.changedFiles.length > 0 ? worker.changedFiles.join(", ") : "无文件修改"}` +
-              `（${formatElapsed(worker.metrics?.elapsedMs ?? 0)}，${worker.metrics?.turns ?? 0} turns，` +
-              `${worker.metrics?.totalTokens ?? 0} tokens，自动重试 ${worker.metrics?.autoRetries ?? 0} 次）\n  ${worker.output}`,
-          ),
-          `阶段耗时：准备 ${formatElapsed(result.metrics?.setupMs ?? 0)} · worker ${formatElapsed(result.metrics?.workersMs ?? 0)} · 合并 ${formatElapsed(result.metrics?.mergeMs ?? 0)}`,
-          "请检查合并后的 diff，并运行项目完整测试。",
-        ];
-        return {
-          content: [{ type: "text", text: lines.join("\n") }],
-          details: {
-            role: role.role,
-            mode: selection.mode,
-            provider: role.provider,
-            model: role.model,
-            thinkingLevel: role.thinkingLevel,
-            tasks: result.tasks,
-            metrics: result.metrics,
-            results: result.results.map(({ id, changedFiles, output, metrics }) => ({
-              id,
-              changedFiles,
-              output,
-              metrics,
-            })),
-          },
-        };
-      } catch (error) {
-        ctx.ui.setStatus("pi-init-parallel", "并行开发 · 失败，等待主开发测试工程师接管");
-        throw error;
-      } finally {
-        ctx.ui.setStatus("pi-init-parallel", undefined);
-      }
     },
   });
 

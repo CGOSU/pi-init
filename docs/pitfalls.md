@@ -38,8 +38,8 @@
 
 - 现象：Windows 下直接 `spawn("pi.cmd", args, { shell: false })` 报 `spawn EINVAL`。
 - 根因：`.cmd` 是 shell 脚本而不是可执行 PE 文件；Node 的 shell-free spawn 不会像 shell 一样解释它。
-- 修复：通过 `cmd.exe /d /s /c` 配合 `windowsVerbatimArguments` 和元字符转义启动；取消/超时使用平台对应的进程组/进程树终止策略。
-- 验证：Windows `.cmd` 备用入口实际启动 Pi CLI；超时进程树测试通过，完整测试 21 项通过。
+- 修复：直接启动 Windows npm CLI 时使用对应的 `.cmd` 入口或 `cmd.exe` 参数转义；不要把 POSIX shell 脚本当作可执行文件。
+- 验证：Windows `.cmd` CLI 启动检查通过；当前项目不再内置并行 worker 进程树管理。
 
 ### 2026-08-06：reload 会丢失扩展内存中的角色状态
 
@@ -68,20 +68,6 @@
 - 根因：Pi Skill 是按需加载的工作流说明；运行时模型切换属于 Extension API。
 - 修复：由 Skill 在职责边界调用 `switch_role`，Extension 从受信任项目的 `.pi/role-models.json` 读取映射并执行 `pi.setModel()` 与 `pi.setThinkingLevel()`。
 - 验证：RPC 中依次执行 `/role architect`、`/role developer-test`、`/role docs-commit`，读取会话状态确认三个模型与推理强度均正确生效。
-
-### 2026-08-06：Git 重命名检测会掩盖范围外删除
-
-- 现象：使用 `git diff --name-only` 检查任务范围时，范围外文件重命名到范围内可能只返回目标路径。
-- 根因：Git 默认启用重命名检测，源文件删除不会作为独立路径返回。
-- 修复：并行 worker 使用 `git diff --no-renames --name-only`，分别检查源路径和目标路径。
-- 验证：确定性并行开发测试覆盖范围外重命名，`npm test` 通过。
-
-### 2026-08-06：子代理的 `--approve` 会隐式提升项目信任
-
-- 现象：并行子代理启动参数中的 `--approve` 会主动接受项目级信任。
-- 根因：Pi 的 `--approve` 会覆盖非交互模式默认的项目信任决策。
-- 修复：父扩展要求当前项目已受信任，子代理改用 `--no-approve`。
-- 验证：见 `docs/session-log.md` 中 2026-08-06 的实际验证记录。
 
 ### 2026-08-06：Windows 下 CLI 查找成功但直接启动仍可能失败
 

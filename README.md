@@ -1,6 +1,6 @@
 # pi-init
 
-Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排与并行开发子代理。
+Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 
 ## 功能
 
@@ -9,8 +9,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排与
 - 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
-- 通过隔离 Git worktree 并行运行开发测试子代理。
-- 记录项目宿主环境、阶段耗时、token/cache/cost 和自动重试指标。
+- 记录项目宿主环境和平台相关命令约定。
 
 ## 安装与启动
 
@@ -154,25 +153,6 @@ flowchart LR
 ```
 
 `/pi-init mode` 只临时覆盖当前会话；`/pi-init config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但角色自动切换以项目配置为准。
-
-## 并行开发
-
-仅当工作包真正独立、契约已冻结且足够大时才使用 `parallel_develop`。共享 DOM、API 或测试契约的任务，即使文件范围不重叠，也应交给单个子代理。
-
-运行规则：
-
-- 最多接受 4 个任务，默认同时运行 2 个，其余排队。
-- 每个任务必须提供 `id`、`task` 和不重叠的 `files` 范围。
-- 仅在受信任项目中运行，使用隔离 Git worktree。
-- 高频模型进度按 250ms 节流；工具和阶段变化即时报告。
-- `terminated` 等基础设施错误自动重试一次；代码或测试错误交由主开发测试工程师处理。
-- 成功后才合并和清理；失败 worktree、prompt 及日志会保留。
-- 主工作区必须干净，子代理不会提交或推送。
-- 按 Git `core.ignorecase` 适配目标文件系统的大小写规则；Windows 通过 `cmd.exe` 安全启动 npm `.cmd` shim，并在取消或超时时终止整个进程树。
-
-结果包含 worker 耗时、turn/token/cache/cost、自动重试次数，以及准备、worker、合并阶段耗时。
-
-GitHub Actions 在 Ubuntu、macOS 和 Windows 上运行测试矩阵。
 
 ## 全局协作规则
 

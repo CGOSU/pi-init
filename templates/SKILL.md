@@ -39,7 +39,6 @@ description: {{SKILL_DESCRIPTION}}
 - 开发测试工程师收到任务后应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`。验证数组只能写实际执行过的命令和真实结果。
 - 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。
 - 工作流在任务完成后由扩展自动切换配置角色和模型，并通过隐藏续跑消息启动下一任务；不要手动重复分配或要求用户触发下一步。若模型忘记提交完成结果，系统会自动提醒有限次数，仍未提交才暂停。
-- `parallel_develop` 只是独立任务的优化路径，不是默认路径；共享接口、DOM、API、测试契约或顺序依赖的任务必须使用顺序工作流。
 
 ## 职责切换模式
 
@@ -65,11 +64,6 @@ description: {{SKILL_DESCRIPTION}}
 - 会话启动、resume 或 reload 时，仅在当前模型和推理强度唯一匹配时恢复角色；重复配置或无法匹配时保持未知。
 - 用户可用 `/pi-init role <职责 ID>` 手动验证同一映射；在受信任项目中需要持久调整某一职责的模型或推理强度时，可使用 `/pi-init config [职责 ID]`；手动模式下执行 `/pi-init role` 后再重试自动职责。
 
-- 架构师完成规划且存在至少两个真正独立、契约已冻结且适合长时间执行的工作包时，调用 `parallel_develop`，让多个开发测试工程师并行实现和测试；小任务或语义耦合的文件应交给单个开发测试工程师。
-- 每个 `parallel_develop` 任务必须提供 `id`、`task` 和不重叠的 `files` 范围；文件不重叠不是充分条件，共享 DOM、接口或测试契约的任务仍应串行。最多 4 个任务，默认同时运行 2 个。
-- `parallel_develop` 仅在受信任项目中运行，使用隔离 Git worktree，成功后自动合并修改；子代理使用 Pi JSON 事件流，状态栏和工具进度实时显示每个任务的状态、当前工具、耗时和最后活动，高频模型输出会节流。基础设施错误（包括 `terminated` 等传输中断）自动重试一次，结果包含耗时、token、缓存、费用和重试指标；代码或测试错误交由主开发测试工程师接管。失败现场和日志保留，主工作区必须干净，开发测试工程师不得提交或推送。子代理使用 `--no-approve`，不会自动提升项目受信任级别。
-- `parallel_develop` 按 Git `core.ignorecase` 适配目标文件系统的大小写规则；Windows 通过 `cmd.exe` 安全启动 npm `.cmd` shim，并在取消或超时时终止整个进程树。
-- 只有一个简单工作包时跳过 `parallel_develop`，直接由开发测试工程师处理。
 
 ## 交接要求
 

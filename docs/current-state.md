@@ -18,7 +18,7 @@
 - `switch_role` 工具和 `/pi-init role` 读取 `.pi/role-models.json`，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 可临时覆盖当前会话，`/pi-init config` 持久修改职责模型。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；成功后注入隐藏续跑消息，失败仅提示并保留已切换角色。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：架构角色可冻结带依赖、文件范围和验收标准的任务；默认自动切换角色、逐项执行并进入下一任务，仅在初始明确要求架构审阅或真实阻塞时暂停。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。
-- `parallel_develop` 工具在架构规划后，在允许自动切换且项目受信任时为多个开发测试任务创建隔离 worktree；最多接受 4 个任务，默认 2 个 worker 并发，其余排队。子代理通过 Pi JSON 事件流实时报告任务状态、当前工具、耗时和最后活动，高频模型 delta 会节流；结果包含 worker 和 setup/worker/merge 阶段的耗时、turn/token/cache/cost/自动重试指标。基础设施错误（包括 `terminated` 等传输中断）自动重试一次，代码/测试错误交由主开发测试工程师接管，失败现场和日志保留，全部成功后才合并和清理；文件范围按 Git `core.ignorecase` 适配大小写规则，Windows `.cmd` 启动和取消/超时进程树终止已有回归测试。
+- 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。
@@ -30,7 +30,6 @@
 
 ## 待处理
 
-- 真实 LLM 子代理端到端演练尚未执行；当前已完成任务校验、扩展加载和 RPC 命令检查。
 - `task_workflow` 真实模型连续多任务端到端演练尚未执行；当前覆盖纯状态机测试和扩展 RPC 加载检查。
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
@@ -38,3 +37,4 @@
 
 - 2026-08-10：`pi-usage` 基于 DuckDB 扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用和近似使用时长；报告移除 Git changes，增加按模型总 token 缩放的柱状图，并在 Overview 显示缓存占比；缺少 DuckDB 时自动安装用户目录运行时；普通查询增加 1 小时缓存和跨自然日自动检查。
 - 2026-08-13：`pi-usage` 增量导入 `pi-token-speed` 的自定义 session 采样，按 provider/model 计算 `输出 token / 有效生成秒数` 的加权平均 TPS；旧数据库升级时只回填 `speed_events`，不再重建既有用量和活动数据。
+- 2026-08-14：移除自研 `parallel_develop` 及其测试、模板和文档说明，保留 `task_workflow`、`switch_role`、角色配置和脚手架能力。

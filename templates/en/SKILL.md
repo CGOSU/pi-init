@@ -39,7 +39,6 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - After receiving a task, the Development and Test Engineer should implement, test, and fix directly instead of pausing for optional preferences. On completion, call `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`; the verification list may contain only commands actually run and their real results.
 - If a product decision, permission/credential, destructive-operation approval, unrecoverable failure, or genuinely blocking fact is missing, call `task_workflow(action=block, taskId=..., reason=...)` instead of guessing completion; after resolution, use `/pi-init workflow retry <taskId>`.
 - After completion, the extension switches the configured role/model and starts the next task through a hidden continuation message. Do not manually reassign the next task or ask the user to trigger it. If the model forgets the completion action, the system nudges it a limited number of times and then pauses.
-- `parallel_develop` is an optimization for independent work, not the default. Shared interfaces, DOM/API behavior, test contracts, or ordering dependencies must use the sequential workflow.
 
 ## Role Switching Modes
 
@@ -65,11 +64,6 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - At session start, resume, or reload, restore a role only when the current model and thinking level uniquely match its configuration; otherwise keep the role unknown.
 - Users can verify the same mapping with `/pi-init role <role ID>`; in trusted projects, use `/pi-init config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/pi-init role` and retry the automatic role boundary.
 
-- After the Architect produces a plan with at least two truly independent, contract-frozen work packages that are large enough to run for a while, call `parallel_develop` to run multiple Development and Test Engineers concurrently; use one engineer for small or semantically coupled files.
-- Every `parallel_develop` task must provide an `id`, `task`, and non-overlapping `files` scope; non-overlapping files are not sufficient when tasks share a DOM, API, or test contract. Up to 4 tasks are accepted, with 2 workers running concurrently by default.
-- `parallel_develop` runs only in trusted projects, uses isolated Git worktrees, and merges successful changes automatically; workers use Pi's JSON event stream, while the status bar and tool progress show each task's status, current tool, elapsed time, and last activity, with high-frequency model updates throttled. Infrastructure failures, including `terminated` transport interruptions, are retried once automatically; results include elapsed time, token/cache/cost/retry metrics. Code or test failures are handed to the main Development and Test Engineer. Failed worktrees and logs are preserved; the main worktree must be clean, and workers must not commit or push. Workers use `--no-approve` and never promote project trust automatically.
-- `parallel_develop` follows Git `core.ignorecase` for filesystem case sensitivity; on Windows it launches npm `.cmd` shims safely through `cmd.exe` and terminates the entire process tree on cancellation or timeout.
-- Skip `parallel_develop` for one small work package and use a single Development and Test Engineer.
 
 ## Handoff Contract
 
