@@ -33,7 +33,7 @@ description: {{SKILL_DESCRIPTION}}
 
 ## 架构拆分与自动任务工作流
 
-- 项目任务工作流默认关闭。仅当 `.pi/role-models.json` 顶层 `workflowEnabled` 为 `true` 时，才采用连续自动流程：架构师分析 → 调用 `task_workflow(action=plan)` 冻结任务 → 开发测试逐项完成 → 自动进入下一个任务 → 最后由文档与收尾工程师收尾。可用 `/pi-init config workflow` 持久启用；关闭时不要调用 `plan`。
+- 项目任务工作流由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `task_workflow(action=plan)`，`on` 对所有合法规划始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、角色切换和隐藏续跑，由当前架构师直接按顺序执行；超过 2 个任务才采用连续流程。可用 `/pi-init config workflow` 持久选择。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；两个字段同时存在时以 `workflowMode` 为准。
 - 架构师的每个任务必须包含唯一 `id`、目标 `task`、允许修改的 `files`、可验证的 `acceptanceCriteria`，并在有顺序约束时填写 `dependsOn`；任务默认按依赖就绪顺序串行执行。
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
 - 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`。验证数组只能写实际执行过的命令和真实结果。
@@ -53,7 +53,7 @@ description: {{SKILL_DESCRIPTION}}
 - `/pi-init advanced [目录]`：编辑项目名称、语言、测试命令和 Skill 后初始化。
 - `/pi-init role <职责 ID>`：手动切换职责。
 - `/pi-init config [职责 ID]`：持久修改职责模型与推理强度。
-- `/pi-init config workflow`：持久启用或关闭任务工作流；也可直接修改 `.pi/role-models.json` 的 `workflowEnabled`。
+- `/pi-init config workflow`：持久选择任务工作流的 `off`、`on` 或 `auto` 策略；也可直接修改 `.pi/role-models.json` 的 `workflowMode`。旧项目可继续使用 `workflowEnabled`，未设置新字段时 `true/false` 分别映射为 `on/off`。
 
 ## 自动模型切换
 

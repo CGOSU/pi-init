@@ -8,11 +8,11 @@
 
 ## 已确认决策
 
-### 2026-08-14：任务工作流默认关闭并显式启用
+### 2026-08-14：任务工作流改为 off/on/auto 策略
 
-- 决定：在 `.pi/role-models.json` 增加顶层布尔字段 `workflowEnabled`，默认值为 `false`；只有通过 `/pi-init config workflow` 或直接修改该字段启用后，`task_workflow(action=plan)` 才允许创建新规划。
-- 原因：任务编排会自动切换角色、发送续跑消息并持久化会话状态，默认关闭可避免在未明确选择时改变普通任务流程。
-- 约束：缺失字段按 `false` 兼容旧项目；关闭只阻止新 `plan`，不阻止 `status` 或既有工作流的完成、阻塞、恢复、重试和取消；中英文模板必须明确说明启用前提。
+- 决定：以 `.pi/role-models.json` 顶层 `workflowMode` 作为规范字段，取值 `off`、`on`、`auto`，默认 `auto`；`off` 拒绝新的 `plan`，`on` 始终编排，`auto` 对不超过 2 个任务跳过状态持久化、调度和角色切换，超过 2 个任务才创建工作流。
+- 原因：保留复杂任务的持久化顺序编排，同时避免简单任务承担规划后的隐藏续跑和模型切换开销。
+- 约束：配置入口仍为 `/pi-init config workflow`；旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 映射为 `on/off`，两个字段同时存在时新字段优先；模式变化不阻止既有工作流的 status、complete、block、resume、retry、cancel。
 
 ### 2026-08-14：移除自研并行开发实现并保留顺序工作流
 

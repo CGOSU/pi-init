@@ -1,7 +1,9 @@
 export const ROLE_NAMES = ["architect", "developer-test", "docs-commit"];
 export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
-export const DEFAULT_WORKFLOW_ENABLED = false;
+export const WORKFLOW_MODES = ["off", "on", "auto"];
+export const DEFAULT_WORKFLOW_MODE = "auto";
+export const WORKFLOW_AUTO_TASK_LIMIT = 2;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
 
 export const ROLE_LABELS = {
@@ -68,7 +70,7 @@ export const DEFAULT_ROLE_MODELS = {
 
 export const DEFAULT_ROLE_CONFIG = {
   mode: DEFAULT_ROLE_MODE,
-  workflowEnabled: DEFAULT_WORKFLOW_ENABLED,
+  workflowMode: DEFAULT_WORKFLOW_MODE,
   ...DEFAULT_ROLE_MODELS,
 };
 
@@ -83,13 +85,32 @@ export function resolveRoleMode(config) {
   return mode;
 }
 
-export function resolveWorkflowEnabled(config) {
-  const value = config?.workflowEnabled;
-  if (value === undefined) return DEFAULT_WORKFLOW_ENABLED;
-  if (typeof value !== "boolean") {
-    throw new Error(`工作流开关 workflowEnabled 必须是布尔值：${value}`);
+export function resolveWorkflowMode(config) {
+  const configuredMode = config?.workflowMode;
+  if (configuredMode !== undefined) {
+    if (!WORKFLOW_MODES.includes(configuredMode)) {
+      throw new Error(`工作流模式 workflowMode 无效：${configuredMode}`);
+    }
+    return configuredMode;
   }
-  return value;
+
+  const legacyEnabled = config?.workflowEnabled;
+  if (legacyEnabled === undefined) return DEFAULT_WORKFLOW_MODE;
+  if (typeof legacyEnabled !== "boolean") {
+    throw new Error(`工作流开关 workflowEnabled 必须是布尔值：${legacyEnabled}`);
+  }
+  return legacyEnabled ? "on" : "off";
+}
+
+export function shouldOrchestrateWorkflow({ mode, taskCount }) {
+  if (!WORKFLOW_MODES.includes(mode)) {
+    throw new Error(`工作流模式 workflowMode 无效：${mode}`);
+  }
+  if (!Number.isInteger(taskCount) || taskCount < 1) {
+    throw new Error(`工作流任务数无效：${taskCount}`);
+  }
+
+  return mode === "on" || (mode === "auto" && taskCount > WORKFLOW_AUTO_TASK_LIMIT);
 }
 
 export function resolveRoleModel(config, role) {
@@ -128,7 +149,7 @@ export function filterRoleModels(models, query) {
 export function resolveRoleConfig(config) {
   const resolved = {
     mode: resolveRoleMode(config),
-    workflowEnabled: resolveWorkflowEnabled(config),
+    workflowMode: resolveWorkflowMode(config),
   };
   for (const role of ROLE_NAMES) {
     resolved[role] = resolveRoleModel(config, role);

@@ -8,7 +8,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
 - 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
-- 提供默认关闭的项目级任务工作流开关；只有 `.pi/role-models.json` 的 `workflowEnabled` 为 `true` 后，架构角色才能创建 `task_workflow` 规划，可通过 `/pi-init config workflow` 启用。
+- 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
 - 记录项目宿主环境和平台相关命令约定。
 
@@ -154,7 +154,7 @@ flowchart LR
 /pi-init mode <auto|confirm|manual>
 ```
 
-任务工作流默认关闭。使用 `/pi-init config workflow` 持久启用或关闭，也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowEnabled` 字段；关闭时不会创建新的 `task_workflow` 规划，但已开始的工作流仍可查看和收尾。
+任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 持久选择 `off`、`on` 或 `auto`，也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，超过 2 个任务才进入编排；已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
 `/pi-init mode` 只临时覆盖当前会话；`/pi-init config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但角色自动切换以项目配置为准。
 

@@ -13,7 +13,14 @@
 - 完成内容：新增顶层 `workflowEnabled` 配置，默认关闭；`/pi-init config workflow` 可持久启用或关闭，`task_workflow(action=plan)` 关闭时拒绝，既有工作流收尾操作不受影响。
 - 完成内容：同步中英文 `AGENTS.md`、Skill、README、当前项目配置和设计决策，明确启用前提及直接编辑 `.pi/role-models.json` 的路径。
 - 验证：`npm test`，24 项测试全部通过；`node --check extensions/init-project.ts`、`git diff --check` 和 RPC 扩展命令发现检查通过。
-- 遗留问题：尚未在真实交互式 TUI 中演练开关菜单；未提交或推送。
+- 遗留问题：尚未在真实交互式 TUI 中演练开关菜单；该设计随后由下方 off/on/auto 策略取代。
+
+### 2026-08-14：任务工作流升级为 off/on/auto 策略
+
+- 完成内容：将规范配置字段升级为默认 `workflowMode: "auto"`，配置中心支持 `off`、`on`、`auto`；`auto` 对不超过 2 个任务跳过工作流状态、调度和角色切换，`on` 保留完整编排，`off` 继续拒绝新规划。
+- 完成内容：保留旧 `workflowEnabled` 的读取兼容，并同步当前项目配置、双语 AGENTS/Skill 模板、README、当前状态和设计决策。
+- 验证：`npm test`，24 项测试全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、`git diff --check` 通过；RPC 扩展加载和命令发现成功。
+- 遗留问题：真实模型连续多任务端到端演练和真实交互式 TUI 菜单演练仍未执行；未提交或推送。
 
 ### 2026-08-14：移除自研 parallel_develop
 

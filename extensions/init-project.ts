@@ -16,12 +16,14 @@ import {
   ROLE_MODES,
   ROLE_NAMES,
   THINKING_LEVELS,
+  WORKFLOW_MODES,
   filterRoleModels,
   findMatchingRole,
   resolveRoleConfig,
   roleLabel,
   roleModeLabel,
   shouldCompactOnRoleSwitch,
+  shouldOrchestrateWorkflow,
 } from "../src/roles.js";
 import {
   WORKFLOW_MAX_TASKS,
@@ -36,6 +38,7 @@ import {
   resumeWorkflow,
   retryWorkflowTask,
   startWorkflowTask,
+  validateWorkflowPlan,
   workflowProgress,
 } from "../src/workflow.js";
 import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text, type SelectItem } from "@earendil-works/pi-tui";
@@ -48,7 +51,12 @@ const roleModelSchema = Type.Object({
   }),
 });
 const roleModelsSchema = Type.Object({
-  workflowEnabled: Type.Optional(Type.Boolean({ description: "是否允许架构角色创建 task_workflow 规划" })),
+  workflowMode: Type.Optional(StringEnum(WORKFLOW_MODES, {
+    description: "任务工作流策略：off、on 或 auto（auto 在不超过 2 个任务时跳过编排）",
+  })),
+  workflowEnabled: Type.Optional(Type.Boolean({
+    description: "兼容旧配置；未设置 workflowMode 时 true 映射 on、false 映射 off",
+  })),
   architect: Type.Optional(roleModelSchema),
   "developer-test": Type.Optional(roleModelSchema),
   "docs-commit": Type.Optional(roleModelSchema),
@@ -218,7 +226,7 @@ type RoleModelConfig = {
 
 type ResolvedRoleConfig = Record<string, RoleModelConfig> & {
   mode: string;
-  workflowEnabled: boolean;
+  workflowMode: string;
 };
 
 function getAvailableRoleModels(ctx: ExtensionContext) {
@@ -433,6 +441,13 @@ async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
   };
 }
 
+function workflowModeLabel(mode: string) {
+  if (mode === "off") return "关闭";
+  if (mode === "on") return "始终编排";
+  if (mode === "auto") return "自动（不超过 2 个任务时跳过）";
+  return mode;
+}
+
 function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
   return [
     {
@@ -442,8 +457,8 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
     },
     {
       value: "workflow",
-      label: `● 工作流 · ${config.workflowEnabled ? "已启用" : "已关闭"}`,
-      description: "持久控制是否允许架构角色创建 task_workflow 规划",
+      label: `● 工作流 · ${workflowModeLabel(config.workflowMode)}`,
+      description: "持久选择新 task_workflow 规划的编排策略",
     },
     ...ROLE_NAMES.map((role) => ({
       value: role,
@@ -473,8 +488,8 @@ async function writeRoleConfig(
   return updateRoleConfig(ctx, { [role]: selection });
 }
 
-async function writeWorkflowConfig(ctx: ExtensionContext, workflowEnabled: boolean) {
-  return updateRoleConfig(ctx, { workflowEnabled });
+async function writeWorkflowConfig(ctx: ExtensionContext, workflowMode: string) {
+  return updateRoleConfig(ctx, { workflowMode });
 }
 
 function formatResult(result: {
@@ -1016,14 +1031,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (params.action !== "status" && !ctx.isProjectTrusted()) {
       throw new Error("task_workflow 仅允许在受信任项目中运行；请先信任当前项目");
     }
-    if (params.action === "plan") {
-      const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
-      if (!config.workflowEnabled) {
-        throw new Error(
-          "task_workflow 当前未启用；请先执行 /pi-init config workflow 启用，或在 .pi/role-models.json 中将 workflowEnabled 设为 true",
-        );
-      }
-    }
 
     switch (params.action) {
       case "plan": {
@@ -1034,12 +1041,29 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           throw new Error("当前已有未结束的工作流，请先完成、取消或处理它");
         }
 
-        const next = createWorkflowState({
+        const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+        const plan = validateWorkflowPlan({
           summary: params.summary,
           constraints: params.constraints,
           tasks: params.tasks,
           reviewRequired: params.reviewRequired,
         });
+        if (config.workflowMode === "off") {
+          throw new Error(
+            "task_workflow 当前策略为 off；请先执行 /pi-init config workflow 选择 on 或 auto，或在 .pi/role-models.json 中将 workflowMode 设为 on/auto",
+          );
+        }
+        if (!shouldOrchestrateWorkflow({ mode: config.workflowMode, taskCount: plan.tasks.length })) {
+          return {
+            content: [{
+              type: "text",
+              text: `当前工作流策略为 auto，规划包含 ${plan.tasks.length} 个任务（不超过 2 个），已跳过工作流编排；请由当前架构角色按顺序直接执行这些任务。`,
+            }],
+            details: { workflowMode: config.workflowMode, taskCount: plan.tasks.length, orchestrated: false },
+          };
+        }
+
+        const next = createWorkflowState(plan);
         persistWorkflowState(next, ctx);
         if (next.status === "paused") {
           ctx.ui.notify("架构规划已保存，等待用户审阅。审阅后执行 /pi-init workflow resume。", "info");
@@ -1160,26 +1184,33 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
 
     const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
-    const choice = await showMenu(ctx, "任务工作流开关", [
+    const choice = await showMenu(ctx, "任务工作流策略", [
       {
-        value: "enable",
-        label: config.workflowEnabled ? "保持启用" : "启用工作流",
-        description: "允许架构角色创建 task_workflow 规划",
-      },
-      {
-        value: "disable",
-        label: config.workflowEnabled ? "关闭工作流" : "保持关闭",
+        value: "off",
+        label: config.workflowMode === "off" ? "保持关闭" : "关闭工作流",
         description: "阻止新规划，已开始的工作流仍可查看和收尾",
       },
+      {
+        value: "on",
+        label: config.workflowMode === "on" ? "保持始终编排" : "始终编排",
+        description: "所有合法的 1 至 12 个任务都创建并自动推进工作流",
+      },
+      {
+        value: "auto",
+        label: config.workflowMode === "auto" ? "保持自动策略" : "自动策略",
+        description: "不超过 2 个任务时跳过编排，更多任务使用工作流",
+      },
       { value: "back", label: "← 返回上一级" },
-    ]);
+    ], { selectedValue: config.workflowMode });
     if (!choice || choice === "back") return;
 
-    const next = await writeWorkflowConfig(ctx, choice === "enable");
+    const next = await writeWorkflowConfig(ctx, choice);
     ctx.ui.notify(
-      next.workflowEnabled
-        ? "项目任务工作流已启用；架构角色现在可以创建 task_workflow 规划。"
-        : "项目任务工作流已关闭；新规划将被拒绝，已开始的工作流仍可查看和收尾。",
+      next.workflowMode === "off"
+        ? "项目任务工作流已关闭；新规划将被拒绝，已开始的工作流仍可查看和收尾。"
+        : next.workflowMode === "on"
+          ? "项目任务工作流已设为始终编排；所有合法规划都会创建工作流。"
+          : "项目任务工作流已设为自动；不超过 2 个任务的规划将跳过编排。",
       "info",
     );
   }
@@ -1296,7 +1327,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           ? `角色  ${roleLabel(role.role)}`
           : "角色  尚未切换（按任务自动选择）",
         `模型  ${currentModel}`,
-        `工作流开关  ${config.workflowEnabled ? "已启用" : "已关闭"}`,
+        `工作流策略  ${workflowModeLabel(config.workflowMode)}`,
       ];
       if (workflowState && !["completed", "cancelled"].includes(workflowState.status)) {
         const progress = workflowProgress(workflowState);
@@ -1472,6 +1503,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only after the Architect has inspected the repository and frozen the plan, constraints, files, dependencies, and acceptance criteria.",
+      "The project workflowMode defaults to auto: a valid plan with one or two tasks returns a bypass notice without creating state or scheduling; continue those tasks directly in order. Use on when orchestration is required for a small plan.",
       "Set reviewRequired=true only when the user's initial request explicitly asks to inspect the architecture before implementation; otherwise leave it false so the workflow advances automatically without asking for choices.",
       "Use task_workflow action=complete only after the current task is actually implemented and verified; include real commands and results in verification.",
       "Use task_workflow action=block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures; do not mark an uncertain task complete.",

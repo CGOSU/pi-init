@@ -33,7 +33,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 
 ## Architecture Decomposition and Automatic Task Workflow
 
-- The project task workflow is disabled by default. Only when top-level `workflowEnabled` in `.pi/role-models.json` is `true`, use the continuous flow: Architect analysis → call `task_workflow(action=plan)` to freeze tasks → Development and Test Engineer completes tasks one by one → automatically start the next task → Documentation and Wrap-up Engineer finishes. Enable it persistently with `/pi-init config workflow`; do not call `plan` while disabled.
+- The project task workflow is controlled by top-level `workflowMode` in `.pi/role-models.json`, defaulting to `auto`: `off` rejects new `task_workflow(action=plan)` calls, `on` always orchestrates valid plans, and `auto` bypasses state persistence, role switching, and hidden continuation for plans with at most 2 tasks so the current Architect executes them directly in order; larger plans use the continuous flow. Choose it persistently with `/pi-init config workflow`. For legacy projects without `workflowMode`, `workflowEnabled: true/false` maps to `on/off`; when both fields exist, `workflowMode` wins.
 - Every Architect-created task must include a unique `id`, a goal in `task`, allowed `files`, verifiable `acceptanceCriteria`, and `dependsOn` when ordering matters; tasks run sequentially when their dependencies are ready.
 - When the workflow is enabled, set `reviewRequired` to `true` only when the user's initial request explicitly asks to see or review the architecture first. The workflow then pauses after saving the plan and resumes with `/pi-init workflow resume`; the default is automatic advancement.
 - After receiving a task, the Development and Test Engineer should implement, test, and fix directly instead of pausing for optional preferences. On completion, call `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`; the verification list may contain only commands actually run and their real results.
@@ -53,7 +53,7 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - `/pi-init advanced [directory]`: edit the project name, language, test command, and Skill before initialization.
 - `/pi-init role <role ID>`: manually switch roles.
 - `/pi-init config [role ID]`: persistently change a role's model and reasoning level.
-- `/pi-init config workflow`: persistently enable or disable the task workflow; you can also edit `workflowEnabled` in `.pi/role-models.json` directly.
+- `/pi-init config workflow`: persistently choose the task workflow strategy `off`, `on`, or `auto`; you can also edit `workflowMode` in `.pi/role-models.json` directly. Legacy projects may keep `workflowEnabled`; when the new field is absent, `true/false` maps to `on/off`.
 
 ## Automatic Model Switching
 
