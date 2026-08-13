@@ -143,7 +143,7 @@ flowchart LR
 /pi-init
 ```
 
-控制中心提供快速初始化、高级初始化、角色与模型配置、角色切换和模式切换。熟悉命令行时也可以直接使用：
+控制中心提供快速初始化、高级初始化、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
 
 ```text
 /pi-init init [目录]
@@ -157,6 +157,16 @@ flowchart LR
 任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 持久选择 `off`、`on` 或 `auto`，也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，超过 2 个任务才进入编排；已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
 `/pi-init mode` 只临时覆盖当前会话；`/pi-init config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但角色自动切换以项目配置为准。
+
+### 工作流运行时版本不一致
+
+如果创建工作流时看到 `(0, _roles.shouldOrchestrateWorkflow) is not a function`，说明正在运行的扩展和 `src/roles.js` 不是同一版本，通常是 Pi 仍加载旧的 Git package 或 reload 前的模块缓存。执行：
+
+```bash
+pi update --extensions
+```
+
+然后在当前 Pi 会话执行 `/reload`；本地开发直接重启 Pi，并使用同一份 `extensions/init-project.ts` 与 `src/roles.js`。pi-init `1.0.4` 起会把该情况转换为可操作的错误提示，不会继续以不确定的策略创建工作流。
 
 ## 全局协作规则
 

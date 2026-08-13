@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-14：修复工作流运行时版本错误并外显工作流状态
+
+- 完成内容：定位 `(0, _roles.shouldOrchestrateWorkflow) is not a function` 为 Pi package 更新/reload 后扩展与相邻 `src/roles.js` 版本不一致；增加运行时诊断、升级到 `1.0.4`，并在 README 记录 `pi update --extensions`、`/reload` 和本地重启步骤。
+- 完成内容：将工作流策略配置移出“变更 · 角色与模型”子菜单，增加控制中心顶层入口；主 `pi-init` 状态项和控制中心摘要显示工作流策略及活动工作流进度。
+- 验证：`npm test`，24 项通过；`node --check src/roles.js`、`node --check src/workflow.js`、`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、`git diff --check` 通过；RPC 扩展加载和命令发现成功。
+- 遗留问题：尚未在真实交互式 TUI 中截图验收；当前项目配置 `.pi/role-models.json` 的 `workflowMode` 仍为用户手动改成的 `off`，未覆盖。
+
 ### 2026-08-12：移除 pi-fast 和 pi-update
 
 - 完成内容：删除 `pi-fast`、`pi-update` 的 Windows/POSIX 脚本，移除安装器复制逻辑，并清理 README、当前状态和测试引用。

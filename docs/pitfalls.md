@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-08-14：Pi package 更新后扩展与相邻源码可能短暂混用
+
+- 现象：创建 2 个任务的工作流时出现 `(0, _roles.shouldOrchestrateWorkflow) is not a function`。
+- 根因：当前扩展已经调用新策略函数，但 Pi 运行时加载的 `src/roles.js` 仍是旧模块，常见于 Git package 更新后未 reload、旧扩展实例仍在内存中，或扩展与源码来自不同副本。
+- 修复：升级 pi-init 到 `1.0.4`，在调用前检测函数是否存在；缺失时停止规划并提示 `pi update --extensions`、`/reload`，本地开发重启 Pi 且确保扩展与 `src/roles.js` 来自同一目录。
+- 验证：本地 `node` 导入确认 `typeof shouldOrchestrateWorkflow === "function"`；RPC 扩展加载成功；`npm test` 24 项通过。
+
 ### 2026-08-14：自动任务必须以状态机和持久 entry 驱动
 
 - 现象：仅在 Skill 中要求“架构师拆 task、开发后继续下一个 task”容易在模型换回合、压缩或 reload 后丢失当前任务，也无法区分用户需要审阅架构和默认自动推进。

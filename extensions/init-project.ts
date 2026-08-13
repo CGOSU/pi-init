@@ -448,17 +448,21 @@ function workflowModeLabel(mode: string) {
   return mode;
 }
 
+function shouldOrchestrateConfiguredWorkflow(mode: string, taskCount: number) {
+  if (typeof shouldOrchestrateWorkflow !== "function") {
+    throw new Error(
+      "检测到 pi-init 运行时版本不一致：扩展与 src/roles.js 不是同一版本，缺少 shouldOrchestrateWorkflow。请先执行 pi update --extensions，然后在 Pi 中执行 /reload；本地开发请重启 Pi，并确保使用同一份扩展和 src/roles.js。",
+    );
+  }
+  return shouldOrchestrateWorkflow({ mode, taskCount });
+}
+
 function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
   return [
     {
       value: "mode",
       label: `● 模式 · ${roleModeLabel(mode)}`,
       description: "只影响本次会话，不修改项目文件",
-    },
-    {
-      value: "workflow",
-      label: `● 工作流 · ${workflowModeLabel(config.workflowMode)}`,
-      description: "持久选择新 task_workflow 规划的编排策略",
     },
     ...ROLE_NAMES.map((role) => ({
       value: role,
@@ -642,6 +646,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   } | undefined;
   let sessionModeOverride: string | undefined;
   let controlCenterGuideShown = false;
+  let roleModeStatus = "auto";
+  let workflowModeStatus = "auto";
   let workflowState: ReturnType<typeof createWorkflowState> | undefined;
   let workflowDispatchInFlight = false;
   let pendingRoleCompaction:
@@ -669,15 +675,31 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return activeRole;
   }
 
-  function setRoleStatus(ctx: ExtensionContext, mode: string) {
+  function workflowStateLabel(state = workflowState) {
+    if (!state) return `策略 ${workflowModeLabel(workflowModeStatus)} · 无活动工作流`;
+
+    const progress = workflowProgress(state);
+    const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
+    if (state.status === "paused") return `已暂停 ${progress.completed}/${progress.total}${current}`;
+    if (state.status === "completed") return `已完成 ${progress.completed}/${progress.total}`;
+    if (state.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}`;
+    return `运行 ${progress.completed}/${progress.total}${current || " · 待调度"}`;
+  }
+
+  function refreshRoleStatus(ctx: ExtensionContext, mode: string) {
     const role = activeRoleFor(ctx);
     const model = ctx.model
       ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
       : "未选择模型";
     ctx.ui.setStatus(
       "pi-init",
-      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model}`,
+      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStateLabel()}`,
     );
+  }
+
+  function setRoleStatus(ctx: ExtensionContext, mode: string) {
+    roleModeStatus = mode;
+    refreshRoleStatus(ctx, mode);
   }
 
   function startPendingRoleCompaction(ctx: ExtensionContext) {
@@ -736,6 +758,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   async function applyRole(role: string, ctx: ExtensionContext) {
     const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+    workflowModeStatus = config.workflowMode;
     const target = config[role];
     if (!target) throw new Error(`未知角色：${role}`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
@@ -844,15 +867,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   function updateWorkflowStatus(ctx: ExtensionContext) {
-    if (!workflowState || ["completed", "cancelled"].includes(workflowState.status)) {
-      ctx.ui.setStatus("pi-init-workflow", undefined);
-      return;
-    }
-
-    const progress = workflowProgress(workflowState);
-    const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
-    const stateText = workflowState.status === "paused" ? "暂停" : `${progress.completed}/${progress.total}`;
-    ctx.ui.setStatus("pi-init-workflow", `● 工作流 · ${stateText}${current}`);
+    refreshRoleStatus(ctx, roleModeStatus);
+    ctx.ui.setStatus("pi-init-workflow", undefined);
   }
 
   function persistWorkflowState(next: ReturnType<typeof createWorkflowState>, ctx: ExtensionContext) {
@@ -1042,6 +1058,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         }
 
         const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+        workflowModeStatus = config.workflowMode;
         const plan = validateWorkflowPlan({
           summary: params.summary,
           constraints: params.constraints,
@@ -1053,7 +1070,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             "task_workflow 当前策略为 off；请先执行 /pi-init config workflow 选择 on 或 auto，或在 .pi/role-models.json 中将 workflowMode 设为 on/auto",
           );
         }
-        if (!shouldOrchestrateWorkflow({ mode: config.workflowMode, taskCount: plan.tasks.length })) {
+        if (!shouldOrchestrateConfiguredWorkflow(config.workflowMode, plan.tasks.length)) {
           return {
             content: [{
               type: "text",
@@ -1205,6 +1222,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (!choice || choice === "back") return;
 
     const next = await writeWorkflowConfig(ctx, choice);
+    workflowModeStatus = next.workflowMode;
+    refreshRoleStatus(ctx, roleModeStatus);
     ctx.ui.notify(
       next.workflowMode === "off"
         ? "项目任务工作流已关闭；新规划将被拒绝，已开始的工作流仍可查看和收尾。"
@@ -1316,6 +1335,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     let selectedAction: string | undefined;
     while (true) {
       const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      workflowModeStatus = config.workflowMode;
       const mode = sessionModeOverride ?? config.mode;
       const role = activeRoleFor(ctx);
       const currentModel = ctx.model
@@ -1328,17 +1348,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           : "角色  尚未切换（按任务自动选择）",
         `模型  ${currentModel}`,
         `工作流策略  ${workflowModeLabel(config.workflowMode)}`,
+        `工作流状态  ${workflowStateLabel()}`,
       ];
-      if (workflowState && !["completed", "cancelled"].includes(workflowState.status)) {
-        const progress = workflowProgress(workflowState);
-        const workflowLabel = progress.currentTaskId ?? (workflowState.status === "paused" ? "暂停" : "待调度");
-        summary.push(`工作流进度  ${progress.completed}/${progress.total} · ${workflowLabel}`);
-      }
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
       const action = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
         { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
         { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或修改三个角色的模型配置" },
+        { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置新 task_workflow 规划的编排策略" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
@@ -1350,6 +1367,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       selectedAction = action;
       if (action === "config") {
         await configureRoleCenter(ctx);
+        continue;
+      }
+      if (action === "workflow-config") {
+        await configureWorkflow(ctx);
         continue;
       }
       if (action === "role") {
@@ -1373,6 +1394,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      workflowModeStatus = config.workflowMode;
       const role = findMatchingRole(config, ctx.model, pi.getThinkingLevel());
       activeRole = role && ctx.model
         ? {
