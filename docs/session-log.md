@@ -14,6 +14,13 @@
 
 ## 会话
 
+### 2026-08-14：增加架构拆分和自动连续任务工作流
+
+- 完成内容：新增 `src/workflow.js` 状态机，支持架构计划、任务依赖、角色、文件范围、验收标准、完成、阻塞、审阅暂停、恢复、重试、取消和未完成提醒。
+- 完成内容：扩展新增 `task_workflow` 工具、工作流状态栏、session custom entry 恢复、自动角色切换和隐藏续跑消息；架构审阅仅由初始 `reviewRequired` 明确触发，默认自动进入下一个任务。
+- 完成内容：中英文 `AGENTS.md` 和项目 Skill 模板补充连续流水线、任务拆分、暂停条件和 `task_workflow` 使用规则。
+- 验证：`node --check src/workflow.js`、`node --check extensions/init-project.ts`、`node --test --test-concurrency=1`，34 项通过；`git diff --check` 通过；RPC 扩展命令发现和加载检查成功。
+- 遗留问题：真实模型驱动的连续多任务端到端演练尚未执行；尚未提交或推送。
 ### 2026-08-13：修复 pi-usage TPS schema 升级导致更新变慢
 
 - 完成内容：schema 从旧版本升级时只扫描 session JSONL 中的 `pi-token-speed` 样本并回填 `speed_events`，不再强制删除和重导全部 `usage_events`、`activity_events`。

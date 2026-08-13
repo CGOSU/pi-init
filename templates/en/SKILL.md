@@ -31,6 +31,16 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 4. For mixed work, hand off sequentially: Architect → Development and Test Engineer → Documentation and Wrap-up Engineer. Do not activate every role for a simple task.
 5. Before committing, inspect the actual diff and verification results. Run `git commit` only when explicitly requested, and `git push` only when explicitly requested.
 
+## Architecture Decomposition and Automatic Task Workflow
+
+- Default to a continuous flow: Architect analysis → call `task_workflow(action=plan)` to freeze tasks → Development and Test Engineer completes tasks one by one → automatically start the next task → Documentation and Wrap-up Engineer finishes. Do not ask the user to choose between tasks.
+- Every Architect-created task must include a unique `id`, a goal in `task`, allowed `files`, verifiable `acceptanceCriteria`, and `dependsOn` when ordering matters; tasks run sequentially when their dependencies are ready.
+- Set `reviewRequired` to `true` only when the user's initial request explicitly asks to see or review the architecture first. The workflow then pauses after saving the plan and resumes with `/pi-init workflow resume`; the default is automatic advancement.
+- After receiving a task, the Development and Test Engineer should implement, test, and fix directly instead of pausing for optional preferences. On completion, call `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`; the verification list may contain only commands actually run and their real results.
+- If a product decision, permission/credential, destructive-operation approval, unrecoverable failure, or genuinely blocking fact is missing, call `task_workflow(action=block, taskId=..., reason=...)` instead of guessing completion; after resolution, use `/pi-init workflow retry <taskId>`.
+- After completion, the extension switches the configured role/model and starts the next task through a hidden continuation message. Do not manually reassign the next task or ask the user to trigger it. If the model forgets the completion action, the system nudges it a limited number of times and then pauses.
+- `parallel_develop` is an optimization for independent work, not the default. Shared interfaces, DOM/API behavior, test contracts, or ordering dependencies must use the sequential workflow.
+
 ## Role Switching Modes
 
 - The top-level `mode` in `.pi/role-models.json` can be `auto`, `confirm`, or `manual`; the default is `auto`.

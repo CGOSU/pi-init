@@ -35,6 +35,21 @@ import {
   validateParallelTasks,
 } from "../src/parallel.js";
 import { getPiInvocation, runParallelDevelop, spawnPiWorker } from "../src/parallel-runner.js";
+import {
+  WORKFLOW_MAX_NUDGES,
+  WORKFLOW_MAX_TASKS,
+  blockWorkflowTask,
+  cancelWorkflow,
+  completeWorkflowTask,
+  createWorkflowState,
+  getNextWorkflowTask,
+  recordWorkflowNudge,
+  resumeWorkflow,
+  retryWorkflowTask,
+  startWorkflowTask,
+  validateWorkflowPlan,
+  workflowProgress,
+} from "../src/workflow.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -359,6 +374,8 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
     assert.match(agents, /docs\/clean-code\.md/);
+    assert.match(agents, /task_workflow/);
+    assert.match(agents, /自动推进/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
     assert.match(cleanCode, /## Hard rules/);
@@ -382,6 +399,10 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(skill, /`max`/);
     assert.match(skill, /`medium`/);
     assert.match(skill, /必须先调用 `switch_role`/);
+    assert.match(skill, /task_workflow\(action=plan\)/);
+    assert.match(skill, /reviewRequired/);
+    assert.match(skill, /task_workflow\(action=complete/);
+    assert.match(skill, /\/pi-init workflow resume/);
     assert.match(skill, /\/pi-init config/);
     assert.match(skill, /调用 `parallel_develop`/);
     assert.match(skill, /受信任项目/);
@@ -533,9 +554,18 @@ test("角色切换压缩等待 agent 完全结束而不是回合结束", async (
   const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
   assert.match(
     extension,
-    /pi\.on\("agent_settled",\s*\(_event, ctx\) => \{\s*startPendingRoleCompaction\(ctx\);\s*\}\);/,
+    /pi\.on\("agent_settled",\s*async \(_event, ctx\) => \{\s*startPendingRoleCompaction\(ctx\);\s*await scheduleWorkflow\(ctx\);\s*\}\);/,
   );
   assert.doesNotMatch(extension, /pi\.on\("turn_end"[\\s\\S]{0,160}startPendingRoleCompaction/);
+});
+
+test("扩展注册顺序工作流并提供自动推进和显式审阅入口", async () => {
+  const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
+  assert.match(extension, /name: "task_workflow"/);
+  assert.match(extension, /action: StringEnum\(\["plan", "status", "complete", "block", "resume", "retry", "cancel"\]/);
+  assert.match(extension, /reviewRequired=true only when the user's initial request explicitly asks/);
+  assert.match(extension, /自动进入任务/);
+  assert.match(extension, /\/pi-init workflow retry/);
 });
 
 test("自动跨角色且上下文达到阈值时才触发压缩", () => {
@@ -619,6 +649,139 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.throws(
     () => resolveRoleModel({ architect: { provider: "", model: "x", thinkingLevel: "max" } }, "architect"),
     /provider 无效/,
+  );
+});
+
+test("架构工作流按依赖顺序推进并在完成后选择下一任务", () => {
+  const planned = createWorkflowState(
+    {
+      summary: "完成用户认证改造",
+      constraints: ["保留现有登录接口"],
+      tasks: [
+        {
+          id: "schema",
+          task: "更新认证数据结构",
+          files: ["src/auth/schema.js"],
+          acceptanceCriteria: ["迁移可重复执行", "新增回归测试"],
+        },
+        {
+          id: "service",
+          task: "实现认证服务",
+          files: ["src/auth/service.js"],
+          acceptanceCriteria: ["服务使用新结构"],
+          dependsOn: ["schema"],
+        },
+        {
+          id: "docs",
+          task: "更新认证文档",
+          role: "docs-commit",
+          files: ["README.md"],
+          acceptanceCriteria: ["文档与实际行为一致"],
+          dependsOn: ["service"],
+        },
+      ],
+    },
+    100,
+  );
+
+  assert.equal(planned.status, "running");
+  assert.equal(getNextWorkflowTask(planned).id, "schema");
+  const first = startWorkflowTask(planned, "schema", 110);
+  assert.equal(first.currentTaskId, "schema");
+  const second = completeWorkflowTask(
+    first,
+    { taskId: "schema", completionSummary: "结构和迁移已完成", verification: ["npm test：通过"] },
+    120,
+  );
+  assert.equal(second.currentTaskId, undefined);
+  assert.equal(getNextWorkflowTask(second).id, "service");
+  const third = completeWorkflowTask(
+    startWorkflowTask(second, "service", 130),
+    { taskId: "service", completionSummary: "服务已切换", verification: ["npm test：通过"] },
+    140,
+  );
+  assert.equal(getNextWorkflowTask(third).id, "docs");
+  const finished = completeWorkflowTask(
+    startWorkflowTask(third, "docs", 150),
+    { taskId: "docs", completionSummary: "文档已同步", verification: ["git diff --check：通过"] },
+    160,
+  );
+  assert.equal(finished.status, "completed");
+  assert.deepEqual(workflowProgress(finished), { completed: 3, total: 3, blocked: 0, currentTaskId: undefined });
+});
+
+test("架构工作流只有明确审阅要求时才暂停，并支持阻塞重试", () => {
+  const review = createWorkflowState(
+    {
+      summary: "先审阅架构",
+      reviewRequired: true,
+      tasks: [{ id: "implementation", task: "实现方案", files: ["src"], acceptanceCriteria: ["测试通过"] }],
+    },
+    200,
+  );
+  assert.equal(review.status, "paused");
+  assert.equal(review.pauseReason, "architecture-review");
+  const running = resumeWorkflow(review, 210);
+  const started = startWorkflowTask(running, "implementation", 220);
+  const blocked = blockWorkflowTask(started, { taskId: "implementation", reason: "缺少产品决策" }, 230);
+  assert.equal(blocked.status, "paused");
+  assert.equal(blocked.tasks[0].status, "blocked");
+  assert.throws(() => resumeWorkflow(blocked), /retry/);
+  const retried = retryWorkflowTask(blocked, "implementation", 240);
+  assert.equal(retried.status, "running");
+  assert.equal(retried.tasks[0].status, "pending");
+});
+
+test("架构工作流未提交完成时有限次提醒后暂停", () => {
+  const state = startWorkflowTask(
+    createWorkflowState({
+      summary: "提醒测试",
+      tasks: [{ id: "task", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+    }),
+    "task",
+  );
+  const nudged = recordWorkflowNudge(state);
+  assert.equal(nudged.status, "running");
+  assert.equal(nudged.nudgeCount, 1);
+  const paused = recordWorkflowNudge(nudged);
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.tasks[0].status, "blocked");
+  assert.equal(paused.pauseReason, "task-not-completed");
+  assert.equal(WORKFLOW_MAX_NUDGES, 2);
+});
+
+test("架构工作流拒绝重复任务、未知依赖和循环依赖", () => {
+  assert.throws(
+    () => validateWorkflowPlan({
+      summary: "重复",
+      tasks: [
+        { id: "same", task: "a", files: ["a"], acceptanceCriteria: ["a"] },
+        { id: "same", task: "b", files: ["b"], acceptanceCriteria: ["b"] },
+      ],
+    }),
+    /id 重复/,
+  );
+  assert.throws(
+    () => validateWorkflowPlan({
+      summary: "未知依赖",
+      tasks: [{ id: "a", task: "a", files: ["a"], acceptanceCriteria: ["a"], dependsOn: ["missing"] }],
+    }),
+    /不存在的任务/,
+  );
+  assert.throws(
+    () => validateWorkflowPlan({
+      summary: "循环",
+      tasks: [
+        { id: "a", task: "a", files: ["a"], acceptanceCriteria: ["a"], dependsOn: ["b"] },
+        { id: "b", task: "b", files: ["b"], acceptanceCriteria: ["b"], dependsOn: ["a"] },
+      ],
+    }),
+    /循环/,
+  );
+  assert.equal(WORKFLOW_MAX_TASKS, 12);
+  assert.throws(
+    () => cancelWorkflow({ status: "completed" }),
+    /已经结束/,
   );
 });
 
@@ -1038,6 +1201,8 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(agents, new RegExp("`" + process.platform + "`"));
     assert.match(agents, /- Test: `npm test`/);
     assert.match(agents, /docs\/clean-code\.md/);
+    assert.match(agents, /Task Execution Workflow/);
+    assert.match(agents, /task_workflow/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);
@@ -1046,6 +1211,10 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(skill, /Development and Test Engineer.+Senior \/ SDET/);
     assert.match(skill, /Documentation and Wrap-up Engineer.+Technical Writer \/ Release Engineer/);
     assert.match(skill, /Call `switch_role` before every role starts/);
+    assert.match(skill, /task_workflow\(action=plan\)/);
+    assert.match(skill, /reviewRequired/);
+    assert.match(skill, /task_workflow\(action=complete/);
+    assert.match(skill, /\/pi-init workflow resume/);
     assert.match(skill, /call `parallel_develop`/);
     assert.match(skill, /trusted projects/);
     assert.match(skill, /## Exact String Replacement/);

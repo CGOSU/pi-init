@@ -14,6 +14,12 @@
 
 ## 已知问题
 
+### 2026-08-14：自动任务必须以状态机和持久 entry 驱动
+
+- 现象：仅在 Skill 中要求“架构师拆 task、开发后继续下一个 task”容易在模型换回合、压缩或 reload 后丢失当前任务，也无法区分用户需要审阅架构和默认自动推进。
+- 根因：自然语言计划没有可验证的状态、依赖和完成协议；角色切换工具本身只切换模型，不负责任务生命周期。
+- 修复：`task_workflow` 用显式状态机保存 plan、currentTaskId、task status 和真实 verification，并通过 `pi.appendEntry` 持久化；只有 `reviewRequired` 或真实 block 才暂停，完成后由 `agent_settled` 调度下一个任务。
+- 验证：`node --test --test-concurrency=1` 34 项通过；真实模型连续任务演练仍待执行。
 ### 2026-08-13：DuckDB schema 升级不应重建历史事件
 
 - 现象：增加 `pi-token-speed` 后，`pi-usage --update` 明显变慢。

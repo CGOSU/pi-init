@@ -31,6 +31,16 @@ description: {{SKILL_DESCRIPTION}}
 4. 混合任务按“架构师 → 开发测试工程师 → 文档与收尾工程师”串行交接，不为简单任务启动全部职责。
 5. 提交前必须检查实际 diff 和验证结果；只有用户明确要求提交时才执行 `git commit`，明确要求推送时才执行 `git push`。
 
+## 架构拆分与自动任务工作流
+
+- 默认采用连续自动流程：架构师分析 → 调用 `task_workflow(action=plan)` 冻结任务 → 开发测试逐项完成 → 自动进入下一个任务 → 最后由文档与收尾工程师收尾。不要在任务之间询问用户选择。
+- 架构师的每个任务必须包含唯一 `id`、目标 `task`、允许修改的 `files`、可验证的 `acceptanceCriteria`，并在有顺序约束时填写 `dependsOn`；任务默认按依赖就绪顺序串行执行。
+- 只有用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
+- 开发测试工程师收到任务后应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`。验证数组只能写实际执行过的命令和真实结果。
+- 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。
+- 工作流在任务完成后由扩展自动切换配置角色和模型，并通过隐藏续跑消息启动下一任务；不要手动重复分配或要求用户触发下一步。若模型忘记提交完成结果，系统会自动提醒有限次数，仍未提交才暂停。
+- `parallel_develop` 只是独立任务的优化路径，不是默认路径；共享接口、DOM、API、测试契约或顺序依赖的任务必须使用顺序工作流。
+
 ## 职责切换模式
 
 - `.pi/role-models.json` 顶层的 `mode` 可设为 `auto`、`confirm` 或 `manual`，默认是 `auto`。

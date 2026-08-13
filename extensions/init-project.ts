@@ -25,6 +25,21 @@ import {
 } from "../src/roles.js";
 import { MAX_PARALLEL_DEVELOPERS } from "../src/parallel.js";
 import { runParallelDevelop } from "../src/parallel-runner.js";
+import {
+  WORKFLOW_MAX_TASKS,
+  blockWorkflowTask,
+  cancelWorkflow,
+  completeWorkflowTask,
+  createWorkflowState,
+  getNextWorkflowTask,
+  getWorkflowTask,
+  isWorkflowActive,
+  recordWorkflowNudge,
+  resumeWorkflow,
+  retryWorkflowTask,
+  startWorkflowTask,
+  workflowProgress,
+} from "../src/workflow.js";
 import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text, type SelectItem } from "@earendil-works/pi-tui";
 
 const roleModelSchema = Type.Object({
@@ -77,6 +92,42 @@ const parallelDevelopParameters = Type.Object({
     maxItems: MAX_PARALLEL_DEVELOPERS,
     description: `并行开发任务，最多 ${MAX_PARALLEL_DEVELOPERS} 个`,
   }),
+});
+const workflowTaskRoleSchema = StringEnum(["developer-test", "docs-commit"] as const, {
+  description: "任务执行角色；默认使用 developer-test",
+});
+const workflowTaskSchema = Type.Object({
+  id: Type.String({ description: "唯一任务 ID，小写字母、数字、点、下划线或连字符" }),
+  task: Type.String({ description: "任务目标和实现范围" }),
+  files: Type.Array(Type.String(), {
+    minItems: 1,
+    description: "任务允许涉及的文件或目录，用于约束实现范围",
+  }),
+  acceptanceCriteria: Type.Array(Type.String(), {
+    minItems: 1,
+    description: "任务完成前必须满足的验收标准",
+  }),
+  role: Type.Optional(workflowTaskRoleSchema),
+  dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
+});
+const taskWorkflowParameters = Type.Object({
+  action: StringEnum(["plan", "status", "complete", "block", "resume", "retry", "cancel"] as const, {
+    description: "工作流动作",
+  }),
+  summary: Type.Optional(Type.String({ description: "架构规划摘要（plan 必填）" })),
+  constraints: Type.Optional(Type.Array(Type.String(), { description: "架构约束和不可改变的决定" })),
+  tasks: Type.Optional(Type.Array(workflowTaskSchema, {
+    minItems: 1,
+    maxItems: WORKFLOW_MAX_TASKS,
+    description: `按顺序拆分的开发测试任务，最多 ${WORKFLOW_MAX_TASKS} 个`,
+  })),
+  reviewRequired: Type.Optional(Type.Boolean({
+    description: "只有用户一开始明确要求先审阅架构时才设为 true；默认 false 自动推进",
+  })),
+  taskId: Type.Optional(Type.String({ description: "当前任务或要重试的任务 ID" })),
+  completionSummary: Type.Optional(Type.String({ description: "完成任务的实现摘要" })),
+  verification: Type.Optional(Type.Array(Type.String(), { description: "实际执行过的验证命令和结果" })),
+  reason: Type.Optional(Type.String({ description: "阻塞原因（block 必填）" })),
 });
 
 async function readRoleConfig(ctx: ExtensionContext) {
@@ -594,7 +645,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   } | undefined;
   let sessionModeOverride: string | undefined;
   let controlCenterGuideShown = false;
-  let pendingRoleCompaction: { fromRole: string; toRole: string } | undefined;
+  let workflowState: ReturnType<typeof createWorkflowState> | undefined;
+  let workflowDispatchInFlight = false;
+  let pendingRoleCompaction:
+    | {
+        fromRole: string;
+        toRole: string;
+        continuation?:
+          | { kind: "workflow-task"; taskId: string }
+          | { kind: "workflow-schedule" }
+          | { kind: "workflow-review" };
+      }
+    | undefined;
   let roleCompactionInFlight = false;
 
   function activeRoleFor(ctx: ExtensionContext) {
@@ -628,29 +690,49 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     pendingRoleCompaction = undefined;
     roleCompactionInFlight = true;
     ctx.ui.setStatus("pi-init-compaction", "● 角色切换 · 正在压缩上下文");
+
+    const continueAfterTransition = (warning?: string) => {
+      if (warning) ctx.ui.notify(warning, "warning");
+      if (transition.continuation?.kind === "workflow-task") {
+        sendWorkflowTaskMessage(ctx, transition.continuation.taskId, warning);
+        return;
+      }
+      if (transition.continuation?.kind === "workflow-schedule") {
+        workflowDispatchInFlight = false;
+        void scheduleWorkflow(ctx).catch((error) => ctx.ui.notify(`工作流自动续跑失败：${textOf(error)}`, "error"));
+        return;
+      }
+      if (transition.continuation?.kind === "workflow-review") {
+        workflowDispatchInFlight = false;
+        return;
+      }
+
+      try {
+        pi.sendMessage(
+          {
+            customType: ROLE_SWITCH_CONTINUATION_TYPE,
+            content: `已完成从${roleLabel(transition.fromRole)}到${roleLabel(transition.toRole)}的自动角色切换和上下文压缩。请继续当前任务。`,
+            display: false,
+            details: transition,
+          },
+          { triggerTurn: true },
+        );
+      } catch (error) {
+        ctx.ui.notify(`上下文压缩已完成，但无法自动继续：${textOf(error)}`, "warning");
+      }
+    };
+
     ctx.compact({
       customInstructions: ROLE_SWITCH_COMPACTION_INSTRUCTIONS,
       onComplete: () => {
         roleCompactionInFlight = false;
         ctx.ui.setStatus("pi-init-compaction", undefined);
-        try {
-          pi.sendMessage(
-            {
-              customType: ROLE_SWITCH_CONTINUATION_TYPE,
-              content: `已完成从${roleLabel(transition.fromRole)}到${roleLabel(transition.toRole)}的自动角色切换和上下文压缩。请继续当前任务。`,
-              display: false,
-              details: transition,
-            },
-            { triggerTurn: true },
-          );
-        } catch (error) {
-          ctx.ui.notify(`上下文压缩已完成，但无法自动继续：${textOf(error)}`, "warning");
-        }
+        continueAfterTransition();
       },
       onError: (error) => {
         roleCompactionInFlight = false;
         ctx.ui.setStatus("pi-init-compaction", undefined);
-        ctx.ui.notify(`角色切换后的上下文压缩失败：${error.message}`, "warning");
+        continueAfterTransition(`角色切换后的上下文压缩失败，仍将继续当前任务：${error.message}`);
       },
     });
   }
@@ -717,10 +799,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         contextUsage: ctx.getContextUsage(),
       });
       const result = await applyRole(role, ctx);
-      if (compactAfterSwitch && previousRole) {
-        pendingRoleCompaction = { fromRole: previousRole, toRole: result.role };
-      }
-      return { mode, requestedRole: role, result };
+      const transition = compactAfterSwitch && previousRole
+        ? { fromRole: previousRole, toRole: result.role }
+        : undefined;
+      if (transition) pendingRoleCompaction = transition;
+      return { mode, requestedRole: role, result, transition };
     }
     if (mode === "manual") {
       return { mode, requestedRole: role, result: currentRole(role, ctx) };
@@ -761,6 +844,276 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       };
     }
     throw new Error("已取消角色切换");
+  }
+
+  function updateWorkflowStatus(ctx: ExtensionContext) {
+    if (!workflowState || ["completed", "cancelled"].includes(workflowState.status)) {
+      ctx.ui.setStatus("pi-init-workflow", undefined);
+      return;
+    }
+
+    const progress = workflowProgress(workflowState);
+    const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
+    const stateText = workflowState.status === "paused" ? "暂停" : `${progress.completed}/${progress.total}`;
+    ctx.ui.setStatus("pi-init-workflow", `● 工作流 · ${stateText}${current}`);
+  }
+
+  function persistWorkflowState(next: ReturnType<typeof createWorkflowState>, ctx: ExtensionContext) {
+    workflowState = next;
+    pi.appendEntry("pi-init-workflow", next);
+    updateWorkflowStatus(ctx);
+    return next;
+  }
+
+  function formatWorkflowState(state = workflowState) {
+    if (!state) return "当前没有活动工作流。";
+    const progress = workflowProgress(state);
+    const lines = [
+      `状态：${state.status}`,
+      `进度：${progress.completed}/${progress.total}`,
+      `规划：${state.plan.summary}`,
+    ];
+    if (state.currentTaskId) lines.push(`当前任务：${state.currentTaskId}`);
+    if (state.pauseReason) lines.push(`暂停原因：${state.pauseReason}${state.taskPauseReason ? ` · ${state.taskPauseReason}` : ""}`);
+    lines.push(
+      ...state.tasks.map((task) =>
+        `- [${task.status}] ${task.id} · ${task.role} · ${task.task}` +
+        (task.completionSummary ? ` · ${task.completionSummary}` : ""),
+      ),
+    );
+    return lines.join("\n");
+  }
+
+  function workflowTaskPrompt(state: ReturnType<typeof createWorkflowState>, taskId: string, note?: string) {
+    const task = getWorkflowTask(state, taskId);
+    if (!task) throw new Error(`工作流任务不存在：${taskId}`);
+    const completed = state.tasks
+      .filter((item) => item.status === "completed")
+      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}`);
+
+    return [
+      "[PI-INIT 自动任务工作流]",
+      `工作流目标：${state.plan.summary}`,
+      state.plan.constraints.length > 0 ? `架构约束：\n${state.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
+      completed.length > 0 ? `已完成任务：\n${completed.join("\n")}` : "",
+      `当前任务（${task.id}，角色 ${task.role}）：${task.task}`,
+      `允许涉及的文件或目录：${task.files.join(", ")}`,
+      `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
+      note ? `调度提示：${note}` : "",
+      "除非遇到真正阻塞的需求、权限、凭据、破坏性操作或必须由用户决定的产品取舍，不要询问用户；做合理假设并记录。",
+      `完成并实际验证后，必须调用 task_workflow(action=\"complete\", taskId=\"${task.id}\", completionSummary=..., verification=[...])。verification 只能填写实际执行过的命令和真实结果。若无法继续，调用 task_workflow(action=\"block\", taskId=\"${task.id}\", reason=...)，不要伪造完成。`,
+    ].filter(Boolean).join("\n\n");
+  }
+
+  function sendWorkflowTaskMessage(ctx: ExtensionContext, taskId: string, note?: string) {
+    if (!workflowState || workflowState.currentTaskId !== taskId) return;
+    workflowDispatchInFlight = false;
+    try {
+      pi.sendMessage(
+        {
+          customType: "pi-init-workflow-task",
+          content: workflowTaskPrompt(workflowState, taskId, note),
+          display: false,
+          details: { taskId },
+        },
+        { triggerTurn: true },
+      );
+    } catch (error) {
+      ctx.ui.notify(`无法自动进入任务 ${taskId}：${textOf(error)}`, "error");
+    }
+  }
+
+  function restoreWorkflowState(ctx: ExtensionContext) {
+    const entry = [...ctx.sessionManager.getBranch()]
+      .reverse()
+      .find((item) => item.type === "custom" && item.customType === "pi-init-workflow");
+    const data = entry && "data" in entry ? entry.data : undefined;
+    workflowState = data && typeof data === "object" && Array.isArray((data as { tasks?: unknown }).tasks)
+      ? data as ReturnType<typeof createWorkflowState>
+      : undefined;
+    updateWorkflowStatus(ctx);
+  }
+
+  async function scheduleWorkflow(ctx: ExtensionContext) {
+    if (
+      workflowDispatchInFlight ||
+      roleCompactionInFlight ||
+      pendingRoleCompaction ||
+      !workflowState ||
+      !isWorkflowActive(workflowState)
+    ) {
+      return;
+    }
+
+    if (workflowState.currentTaskId) {
+      const nudged = recordWorkflowNudge(workflowState);
+      if (nudged === workflowState) return;
+      persistWorkflowState(nudged, ctx);
+      if (nudged.status === "paused") {
+        ctx.ui.notify(
+          `工作流已暂停：任务未提交 complete/block。请检查当前任务后使用 /pi-init workflow retry 或重新规划。`,
+          "warning",
+        );
+        return;
+      }
+      sendWorkflowTaskMessage(ctx, nudged.currentTaskId!, `上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow。`);
+      return;
+    }
+
+    const next = getNextWorkflowTask(workflowState);
+    if (!next) return;
+
+    workflowDispatchInFlight = true;
+    persistWorkflowState(startWorkflowTask(workflowState, next.id), ctx);
+    try {
+      const selection = await automaticRole(next.role, ctx);
+      if (selection.result.role !== next.role) {
+        const paused = blockWorkflowTask(workflowState, {
+          taskId: next.id,
+          reason: `角色模式选择了 ${selection.result.role}，而任务要求 ${next.role}`,
+        });
+        persistWorkflowState(paused, ctx);
+        workflowDispatchInFlight = false;
+        ctx.ui.notify(`任务 ${next.id} 已暂停：未能应用要求的角色 ${roleLabel(next.role)}。`, "warning");
+        return;
+      }
+
+      if (selection.transition && pendingRoleCompaction) {
+        pendingRoleCompaction.continuation = { kind: "workflow-task", taskId: next.id };
+        startPendingRoleCompaction(ctx);
+        return;
+      }
+      sendWorkflowTaskMessage(ctx, next.id);
+    } catch (error) {
+      const paused = blockWorkflowTask(workflowState, {
+        taskId: next.id,
+        reason: `无法切换到 ${roleLabel(next.role)}：${textOf(error)}`,
+      });
+      persistWorkflowState(paused, ctx);
+      workflowDispatchInFlight = false;
+      ctx.ui.notify(`工作流已暂停：${textOf(error)}`, "error");
+    }
+  }
+
+  async function workflowCommand(action: string | undefined, taskId: string | undefined, ctx: ExtensionCommandContext) {
+    if (action === undefined || action === "status") {
+      ctx.ui.notify(formatWorkflowState(), "info");
+      return;
+    }
+    if (!workflowState) {
+      ctx.ui.notify("当前没有工作流。请先让架构角色调用 task_workflow(action=plan)。", "warning");
+      return;
+    }
+
+    try {
+      if (action === "resume") {
+        persistWorkflowState(resumeWorkflow(workflowState), ctx);
+        await scheduleWorkflow(ctx);
+        return;
+      }
+      if (action === "retry") {
+        persistWorkflowState(retryWorkflowTask(workflowState, taskId), ctx);
+        await scheduleWorkflow(ctx);
+        return;
+      }
+      if (action === "cancel") {
+        persistWorkflowState(cancelWorkflow(workflowState), ctx);
+        ctx.ui.notify("工作流已取消。", "info");
+        return;
+      }
+      ctx.ui.notify("用法：/pi-init workflow [status|resume|retry <taskId>|cancel]", "error");
+    } catch (error) {
+      ctx.ui.notify(textOf(error), "error");
+    }
+  }
+
+  async function runTaskWorkflowAction(params: any, signal: AbortSignal | undefined, ctx: ExtensionContext) {
+    if (signal?.aborted) {
+      return { content: [{ type: "text", text: "工作流操作已取消。" }], details: {} };
+    }
+    if (params.action !== "status" && !ctx.isProjectTrusted()) {
+      throw new Error("task_workflow 仅允许在受信任项目中运行；请先信任当前项目");
+    }
+
+    switch (params.action) {
+      case "plan": {
+        if (activeRoleFor(ctx)?.role !== "architect") {
+          throw new Error("只有架构角色可以创建工作流；请先调用 switch_role(role=architect)");
+        }
+        if (workflowState && ["running", "paused"].includes(workflowState.status)) {
+          throw new Error("当前已有未结束的工作流，请先完成、取消或处理它");
+        }
+
+        const next = createWorkflowState({
+          summary: params.summary,
+          constraints: params.constraints,
+          tasks: params.tasks,
+          reviewRequired: params.reviewRequired,
+        });
+        persistWorkflowState(next, ctx);
+        if (next.status === "paused") {
+          ctx.ui.notify("架构规划已保存，等待用户审阅。审阅后执行 /pi-init workflow resume。", "info");
+          if (pendingRoleCompaction) pendingRoleCompaction.continuation = { kind: "workflow-review" };
+        } else if (pendingRoleCompaction) {
+          pendingRoleCompaction.continuation = { kind: "workflow-schedule" };
+        }
+        return {
+          content: [{ type: "text", text: `已保存架构规划。\n${formatWorkflowState(next)}${next.status === "paused" ? "\n\n当前按用户要求暂停，审阅后再执行。" : "\n\n将自动切换到第一个任务。"}` }],
+          details: next,
+          terminate: true,
+        };
+      }
+      case "status":
+        return { content: [{ type: "text", text: formatWorkflowState() }], details: workflowState ?? {} };
+      case "complete": {
+        if (!workflowState) throw new Error("当前没有活动工作流");
+        const taskId = params.taskId ?? workflowState.currentTaskId;
+        const task = getWorkflowTask(workflowState, taskId);
+        if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
+        if (activeRoleFor(ctx)?.role !== task.role) {
+          throw new Error(`任务 ${task.id} 要求角色 ${task.role}，当前角色不匹配；请先调用 switch_role`);
+        }
+        const next = completeWorkflowTask(workflowState, {
+          taskId,
+          completionSummary: params.completionSummary,
+          verification: params.verification,
+        });
+        persistWorkflowState(next, ctx);
+        return {
+          content: [{ type: "text", text: next.status === "completed" ? `工作流已完成。\n${formatWorkflowState(next)}` : `任务 ${task.id} 已完成，下一任务将自动开始。\n${formatWorkflowState(next)}` }],
+          details: next,
+          terminate: true,
+        };
+      }
+      case "block": {
+        if (!workflowState) throw new Error("当前没有活动工作流");
+        const taskId = params.taskId ?? workflowState.currentTaskId;
+        const next = blockWorkflowTask(workflowState, { taskId, reason: params.reason });
+        persistWorkflowState(next, ctx);
+        ctx.ui.notify(`工作流已暂停：任务 ${taskId} 被标记为阻塞。`, "warning");
+        return { content: [{ type: "text", text: formatWorkflowState(next) }], details: next, terminate: true };
+      }
+      case "resume": {
+        if (!workflowState) throw new Error("当前没有活动工作流");
+        const next = resumeWorkflow(workflowState);
+        persistWorkflowState(next, ctx);
+        return { content: [{ type: "text", text: "工作流已恢复，下一任务将自动开始。" }], details: next, terminate: true };
+      }
+      case "retry": {
+        if (!workflowState) throw new Error("当前没有活动工作流");
+        const next = retryWorkflowTask(workflowState, params.taskId);
+        persistWorkflowState(next, ctx);
+        return { content: [{ type: "text", text: `任务 ${params.taskId ?? ""} 已重新排队，工作流将自动继续。` }], details: next, terminate: true };
+      }
+      case "cancel": {
+        if (!workflowState) throw new Error("当前没有活动工作流");
+        const next = cancelWorkflow(workflowState);
+        persistWorkflowState(next, ctx);
+        return { content: [{ type: "text", text: "工作流已取消。" }], details: next, terminate: true };
+      }
+      default:
+        throw new Error(`未知工作流动作：${params.action}`);
+    }
   }
 
   async function setSessionMode(requested: string | undefined, ctx: ExtensionCommandContext) {
@@ -909,6 +1262,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           : "角色  尚未切换（按任务自动选择）",
         `模型  ${currentModel}`,
       ];
+      if (workflowState && !["completed", "cancelled"].includes(workflowState.status)) {
+        const progress = workflowProgress(workflowState);
+        const workflowLabel = progress.currentTaskId ?? (workflowState.status === "paused" ? "暂停" : "待调度");
+        summary.push(`工作流  ${progress.completed}/${progress.total} · ${workflowLabel}`);
+      }
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
       const action = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
@@ -916,6 +1274,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或修改三个角色的模型配置" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
+        { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
       ], { summary });
       if (!action || action === "exit") return;
@@ -932,11 +1291,15 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
       }
+      if (action === "workflow") {
+        await workflowCommand("status", undefined, ctx);
+      }
     }
   }
 
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", async (_event, ctx) => {
     startPendingRoleCompaction(ctx);
+    await scheduleWorkflow(ctx);
   });
 
   pi.on("session_start", async (_event, ctx) => {
@@ -951,10 +1314,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             thinkingLevel: pi.getThinkingLevel(),
           }
         : undefined;
+      restoreWorkflowState(ctx);
       setRoleStatus(ctx, sessionModeOverride ?? config.mode);
+      await scheduleWorkflow(ctx);
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
     }
+  });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    restoreWorkflowState(ctx);
   });
 
   pi.registerCommand("pi-init", {
@@ -962,12 +1331,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "config", "role", "mode"];
+        const values = ["init", "advanced", "config", "role", "mode", "workflow"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
       const action = tokens[0];
-      const values = action === "role" || action === "config" ? ROLE_NAMES : action === "mode" ? ROLE_MODES : [];
+      const values = action === "role" || action === "config"
+        ? ROLE_NAMES
+        : action === "mode"
+          ? ROLE_MODES
+          : action === "workflow"
+            ? ["status", "resume", "retry", "cancel"]
+            : [];
       const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
       const matches = values.filter((value) => value.startsWith(partial));
       return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
@@ -982,7 +1357,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (action === "config") return configureRole(tokens[0], ctx);
         if (action === "role") return switchRole(tokens[0], ctx);
         if (action === "mode") return setSessionMode(tokens[0], ctx);
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|role|mode] [参数]", "error");
+        if (action === "workflow") return workflowCommand(tokens.shift(), tokens.shift(), ctx);
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|role|mode|workflow] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");
       }
@@ -1046,6 +1422,45 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text }],
         details: result,
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "task_workflow",
+    label: "Task Workflow",
+    description:
+      `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect creates an ordered plan, Development and Test Engineers complete one task at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
+    promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
+    promptGuidelines: [
+      "Use task_workflow action=plan only after the Architect has inspected the repository and frozen the plan, constraints, files, dependencies, and acceptance criteria.",
+      "Set reviewRequired=true only when the user's initial request explicitly asks to inspect the architecture before implementation; otherwise leave it false so the workflow advances automatically without asking for choices.",
+      "Use task_workflow action=complete only after the current task is actually implemented and verified; include real commands and results in verification.",
+      "Use task_workflow action=block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures; do not mark an uncertain task complete.",
+      "When a task completes, the workflow automatically switches to its assigned role and starts the next ready task. Do not ask the user to choose the next task.",
+    ],
+    parameters: taskWorkflowParameters,
+    renderCall(args, theme) {
+      const action = typeof args.action === "string" ? args.action : "...";
+      const taskCount = Array.isArray(args.tasks) ? ` · ${args.tasks.length} 个任务` : "";
+      return new Text(theme.fg("toolTitle", theme.bold("工作流 ")) + theme.fg("muted", `${action}${taskCount}`), 0, 0);
+    },
+    renderResult(result, { expanded }, theme) {
+      if (result.isError) return new Text(theme.fg("error", "工作流操作失败"), 0, 0);
+      const details = result.details as ReturnType<typeof createWorkflowState> | undefined;
+      if (!details || !Array.isArray(details.tasks)) {
+        const text = result.content[0];
+        return new Text(text?.type === "text" ? text.text : "工作流已更新", 0, 0);
+      }
+      const progress = workflowProgress(details);
+      const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";
+      let text = theme.fg("success", "✓ ") + theme.fg("accent", `工作流 ${progress.completed}/${progress.total}`) + theme.fg("muted", current);
+      if (details.status === "paused") text += theme.fg("warning", " · 已暂停");
+      if (expanded) text += `\n${details.tasks.map((task) => `  [${task.status}] ${task.id} · ${task.task}`).join("\n")}`;
+      return new Text(text, 0, 0);
+    },
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      return runTaskWorkflowAction(params, signal, ctx);
     },
   });
 
