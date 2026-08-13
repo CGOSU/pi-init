@@ -14,6 +14,18 @@
 
 ## 会话
 
+### 2026-08-13：展示按模型统计的平均 token 速度
+
+- 后续修正：发现 `done` assistant stream event 发生在扩展的 `message_end` 之前，而 Pi 会在 `message_end` 后才持久化最终消息；改为在 assistant `message_start` 开始计时、`message_end` 使用最终 provider usage 立即写样本，`agent_end` 仅作兼容兜底并防重复。
+- 后续修正：为 TypeScript 扩展内部导入补充 `.ts` 扩展名和 `allowImportingTsExtensions`，确保 Pi 运行时与 `tsc` 的模块解析一致。
+
+- 完成内容：`pi-token-speed` 在 assistant `message_end` 时写入不进入上下文的 `pi-token-speed` 自定义 session entry，保存 provider/model、provider 输出 token 和排除 prompt-processing tool 时间后的有效生成时长；避免 `message_update` 的 done/error 与 `agent_end` 重复记录。
+- 完成内容：`pi-usage` 新增 `speed_events` DuckDB 表和 schema 版本迁移，按模型显示加权 `Avg TPS`，Total 行也显示整体加权速度；无历史采样的模型显示 `--`。
+- 完成内容：补充 `pi-token-speed` 引擎测试和 `pi-usage` 集成测试，更新两个项目 README。
+- 验证：`pi-token-speed` 执行 `npm test`，4 项通过；`npx tsc -p tsconfig.json --pretty false` 通过；RPC 扩展加载检查通过。
+- 验证：`pi-init` 执行 `node --check scripts/pi-usage.js`、`node --test --test-concurrency=1`，28 项通过；并运行 `git diff --check`。
+- 遗留问题：`pi-init` 默认并发 `npm test` 的 Windows CLI 启动测试仍有环境相关偶发失败；串行测试通过。未提交或推送。
+
 ### 2026-08-10：优化 pi-usage 模型用量展示
 
 - 完成内容：移除 Git changes 的扫描、数据库汇总和报告展示；增加按模型总 token 缩放的 Unicode 柱状图。

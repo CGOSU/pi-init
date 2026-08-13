@@ -12,6 +12,8 @@ const ACTIVE_GAP_MS = 5 * 60 * 1000;
 const MODEL_WAIT_GAP_MS = 30 * 60 * 1000;
 const AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 const MODEL_BAR_WIDTH = 24;
+const TOKEN_SPEED_CUSTOM_TYPE = "pi-token-speed";
+const USAGE_SCHEMA_VERSION = 2;
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -76,6 +78,7 @@ function usageForEntry(entry) {
 }
 
 function parseActivityEvent(entry, sourceFile, lineNumber, cwd) {
+  if (entry.type === "custom" && entry.customType === TOKEN_SPEED_CUSTOM_TYPE) return undefined;
   const date = entryDate(entry);
   if (!date) return undefined;
   const message = entry.message;
@@ -114,7 +117,39 @@ function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
   };
 }
 
-function scanFile(file, events, activityEvents) {
+function parseSpeedEvent(entry, sourceFile, lineNumber, cwd) {
+  if (entry.type !== "custom" || entry.customType !== TOKEN_SPEED_CUSTOM_TYPE) return undefined;
+  const date = entryDate(entry);
+  const data = entry.data;
+  if (!date || !data || typeof data !== "object") return undefined;
+  const provider = typeof data.provider === "string" ? data.provider.trim() : "";
+  const model = typeof data.model === "string" ? data.model.trim() : "";
+  const outputTokens = Number(data.outputTokens);
+  const elapsedMs = Number(data.elapsedMs);
+  if (
+    data.version !== 1 ||
+    !provider ||
+    !model ||
+    !Number.isFinite(outputTokens) ||
+    outputTokens <= 0 ||
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    sourceFile,
+    entryKey: String(lineNumber),
+    eventTimestamp: date.toISOString(),
+    eventDate: localDateString(date),
+    model: `${provider}/${model}`,
+    outputTokens,
+    generationSeconds: elapsedMs / 1000,
+    cwd,
+  };
+}
+
+function scanFile(file, events, activityEvents, speedEvents) {
   let cwd = "";
   const lines = readFileSync(file, "utf8").split(/\r?\n/);
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
@@ -133,6 +168,8 @@ function scanFile(file, events, activityEvents) {
     if (activityEvent) activityEvents.push(activityEvent);
     const event = parseUsageEvent(entry, file, lineNumber, cwd);
     if (event) events.push(event);
+    const speedEvent = parseSpeedEvent(entry, file, lineNumber, cwd);
+    if (speedEvent) speedEvents.push(speedEvent);
   }
 }
 
@@ -304,17 +341,38 @@ async function initializeDatabase(connection) {
       PRIMARY KEY (report_date, scope, model)
     )
   `);
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS speed_events (
+      source_file VARCHAR,
+      entry_key VARCHAR,
+      event_timestamp VARCHAR,
+      event_date VARCHAR,
+      model VARCHAR,
+      output_tokens DOUBLE,
+      generation_seconds DOUBLE,
+      cwd VARCHAR,
+      PRIMARY KEY (source_file, entry_key)
+    )
+  `);
+  await connection.run(`
+    CREATE TABLE IF NOT EXISTS usage_schema (
+      schema_key VARCHAR PRIMARY KEY,
+      schema_version INTEGER
+    )
+  `);
 }
 
 function scanSessionFile(file) {
   const events = [];
   const activityEvents = [];
-  scanFile(file, events, activityEvents);
+  const speedEvents = [];
+  scanFile(file, events, activityEvents, speedEvents);
   const metadata = statSync(file);
   return {
     metadata: { sourceFile: file, fileSize: metadata.size, modifiedMs: metadata.mtimeMs },
     events,
     activityEvents,
+    speedEvents,
   };
 }
 
@@ -328,12 +386,26 @@ async function readUsageState(connection) {
     : undefined;
 }
 
+async function readUsageSchemaVersion(connection) {
+  const reader = await connection.runAndReadAll(
+    "SELECT schema_version FROM usage_schema WHERE schema_key = 'usage'",
+  );
+  const row = reader.getRowObjects()[0];
+  return row ? numberValue(row.schema_version) : undefined;
+}
+
 async function markUsageChecked(connection, now = new Date()) {
   await connection.run(
     `
       INSERT OR REPLACE INTO usage_state VALUES ('refresh', $checked_ms, $checked_date)
     `,
     { checked_ms: now.getTime(), checked_date: localDateString(now) },
+  );
+  await connection.run(
+    `
+      INSERT OR REPLACE INTO usage_schema VALUES ('usage', $schema_version)
+    `,
+    { schema_version: USAGE_SCHEMA_VERSION },
   );
 }
 
@@ -343,13 +415,15 @@ async function readEventDates(connection, sourceFile) {
       SELECT event_date FROM usage_events WHERE source_file = $source_file
       UNION
       SELECT event_date FROM activity_events WHERE source_file = $source_file
+      UNION
+      SELECT event_date FROM speed_events WHERE source_file = $source_file
     `,
     { source_file: sourceFile },
   );
   return reader.getRowObjects().map((row) => row.event_date).filter(Boolean);
 }
 
-async function refreshSessionFiles(connection, sessionsDirectory) {
+async function refreshSessionFiles(connection, sessionsDirectory, forceRefresh = false) {
   const storedReader = await connection.runAndReadAll("SELECT source_file, file_size, modified_ms FROM session_files");
   const stored = new Map(
     storedReader.getRowObjects().map((row) => [
@@ -363,12 +437,26 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
   for (const file of files) {
     const metadata = statSync(file);
     const previous = stored.get(file);
-    if (previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs) continue;
+    if (
+      !forceRefresh &&
+      previous &&
+      previous.fileSize === metadata.size &&
+      previous.modifiedMs === metadata.mtimeMs
+    ) {
+      continue;
+    }
     for (const date of await readEventDates(connection, file)) affectedDates.add(date);
     const parsed = scanSessionFile(file);
-    for (const event of [...parsed.events, ...parsed.activityEvents]) affectedDates.add(event.eventDate);
+    for (const event of [
+      ...parsed.events,
+      ...parsed.activityEvents,
+      ...parsed.speedEvents,
+    ]) {
+      affectedDates.add(event.eventDate);
+    }
     await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
     await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
+    await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: file });
     for (const event of parsed.events) {
       await connection.run(
         `
@@ -413,6 +501,26 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
         },
       );
     }
+    for (const event of parsed.speedEvents) {
+      await connection.run(
+        `
+          INSERT INTO speed_events VALUES (
+            $source_file, $entry_key, $event_timestamp, $event_date,
+            $model, $output_tokens, $generation_seconds, $cwd
+          )
+        `,
+        {
+          source_file: event.sourceFile,
+          entry_key: event.entryKey,
+          event_timestamp: event.eventTimestamp,
+          event_date: event.eventDate,
+          model: event.model,
+          output_tokens: event.outputTokens,
+          generation_seconds: event.generationSeconds,
+          cwd: event.cwd,
+        },
+      );
+    }
     await connection.run(
       `INSERT OR REPLACE INTO session_files VALUES ($source_file, $file_size, $modified_ms)`,
       {
@@ -427,6 +535,7 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
     for (const date of await readEventDates(connection, sourceFile)) affectedDates.add(date);
     await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: sourceFile });
     await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: sourceFile });
+    await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: sourceFile });
     await connection.run("DELETE FROM session_files WHERE source_file = $source_file", { source_file: sourceFile });
   }
   return { affectedDates };
@@ -472,6 +581,11 @@ function numberValue(value) {
   return Number(value) || 0;
 }
 
+function averageTps(speed) {
+  if (!speed || speed.outputTokens <= 0 || speed.generationSeconds <= 0) return null;
+  return speed.outputTokens / speed.generationSeconds;
+}
+
 async function readActivityEvents(connection, range) {
   const reader = await connection.runAndReadAll(
     `
@@ -515,6 +629,17 @@ async function readSummary(connection, range) {
     `,
     { date: range.date },
   );
+  const speedReader = await connection.runAndReadAll(
+    `
+      SELECT model,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(generation_seconds), 0) AS generation_seconds
+      FROM speed_events
+      WHERE event_date = $date
+      GROUP BY model
+    `,
+    { date: range.date },
+  );
   const sessionsReader = await connection.runAndReadAll(
     "SELECT COUNT(DISTINCT source_file) AS sessions FROM usage_events WHERE event_date = $date",
     { date: range.date },
@@ -522,6 +647,15 @@ async function readSummary(connection, range) {
   const durationReader = await connection.runAndReadAll(
     "SELECT * FROM duration_summaries WHERE report_date = $date AND scope = 'overall'",
     { date: range.date },
+  );
+  const speedByModel = new Map(
+    speedReader.getRowObjects().map((row) => [
+      row.model,
+      {
+        outputTokens: numberValue(row.output_tokens),
+        generationSeconds: numberValue(row.generation_seconds),
+      },
+    ]),
   );
   const rows = rowsReader.getRowObjects().map((row) => ({
     model: row.model,
@@ -532,7 +666,15 @@ async function readSummary(connection, range) {
     cacheWrite: numberValue(row.cacheWrite),
     tokens: numberValue(row.tokens),
     cost: numberValue(row.cost),
+    avgTps: averageTps(speedByModel.get(row.model)),
   }));
+  const speed = [...speedByModel.values()].reduce(
+    (total, value) => ({
+      outputTokens: total.outputTokens + value.outputTokens,
+      generationSeconds: total.generationSeconds + value.generationSeconds,
+    }),
+    { outputTokens: 0, generationSeconds: 0 },
+  );
   const durationRow = durationReader.getRowObjects()[0];
   const duration = {
     sessions: numberValue(durationRow?.sessions),
@@ -544,6 +686,7 @@ async function readSummary(connection, range) {
     date: range.date,
     sessions: numberValue(sessionsReader.getRowObjects()[0]?.sessions),
     rows,
+    speed: { ...speed, avgTps: averageTps(speed) },
     duration,
   };
 }
@@ -568,7 +711,12 @@ async function withDatabase(databasePath, runtimeDirectory, callback) {
 }
 
 async function refreshUsage(connection, sessionsDirectory, range) {
-  const { affectedDates } = await refreshSessionFiles(connection, sessionsDirectory);
+  const schemaVersion = await readUsageSchemaVersion(connection);
+  const { affectedDates } = await refreshSessionFiles(
+    connection,
+    sessionsDirectory,
+    schemaVersion !== USAGE_SCHEMA_VERSION,
+  );
   const dates = new Set([range.date, ...affectedDates]);
   for (const date of dates) {
     await refreshDerivedSummaries(connection, dateRange(date));
@@ -598,7 +746,11 @@ export async function queryUsage(
   const range = dateRange(date);
   return withDatabase(databasePath, runtimeDirectory, async (connection) => {
     const state = await readUsageState(connection);
-    if (sessionsDirectory && shouldRefreshUsage(state)) {
+    const schemaVersion = await readUsageSchemaVersion(connection);
+    if (
+      sessionsDirectory &&
+      (schemaVersion !== USAGE_SCHEMA_VERSION || shouldRefreshUsage(state))
+    ) {
       await refreshUsage(connection, sessionsDirectory, range);
     }
     return readSummary(connection, range);
@@ -611,6 +763,12 @@ function formatNumber(value) {
 
 function formatCost(value) {
   return `$${value.toFixed(4)}`;
+}
+
+function formatTps(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value.toFixed(1)
+    : "--";
 }
 
 function formatDuration(seconds) {
@@ -708,8 +866,9 @@ function formatUsageTable(rows, color) {
       formatNumber(row.cacheWrite),
       formatNumber(row.tokens),
       formatCost(row.cost),
+      formatTps(row.avgTps),
     ]),
-    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cost"],
+    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cost", "Avg TPS"],
     [],
     { color, highlightLast: true },
   );
@@ -751,8 +910,12 @@ export function formatReport(summary, options = {}) {
     for (const field of ["calls", ...FIELDS, "tokens", "cost"]) result[field] += row[field];
     return result;
   }, emptyUsage());
+  const totalSpeed = summary.speed ?? { outputTokens: 0, generationSeconds: 0 };
   const usage = summary.rows.length
-    ? formatUsageTable([...summary.rows, { model: "Total", ...total }], color)
+    ? formatUsageTable(
+        [...summary.rows, { model: "Total", ...total, avgTps: averageTps(totalSpeed) }],
+        color,
+      )
     : "No usage recorded. Run `pi-usage --update` to import session JSONL.";
   const duration = summary.duration ?? {
     activeSeconds: 0,

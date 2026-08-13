@@ -213,6 +213,68 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
   });
 });
 
+test("pi-usage 按模型汇总加权平均 token 速度", async () => {
+  await withTempDirectory(async (directory) => {
+    const sessions = path.join(directory, "sessions");
+    const start = new Date();
+    start.setHours(12, 0, 0, 0);
+    const date = start.toLocaleDateString("sv-SE");
+    const usage = (output) => ({
+      input: 1,
+      output,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: { total: 0 },
+    });
+    const assistant = (timestamp, provider, model, output) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: timestamp.toISOString(),
+        message: { role: "assistant", provider, model, usage: usage(output) },
+      });
+    const speed = (timestamp, provider, model, outputTokens, elapsedMs) =>
+      JSON.stringify({
+        type: "custom",
+        timestamp: timestamp.toISOString(),
+        customType: "pi-token-speed",
+        data: { version: 1, provider, model, outputTokens, elapsedMs },
+      });
+    const firstModelStart = new Date(start);
+    const secondModelStart = new Date(start.getTime() + 60_000);
+    const otherModelStart = new Date(start.getTime() + 120_000);
+    await mkdir(path.join(sessions, "project"), { recursive: true });
+    await writeFile(
+      path.join(sessions, "project", "speed.jsonl"),
+      [
+        JSON.stringify({ type: "session", cwd: process.cwd() }),
+        assistant(firstModelStart, "provider-a", "model-a", 100),
+        speed(new Date(firstModelStart.getTime() + 10_000), "provider-a", "model-a", 100, 10_000),
+        assistant(secondModelStart, "provider-a", "model-a", 10),
+        speed(new Date(secondModelStart.getTime() + 2_000), "provider-a", "model-a", 10, 2_000),
+        assistant(otherModelStart, "provider-b", "model-b", 20),
+        speed(new Date(otherModelStart.getTime() + 2_000), "provider-b", "model-b", 20, 2_000),
+        speed(new Date(otherModelStart.getTime() + 3_000), "provider-c", "invalid", 0, 1_000),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const summary = await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
+    const modelA = summary.rows.find((row) => row.model === "provider-a/model-a");
+    const modelB = summary.rows.find((row) => row.model === "provider-b/model-b");
+    assert.ok(modelA);
+    assert.ok(modelB);
+    assert.ok(Math.abs(modelA.avgTps - 110 / 12) < 0.000001);
+    assert.equal(modelB.avgTps, 10);
+    assert.equal(summary.rows.find((row) => row.model === "provider-c/invalid"), undefined);
+    assert.ok(Math.abs(summary.speed.avgTps - 130 / 14) < 0.000001);
+
+    const report = formatReport(summary);
+    assert.match(report, /Avg TPS/);
+    assert.match(report, /9\.2/);
+    assert.match(report, /10\.0/);
+  });
+});
+
 test("生成默认文件结构和动态 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "example-app");
