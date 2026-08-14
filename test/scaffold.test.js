@@ -220,6 +220,38 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
   });
 });
 
+test("pi-usage 柱状图使用分数块区分接近的 token 数", () => {
+  const report = formatReport({
+    date: "2026-08-10",
+    sessions: 2,
+    rows: [
+      {
+        model: "model-large",
+        calls: 1,
+        input: 0,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        tokens: 100,
+        cost: 0,
+      },
+      {
+        model: "model-close",
+        calls: 1,
+        input: 0,
+        output: 99,
+        cacheRead: 0,
+        cacheWrite: 0,
+        tokens: 99,
+        cost: 0,
+      },
+    ],
+  });
+
+  assert.match(report, /model-large\s+█{24}\s+100/);
+  assert.match(report, /model-close\s+█{23}▊\s+99/);
+});
+
 test("pi-usage 按模型汇总加权平均 token 速度", async () => {
   await withTempDirectory(async (directory) => {
     const sessions = path.join(directory, "sessions");

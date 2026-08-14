@@ -13,6 +13,13 @@
 - 验证：`bash -n scripts/*.sh`、`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`git diff --check` 通过；`npm test` 26/27 通过，现有 Windows Pi CLI 启动测试偶发失败。
 - 遗留问题：无。
 
+### 2026-08-14：提高 pi-usage 柱状图对接近数值的辨识度
+
+- 完成内容：模型 token 柱状图从整格四舍五入改为支持 Unicode 八分之一分数块；接近但不同的 token 数会显示不同的柱长，保留数字标签和最大值满格行为。
+- 完成内容：增加回归测试，覆盖 100 与 99 token 不再渲染为相同柱状图。
+- 验证：`node --test --test-name-pattern='柱状图使用分数块' test/scaffold.test.js` 通过；`node --check scripts/pi-usage.js`、`git diff --check` 和 `npm test`（25 项通过）通过。
+- 遗留问题：未提交或推送。
+
 本文件按时间追加每次工作的完成内容、实际验证和遗留问题，不记录敏感信息或未经验证的结果。
 
 ### 2026-08-14：增加 task_workflow 全局开关

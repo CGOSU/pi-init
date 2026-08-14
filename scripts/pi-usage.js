@@ -12,6 +12,8 @@ const ACTIVE_GAP_MS = 5 * 60 * 1000;
 const MODEL_WAIT_GAP_MS = 30 * 60 * 1000;
 const AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 const MODEL_BAR_WIDTH = 24;
+const MODEL_BAR_SEGMENTS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+const MODEL_BAR_RESOLUTION = MODEL_BAR_SEGMENTS.length - 1;
 const TOKEN_SPEED_CUSTOM_TYPE = "pi-token-speed";
 const USAGE_SCHEMA_VERSION = 2;
 
@@ -928,11 +930,16 @@ function formatModelUsageChart(rows, color) {
   const maxTokens = Math.max(...chartRows.map((row) => row.tokens));
   return chartRows
     .map((row) => {
-      const barLength =
+      const barUnits =
         maxTokens > 0 && row.tokens > 0
-          ? Math.max(1, Math.round((row.tokens / maxTokens) * MODEL_BAR_WIDTH))
+          ? Math.max(
+              1,
+              Math.round((row.tokens / maxTokens) * MODEL_BAR_WIDTH * MODEL_BAR_RESOLUTION),
+            )
           : 0;
-      const bar = "█".repeat(barLength).padEnd(MODEL_BAR_WIDTH);
+      const fullBlocks = Math.floor(barUnits / MODEL_BAR_RESOLUTION);
+      const partialBlock = MODEL_BAR_SEGMENTS[barUnits % MODEL_BAR_RESOLUTION];
+      const bar = `${"█".repeat(fullBlocks)}${partialBlock}`.padEnd(MODEL_BAR_WIDTH);
       return `${row.model.padEnd(labelWidth)} ${paint(bar, "34", color)} ${formatNumber(row.tokens)}`;
     })
     .join("\n");
