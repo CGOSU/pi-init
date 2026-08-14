@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-14：任务完成时输出基于状态机时间戳的完成报告
+
+- 决定：每个工作流任务进入 `in_progress` 时记录 `startedAt`，完成时记录 `completedAt`；本地完成和 subagents 完成路径都输出统一的任务完成报告，包含任务信息、角色、时间、总耗时、摘要和验证结果。
+- 原因：用户需要在任务结束时直接了解交付内容和实际耗时，统一 formatter 可避免不同执行器的输出字段漂移。
+- 约束：总耗时只使用任务自身的 `startedAt` 和 `completedAt` 计算；旧状态缺少开始时间时必须显示不可用，不得用工作流创建时间或子代理生命周期时间伪造。
+
 ### 2026-08-14：通过 pi.events 接入可选的 pi-subagents 顺序执行器
 
 - 决定：`task_workflow` 保留主扩展状态机和唯一写入权；新增显式 `workflowExecutor`，默认 `local`，只有配置为 `subagents` 时才通过 documented `pi.events` RPC 委派当前任务，不引入 `@tintinweb/pi-subagents` 依赖或复制源码。

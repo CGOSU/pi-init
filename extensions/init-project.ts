@@ -36,6 +36,7 @@ import {
   createWorkflowState,
   getNextWorkflowTask,
   getWorkflowTask,
+  getWorkflowTaskDuration,
   hydrateWorkflowState,
   isWorkflowActive,
   recordWorkflowDelegationFailure,
@@ -934,6 +935,46 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return lines.join("\n");
   }
 
+  function formatWorkflowTimestamp(value: unknown, unavailableText: string) {
+    return typeof value === "number" && Number.isFinite(value)
+      ? new Date(value).toISOString()
+      : unavailableText;
+  }
+
+  function formatWorkflowDuration(milliseconds: number | undefined) {
+    if (milliseconds === undefined) return "不可用（历史任务未记录有效的开始时间）";
+    if (milliseconds < 1000) return `${milliseconds} 毫秒`;
+
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts = [];
+    if (hours > 0) parts.push(`${hours} 小时`);
+    if (minutes > 0) parts.push(`${minutes} 分钟`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds} 秒`);
+    const remainingMilliseconds = milliseconds % 1000;
+    if (remainingMilliseconds > 0) parts.push(`${remainingMilliseconds} 毫秒`);
+    return parts.join(" ");
+  }
+
+  function formatWorkflowTaskCompletion(task: ReturnType<typeof getWorkflowTask>) {
+    if (!task) throw new Error("无法生成不存在的工作流任务完成报告");
+    const verification = task.verification?.map((item) => `- ${item}`).join("\n") ?? "- 无";
+    return [
+      "任务完成报告",
+      `任务 ID：${task.id}`,
+      `任务：${task.task}`,
+      `角色：${roleLabel(task.role)}（${task.role}）`,
+      `涉及文件：${task.files.join(", ")}`,
+      `开始时间：${formatWorkflowTimestamp(task.startedAt, "不可用（历史任务未记录开始时间）")}`,
+      `结束时间：${formatWorkflowTimestamp(task.completedAt, "不可用（任务未记录结束时间）")}`,
+      `总耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
+      `完成摘要：${task.completionSummary ?? "无"}`,
+      `验证结果：\n${verification}`,
+    ].join("\n");
+  }
+
   function workflowTaskPrompt(state: ReturnType<typeof createWorkflowState>, taskId: string, note?: string) {
     const task = getWorkflowTask(state, taskId);
     if (!task) throw new Error(`工作流任务不存在：${taskId}`);
@@ -1142,12 +1183,15 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         blockDelegatedTask(ctx, task.id, result.reason, delegation.agentId);
         return;
       }
-      persistWorkflowState(completeWorkflowTask(workflowState, {
+      const next = completeWorkflowTask(workflowState, {
         taskId: task.id,
         completionSummary: result.completionSummary,
         verification: result.verification,
-      }), ctx);
+      });
+      const completedTask = getWorkflowTask(next, task.id);
+      persistWorkflowState(next, ctx);
       workflowDispatchInFlight = false;
+      ctx.ui.notify(formatWorkflowTaskCompletion(completedTask), "info");
       await scheduleWorkflow(ctx);
     } catch (error) {
       blockDelegatedTask(ctx, task.id, `子代理结果无效：${textOf(error)}`, delegation.agentId);
@@ -1358,9 +1402,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           completionSummary: params.completionSummary,
           verification: params.verification,
         });
+        const completedTask = getWorkflowTask(next, task.id);
+        const completionReport = formatWorkflowTaskCompletion(completedTask);
         persistWorkflowState(next, ctx);
         return {
-          content: [{ type: "text", text: next.status === "completed" ? `工作流已完成。\n${formatWorkflowState(next)}` : `任务 ${task.id} 已完成，下一任务将自动开始。\n${formatWorkflowState(next)}` }],
+          content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : `任务 ${task.id} 已完成，下一任务将自动开始。`}\n${formatWorkflowState(next)}` }],
           details: next,
           terminate: true,
         };

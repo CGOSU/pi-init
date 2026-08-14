@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-14：增加任务完成时间和结构化完成报告
+
+- 完成内容：工作流任务进入 `in_progress` 时记录开始时间，完成时记录结束时间；新增任务耗时计算，旧状态缺少开始时间时保持兼容并报告不可用。
+- 完成内容：本地 `task_workflow complete` 和 subagents 完成事件统一输出任务完成报告，包含任务 ID、任务内容、角色、涉及文件、开始/结束时间、总耗时、完成摘要和验证结果；同步中英文生成模板及 README 说明。
+- 验证：`node --test --test-concurrency=1 test/scaffold.test.js`，29 项通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、扩展 RPC 加载和命令发现、`git diff --check` 均通过。
+- 遗留问题：真实 subagents 模型驱动完成报告端到端演练仍未执行；未提交或推送。
+
 ### 2026-08-14：完成 pi-subagents 工作流集成和受限脚手架
 
 - 完成内容：新增默认 `local`、可选 `subagents` 的工作流执行器；通过 `pi.events` RPC 顺序委派并持久化 request/agent 绑定，严格验证 `pi-init/task-result@1`，对 RPC/扩展/结果错误安全阻塞，取消/阻塞发送 stop 请求，reload 不自动重生已绑定代理。

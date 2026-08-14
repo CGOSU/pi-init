@@ -66,6 +66,12 @@ function normalizeTextList(value, label, { required = false } = {}) {
   return [...new Set(result)];
 }
 
+function normalizeTimestamp(value, label) {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) throw new Error(`${label}无效`);
+  return value;
+}
+
 function normalizeTask(task, index) {
   if (!task || typeof task !== "object") {
     throw new Error(`工作流任务 ${index + 1} 格式无效`);
@@ -204,6 +210,11 @@ function normalizeHydratedTask(task, index) {
   if (!["pending", "in_progress", "completed", "blocked"].includes(status)) {
     throw new Error(`已保存的工作流任务 ${task.id ?? index + 1} 状态无效：${status}`);
   }
+  const startedAt = normalizeTimestamp(task.startedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 startedAt`);
+  const completedAt = normalizeTimestamp(task.completedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 completedAt`);
+  if (startedAt !== undefined && completedAt !== undefined && completedAt < startedAt) {
+    throw new Error(`已保存的工作流任务 ${task.id ?? index + 1} 的 completedAt 早于 startedAt`);
+  }
   return {
     ...task,
     id: requireText(task.id, `已保存的工作流任务 ${index + 1} 的 id`).toLowerCase(),
@@ -216,6 +227,8 @@ function normalizeHydratedTask(task, index) {
     ),
     dependsOn: normalizeTextList(task.dependsOn, `已保存的工作流任务 ${task.id} 的 dependsOn`),
     status,
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
     ...(task.verification
       ? { verification: normalizeTextList(task.verification, `已保存的工作流任务 ${task.id} 的 verification`) }
       : {}),
@@ -269,6 +282,7 @@ export function startWorkflowTask(state, taskId, now = Date.now()) {
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, next.id);
   task.status = "in_progress";
+  task.startedAt = now;
   result.currentTaskId = task.id;
   result.nudgeCount = 0;
   return result;
@@ -346,6 +360,12 @@ export function requestWorkflowDelegationStop(state, now = Date.now()) {
   return result;
 }
 
+export function getWorkflowTaskDuration(task) {
+  if (!task || !Number.isFinite(task.startedAt) || !Number.isFinite(task.completedAt)) return undefined;
+  if (task.completedAt < task.startedAt) return undefined;
+  return task.completedAt - task.startedAt;
+}
+
 export function completeWorkflowTask(state, { taskId, completionSummary, verification }, now = Date.now()) {
   if (!state || state.status !== "running") throw new Error("工作流当前不在执行中");
   if (state.currentTaskId !== taskId) {
@@ -404,6 +424,7 @@ export function retryWorkflowTask(state, taskId, now = Date.now()) {
   delete task.blockReason;
   delete task.completionSummary;
   delete task.verification;
+  delete task.startedAt;
   delete task.completedAt;
   delete task.delegation;
   result.status = "running";

@@ -42,6 +42,7 @@ import {
   completeWorkflowTask,
   createWorkflowState,
   getNextWorkflowTask,
+  getWorkflowTaskDuration,
   hydrateWorkflowState,
   recordWorkflowDelegationFailure,
   recordWorkflowNudge,
@@ -648,6 +649,12 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /workflowEnabled: Type\.Optional\(Type\.Boolean/);
   assert.match(extension, /workflowExecutor: Type\.Optional\(StringEnum\(WORKFLOW_EXECUTORS/);
   assert.match(extension, /workflowExecutorLabel/);
+  assert.match(extension, /getWorkflowTaskDuration/);
+  assert.match(extension, /function formatWorkflowTaskCompletion\(task: ReturnType<typeof getWorkflowTask>\)/);
+  for (const field of ["任务 ID：", "任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "完成摘要：", "验证结果："]) {
+    assert.match(extension, new RegExp(field));
+  }
+  assert.match(extension, /历史任务未记录开始时间/);
   assert.match(extension, /async function configureWorkflow\(ctx: ExtensionCommandContext\)/);
   assert.match(extension, /requested === "workflow"/);
   assert.match(extension, /value: "workflow-config", label: `◆ 变更 · 工作流策略：[\s\S]*?配置新 task_workflow 规划的编排策略/);
@@ -670,6 +677,14 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /subagents:rpc:spawn/);
   assert.match(extension, /subagents:rpc:spawn:reply:/);
   assert.match(extension, /subagents:completed/);
+  assert.match(
+    extension,
+    /async function handleSubagentCompleted[\s\S]*?formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?await scheduleWorkflow\(ctx\);/,
+  );
+  assert.match(
+    extension,
+    /case "complete":[\s\S]*?const completionReport = formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?content: \[\{ type: "text", text: `\$\{completionReport\}/,
+  );
   assert.match(extension, /subagents:failed/);
   assert.match(extension, /parseSubagentResult/);
   assert.match(extension, /matchesSubagentEvent/);
@@ -837,12 +852,15 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   assert.equal(getNextWorkflowTask(planned).id, "schema");
   const first = startWorkflowTask(planned, "schema", 110);
   assert.equal(first.currentTaskId, "schema");
+  assert.equal(first.tasks[0].startedAt, 110);
   const second = completeWorkflowTask(
     first,
     { taskId: "schema", completionSummary: "结构和迁移已完成", verification: ["npm test：通过"] },
     120,
   );
   assert.equal(second.currentTaskId, undefined);
+  assert.equal(second.tasks[0].completedAt, 120);
+  assert.equal(getWorkflowTaskDuration(second.tasks[0]), 10);
   assert.equal(getNextWorkflowTask(second).id, "service");
   const third = completeWorkflowTask(
     startWorkflowTask(second, "service", 130),
@@ -883,6 +901,8 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
   assert.equal(restored.executor, "local");
   assert.equal(restored.currentTaskId, "legacy-task");
   assert.equal(restored.tasks[0].status, "in_progress");
+  assert.equal(restored.tasks[0].startedAt, undefined);
+  assert.equal(getWorkflowTaskDuration(restored.tasks[0]), undefined);
   assert.equal(restored.tasks[0].delegation, undefined);
 });
 
@@ -924,6 +944,8 @@ test("subagents 工作流保存绑定、失败和取消状态", () => {
   assert.equal(blocked.tasks[0].delegation.status, "failed");
 
   const retried = retryWorkflowTask(blocked, "implementation", 160);
+  assert.equal(retried.tasks[0].startedAt, undefined);
+  assert.equal(retried.tasks[0].completedAt, undefined);
   const rebound = bindWorkflowAgent(
     beginWorkflowDelegation(startWorkflowTask(retried, "implementation", 170), {
       taskId: "implementation",
@@ -1061,6 +1083,29 @@ test("架构工作流拒绝重复任务、未知依赖和循环依赖", () => {
   assert.throws(
     () => cancelWorkflow({ status: "completed" }),
     /已经结束/,
+  );
+  assert.equal(
+    getWorkflowTaskDuration({ startedAt: 20, completedAt: 10 }),
+    undefined,
+  );
+  assert.throws(
+    () => hydrateWorkflowState({
+      version: 2,
+      status: "completed",
+      plan: { summary: "无效时间", constraints: [] },
+      tasks: [{
+        id: "task",
+        task: "任务",
+        role: "developer-test",
+        files: ["src"],
+        acceptanceCriteria: ["完成"],
+        dependsOn: [],
+        status: "completed",
+        startedAt: 20,
+        completedAt: 10,
+      }],
+    }),
+    /completedAt 早于 startedAt/,
   );
 });
 
