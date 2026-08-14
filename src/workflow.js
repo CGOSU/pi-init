@@ -282,9 +282,29 @@ export function startWorkflowTask(state, taskId, now = Date.now()) {
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, next.id);
   task.status = "in_progress";
-  task.startedAt = now;
+  delete task.startedAt;
+  delete task.executionStartedAt;
   result.currentTaskId = task.id;
   result.nudgeCount = 0;
+  return result;
+}
+
+export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
+  if (!state || state.status !== "running") throw new Error("工作流当前不可记录任务开始时间");
+  if (state.currentTaskId !== taskId) {
+    throw new Error(`只能记录当前任务 ${state.currentTaskId ?? "（无）"} 的开始时间`);
+  }
+
+  const task = getWorkflowTask(state, taskId);
+  if (!task || task.status !== "in_progress") {
+    throw new Error(`任务 ${taskId} 当前不在执行中`);
+  }
+  if (task.executionStartedAt !== undefined) return state;
+
+  const result = cloneState(state, now);
+  const startedTask = getWorkflowTask(result, taskId);
+  startedTask.startedAt = now;
+  startedTask.executionStartedAt = now;
   return result;
 }
 
@@ -425,6 +445,7 @@ export function retryWorkflowTask(state, taskId, now = Date.now()) {
   delete task.completionSummary;
   delete task.verification;
   delete task.startedAt;
+  delete task.executionStartedAt;
   delete task.completedAt;
   delete task.delegation;
   result.status = "running";

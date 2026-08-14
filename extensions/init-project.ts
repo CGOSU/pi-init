@@ -39,6 +39,7 @@ import {
   getWorkflowTaskDuration,
   hydrateWorkflowState,
   isWorkflowActive,
+  markWorkflowTaskStarted,
   recordWorkflowDelegationFailure,
   recordWorkflowNudge,
   resumeWorkflow,
@@ -1155,8 +1156,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         requestId,
         type: WORKFLOW_SUBAGENT_TYPES[task.role as keyof typeof WORKFLOW_SUBAGENT_TYPES],
       });
-      persistWorkflowState(spawning, ctx);
-      const result = await spawnSubagent(task, workflowSubagentPrompt(spawning, taskId), ctx, requestId);
+      const started = markWorkflowTaskStarted(spawning, taskId);
+      persistWorkflowState(started, ctx);
+      const result = await spawnSubagent(task, workflowSubagentPrompt(started, taskId), ctx, requestId);
       if (
         !workflowState ||
         workflowState.status !== "running" ||
@@ -1713,6 +1715,19 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
     }
   }
+
+  pi.on("agent_start", (_event, ctx) => {
+    currentContext = ctx;
+    if (
+      !workflowState ||
+      workflowState.executor === "subagents" ||
+      !workflowState.currentTaskId ||
+      !isWorkflowActive(workflowState)
+    ) return;
+    const task = getWorkflowTask(workflowState, workflowState.currentTaskId);
+    if (!task || task.executionStartedAt !== undefined) return;
+    persistWorkflowState(markWorkflowTaskStarted(workflowState, task.id), ctx);
+  });
 
   pi.on("agent_settled", async (_event, ctx) => {
     currentContext = ctx;

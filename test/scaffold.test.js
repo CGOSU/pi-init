@@ -44,6 +44,7 @@ import {
   getNextWorkflowTask,
   getWorkflowTaskDuration,
   hydrateWorkflowState,
+  markWorkflowTaskStarted,
   recordWorkflowDelegationFailure,
   recordWorkflowNudge,
   resumeWorkflow,
@@ -651,6 +652,8 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /workflowExecutorLabel/);
   assert.match(extension, /function workflowStatusLabel\(state = workflowState\)[\s\S]*?\["completed", "cancelled"\][\s\S]*?inactiveWorkflowStateLabel/);
   assert.match(extension, /getWorkflowTaskDuration/);
+  assert.match(extension, /markWorkflowTaskStarted/);
+  assert.match(extension, /pi\.on\("agent_start"[\s\S]*?markWorkflowTaskStarted\(workflowState, task\.id\)/);
   assert.match(extension, /function formatWorkflowTaskCompletion\(task: ReturnType<typeof getWorkflowTask>\)/);
   for (const field of ["任务 ID：", "任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "完成摘要：", "验证结果："]) {
     assert.match(extension, new RegExp(field));
@@ -853,15 +856,19 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   assert.equal(getNextWorkflowTask(planned).id, "schema");
   const first = startWorkflowTask(planned, "schema", 110);
   assert.equal(first.currentTaskId, "schema");
-  assert.equal(first.tasks[0].startedAt, 110);
+  assert.equal(first.tasks[0].startedAt, undefined);
+  const firstStarted = markWorkflowTaskStarted(first, "schema", 115);
+  assert.equal(firstStarted.tasks[0].startedAt, 115);
+  assert.equal(firstStarted.tasks[0].executionStartedAt, 115);
+  assert.equal(markWorkflowTaskStarted(firstStarted, "schema", 119), firstStarted);
   const second = completeWorkflowTask(
-    first,
+    firstStarted,
     { taskId: "schema", completionSummary: "结构和迁移已完成", verification: ["npm test：通过"] },
     120,
   );
   assert.equal(second.currentTaskId, undefined);
   assert.equal(second.tasks[0].completedAt, 120);
-  assert.equal(getWorkflowTaskDuration(second.tasks[0]), 10);
+  assert.equal(getWorkflowTaskDuration(second.tasks[0]), 5);
   assert.equal(getNextWorkflowTask(second).id, "service");
   const third = completeWorkflowTask(
     startWorkflowTask(second, "service", 130),
@@ -904,6 +911,13 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
   assert.equal(restored.tasks[0].status, "in_progress");
   assert.equal(restored.tasks[0].startedAt, undefined);
   assert.equal(getWorkflowTaskDuration(restored.tasks[0]), undefined);
+  const staleStarted = hydrateWorkflowState({
+    ...legacy,
+    tasks: [{ ...legacy.tasks[0], startedAt: 5 }],
+  });
+  const refreshedStart = markWorkflowTaskStarted(staleStarted, "legacy-task", 30);
+  assert.equal(refreshedStart.tasks[0].startedAt, 30);
+  assert.equal(refreshedStart.tasks[0].executionStartedAt, 30);
   assert.equal(restored.tasks[0].delegation, undefined);
 });
 
@@ -946,6 +960,7 @@ test("subagents 工作流保存绑定、失败和取消状态", () => {
 
   const retried = retryWorkflowTask(blocked, "implementation", 160);
   assert.equal(retried.tasks[0].startedAt, undefined);
+  assert.equal(retried.tasks[0].executionStartedAt, undefined);
   assert.equal(retried.tasks[0].completedAt, undefined);
   const rebound = bindWorkflowAgent(
     beginWorkflowDelegation(startWorkflowTask(retried, "implementation", 170), {
