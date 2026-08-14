@@ -752,10 +752,14 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   const component = renderer(
     { data: harness.entries[0].data },
     { expanded: false },
-    { fg: (_color, text) => text },
+    {
+      fg: (color, text) => `<${color}>${text}</${color}>`,
+      bold: (text) => `<bold>${text}</bold>`,
+    },
   );
   const rendered = component.render(240).join("\n");
-  assert.match(rendered, /普通执行时间报告/);
+  assert.match(rendered, /<accent><bold>◆ 普通执行时间报告<\/bold><\/accent>/);
+  assert.match(rendered, /<warning><bold>总耗时：/);
   assert.match(rendered, /开始时间：/);
   assert.match(rendered, /结束时间：/);
   assert.match(rendered, /总耗时：/);
@@ -786,17 +790,22 @@ test("task_workflow 完成结果渲染完整摘要和时间报告", () => {
     "结束时间：1970-01-01T00:00:00.175Z",
     "总耗时：65 毫秒",
     "完成摘要：实现已完成",
-  ].join("\\n");
+  ].join("\n");
   const component = workflowTool.renderResult(
     {
       isError: false,
-      content: [{ type: "text", text: `${report}\\n\\n工作流已完成。` }],
+      content: [{ type: "text", text: `${report}\n\n工作流已完成。` }],
       details: completed,
     },
     { expanded: false },
-    { fg: (_color, text) => text },
+    {
+      fg: (color, text) => `<${color}>${text}</${color}>`,
+      bold: (text) => `<bold>${text}</bold>`,
+    },
   );
-  const rendered = component.render(240).join("\\n");
+  const rendered = component.render(240).join("\n");
+  assert.match(rendered, /<accent><bold>◆ 任务完成报告<\/bold><\/accent>/);
+  assert.match(rendered, /<warning><bold>总耗时：65 毫秒<\/bold><\/warning>/);
   assert.match(rendered, /任务完成报告/);
   assert.match(rendered, /开始时间：1970-01-01T00:00:00\.110Z/);
   assert.match(rendered, /结束时间：1970-01-01T00:00:00\.175Z/);

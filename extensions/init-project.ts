@@ -259,6 +259,11 @@ type RunTimingEntryData = {
   completedAt?: unknown;
 };
 
+type ReportTheme = {
+  fg: (color: string, text: string) => string;
+  bold: (text: string) => string;
+};
+
 type ResolvedRoleConfig = Record<string, RoleModelConfig> & {
   mode: string;
   workflowMode: string;
@@ -1008,6 +1013,19 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     ].join("\n");
   }
 
+  function styleReportText(report: string, theme: ReportTheme) {
+    return report.split("\n").map((line, index) => {
+      if (index === 0) return theme.fg("accent", theme.bold(`◆ ${line}`));
+      if (line.startsWith("总耗时：")) return theme.fg("warning", theme.bold(line));
+      if (line.startsWith("完成摘要：")) return theme.fg("success", theme.bold(line));
+      if (line.startsWith("验证结果：")) return theme.fg("success", theme.bold(line));
+      if (line.startsWith("开始时间：") || line.startsWith("结束时间：")) return theme.fg("accent", line);
+      if (line.startsWith("计时口径：")) return theme.fg("dim", line);
+      if (line.startsWith("- ")) return theme.fg("muted", line);
+      return theme.fg("text", line);
+    }).join("\n");
+  }
+
   function settleExternalRunTiming() {
     const timing = externalRunTiming;
     externalRunTiming = undefined;
@@ -1023,7 +1041,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const data = entry.data && typeof entry.data === "object"
       ? entry.data as RunTimingEntryData
       : {};
-    return new Text(theme.fg("dim", formatRunTimingReport(data)), 0, 0);
+    return new Text(styleReportText(formatRunTimingReport(data), theme), 0, 0);
   });
 
   function formatWorkflowTaskCompletion(task: ReturnType<typeof getWorkflowTask>) {
@@ -2002,7 +2020,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (result.isError) return new Text(theme.fg("error", "工作流操作失败"), 0, 0);
       const firstContent = result.content[0];
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
-      if (contentText.startsWith("任务完成报告")) return new Text(contentText, 0, 0);
+      if (contentText.startsWith("任务完成报告")) return new Text(styleReportText(contentText, theme), 0, 0);
 
       const details = result.details as ReturnType<typeof createWorkflowState> | undefined;
       if (!details || !Array.isArray(details.tasks)) {
