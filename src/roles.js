@@ -3,6 +3,8 @@ export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
 export const WORKFLOW_MODES = ["off", "on", "auto"];
 export const DEFAULT_WORKFLOW_MODE = "auto";
+export const WORKFLOW_EXECUTORS = ["local", "subagents"];
+export const DEFAULT_WORKFLOW_EXECUTOR = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
 
@@ -71,6 +73,7 @@ export const DEFAULT_ROLE_MODELS = {
 export const DEFAULT_ROLE_CONFIG = {
   mode: DEFAULT_ROLE_MODE,
   workflowMode: DEFAULT_WORKFLOW_MODE,
+  workflowExecutor: DEFAULT_WORKFLOW_EXECUTOR,
   ...DEFAULT_ROLE_MODELS,
 };
 
@@ -100,6 +103,14 @@ export function resolveWorkflowMode(config) {
     throw new Error(`工作流开关 workflowEnabled 必须是布尔值：${legacyEnabled}`);
   }
   return legacyEnabled ? "on" : "off";
+}
+
+export function resolveWorkflowExecutor(config) {
+  const executor = config?.workflowExecutor ?? DEFAULT_WORKFLOW_EXECUTOR;
+  if (!WORKFLOW_EXECUTORS.includes(executor)) {
+    throw new Error(`工作流执行器 workflowExecutor 无效：${executor}`);
+  }
+  return executor;
 }
 
 export function shouldOrchestrateWorkflow({ mode, taskCount }) {
@@ -150,6 +161,7 @@ export function resolveRoleConfig(config) {
   const resolved = {
     mode: resolveRoleMode(config),
     workflowMode: resolveWorkflowMode(config),
+    workflowExecutor: resolveWorkflowExecutor(config),
   };
   for (const role of ROLE_NAMES) {
     resolved[role] = resolveRoleModel(config, role);

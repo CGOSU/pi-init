@@ -37,6 +37,9 @@ description: {{SKILL_DESCRIPTION}}
 - 架构师的每个任务必须包含唯一 `id`、目标 `task`、允许修改的 `files`、可验证的 `acceptanceCriteria`，并在有顺序约束时填写 `dependsOn`；任务默认按依赖就绪顺序串行执行。
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
 - 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`。验证数组只能写实际执行过的命令和真实结果。
+- 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，缺少扩展、RPC 错误或异常回复都必须安全阻塞。
+- 使用 `subagents` 时主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并必须返回严格的 `pi-init/task-result@1` JSON，只有合法 `complete` 才能完成任务。
+- 子代理在共享工作区执行，不创建 worktree、不合并分支、不自动提交或推送；reload 后已绑定的非终态子代理不会自动重生，须查看绑定并人工恢复。
 - 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。
 - 工作流在任务完成后由扩展自动切换配置角色和模型，并通过隐藏续跑消息启动下一任务；不要手动重复分配或要求用户触发下一步。若模型忘记提交完成结果，系统会自动提醒有限次数，仍未提交才暂停。
 

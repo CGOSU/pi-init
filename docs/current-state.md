@@ -19,7 +19,9 @@
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；成功后注入隐藏续跑消息，失败仅提示并保留已切换角色。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，由当前架构角色直接顺序执行，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。
 - 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
-- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖；`.pi/role-models.json` 保存默认 `workflowMode: "auto"`。
+- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖；`.pi/role-models.json` 保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。
+- `workflowExecutor: "subagents"` 通过 `pi.events` RPC 顺序委派 `pi-init-developer-test`/`pi-init-docs-commit`，主扩展唯一写入工作流状态；严格校验 `pi-init/task-result@1`，RPC/扩展/结果失败安全阻塞，取消或阻塞发送 stop 请求，reload 不自动重生已绑定代理。
+- 初始化额外生成 `.pi/agents/pi-init-developer-test.md` 和 `.pi/agents/pi-init-docs-commit.md`；代理仅开放 read/bash/edit/write，关闭 extensions、skills 和嵌套子代理，并在共享工作区执行。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。
 - 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令、Skill 名称和职责模型。
@@ -30,7 +32,7 @@
 
 ## 待处理
 
-- `task_workflow` 真实模型连续多任务端到端演练尚未执行；当前覆盖纯状态机测试和扩展 RPC 加载检查。
+- `task_workflow` 与 pi-subagents 的真实模型连续多任务端到端演练、真实生命周期事件和 reload 后人工恢复尚未执行；当前覆盖纯状态机/协议/脚手架测试和扩展 RPC 加载检查。
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
@@ -41,3 +43,4 @@
 - 2026-08-13：`pi-usage` 增量导入 `pi-token-speed` 的自定义 session 采样，按 provider/model 计算 `输出 token / 有效生成秒数` 的加权平均 TPS；旧数据库升级时只回填 `speed_events`，不再重建既有用量和活动数据。
 - 2026-08-14：移除自研 `parallel_develop` 及其测试、模板和文档说明，保留 `task_workflow`、`switch_role`、角色配置和脚手架能力。
 - 2026-08-14：任务工作流升级为默认 `workflowMode: "auto"` 的 off/on/auto 策略；`auto` 对不超过 2 个任务跳过编排，配置入口为 `/pi-init config workflow`，并兼容旧 `workflowEnabled`。
+- 2026-08-14：新增默认 `local`/可选 `subagents` 执行器、严格结果协议、持久化任务—代理绑定及受限的 pi-subagents 专用代理脚手架；README 记录安装前提和 reload/孤儿代理边界。

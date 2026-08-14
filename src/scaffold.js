@@ -21,6 +21,8 @@ const PLATFORM_NAMES = {
 
 const TEMPLATE_FILES = [
   ["AGENTS.md", () => "AGENTS.md"],
+  ["agents/pi-init-developer-test.md", () => ".pi/agents/pi-init-developer-test.md", false],
+  ["agents/pi-init-docs-commit.md", () => ".pi/agents/pi-init-docs-commit.md", false],
   ["docs/clean-code.md", () => "docs/clean-code.md"],
   ["docs/current-state.md", () => "docs/current-state.md"],
   ["docs/decisions.md", () => "docs/decisions.md"],
@@ -143,7 +145,7 @@ function renderTemplate(source, variables, templatePath) {
 }
 
 /**
- * Generate the seven long-term AI collaboration files for a project.
+ * Generate the long-term AI collaboration files for a project.
  * Existing generated files are intentionally overwritten; unrelated files are untouched.
  */
 export async function createScaffold(targetDir, options = {}) {
@@ -197,8 +199,8 @@ export async function createScaffold(targetDir, options = {}) {
   };
 
   const files = await Promise.all(
-    TEMPLATE_FILES.map(async ([templatePath, outputPath]) => {
-      const localizedTemplatePath = language === "en" ? path.join("en", templatePath) : templatePath;
+    TEMPLATE_FILES.map(async ([templatePath, outputPath, localize = true]) => {
+      const localizedTemplatePath = language === "en" && localize ? path.join("en", templatePath) : templatePath;
       const source = await readFile(path.join(TEMPLATE_ROOT, localizedTemplatePath), "utf8");
       const relativePath = outputPath({ projectSlug });
       return {

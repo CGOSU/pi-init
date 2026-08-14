@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-14：完成 pi-subagents 工作流集成和受限脚手架
+
+- 完成内容：新增默认 `local`、可选 `subagents` 的工作流执行器；通过 `pi.events` RPC 顺序委派并持久化 request/agent 绑定，严格验证 `pi-init/task-result@1`，对 RPC/扩展/结果错误安全阻塞，取消/阻塞发送 stop 请求，reload 不自动重生已绑定代理。
+- 完成内容：脚手架生成 `.pi/agents/pi-init-developer-test.md` 与 `.pi/agents/pi-init-docs-commit.md`，仅开放 read/bash/edit/write，关闭 extensions、skills 和嵌套子代理；中英文 AGENTS/Skill 与 README 已记录安装前提、共享工作区、状态所有权、结果协议和孤儿代理边界。
+- 验证：`npm test`，29 项通过；`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 通过；`node --test --test-concurrency=1 test/scaffold.test.js`，29 项通过；扩展 RPC 加载和命令发现检查成功；`git diff --check` 通过，仅有预期的 CRLF 转换警告。
+- 遗留问题：尚未使用真实 `@tintinweb/pi-subagents` 运行模型驱动的连续任务、生命周期事件和 reload 后人工恢复演练；未提交或推送。
+
 ### 2026-08-14：修复工作流运行时版本错误并外显工作流状态
 
 - 完成内容：定位 `(0, _roles.shouldOrchestrateWorkflow) is not a function` 为 Pi package 更新/reload 后扩展与相邻 `src/roles.js` 版本不一致；增加运行时诊断、升级到 `1.0.4`，并在 README 记录 `pi update --extensions`、`/reload` 和本地重启步骤。

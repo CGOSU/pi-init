@@ -19,6 +19,9 @@
 - 默认按“架构分析 → 任务拆分 → 开发测试逐项执行 → 文档与收尾”的流水线工作；除非用户一开始明确要求先审阅架构，否则架构师完成规划后不得停下来询问下一步选择。
 - 项目任务工作流策略由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `plan`，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行，超过 2 个任务才进入自动工作流。可通过 `/pi-init config workflow` 持久选择，或直接修改该配置字段。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；关闭时不要调用 `plan`。
 - 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务。
+- 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，并且缺少扩展、RPC 错误或异常回复都必须安全阻塞任务。
+- 使用 `subagents` 时，主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并且必须返回严格的 `pi-init/task-result@1` JSON 结果，只有合法 `complete` 才能完成任务。
+- 子代理在共享工作区执行；不得创建 worktree、合并分支、自动提交或推送。reload 后已绑定的非终态子代理不会自动重生，应先查看持久化绑定再人工恢复。
 - 不要因为偏好、风格或可选方案向用户提问。只有用户明确要求架构审阅，或遇到缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息时才暂停；把合理假设记录在任务结果中。
 - 用户明确要求先看架构时，且工作流已启用，架构师将 `reviewRequired` 设为 `true`，保存规划后暂停；用户审阅后执行 `/pi-init workflow resume`。阻塞任务使用 `block`，处理完原因后使用 `/pi-init workflow retry <taskId>`。
 

@@ -14,6 +14,20 @@
 
 ## 已知问题
 
+### 2026-08-14：subagents 执行器的绑定代理不会在 reload 后自动恢复
+
+- 现象：reload 或 session replacement 后，工作流状态仍可能显示已绑定的非终态子代理，但 pi-init 不会再次 spawn 它。
+- 根因：自动重生会在共享工作区产生并发写入；子代理生命周期由独立的 `@tintinweb/pi-subagents` 扩展管理，主扩展无法安全猜测其存活状态。
+- 修复：持久化 requestId、agentId、类型和 delegation 状态；恢复时只展示绑定并保持任务不自动派发，取消或阻塞时发送 documented stop RPC。需要继续执行时由用户确认代理状态后人工恢复。
+- 验证：`npm test` 覆盖绑定、取消和扩展契约；扩展 RPC 加载检查成功。真实 reload 后人工恢复尚未演练。
+
+### 2026-08-14：pi-subagents 是可选的外部扩展而不是 pi-init 依赖
+
+- 现象：将 `workflowExecutor` 设为 `subagents`，但同一 Pi 环境没有启用 `@tintinweb/pi-subagents` 时，无法收到 spawn RPC 回复。
+- 根因：pi-init 只依赖 documented `pi.events` 通道，不能导入或复制第三方生命周期实现。
+- 修复：默认保持 `workflowExecutor: "local"`；README 和生成规则要求单独安装并启用扩展，主扩展对缺少 RPC、超时和异常回复安全阻塞任务。
+- 验证：协议/脚手架测试和扩展加载检查通过；未伪造第三方真实模型运行结果。
+
 ### 2026-08-14：Pi 更新不会自动刷新独立复制的启动器
 
 - 现象：`pi update --extensions` 更新 package 后，PATH 中独立安装的 `pi-usage` 仍可能是旧版本。

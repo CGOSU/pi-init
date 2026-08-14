@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-14：通过 pi.events 接入可选的 pi-subagents 顺序执行器
+
+- 决定：`task_workflow` 保留主扩展状态机和唯一写入权；新增显式 `workflowExecutor`，默认 `local`，只有配置为 `subagents` 时才通过 documented `pi.events` RPC 委派当前任务，不引入 `@tintinweb/pi-subagents` 依赖或复制源码。
+- 原因：复用第三方代理的生命周期、模型和会话管理，同时保持现有工作流默认行为和本地回退；首版顺序执行可避免共享工作区并发修改和合并冲突。
+- 约束：子代理只能在共享工作区执行，不自动创建 worktree、并行、合并、提交或推送；结果必须严格符合 `pi-init/task-result@1`，异常结果、RPC/扩展缺失和生命周期失败安全阻塞任务；任务创建时持久化 executor，reload 后不自动重生已绑定的非终态代理，取消/阻塞仅发送 stop 请求而不伪造完成。
+
 ### 2026-08-14：通过 package postinstall 同步 pi-usage 独立启动器
 
 - 决定：将跨平台 `scripts/install-launchers.js` 配置为 package 的 `postinstall`，让 `pi update --extensions` 触发 package 安装时重新复制 `pi-usage` 启动器和脚本到 Pi 可执行目录。

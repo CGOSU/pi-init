@@ -1,6 +1,6 @@
 {
   "mode": "auto",
-  "workflowMode": "off",
+  "workflowMode": "auto",
   "architect": {
     "provider": "openai-codex",
     "model": "gpt-5.6-terra",

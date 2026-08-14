@@ -16,6 +16,7 @@ import {
   ROLE_MODES,
   ROLE_NAMES,
   THINKING_LEVELS,
+  WORKFLOW_EXECUTORS,
   WORKFLOW_MODES,
   filterRoleModels,
   findMatchingRole,
@@ -27,13 +28,17 @@ import {
 } from "../src/roles.js";
 import {
   WORKFLOW_MAX_TASKS,
+  bindWorkflowAgent,
   blockWorkflowTask,
+  beginWorkflowDelegation,
   cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
   getNextWorkflowTask,
   getWorkflowTask,
+  hydrateWorkflowState,
   isWorkflowActive,
+  recordWorkflowDelegationFailure,
   recordWorkflowNudge,
   resumeWorkflow,
   retryWorkflowTask,
@@ -41,6 +46,13 @@ import {
   validateWorkflowPlan,
   workflowProgress,
 } from "../src/workflow.js";
+import {
+  matchesSubagentEvent,
+  parseSubagentResult,
+  parseSubagentSpawnReply,
+  subagentFailureReason,
+  SUBAGENT_RESULT_PROTOCOL,
+} from "../src/subagents.js";
 import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text, type SelectItem } from "@earendil-works/pi-tui";
 
 const roleModelSchema = Type.Object({
@@ -57,6 +69,9 @@ const roleModelsSchema = Type.Object({
   workflowEnabled: Type.Optional(Type.Boolean({
     description: "兼容旧配置；未设置 workflowMode 时 true 映射 on、false 映射 off",
   })),
+  workflowExecutor: Type.Optional(StringEnum(WORKFLOW_EXECUTORS, {
+    description: "工作流执行器：local 或 subagents；默认 local",
+  })),
   architect: Type.Optional(roleModelSchema),
   "developer-test": Type.Optional(roleModelSchema),
   "docs-commit": Type.Optional(roleModelSchema),
@@ -68,6 +83,11 @@ const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
   "不要把未完成事项写成已完成；保持项目路径、错误信息和待处理问题的准确性。",
 ].join("\n");
 const ROLE_SWITCH_CONTINUATION_TYPE = "pi-init-role-transition";
+const SUBAGENT_RPC_TIMEOUT_MS = 30_000;
+const WORKFLOW_SUBAGENT_TYPES = {
+  "developer-test": "pi-init-developer-test",
+  "docs-commit": "pi-init-docs-commit",
+};
 
 const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
@@ -227,6 +247,7 @@ type RoleModelConfig = {
 type ResolvedRoleConfig = Record<string, RoleModelConfig> & {
   mode: string;
   workflowMode: string;
+  workflowExecutor: string;
 };
 
 function getAvailableRoleModels(ctx: ExtensionContext) {
@@ -448,6 +469,12 @@ function workflowModeLabel(mode: string) {
   return mode;
 }
 
+function workflowExecutorLabel(executor: string) {
+  if (executor === "local") return "主会话顺序执行";
+  if (executor === "subagents") return "pi-subagents 子代理";
+  return executor;
+}
+
 function shouldOrchestrateConfiguredWorkflow(mode: string, taskCount: number) {
   if (typeof shouldOrchestrateWorkflow !== "function") {
     throw new Error(
@@ -492,8 +519,8 @@ async function writeRoleConfig(
   return updateRoleConfig(ctx, { [role]: selection });
 }
 
-async function writeWorkflowConfig(ctx: ExtensionContext, workflowMode: string) {
-  return updateRoleConfig(ctx, { workflowMode });
+async function writeWorkflowConfig(ctx: ExtensionContext, workflowMode: string, workflowExecutor: string) {
+  return updateRoleConfig(ctx, { workflowMode, workflowExecutor });
 }
 
 function formatResult(result: {
@@ -648,8 +675,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   let controlCenterGuideShown = false;
   let roleModeStatus = "auto";
   let workflowModeStatus = "auto";
+  let workflowExecutorStatus = "local";
   let workflowState: ReturnType<typeof createWorkflowState> | undefined;
   let workflowDispatchInFlight = false;
+  let currentContext: ExtensionContext | undefined;
+  let subagentRequestSequence = 0;
+  let runtimeDisposed = false;
+  const pendingSubagentReplyCleanups = new Set<() => void>();
   let pendingRoleCompaction:
     | {
         fromRole: string;
@@ -676,14 +708,17 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   function workflowStateLabel(state = workflowState) {
-    if (!state) return `策略 ${workflowModeLabel(workflowModeStatus)} · 无活动工作流`;
+    if (!state) {
+      return `策略 ${workflowModeLabel(workflowModeStatus)} · 执行器 ${workflowExecutorLabel(workflowExecutorStatus)} · 无活动工作流`;
+    }
 
     const progress = workflowProgress(state);
     const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
-    if (state.status === "paused") return `已暂停 ${progress.completed}/${progress.total}${current}`;
-    if (state.status === "completed") return `已完成 ${progress.completed}/${progress.total}`;
-    if (state.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}`;
-    return `运行 ${progress.completed}/${progress.total}${current || " · 待调度"}`;
+    const executor = ` · ${workflowExecutorLabel(state.executor)}`;
+    if (state.status === "paused") return `已暂停 ${progress.completed}/${progress.total}${executor}${current}`;
+    if (state.status === "completed") return `已完成 ${progress.completed}/${progress.total}${executor}`;
+    if (state.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}${executor}`;
+    return `运行 ${progress.completed}/${progress.total}${executor}${current || " · 待调度"}`;
   }
 
   function refreshRoleStatus(ctx: ExtensionContext, mode: string) {
@@ -759,6 +794,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   async function applyRole(role: string, ctx: ExtensionContext) {
     const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
     workflowModeStatus = config.workflowMode;
+    workflowExecutorStatus = config.workflowExecutor;
     const target = config[role];
     if (!target) throw new Error(`未知角色：${role}`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
@@ -884,6 +920,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const lines = [
       `状态：${state.status}`,
       `进度：${progress.completed}/${progress.total}`,
+      `执行器：${workflowExecutorLabel(state.executor)}`,
       `规划：${state.plan.summary}`,
     ];
     if (state.currentTaskId) lines.push(`当前任务：${state.currentTaskId}`);
@@ -937,15 +974,204 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   function restoreWorkflowState(ctx: ExtensionContext) {
+    currentContext = ctx;
     const entry = [...ctx.sessionManager.getBranch()]
       .reverse()
       .find((item) => item.type === "custom" && item.customType === "pi-init-workflow");
     const data = entry && "data" in entry ? entry.data : undefined;
-    workflowState = data && typeof data === "object" && Array.isArray((data as { tasks?: unknown }).tasks)
-      ? data as ReturnType<typeof createWorkflowState>
-      : undefined;
+    try {
+      workflowState = data && typeof data === "object" && Array.isArray((data as { tasks?: unknown }).tasks)
+        ? hydrateWorkflowState(data) as ReturnType<typeof createWorkflowState>
+        : undefined;
+      if (workflowState) workflowExecutorStatus = workflowState.executor;
+    } catch (error) {
+      workflowState = undefined;
+      ctx.ui.notify(`无法恢复工作流状态：${textOf(error)}`, "error");
+    }
     updateWorkflowStatus(ctx);
   }
+
+  function nextSubagentRequestId(taskId: string) {
+    subagentRequestSequence += 1;
+    return `pi-init-${taskId}-${Date.now()}-${subagentRequestSequence}`;
+  }
+
+  function emitSubagentStop(agentId: string) {
+    pi.events.emit("subagents:rpc:stop", {
+      requestId: nextSubagentRequestId("stop"),
+      agentId,
+    });
+  }
+
+  function workflowSubagentPrompt(state: ReturnType<typeof createWorkflowState>, taskId: string) {
+    const task = getWorkflowTask(state, taskId);
+    if (!task) throw new Error(`工作流任务不存在：${taskId}`);
+    const completed = state.tasks
+      .filter((item) => item.status === "completed")
+      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}`);
+
+    return [
+      "[PI-INIT SUBAGENT WORKFLOW]",
+      `Workflow goal: ${state.plan.summary}`,
+      state.plan.constraints.length > 0 ? `Architecture constraints:\n${state.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
+      completed.length > 0 ? `Completed tasks:\n${completed.join("\n")}` : "",
+      `Current task (${task.id}, role ${task.role}): ${task.task}`,
+      `Allowed files or directories: ${task.files.join(", ")}`,
+      `Acceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
+      "Work in the current shared checkout. Do not create worktrees, merge branches, commit, or push.",
+      "Do not call pi-init task_workflow tools. The parent session owns workflow state.",
+      `When finished, output only one JSON object using protocol ${SUBAGENT_RESULT_PROTOCOL}. For success use {\"protocol\":\"${SUBAGENT_RESULT_PROTOCOL}\",\"outcome\":\"complete\",\"completionSummary\":\"...\",\"verification\":[\"actual command and result\"]}. If genuinely blocked use {\"protocol\":\"${SUBAGENT_RESULT_PROTOCOL}\",\"outcome\":\"blocked\",\"reason\":\"...\"}. Do not wrap it in Markdown fences or add other text.`,
+    ].filter(Boolean).join("\n\n");
+  }
+
+  function spawnSubagent(task: ReturnType<typeof getWorkflowTask>, prompt: string, ctx: ExtensionContext, requestId: string) {
+    if (!task) return Promise.reject(new Error("工作流任务不存在"));
+    const events = pi.events;
+    if (!events || typeof events.emit !== "function" || typeof events.on !== "function") {
+      return Promise.reject(new Error("未检测到 pi.events；请确认已加载 @tintinweb/pi-subagents"));
+    }
+
+    const replyChannel = `subagents:rpc:spawn:reply:${requestId}`;
+    const type = WORKFLOW_SUBAGENT_TYPES[task.role as keyof typeof WORKFLOW_SUBAGENT_TYPES];
+    if (!type) return Promise.reject(new Error(`没有为角色 ${task.role} 配置 pi-subagents 类型`));
+
+    return new Promise<{ requestId: string; agentId: string }>((resolve, reject) => {
+      let settled = false;
+      let unsubscribe = () => {};
+      let cancelOnShutdown = () => {};
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        unsubscribe();
+        pendingSubagentReplyCleanups.delete(cancelOnShutdown);
+        callback();
+      };
+      const timeout = setTimeout(() => {
+        finish(() => reject(new Error(`等待 pi-subagents spawn 回复超时（${SUBAGENT_RPC_TIMEOUT_MS}ms）`)));
+      }, SUBAGENT_RPC_TIMEOUT_MS);
+      cancelOnShutdown = () => finish(() => reject(new Error("会话已 reload，已取消等待 pi-subagents spawn 回复")));
+      pendingSubagentReplyCleanups.add(cancelOnShutdown);
+
+      unsubscribe = events.on(replyChannel, (raw) => {
+        try {
+          const reply = parseSubagentSpawnReply(raw);
+          finish(() => resolve({ requestId, agentId: reply.id }));
+        } catch (error) {
+          finish(() => reject(error));
+        }
+      });
+
+      try {
+        events.emit("subagents:rpc:spawn", {
+          requestId,
+          type,
+          prompt,
+          options: {
+            cwd: ctx.cwd,
+            runInBackground: true,
+            inheritContext: false,
+          },
+        });
+      } catch (error) {
+        finish(() => reject(error));
+      }
+    });
+  }
+
+  function blockDelegatedTask(ctx: ExtensionContext, taskId: string, reason: string, agentId?: string) {
+    if (runtimeDisposed || !workflowState || workflowState.currentTaskId !== taskId || !isWorkflowActive(workflowState)) return;
+    try {
+      let failed = workflowState;
+      if (agentId) {
+        failed = recordWorkflowDelegationFailure(failed, { taskId, agentId, reason });
+      }
+      const blocked = blockWorkflowTask(failed, { taskId, reason });
+      persistWorkflowState(blocked, ctx);
+      workflowDispatchInFlight = false;
+      ctx.ui.notify(`工作流已暂停：子代理任务 ${taskId}：${reason}`, "warning");
+    } catch (error) {
+      workflowDispatchInFlight = false;
+      ctx.ui.notify(`无法记录子代理任务 ${taskId} 的失败：${textOf(error)}`, "error");
+    }
+  }
+
+  async function dispatchSubagentTask(ctx: ExtensionContext, taskId: string) {
+    if (!workflowState || workflowState.currentTaskId !== taskId || !isWorkflowActive(workflowState)) return;
+    const task = getWorkflowTask(workflowState, taskId);
+    if (!task) return;
+    const requestId = nextSubagentRequestId(task.id);
+    try {
+      const spawning = beginWorkflowDelegation(workflowState, {
+        taskId,
+        requestId,
+        type: WORKFLOW_SUBAGENT_TYPES[task.role as keyof typeof WORKFLOW_SUBAGENT_TYPES],
+      });
+      persistWorkflowState(spawning, ctx);
+      const result = await spawnSubagent(task, workflowSubagentPrompt(spawning, taskId), ctx, requestId);
+      if (
+        !workflowState ||
+        workflowState.status !== "running" ||
+        workflowState.currentTaskId !== taskId ||
+        getWorkflowTask(workflowState, taskId)?.delegation?.requestId !== result.requestId
+      ) {
+        emitSubagentStop(result.agentId);
+        workflowDispatchInFlight = false;
+        return;
+      }
+      persistWorkflowState(bindWorkflowAgent(workflowState, { taskId, agentId: result.agentId }), ctx);
+      ctx.ui.notify(`已启动子代理 ${result.agentId} 执行任务 ${taskId}。`, "info");
+    } catch (error) {
+      blockDelegatedTask(ctx, taskId, `无法启动 pi-subagents：${textOf(error)}`);
+    }
+  }
+
+  async function handleSubagentCompleted(event: unknown) {
+    const ctx = currentContext;
+    if (runtimeDisposed || !ctx || !workflowState || workflowState.executor !== "subagents" || !isWorkflowActive(workflowState)) return;
+    const task = workflowState.currentTaskId ? getWorkflowTask(workflowState, workflowState.currentTaskId) : undefined;
+    const delegation = task?.delegation;
+    if (!task || !delegation?.agentId || !matchesSubagentEvent(event, {
+      agentId: delegation.agentId,
+      type: delegation.type,
+    })) return;
+
+    try {
+      const result = parseSubagentResult((event as { result?: unknown }).result);
+      if (result.outcome === "blocked") {
+        blockDelegatedTask(ctx, task.id, result.reason, delegation.agentId);
+        return;
+      }
+      persistWorkflowState(completeWorkflowTask(workflowState, {
+        taskId: task.id,
+        completionSummary: result.completionSummary,
+        verification: result.verification,
+      }), ctx);
+      workflowDispatchInFlight = false;
+      await scheduleWorkflow(ctx);
+    } catch (error) {
+      blockDelegatedTask(ctx, task.id, `子代理结果无效：${textOf(error)}`, delegation.agentId);
+    }
+  }
+
+  function handleSubagentFailed(event: unknown) {
+    const ctx = currentContext;
+    if (runtimeDisposed || !ctx || !workflowState || workflowState.executor !== "subagents" || !isWorkflowActive(workflowState)) return;
+    const task = workflowState.currentTaskId ? getWorkflowTask(workflowState, workflowState.currentTaskId) : undefined;
+    const delegation = task?.delegation;
+    if (!task || !delegation?.agentId || !matchesSubagentEvent(event, {
+      agentId: delegation.agentId,
+      type: delegation.type,
+    })) return;
+    blockDelegatedTask(ctx, task.id, subagentFailureReason(event), delegation.agentId);
+  }
+
+  const unsubscribeSubagentCompleted = pi.events.on("subagents:completed", (event) => {
+    void handleSubagentCompleted(event).catch((error) => {
+      currentContext?.ui.notify(`处理子代理完成事件失败：${textOf(error)}`, "error");
+    });
+  });
+  const unsubscribeSubagentFailed = pi.events.on("subagents:failed", handleSubagentFailed);
 
   async function scheduleWorkflow(ctx: ExtensionContext) {
     if (
@@ -959,6 +1185,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
 
     if (workflowState.currentTaskId) {
+      const currentTask = getWorkflowTask(workflowState, workflowState.currentTaskId);
+      if (workflowState.executor === "subagents") {
+        // A restored delegated task stays attached to its original worker. Never
+        // respawn it automatically after reload or on a parent agent_settled.
+        if (currentTask?.delegation) return;
+        workflowDispatchInFlight = true;
+        void dispatchSubagentTask(ctx, workflowState.currentTaskId);
+        return;
+      }
+
       const nudged = recordWorkflowNudge(workflowState);
       if (nudged === workflowState) return;
       persistWorkflowState(nudged, ctx);
@@ -977,7 +1213,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (!next) return;
 
     workflowDispatchInFlight = true;
-    persistWorkflowState(startWorkflowTask(workflowState, next.id), ctx);
+    const started = startWorkflowTask(workflowState, next.id);
+    persistWorkflowState(started, ctx);
+    if (started.executor === "subagents") {
+      void dispatchSubagentTask(ctx, next.id);
+      return;
+    }
+
     try {
       const selection = await automaticRole(next.role, ctx);
       if (selection.result.role !== next.role) {
@@ -1030,8 +1272,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         return;
       }
       if (action === "cancel") {
-        persistWorkflowState(cancelWorkflow(workflowState), ctx);
-        ctx.ui.notify("工作流已取消。", "info");
+        const activeAgents = workflowState.tasks
+          .map((task) => task.delegation?.agentId)
+          .filter((agentId): agentId is string => typeof agentId === "string");
+        const cancelled = cancelWorkflow(workflowState);
+        persistWorkflowState(cancelled, ctx);
+        workflowDispatchInFlight = false;
+        for (const agentId of activeAgents) emitSubagentStop(agentId);
+        ctx.ui.notify("工作流已取消；已向运行中的子代理发送停止请求。", "info");
         return;
       }
       ctx.ui.notify("用法：/pi-init workflow [status|resume|retry <taskId>|cancel]", "error");
@@ -1059,6 +1307,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
         const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
         workflowModeStatus = config.workflowMode;
+        workflowExecutorStatus = config.workflowExecutor;
         const plan = validateWorkflowPlan({
           summary: params.summary,
           constraints: params.constraints,
@@ -1080,7 +1329,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           };
         }
 
-        const next = createWorkflowState(plan);
+        const next = createWorkflowState({ ...plan, executor: config.workflowExecutor });
         persistWorkflowState(next, ctx);
         if (next.status === "paused") {
           ctx.ui.notify("架构规划已保存，等待用户审阅。审阅后执行 /pi-init workflow resume。", "info");
@@ -1119,8 +1368,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       case "block": {
         if (!workflowState) throw new Error("当前没有活动工作流");
         const taskId = params.taskId ?? workflowState.currentTaskId;
+        const agentId = taskId ? getWorkflowTask(workflowState, taskId)?.delegation?.agentId : undefined;
         const next = blockWorkflowTask(workflowState, { taskId, reason: params.reason });
         persistWorkflowState(next, ctx);
+        workflowDispatchInFlight = false;
+        if (agentId) emitSubagentStop(agentId);
         ctx.ui.notify(`工作流已暂停：任务 ${taskId} 被标记为阻塞。`, "warning");
         return { content: [{ type: "text", text: formatWorkflowState(next) }], details: next, terminate: true };
       }
@@ -1138,9 +1390,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
       case "cancel": {
         if (!workflowState) throw new Error("当前没有活动工作流");
+        const activeAgents = workflowState.tasks
+          .map((task) => task.delegation?.agentId)
+          .filter((agentId): agentId is string => typeof agentId === "string");
         const next = cancelWorkflow(workflowState);
         persistWorkflowState(next, ctx);
-        return { content: [{ type: "text", text: "工作流已取消。" }], details: next, terminate: true };
+        workflowDispatchInFlight = false;
+        for (const agentId of activeAgents) emitSubagentStop(agentId);
+        return { content: [{ type: "text", text: "工作流已取消，并已向运行中的子代理发送停止请求。" }], details: next, terminate: true };
       }
       default:
         throw new Error(`未知工作流动作：${params.action}`);
@@ -1221,15 +1478,31 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     ], { selectedValue: config.workflowMode });
     if (!choice || choice === "back") return;
 
-    const next = await writeWorkflowConfig(ctx, choice);
+    const executor = await showMenu(ctx, "工作流执行器", [
+      {
+        value: "local",
+        label: config.workflowExecutor === "local" ? "保持主会话顺序执行" : "主会话顺序执行",
+        description: "使用当前会话和现有角色切换逻辑",
+      },
+      {
+        value: "subagents",
+        label: config.workflowExecutor === "subagents" ? "保持 pi-subagents 子代理" : "pi-subagents 子代理",
+        description: "需要已安装并启用 @tintinweb/pi-subagents；共享工作区，顺序委派",
+      },
+      { value: "back", label: "← 返回上一级" },
+    ], { selectedValue: config.workflowExecutor });
+    if (!executor || executor === "back") return;
+
+    const next = await writeWorkflowConfig(ctx, choice, executor);
     workflowModeStatus = next.workflowMode;
+    workflowExecutorStatus = next.workflowExecutor;
     refreshRoleStatus(ctx, roleModeStatus);
     ctx.ui.notify(
       next.workflowMode === "off"
-        ? "项目任务工作流已关闭；新规划将被拒绝，已开始的工作流仍可查看和收尾。"
+        ? `项目任务工作流已关闭；执行器配置为${workflowExecutorLabel(next.workflowExecutor)}，新规划将被拒绝。`
         : next.workflowMode === "on"
-          ? "项目任务工作流已设为始终编排；所有合法规划都会创建工作流。"
-          : "项目任务工作流已设为自动；不超过 2 个任务的规划将跳过编排。",
+          ? `项目任务工作流已设为始终编排，执行器为${workflowExecutorLabel(next.workflowExecutor)}。`
+          : `项目任务工作流已设为自动，执行器为${workflowExecutorLabel(next.workflowExecutor)}；不超过 2 个任务的规划将跳过编排。`,
       "info",
     );
   }
@@ -1336,6 +1609,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     while (true) {
       const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
       workflowModeStatus = config.workflowMode;
+      workflowExecutorStatus = config.workflowExecutor;
       const mode = sessionModeOverride ?? config.mode;
       const role = activeRoleFor(ctx);
       const currentModel = ctx.model
@@ -1348,6 +1622,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           : "角色  尚未切换（按任务自动选择）",
         `模型  ${currentModel}`,
         `工作流策略  ${workflowModeLabel(config.workflowMode)}`,
+        `工作流执行器  ${workflowExecutorLabel(config.workflowExecutor)}`,
         `工作流状态  ${workflowStateLabel()}`,
       ];
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
@@ -1387,14 +1662,27 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   pi.on("agent_settled", async (_event, ctx) => {
+    currentContext = ctx;
     startPendingRoleCompaction(ctx);
     await scheduleWorkflow(ctx);
   });
 
+  pi.on("session_shutdown", async () => {
+    runtimeDisposed = true;
+    unsubscribeSubagentCompleted();
+    unsubscribeSubagentFailed();
+    for (const cleanup of [...pendingSubagentReplyCleanups]) cleanup();
+    pendingSubagentReplyCleanups.clear();
+    currentContext = undefined;
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     try {
+      runtimeDisposed = false;
       const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      currentContext = ctx;
       workflowModeStatus = config.workflowMode;
+      workflowExecutorStatus = config.workflowExecutor;
       const role = findMatchingRole(config, ctx.model, pi.getThinkingLevel());
       activeRole = role && ctx.model
         ? {
