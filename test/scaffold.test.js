@@ -44,6 +44,8 @@ import {
   createWorkflowState,
   getNextWorkflowTask,
   getWorkflowTaskDuration,
+  getWorkflowExecutionBounds,
+  getWorkflowExecutionDuration,
   hydrateWorkflowState,
   markWorkflowTaskStarted,
   recordWorkflowDelegationFailure,
@@ -766,51 +768,81 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
 });
 
-test("task_workflow 完成结果渲染完整摘要和时间报告", () => {
+test("task_workflow 区分中间任务和最终工作流报告并保留样式", () => {
   const harness = createExtensionHarness();
   const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
   assert.ok(workflowTool);
-
-  const started = startWorkflowTask(
-    createWorkflowState({
-      summary: "完成任务",
-      tasks: [{ id: "task", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
-    }, 100),
-    "task",
-    110,
+  const theme = {
+    fg: (color, text) => `<${color}>${text}</${color}>`,
+    bold: (text) => `<bold>${text}</bold>`,
+  };
+  const planned = createWorkflowState({
+    summary: "冻结认证改造",
+    tasks: [
+      { id: "schema", task: "更新结构", files: ["src/schema.js"], acceptanceCriteria: ["测试通过"] },
+      { id: "docs", task: "更新文档", files: ["README.md"], acceptanceCriteria: ["文档同步"], dependsOn: ["schema"] },
+    ],
+  }, 100);
+  const firstStarted = markWorkflowTaskStarted(startWorkflowTask(planned, "schema", 110), "schema", 115);
+  const intermediate = completeWorkflowTask(
+    firstStarted,
+    { taskId: "schema", completionSummary: "结构完成", verification: ["npm test：通过"] },
+    125,
   );
+  const finalStarted = markWorkflowTaskStarted(startWorkflowTask(intermediate, "docs", 150), "docs", 155);
   const completed = completeWorkflowTask(
-    started,
-    { taskId: "task", completionSummary: "实现已完成", verification: ["npm test：通过"] },
+    finalStarted,
+    { taskId: "docs", completionSummary: "文档完成", verification: ["git diff --check：通过"] },
     175,
   );
-  const report = [
+
+  const taskReport = [
     "任务完成报告",
-    "开始时间：1970-01-01T00:00:00.110Z",
-    "结束时间：1970-01-01T00:00:00.175Z",
-    "总耗时：65 毫秒",
-    "完成摘要：实现已完成",
+    "任务 ID：schema",
+    "总耗时：10 毫秒",
+    "完成摘要：结构完成",
   ].join("\n");
-  const component = workflowTool.renderResult(
-    {
-      isError: false,
-      content: [{ type: "text", text: `${report}\n\n工作流已完成。` }],
-      details: completed,
-    },
+  const taskRendered = workflowTool.renderResult(
+    { isError: false, content: [{ type: "text", text: taskReport }], details: intermediate },
     { expanded: false },
-    {
-      fg: (color, text) => `<${color}>${text}</${color}>`,
-      bold: (text) => `<bold>${text}</bold>`,
-    },
-  );
-  const rendered = component.render(240).join("\n");
-  assert.match(rendered, /<accent><bold>◆ 任务完成报告<\/bold><\/accent>/);
-  assert.match(rendered, /<warning><bold>总耗时：65 毫秒<\/bold><\/warning>/);
-  assert.match(rendered, /任务完成报告/);
-  assert.match(rendered, /开始时间：1970-01-01T00:00:00\.110Z/);
-  assert.match(rendered, /结束时间：1970-01-01T00:00:00\.175Z/);
-  assert.match(rendered, /总耗时：65 毫秒/);
-  assert.match(rendered, /完成摘要：实现已完成/);
+    theme,
+  ).render(240).join("\n");
+  assert.match(taskRendered, /<accent><bold>◆ 任务完成报告<\/bold><\/accent>/);
+  assert.match(taskRendered, /<warning><bold>总耗时：10 毫秒<\/bold><\/warning>/);
+  assert.doesNotMatch(taskRendered, /工作流完成报告/);
+  assert.doesNotMatch(taskRendered, /整体总耗时/);
+
+  const workflowReport = [
+    "工作流完成报告",
+    "工作流目标：冻结认证改造",
+    "整体工作总结：",
+    "完成进度：2/2",
+    "- schema：结构完成",
+    "- docs：文档完成",
+    "工作复盘：",
+    "冻结时间：1970-01-01T00:00:00.100Z",
+    "实际开始时间：1970-01-01T00:00:00.115Z",
+    "结束时间：1970-01-01T00:00:00.175Z",
+    "整体总耗时：60 毫秒",
+    "汇总验证：",
+    "- schema：npm test：通过",
+    "- docs：git diff --check：通过",
+  ].join("\n");
+  const workflowRendered = workflowTool.renderResult(
+    { isError: false, content: [{ type: "text", text: workflowReport }], details: completed },
+    { expanded: false },
+    theme,
+  ).render(240).join("\n");
+  assert.match(workflowRendered, /<accent><bold>◆ 工作流完成报告<\/bold><\/accent>/);
+  assert.match(workflowRendered, /<success><bold>工作流目标：冻结认证改造<\/bold><\/success>/);
+  assert.match(workflowRendered, /<success><bold>整体工作总结：<\/bold><\/success>/);
+  assert.match(workflowRendered, /<success><bold>完成进度：2\/2<\/bold><\/success>/);
+  assert.match(workflowRendered, /<success><bold>工作复盘：<\/bold><\/success>/);
+  assert.match(workflowRendered, /<warning><bold>整体总耗时：60 毫秒<\/bold><\/warning>/);
+  assert.match(workflowRendered, /实际开始时间：1970-01-01T00:00:00\.115Z/);
+  assert.match(workflowRendered, /结束时间：1970-01-01T00:00:00\.175Z/);
+  assert.match(workflowRendered, /schema：结构完成/);
+  assert.match(workflowRendered, /docs：git diff --check：通过/);
 });
 
 test("活动 subagents 工作流和会话中断不会伪造普通执行报告", async () => {
@@ -868,9 +900,11 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /markWorkflowTaskStarted/);
   assert.match(extension, /pi\.on\("agent_start"[\s\S]*?markWorkflowTaskStarted\(workflowState, task\.id\)/);
   assert.match(extension, /function formatWorkflowTaskCompletion\(task: ReturnType<typeof getWorkflowTask>\)/);
-  for (const field of ["任务 ID：", "任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "完成摘要：", "验证结果："]) {
+  assert.match(extension, /function formatWorkflowCompletion\(state: ReturnType<typeof createWorkflowState>\)/);
+  for (const field of ["任务 ID：", "任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "完成摘要：", "验证结果：", "工作流目标：", "整体工作总结：", "完成进度：", "工作复盘：", "冻结时间：", "实际开始时间：", "整体总耗时：", "汇总验证："]) {
     assert.match(extension, new RegExp(field));
   }
+  assert.doesNotMatch(extension, /工作流摘要：|任务进度：|各任务摘要：/);
   assert.match(extension, /历史任务未记录开始时间/);
   assert.match(extension, /async function configureWorkflow\(ctx: ExtensionCommandContext\)/);
   assert.match(extension, /requested === "workflow"/);
@@ -900,7 +934,11 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   );
   assert.match(
     extension,
-    /case "complete":[\s\S]*?const completionReport = formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?content: \[\{ type: "text", text: `\$\{completionReport\}/,
+    /case "complete":[\s\S]*?const taskCompletionReport = formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?formatWorkflowCompletion\(next\)[\s\S]*?content: \[\{ type: "text", text: `\$\{completionReport\}/,
+  );
+  assert.match(
+    extension,
+    /handleSubagentCompleted[\s\S]*?const taskCompletionReport = formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?formatWorkflowCompletion\(next\)[\s\S]*?ctx\.ui\.notify\(completionReport, "info"\)/,
   );
   assert.match(extension, /subagents:failed/);
   assert.match(extension, /parseSubagentResult/);
@@ -1073,6 +1111,8 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   const firstStarted = markWorkflowTaskStarted(first, "schema", 115);
   assert.equal(firstStarted.tasks[0].startedAt, 115);
   assert.equal(firstStarted.tasks[0].executionStartedAt, 115);
+  assert.equal(firstStarted.startedAt, 115);
+  assert.equal(getWorkflowExecutionBounds(firstStarted).startedAt, 115);
   assert.equal(markWorkflowTaskStarted(firstStarted, "schema", 119), firstStarted);
   const second = completeWorkflowTask(
     firstStarted,
@@ -1082,19 +1122,27 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   assert.equal(second.currentTaskId, undefined);
   assert.equal(second.tasks[0].completedAt, 120);
   assert.equal(getWorkflowTaskDuration(second.tasks[0]), 5);
+  assert.equal(second.completedAt, undefined);
+  assert.equal(getWorkflowExecutionDuration(second), 5);
   assert.equal(getNextWorkflowTask(second).id, "service");
+  const secondStarted = markWorkflowTaskStarted(startWorkflowTask(second, "service", 130), "service", 135);
   const third = completeWorkflowTask(
-    startWorkflowTask(second, "service", 130),
+    secondStarted,
     { taskId: "service", completionSummary: "服务已切换", verification: ["npm test：通过"] },
     140,
   );
   assert.equal(getNextWorkflowTask(third).id, "docs");
+  const finishedStarted = markWorkflowTaskStarted(startWorkflowTask(third, "docs", 150), "docs", 155);
   const finished = completeWorkflowTask(
-    startWorkflowTask(third, "docs", 150),
+    finishedStarted,
     { taskId: "docs", completionSummary: "文档已同步", verification: ["git diff --check：通过"] },
     160,
   );
   assert.equal(finished.status, "completed");
+  assert.equal(finished.startedAt, 115);
+  assert.equal(finished.completedAt, 160);
+  assert.deepEqual(getWorkflowExecutionBounds(finished), { startedAt: 115, completedAt: 160 });
+  assert.equal(getWorkflowExecutionDuration(finished), 45);
   assert.deepEqual(workflowProgress(finished), { completed: 3, total: 3, blocked: 0, currentTaskId: undefined });
 });
 
@@ -1132,6 +1180,20 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
   assert.equal(refreshedStart.tasks[0].startedAt, 30);
   assert.equal(refreshedStart.tasks[0].executionStartedAt, 30);
   assert.equal(restored.tasks[0].delegation, undefined);
+
+  const legacyCompleted = hydrateWorkflowState({
+    ...legacy,
+    status: "completed",
+    currentTaskId: undefined,
+    tasks: [{ ...legacy.tasks[0], status: "completed", startedAt: 40, completedAt: 70 }],
+  });
+  assert.deepEqual(getWorkflowExecutionBounds(legacyCompleted), { startedAt: 40, completedAt: 70 });
+  assert.equal(getWorkflowExecutionDuration(legacyCompleted), 30);
+  assert.equal(getWorkflowExecutionDuration({ startedAt: 80, completedAt: 70, tasks: [] }), undefined);
+  assert.throws(
+    () => hydrateWorkflowState({ ...legacy, startedAt: 80, completedAt: 70 }),
+    /completedAt 早于 startedAt/,
+  );
 });
 
 test("subagents 工作流保存绑定、失败和取消状态", () => {

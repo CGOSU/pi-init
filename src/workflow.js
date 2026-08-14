@@ -184,6 +184,41 @@ export function getWorkflowTask(state, taskId) {
   return state?.tasks?.find((task) => task.id === taskId);
 }
 
+function taskTimestampRange(state, field, reducer, initialValue) {
+  return (state?.tasks ?? [])
+    .map((task) => task[field])
+    .filter((value) => Number.isFinite(value))
+    .reduce(reducer, initialValue);
+}
+
+export function getWorkflowExecutionBounds(state) {
+  if (!state || typeof state !== "object") {
+    return { startedAt: undefined, completedAt: undefined };
+  }
+
+  const startedAt = state.startedAt === undefined
+    ? taskTimestampRange(state, "startedAt", (earliest, value) => Math.min(earliest, value), Infinity)
+    : Number.isFinite(state.startedAt)
+      ? state.startedAt
+      : undefined;
+  const completedAt = state.completedAt === undefined
+    ? taskTimestampRange(state, "completedAt", (latest, value) => Math.max(latest, value), -Infinity)
+    : Number.isFinite(state.completedAt)
+      ? state.completedAt
+      : undefined;
+
+  return {
+    startedAt: Number.isFinite(startedAt) ? startedAt : undefined,
+    completedAt: Number.isFinite(completedAt) ? completedAt : undefined,
+  };
+}
+
+export function getWorkflowExecutionDuration(state) {
+  const { startedAt, completedAt } = getWorkflowExecutionBounds(state);
+  if (startedAt === undefined || completedAt === undefined || completedAt < startedAt) return undefined;
+  return completedAt - startedAt;
+}
+
 function cloneState(state, now = Date.now()) {
   return {
     ...state,
@@ -245,6 +280,11 @@ export function hydrateWorkflowState(state) {
   if (!Array.isArray(state.tasks) || state.tasks.length === 0) {
     throw new Error("已保存的工作流状态缺少任务");
   }
+  const startedAt = normalizeTimestamp(state.startedAt, "已保存的工作流 startedAt");
+  const completedAt = normalizeTimestamp(state.completedAt, "已保存的工作流 completedAt");
+  if (startedAt !== undefined && completedAt !== undefined && completedAt < startedAt) {
+    throw new Error("已保存的工作流 completedAt 早于 startedAt");
+  }
 
   return {
     ...state,
@@ -256,6 +296,8 @@ export function hydrateWorkflowState(state) {
       summary: requireText(state.plan?.summary, "已保存的工作流规划摘要"),
       constraints: normalizeTextList(state.plan?.constraints, "已保存的工作流约束"),
     },
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
     tasks: state.tasks.map(normalizeHydratedTask),
   };
 }
@@ -305,6 +347,9 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
   const startedTask = getWorkflowTask(result, taskId);
   startedTask.startedAt = now;
   startedTask.executionStartedAt = now;
+  if (result.startedAt === undefined) {
+    result.startedAt = getWorkflowExecutionBounds(state).startedAt ?? now;
+  }
   return result;
 }
 
@@ -408,6 +453,9 @@ export function completeWorkflowTask(state, { taskId, completionSummary, verific
   result.nudgeCount = 0;
   if (result.tasks.every((item) => item.status === "completed")) {
     result.status = "completed";
+    result.completedAt = now;
+  } else {
+    delete result.completedAt;
   }
   return result;
 }

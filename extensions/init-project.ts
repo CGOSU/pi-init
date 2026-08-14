@@ -37,6 +37,8 @@ import {
   getNextWorkflowTask,
   getWorkflowTask,
   getWorkflowTaskDuration,
+  getWorkflowExecutionBounds,
+  getWorkflowExecutionDuration,
   hydrateWorkflowState,
   isWorkflowActive,
   markWorkflowTaskStarted,
@@ -1016,10 +1018,23 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   function styleReportText(report: string, theme: ReportTheme) {
     return report.split("\n").map((line, index) => {
       if (index === 0) return theme.fg("accent", theme.bold(`◆ ${line}`));
-      if (line.startsWith("总耗时：")) return theme.fg("warning", theme.bold(line));
-      if (line.startsWith("完成摘要：")) return theme.fg("success", theme.bold(line));
-      if (line.startsWith("验证结果：")) return theme.fg("success", theme.bold(line));
-      if (line.startsWith("开始时间：") || line.startsWith("结束时间：")) return theme.fg("accent", line);
+      if (line.startsWith("总耗时：") || line.startsWith("整体总耗时：")) return theme.fg("warning", theme.bold(line));
+      if (
+        line.startsWith("完成摘要：") ||
+        line.startsWith("工作流目标：") ||
+        line.startsWith("整体工作总结：") ||
+        line.startsWith("完成进度：") ||
+        line.startsWith("工作复盘：")
+      ) return theme.fg("success", theme.bold(line));
+      if (line.startsWith("验证结果：") || line.startsWith("汇总验证：")) {
+        return theme.fg("success", theme.bold(line));
+      }
+      if (
+        line.startsWith("冻结时间：") ||
+        line.startsWith("开始时间：") ||
+        line.startsWith("结束时间：") ||
+        line.startsWith("实际开始时间：")
+      ) return theme.fg("accent", line);
       if (line.startsWith("计时口径：")) return theme.fg("dim", line);
       if (line.startsWith("- ")) return theme.fg("muted", line);
       return theme.fg("text", line);
@@ -1058,6 +1073,39 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       `总耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
       `完成摘要：${task.completionSummary ?? "无"}`,
       `验证结果：\n${verification}`,
+    ].join("\n");
+  }
+
+  function formatWorkflowExecutionDuration(state: ReturnType<typeof createWorkflowState>) {
+    const duration = getWorkflowExecutionDuration(state);
+    return duration === undefined
+      ? "不可用（工作流缺少有效的整体开始或结束时间）"
+      : formatWorkflowDuration(duration);
+  }
+
+  function formatWorkflowCompletion(state: ReturnType<typeof createWorkflowState>) {
+    const progress = workflowProgress(state);
+    const bounds = getWorkflowExecutionBounds(state);
+    const taskSummaries = state.tasks
+      .map((task) => `- ${task.id}：${task.completionSummary ?? "无"}`)
+      .join("\n") || "- 无";
+    const verification = state.tasks
+      .flatMap((task) => (task.verification ?? []).map((item) => `- ${task.id}：${item}`))
+      .join("\n") || "- 无";
+
+    return [
+      "工作流完成报告",
+      `工作流目标：${state.plan.summary}`,
+      "整体工作总结：",
+      `完成进度：${progress.completed}/${progress.total}`,
+      taskSummaries,
+      "工作复盘：",
+      `冻结时间：${formatWorkflowTimestamp(state.createdAt, "不可用（无效的冻结时间）")}`,
+      `实际开始时间：${formatWorkflowTimestamp(bounds.startedAt, "不可用（工作流未记录有效的实际开始时间）")}`,
+      `结束时间：${formatWorkflowTimestamp(bounds.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
+      `整体总耗时：${formatWorkflowExecutionDuration(state)}`,
+      "汇总验证：",
+      verification,
     ].join("\n");
   }
 
@@ -1278,9 +1326,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         verification: result.verification,
       });
       const completedTask = getWorkflowTask(next, task.id);
+      const taskCompletionReport = formatWorkflowTaskCompletion(completedTask);
+      const completionReport = next.status === "completed"
+        ? formatWorkflowCompletion(next)
+        : taskCompletionReport;
       persistWorkflowState(next, ctx);
       workflowDispatchInFlight = false;
-      ctx.ui.notify(formatWorkflowTaskCompletion(completedTask), "info");
+      ctx.ui.notify(completionReport, "info");
       await scheduleWorkflow(ctx);
     } catch (error) {
       blockDelegatedTask(ctx, task.id, `子代理结果无效：${textOf(error)}`, delegation.agentId);
@@ -1492,7 +1544,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           verification: params.verification,
         });
         const completedTask = getWorkflowTask(next, task.id);
-        const completionReport = formatWorkflowTaskCompletion(completedTask);
+        const taskCompletionReport = formatWorkflowTaskCompletion(completedTask);
+        const completionReport = next.status === "completed"
+          ? formatWorkflowCompletion(next)
+          : taskCompletionReport;
         persistWorkflowState(next, ctx);
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : `任务 ${task.id} 已完成，下一任务将自动开始。`}\n${formatWorkflowState(next)}` }],
@@ -2020,7 +2075,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (result.isError) return new Text(theme.fg("error", "工作流操作失败"), 0, 0);
       const firstContent = result.content[0];
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
-      if (contentText.startsWith("任务完成报告")) return new Text(styleReportText(contentText, theme), 0, 0);
+      if (contentText.startsWith("任务完成报告") || contentText.startsWith("工作流完成报告")) {
+        return new Text(styleReportText(contentText, theme), 0, 0);
+      }
 
       const details = result.details as ReturnType<typeof createWorkflowState> | undefined;
       if (!details || !Array.isArray(details.tasks)) {

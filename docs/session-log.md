@@ -1,5 +1,17 @@
 # 会话记录
 
+### 2026-08-14：将最终摘要改为整体工作总结与复盘
+
+- 完成内容：最终报告保留冻结规划作为“工作流目标”，新增“整体工作总结”“工作复盘”“汇总验证”；总结和验证按任务顺序从持久化状态确定性汇总，复盘使用已有冻结时间、整体实际执行区间和总耗时，不增加模型调用。更新 local/subagents 共用报告的 TUI 样式和回归测试。
+- 验证：`npm test`，33 项通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：真实模型连续多任务、subagents 生命周期和交互式 TUI 视觉验收仍未执行。
+
+### 2026-08-14：增加冻结工作流整体完成报告
+
+- 完成内容：持久化工作流级实际开始/完成时间；最终 `task_workflow` 报告使用冻结的 `state.plan.summary`，汇总全部任务和验证结果，并展示从首个任务实际开始到最后任务完成的整体耗时。中间任务仍使用任务级报告，local 与 `subagents` 完成路径统一格式和醒目 TUI 样式。
+- 验证：`npm test`，33 项通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：真实模型连续多任务、subagents 生命周期和交互式 TUI 视觉验收仍未执行。
+
 ### 2026-08-14：修复 task_workflow 完成报告显示
 
 - 完成内容：修复 `task_workflow complete` 的 `renderResult`，不再让工作流进度摘要覆盖完整任务完成报告；现在会显示任务摘要、开始时间、结束时间、总耗时和验证结果。
