@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-14：通过 package postinstall 同步 pi-usage 独立启动器
+
+- 决定：将跨平台 `scripts/install-launchers.js` 配置为 package 的 `postinstall`，让 `pi update --extensions` 触发 package 安装时重新复制 `pi-usage` 启动器和脚本到 Pi 可执行目录。
+- 原因：启动器是独立复制到 PATH 的文件，不属于 Pi package 资源目录；仅更新 package 不会自动替换已安装的启动器。
+- 约束：按 `process.platform` 选择 `.cmd` 或 POSIX shell 启动器；找不到 `pi` 时必须安全跳过并提示手动安装，不得阻断 package 更新；npm 禁用 lifecycle scripts 时仍需保留手动安装路径。
+
 ### 2026-08-14：工作流策略独立于角色与模型配置并合并到主状态
 
 - 决定：控制中心将工作流策略作为独立的顶层“变更”入口，不再嵌入“变更 · 角色与模型”；主 `pi-init` 状态项同时显示角色模型和工作流策略/进度，保留独立工作流进度菜单用于查看和操作。

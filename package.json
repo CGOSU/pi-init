@@ -13,7 +13,8 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "postinstall": "node scripts/install-launchers.js"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.3"

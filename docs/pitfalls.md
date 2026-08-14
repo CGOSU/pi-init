@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-08-14：Pi 更新不会自动刷新独立复制的启动器
+
+- 现象：`pi update --extensions` 更新 package 后，PATH 中独立安装的 `pi-usage` 仍可能是旧版本。
+- 根因：Pi package 资源目录与手动复制到 Pi 可执行目录的启动器是两套文件；后者不属于扩展资源，更新 package 不会自动同步。
+- 修复：在 package `postinstall` 中执行跨平台启动器复制；找不到 `pi` 时安全跳过，避免影响 package 更新。
+- 验证：回归测试覆盖 Windows 和 POSIX 启动器复制；`npm test` 26 项通过。
+
 ### 2026-08-14：整格柱状图会掩盖接近的 token 数差异
 
 - 现象：`pi-usage` 中不同模型的 token 数不同，但柱状图长度看起来相同。

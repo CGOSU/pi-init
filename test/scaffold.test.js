@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { installLaunchers } from "../scripts/install-launchers.js";
 import {
   dateRange,
   formatReport,
@@ -87,6 +88,19 @@ test("跨平台 Pi 用量统计启动器指向共享脚本", async () => {
 
   assert.match(files.windowsUsage, /pi-usage\.js/);
   assert.match(files.posixUsage, /pi-usage\.js/);
+});
+
+test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
+  await withTempDirectory(async (directory) => {
+    const packageManifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+    assert.equal(packageManifest.scripts.postinstall, "node scripts/install-launchers.js");
+
+    assert.equal(await installLaunchers({ targetDir: directory, platform: "win32" }), true);
+    assert.equal(await installLaunchers({ targetDir: directory, platform: "linux" }), true);
+    assert.match(await readFile(path.join(directory, "pi-usage.cmd"), "utf8"), /pi-usage\.js/);
+    assert.match(await readFile(path.join(directory, "pi-usage"), "utf8"), /pi-usage\.js/);
+    assert.match(await readFile(path.join(directory, "pi-usage.js"), "utf8"), /DUCKDB_PACKAGE/);
+  });
 });
 
 test("pi-usage 默认日期范围从本地午夜开始", () => {

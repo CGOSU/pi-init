@@ -20,6 +20,13 @@
 - 验证：`node --test --test-name-pattern='柱状图使用分数块' test/scaffold.test.js` 通过；`node --check scripts/pi-usage.js`、`git diff --check` 和 `npm test`（25 项通过）通过。
 - 遗留问题：未提交或推送。
 
+### 2026-08-14：pi-usage 随 Pi package 更新自动重装启动器
+
+- 完成内容：新增跨平台 `scripts/install-launchers.js`，并配置 package `postinstall`；`pi update --extensions` 触发 npm 安装流程时，会根据当前平台重新复制 `pi-usage` 启动器和脚本。
+- 完成内容：找不到 `pi` 或 npm 禁用 lifecycle scripts 时不阻断 package 更新；补充 README 和安装回归测试。
+- 验证：`node --check scripts/install-launchers.js`、`node --check scripts/pi-usage.js`、`git diff --check` 和 `npm test`（26 项通过）通过。
+- 遗留问题：尚未提交或推送。
+
 本文件按时间追加每次工作的完成内容、实际验证和遗留问题，不记录敏感信息或未经验证的结果。
 
 ### 2026-08-14：增加 task_workflow 全局开关
