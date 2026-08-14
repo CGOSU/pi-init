@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import initProjectExtension from "../extensions/init-project.ts";
 import { installLaunchers } from "../scripts/install-launchers.js";
 import {
   dateRange,
@@ -62,6 +63,12 @@ import {
   parseSubagentSpawnReply,
   subagentFailureReason,
 } from "../src/subagents.js";
+import {
+  completeRunTiming,
+  createRunTiming,
+  getRunTimingDuration,
+  isExternalRunSource,
+} from "../src/run-timing.js";
 
 function normalizeNewlines(value) {
   return value.replaceAll("\r\n", "\n");
@@ -74,6 +81,73 @@ async function withTempDirectory(run) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+function createExtensionHarness(branch = []) {
+  const handlers = new Map();
+  const entries = [];
+  const renderers = new Map();
+  const tools = [];
+  const pi = {
+    on(name, handler) {
+      const registered = handlers.get(name) ?? [];
+      registered.push(handler);
+      handlers.set(name, registered);
+    },
+    events: {
+      on() {
+        return () => {};
+      },
+      emit() {},
+    },
+    appendEntry(type, data) {
+      entries.push({ type, data });
+    },
+    registerCommand() {},
+    registerEntryRenderer(type, renderer) {
+      renderers.set(type, renderer);
+    },
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    getThinkingLevel() {
+      return "max";
+    },
+    setThinkingLevel() {},
+    async setModel() {
+      return true;
+    },
+    sendMessage() {},
+  };
+  initProjectExtension(pi);
+
+  const context = {
+    model: undefined,
+    ui: {
+      notify() {},
+      setStatus() {},
+    },
+    sessionManager: {
+      getBranch() {
+        return branch;
+      },
+    },
+  };
+  return { handlers, entries, renderers, tools, context };
+}
+
+async function emitExtensionEvent(harness, name, event = {}) {
+  for (const handler of harness.handlers.get(name) ?? []) {
+    await handler(event, harness.context);
+  }
+}
+
+async function runExternalAgent(harness, source) {
+  await emitExtensionEvent(harness, "input", { source });
+  await emitExtensionEvent(harness, "before_agent_start");
+  await emitExtensionEvent(harness, "agent_start");
+  await emitExtensionEvent(harness, "agent_start");
+  await emitExtensionEvent(harness, "agent_settled");
 }
 
 function assertSkillMatchesRoleConfig(skill, config) {
@@ -631,6 +705,136 @@ test("恢复会话角色要求模型和推理强度唯一匹配", () => {
     ),
     undefined,
   );
+});
+
+test("普通执行计时限定外部来源并拒绝无效时间边界", () => {
+  assert.equal(isExternalRunSource("interactive"), true);
+  assert.equal(isExternalRunSource("rpc"), true);
+  assert.equal(isExternalRunSource("extension"), false);
+  assert.equal(isExternalRunSource(undefined), false);
+
+  const started = createRunTiming("interactive", 100);
+  assert.deepEqual(started, { source: "interactive", startedAt: 100 });
+  assert.equal(getRunTimingDuration(started), undefined);
+  assert.equal(createRunTiming("extension", 100), undefined);
+  assert.equal(createRunTiming("interactive", Number.NaN), undefined);
+  assert.equal(createRunTiming("interactive", Number.POSITIVE_INFINITY), undefined);
+
+  const completed = completeRunTiming(started, 175);
+  assert.deepEqual(completed, { source: "interactive", startedAt: 100, completedAt: 175 });
+  assert.equal(getRunTimingDuration(completed), 75);
+  assert.equal(completeRunTiming(started, 99), undefined);
+  assert.equal(completeRunTiming(started, Number.NaN), undefined);
+  assert.equal(completeRunTiming({ source: "extension", startedAt: 100 }, 175), undefined);
+  assert.equal(getRunTimingDuration({ ...completed, completedAt: 99 }), undefined);
+  assert.equal(getRunTimingDuration({ ...completed, completedAt: Number.POSITIVE_INFINITY }), undefined);
+});
+
+test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告", async () => {
+  const harness = createExtensionHarness();
+  await runExternalAgent(harness, "interactive");
+  await runExternalAgent(harness, "rpc");
+  await runExternalAgent(harness, "extension");
+
+  assert.equal(harness.entries.length, 2);
+  assert.deepEqual(harness.entries.map(({ type, data }) => ({ type, source: data.source })), [
+    { type: "pi-init-run-timing", source: "interactive" },
+    { type: "pi-init-run-timing", source: "rpc" },
+  ]);
+  for (const entry of harness.entries) {
+    assert.equal(typeof entry.data.startedAt, "number");
+    assert.equal(typeof entry.data.completedAt, "number");
+    assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
+  }
+
+  const renderer = harness.renderers.get("pi-init-run-timing");
+  assert.equal(typeof renderer, "function");
+  const component = renderer(
+    { data: harness.entries[0].data },
+    { expanded: false },
+    { fg: (_color, text) => text },
+  );
+  const rendered = component.render(240).join("\n");
+  assert.match(rendered, /普通执行时间报告/);
+  assert.match(rendered, /开始时间：/);
+  assert.match(rendered, /结束时间：/);
+  assert.match(rendered, /总耗时：/);
+  assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
+});
+
+test("task_workflow 完成结果渲染完整摘要和时间报告", () => {
+  const harness = createExtensionHarness();
+  const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
+  assert.ok(workflowTool);
+
+  const started = startWorkflowTask(
+    createWorkflowState({
+      summary: "完成任务",
+      tasks: [{ id: "task", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+    }, 100),
+    "task",
+    110,
+  );
+  const completed = completeWorkflowTask(
+    started,
+    { taskId: "task", completionSummary: "实现已完成", verification: ["npm test：通过"] },
+    175,
+  );
+  const report = [
+    "任务完成报告",
+    "开始时间：1970-01-01T00:00:00.110Z",
+    "结束时间：1970-01-01T00:00:00.175Z",
+    "总耗时：65 毫秒",
+    "完成摘要：实现已完成",
+  ].join("\\n");
+  const component = workflowTool.renderResult(
+    {
+      isError: false,
+      content: [{ type: "text", text: `${report}\\n\\n工作流已完成。` }],
+      details: completed,
+    },
+    { expanded: false },
+    { fg: (_color, text) => text },
+  );
+  const rendered = component.render(240).join("\\n");
+  assert.match(rendered, /任务完成报告/);
+  assert.match(rendered, /开始时间：1970-01-01T00:00:00\.110Z/);
+  assert.match(rendered, /结束时间：1970-01-01T00:00:00\.175Z/);
+  assert.match(rendered, /总耗时：65 毫秒/);
+  assert.match(rendered, /完成摘要：实现已完成/);
+});
+
+test("活动 subagents 工作流和会话中断不会伪造普通执行报告", async () => {
+  const workflow = bindWorkflowAgent(
+    beginWorkflowDelegation(
+      startWorkflowTask(
+        createWorkflowState({
+          executor: "subagents",
+          summary: "委派任务",
+          tasks: [{ id: "task", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+        }, 100),
+        "task",
+        110,
+      ),
+      { taskId: "task", requestId: "request", type: "workflow-developer" },
+      120,
+    ),
+    { taskId: "task", agentId: "agent" },
+    130,
+  );
+  const branch = [{ type: "custom", customType: "pi-init-workflow", data: workflow }];
+  const workflowHarness = createExtensionHarness(branch);
+  await emitExtensionEvent(workflowHarness, "session_tree");
+  await runExternalAgent(workflowHarness, "rpc");
+  assert.equal(workflowHarness.entries.length, 0);
+
+  const interruptedHarness = createExtensionHarness();
+  await emitExtensionEvent(interruptedHarness, "input", { source: "interactive" });
+  await emitExtensionEvent(interruptedHarness, "before_agent_start");
+  await emitExtensionEvent(interruptedHarness, "agent_start");
+  await emitExtensionEvent(interruptedHarness, "session_shutdown");
+  await emitExtensionEvent(interruptedHarness, "agent_settled");
+  assert.equal(interruptedHarness.entries.length, 0);
 });
 
 test("角色切换压缩等待 agent 完全结束而不是回合结束", async () => {

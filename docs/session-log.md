@@ -1,5 +1,18 @@
 # 会话记录
 
+### 2026-08-14：修复 task_workflow 完成报告显示
+
+- 完成内容：修复 `task_workflow complete` 的 `renderResult`，不再让工作流进度摘要覆盖完整任务完成报告；现在会显示任务摘要、开始时间、结束时间、总耗时和验证结果。
+- 验证：`npm test`，33 项通过；`node --check extensions/init-project.ts`；`node --check test/scaffold.test.js`；`git diff --check` 均通过。
+- 遗留问题：真实交互式 TUI 视觉验收仍未执行。
+
+### 2026-08-14：增加非工作流 Agent 执行时间报告
+
+- 完成内容：新增普通执行计时模型和扩展生命周期接入；`interactive`/`rpc` 输入从首次 `agent_start` 计时到最终 `agent_settled`，完成后写入 `pi-init-run-timing` custom entry，并在 TUI 展示来源、开始/结束时间、总耗时和不等同于任务完成的计时口径。活动工作流、扩展隐藏续跑、subagents 和中断路径不会重复或伪造普通报告。
+- 完成内容：新增核心边界、扩展 harness、custom entry renderer 和工作流计时回归测试。
+- 验证：`npm test`，32 项通过；`node --check test/scaffold.test.js`；`git diff --check` 均通过。
+- 遗留问题：尚未在真实交互式 TUI 和真实模型连续工作流中进行端到端视觉/生命周期演练。
+
 ### 2026-08-14：修正任务完成报告的开始时间
 
 - 完成内容：不再在工作流预调度阶段写入任务开始时间；本地任务在 `agent_start` 生命周期记录实际模型执行开始时间，子代理任务在发起执行前记录开始时间，并用持久化标记避免提醒回合重复刷新。旧状态的过时时间会在首次实际派发时刷新。

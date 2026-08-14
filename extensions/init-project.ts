@@ -49,6 +49,12 @@ import {
   workflowProgress,
 } from "../src/workflow.js";
 import {
+  completeRunTiming,
+  createRunTiming,
+  getRunTimingDuration,
+  isExternalRunSource,
+} from "../src/run-timing.js";
+import {
   matchesSubagentEvent,
   parseSubagentResult,
   parseSubagentSpawnReply,
@@ -90,6 +96,7 @@ const WORKFLOW_SUBAGENT_TYPES = {
   "developer-test": "pi-init-developer-test",
   "docs-commit": "pi-init-docs-commit",
 };
+const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 
 const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
@@ -244,6 +251,12 @@ type RoleModelConfig = {
   provider: string;
   model: string;
   thinkingLevel: string;
+};
+
+type RunTimingEntryData = {
+  source?: unknown;
+  startedAt?: unknown;
+  completedAt?: unknown;
 };
 
 type ResolvedRoleConfig = Record<string, RoleModelConfig> & {
@@ -680,6 +693,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   let workflowExecutorStatus = "local";
   let workflowState: ReturnType<typeof createWorkflowState> | undefined;
   let workflowDispatchInFlight = false;
+  let pendingExternalRunSource: string | undefined;
+  let acceptedExternalRunSource: string | undefined;
+  let externalRunTiming: ReturnType<typeof createRunTiming>;
+  let internalContinuationPending = false;
   let currentContext: ExtensionContext | undefined;
   let subagentRequestSequence = 0;
   let runtimeDisposed = false;
@@ -771,6 +788,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
 
       try {
+        internalContinuationPending = true;
         pi.sendMessage(
           {
             customType: ROLE_SWITCH_CONTINUATION_TYPE,
@@ -781,6 +799,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           { triggerTurn: true },
         );
       } catch (error) {
+        internalContinuationPending = false;
         ctx.ui.notify(`上下文压缩已完成，但无法自动继续：${textOf(error)}`, "warning");
       }
     };
@@ -966,6 +985,47 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return parts.join(" ");
   }
 
+  function formatRunTimingDuration(milliseconds: number | undefined) {
+    return milliseconds === undefined
+      ? "不可用（无效或不完整的时间戳）"
+      : formatWorkflowDuration(milliseconds);
+  }
+
+  function runTimingSourceLabel(source: unknown) {
+    if (source === "interactive") return "交互式输入";
+    if (source === "rpc") return "RPC 输入";
+    return "未知来源";
+  }
+
+  function formatRunTimingReport(data: RunTimingEntryData = {}) {
+    return [
+      "普通执行时间报告",
+      `来源：${runTimingSourceLabel(data.source)}`,
+      `开始时间：${formatWorkflowTimestamp(data.startedAt, "不可用（无效的开始时间）")}`,
+      `结束时间：${formatWorkflowTimestamp(data.completedAt, "不可用（无效的结束时间）")}`,
+      `总耗时：${formatRunTimingDuration(getRunTimingDuration(data))}`,
+      "计时口径：从本次外部输入触发的首次 agent_start 到最终 agent_settled；仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成。",
+    ].join("\n");
+  }
+
+  function settleExternalRunTiming() {
+    const timing = externalRunTiming;
+    externalRunTiming = undefined;
+    pendingExternalRunSource = undefined;
+    acceptedExternalRunSource = undefined;
+    if (!timing || (workflowState && isWorkflowActive(workflowState))) return;
+
+    const completed = completeRunTiming(timing);
+    if (completed) pi.appendEntry(RUN_TIMING_ENTRY_TYPE, completed);
+  }
+
+  pi.registerEntryRenderer<RunTimingEntryData>(RUN_TIMING_ENTRY_TYPE, (entry, _options, theme) => {
+    const data = entry.data && typeof entry.data === "object"
+      ? entry.data as RunTimingEntryData
+      : {};
+    return new Text(theme.fg("dim", formatRunTimingReport(data)), 0, 0);
+  });
+
   function formatWorkflowTaskCompletion(task: ReturnType<typeof getWorkflowTask>) {
     if (!task) throw new Error("无法生成不存在的工作流任务完成报告");
     const verification = task.verification?.map((item) => `- ${item}`).join("\n") ?? "- 无";
@@ -1008,6 +1068,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (!workflowState || workflowState.currentTaskId !== taskId) return;
     workflowDispatchInFlight = false;
     try {
+      internalContinuationPending = true;
       pi.sendMessage(
         {
           customType: "pi-init-workflow-task",
@@ -1018,6 +1079,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         { triggerTurn: true },
       );
     } catch (error) {
+      internalContinuationPending = false;
       ctx.ui.notify(`无法自动进入任务 ${taskId}：${textOf(error)}`, "error");
     }
   }
@@ -1716,8 +1778,46 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
   }
 
+  pi.on("input", async (event) => {
+    if (!isExternalRunSource(event.source)) return { action: "continue" };
+    if (workflowState && isWorkflowActive(workflowState)) {
+      pendingExternalRunSource = undefined;
+      acceptedExternalRunSource = undefined;
+      return { action: "continue" };
+    }
+    if (!externalRunTiming) pendingExternalRunSource = event.source;
+    return { action: "continue" };
+  });
+
+  pi.on("before_agent_start", async () => {
+    if (internalContinuationPending) {
+      internalContinuationPending = false;
+      pendingExternalRunSource = undefined;
+      acceptedExternalRunSource = undefined;
+      return;
+    }
+    if (!pendingExternalRunSource) return;
+    if (externalRunTiming || (workflowState && isWorkflowActive(workflowState))) {
+      pendingExternalRunSource = undefined;
+      acceptedExternalRunSource = undefined;
+      return;
+    }
+    acceptedExternalRunSource = pendingExternalRunSource;
+    pendingExternalRunSource = undefined;
+  });
+
   pi.on("agent_start", (_event, ctx) => {
     currentContext = ctx;
+    internalContinuationPending = false;
+    const source = acceptedExternalRunSource;
+    acceptedExternalRunSource = undefined;
+    pendingExternalRunSource = undefined;
+    if (workflowState && isWorkflowActive(workflowState)) {
+      externalRunTiming = undefined;
+    } else if (!externalRunTiming && source) {
+      externalRunTiming = createRunTiming(source);
+    }
+
     if (
       !workflowState ||
       workflowState.executor === "subagents" ||
@@ -1731,12 +1831,17 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("agent_settled", async (_event, ctx) => {
     currentContext = ctx;
+    settleExternalRunTiming();
     startPendingRoleCompaction(ctx);
     await scheduleWorkflow(ctx);
   });
 
   pi.on("session_shutdown", async () => {
     runtimeDisposed = true;
+    pendingExternalRunSource = undefined;
+    acceptedExternalRunSource = undefined;
+    externalRunTiming = undefined;
+    internalContinuationPending = false;
     unsubscribeSubagentCompleted();
     unsubscribeSubagentFailed();
     for (const cleanup of [...pendingSubagentReplyCleanups]) cleanup();
@@ -1895,10 +2000,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
     renderResult(result, { expanded }, theme) {
       if (result.isError) return new Text(theme.fg("error", "工作流操作失败"), 0, 0);
+      const firstContent = result.content[0];
+      const contentText = firstContent?.type === "text" ? firstContent.text : "";
+      if (contentText.startsWith("任务完成报告")) return new Text(contentText, 0, 0);
+
       const details = result.details as ReturnType<typeof createWorkflowState> | undefined;
       if (!details || !Array.isArray(details.tasks)) {
-        const text = result.content[0];
-        return new Text(text?.type === "text" ? text.text : "工作流已更新", 0, 0);
+        return new Text(contentText || "工作流已更新", 0, 0);
       }
       const progress = workflowProgress(details);
       const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";
