@@ -649,6 +649,7 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /workflowEnabled: Type\.Optional\(Type\.Boolean/);
   assert.match(extension, /workflowExecutor: Type\.Optional\(StringEnum\(WORKFLOW_EXECUTORS/);
   assert.match(extension, /workflowExecutorLabel/);
+  assert.match(extension, /function workflowStatusLabel\(state = workflowState\)[\s\S]*?\["completed", "cancelled"\][\s\S]*?inactiveWorkflowStateLabel/);
   assert.match(extension, /getWorkflowTaskDuration/);
   assert.match(extension, /function formatWorkflowTaskCompletion\(task: ReturnType<typeof getWorkflowTask>\)/);
   for (const field of ["任务 ID：", "任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "完成摘要：", "验证结果："]) {
@@ -670,7 +671,7 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /自动进入任务/);
   assert.match(extension, /value: "workflow-config", label: `◆ 变更 · 工作流策略：/);
   assert.match(extension, /工作流状态  \$\{workflowStateLabel\(\)\}/);
-  assert.match(extension, /setStatus\(\s*"pi-init",[\s\S]*?工作流 · \$\{workflowStateLabel\(\)\}/);
+  assert.match(extension, /setStatus\(\s*"pi-init",[\s\S]*?工作流 · \$\{workflowStatusLabel\(\)\}/);
   const roleMenu = extension.match(/function roleMenuItems[\s\S]*?\n}\n/)?.[0] ?? "";
   assert.doesNotMatch(roleMenu, /value: "workflow"/);
   assert.match(extension, /\/pi-init workflow retry/);

@@ -25,6 +25,12 @@ This file defines the long-term AI coding rules for this project. Before startin
 - Do not ask about preferences, style, or optional alternatives mid-task. Pause only for an explicit architecture review request, missing product decisions, permissions/credentials, approval for destructive operations, unrecoverable failures, or genuinely blocking information; record reasonable assumptions in the task result.
 - When the user explicitly asks to see the architecture first and the workflow is enabled, the Architect sets `reviewRequired` to `true` and pauses after saving the plan; after review, run `/pi-init workflow resume`. Blocked tasks use `block`; after the cause is resolved, use `/pi-init workflow retry <taskId>`.
 
+## Tool Invocation Rules
+
+- Use only `path`, `offset`, and `limit` with `read`; use only `path` and `edits` with `edit`, and include `oldText` and `newText` in every edit item.
+- Read the latest file content before calling `edit`, and copy the actual text directly into `oldText`; do not manually rewrite quotation marks, indentation, spaces, or line endings.
+- If an `oldText` match fails, read the file again and inspect the actual content before retrying; do not repeat the same replacement or bypass exact-edit protection with fuzzy matching.
+
 ## Runtime Environment and Command Conventions
 
 {{ENVIRONMENT_CONTEXT}}

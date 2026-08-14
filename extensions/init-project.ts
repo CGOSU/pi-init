@@ -708,10 +708,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return activeRole;
   }
 
+  function inactiveWorkflowStateLabel() {
+    return `策略 ${workflowModeLabel(workflowModeStatus)} · 执行器 ${workflowExecutorLabel(workflowExecutorStatus)} · 无活动工作流`;
+  }
+
   function workflowStateLabel(state = workflowState) {
-    if (!state) {
-      return `策略 ${workflowModeLabel(workflowModeStatus)} · 执行器 ${workflowExecutorLabel(workflowExecutorStatus)} · 无活动工作流`;
-    }
+    if (!state) return inactiveWorkflowStateLabel();
 
     const progress = workflowProgress(state);
     const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
@@ -722,6 +724,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return `运行 ${progress.completed}/${progress.total}${executor}${current || " · 待调度"}`;
   }
 
+  function workflowStatusLabel(state = workflowState) {
+    if (!state || ["completed", "cancelled"].includes(state.status)) return inactiveWorkflowStateLabel();
+    return workflowStateLabel(state);
+  }
+
   function refreshRoleStatus(ctx: ExtensionContext, mode: string) {
     const role = activeRoleFor(ctx);
     const model = ctx.model
@@ -729,7 +736,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       : "未选择模型";
     ctx.ui.setStatus(
       "pi-init",
-      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStateLabel()}`,
+      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStatusLabel()}`,
     );
   }
 
