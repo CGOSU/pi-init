@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-15：postinstall 忽略当前 npm 包的 Pi shim
+
+- 决定：`scripts/install-launchers.js` 从 `PATH` 查找 Pi CLI 时，跳过当前包 `node_modules/.bin` 下的 `pi`/`pi.cmd` 等 shim，选择后续实际 Pi CLI 所在目录作为 `pi-usage` 安装目标。
+- 原因：Pi 更新 Git 包时会在包目录执行 npm 生命周期脚本，npm 将当前包的 `.bin` 目录置于 `PATH` 首位；若直接取第一个 `pi`，启动器会被复制到临时依赖目录，用户 PATH 中的 `pi-usage` 仍保持旧副本。
+- 约束：保留 Windows 和 POSIX 的 PATH 查找，未找到可用 Pi 时仍安全跳过；显式传入安装目标的测试/调用不经过 CLI 查找。
+
 ### 2026-08-15：角色配置默认只在当前会话生效
 
 - 决定：运行时角色切换、角色模型配置和工作流配置先保存在扩展内存中的当前会话草稿；只有用户明确执行 `/pi-init save`（保存角色配置）时，才将暂存字段合并写入 `.pi/role-models.json`。

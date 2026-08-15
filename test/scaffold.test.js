@@ -236,6 +236,45 @@ test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
   });
 });
 
+test("npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录", async () => {
+  await withTempDirectory(async (directory) => {
+    const packageDir = path.join(directory, "package");
+    const sourceDir = path.join(packageDir, "scripts");
+    const localBinDir = path.join(packageDir, "node_modules", ".bin");
+    const actualPiDir = path.join(directory, "pi-bin");
+    await mkdir(sourceDir, { recursive: true });
+    await mkdir(localBinDir, { recursive: true });
+    await mkdir(actualPiDir, { recursive: true });
+    await writeFile(path.join(packageDir, "package.json"), JSON.stringify({ version: "test-version" }));
+    await writeFile(
+      path.join(sourceDir, "pi-usage.js"),
+      await readFile(path.join(process.cwd(), "scripts", "pi-usage.js")),
+    );
+    await writeFile(
+      path.join(sourceDir, "pi-usage.cmd"),
+      await readFile(path.join(process.cwd(), "scripts", "pi-usage.cmd")),
+    );
+    await writeFile(
+      path.join(sourceDir, "pi-usage.sh"),
+      await readFile(path.join(process.cwd(), "scripts", "pi-usage.sh")),
+    );
+    await writeFile(path.join(localBinDir, "pi.cmd"), "local npm shim");
+    await writeFile(path.join(actualPiDir, "pi.cmd"), "actual Pi CLI");
+
+    assert.equal(
+      await installLaunchers({
+        sourceDir,
+        platform: "win32",
+        pathValue: [localBinDir, actualPiDir].join(";"),
+      }),
+      true,
+    );
+    const installedUsage = await readFile(path.join(actualPiDir, "pi-usage.js"), "utf8");
+    assert.ok(installedUsage.includes('const EMBEDDED_PACKAGE_VERSION = "test-version";'));
+    await assert.rejects(readFile(path.join(localBinDir, "pi-usage.js")));
+  });
+});
+
 test("pi-usage 默认日期范围从本地午夜开始", () => {
   const range = dateRange();
   const now = new Date();

@@ -1,5 +1,16 @@
 # 会话记录
 
+### 2026-08-15：修复 npm lifecycle 中 pi-usage 安装目标错误并升级版本
+
+- 完成内容：修复 `postinstall` 在 `pi update --extensions` 中误选当前包 `node_modules/.bin/pi.cmd` 的问题；安装器现在跳过该本地 shim，选择 PATH 中后续的实际 Pi CLI 目录。
+- 完成内容：增加 npm lifecycle PATH 优先级回归测试，版本从 `1.0.5` 升级到 `1.0.6`，同步 `package-lock.json`。
+- 验证：`node --test --test-name-pattern='本地 pi shim|自动刷新 pi-usage' test/scaffold.test.js`，2 项通过。
+- 验证：`node --check scripts/install-launchers.js`、`node --check test/scaffold.test.js` 通过。
+- 验证：手动执行安装器后，`%APPDATA%\\npm\\pi-usage.js` 的嵌入版本更新为 `1.0.6`，执行 `pi-usage 2026-08-15` 输出 `v1.0.6`。
+- 验证：`npm test`，37 项全部通过。
+- 验证：`node --check scripts/install-launchers.js`、`node --check test/scaffold.test.js`、`git diff --check` 通过，仅有 Git 的 LF/CRLF 环境警告。
+- 遗留问题：无。
+
 ### 2026-08-15：角色配置改为会话暂存并升级版本
 
 - 完成内容：运行时角色切换、角色模型配置和工作流配置改为当前会话草稿；`/pi-init config` 不再直接写 `.pi/role-models.json`，新增 `/pi-init save` 作为显式保存入口。

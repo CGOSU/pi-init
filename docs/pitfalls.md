@@ -44,6 +44,13 @@
 - 修复：默认保持 `workflowExecutor: "local"`；README 和生成规则要求单独安装并启用扩展，主扩展对缺少 RPC、超时和异常回复安全阻塞任务。
 - 验证：协议/脚手架测试和扩展加载检查通过；未伪造第三方真实模型运行结果。
 
+### 2026-08-15：npm lifecycle 的本地 Pi shim 会遮蔽实际 CLI
+
+- 现象：执行 `pi update --extensions` 后，`pi-usage` 仍显示 `vunknown` 或保持旧版本，尽管 package 的 `postinstall` 已执行。
+- 根因：Pi 更新 Git 包时在包目录执行 npm lifecycle，当前包的 `node_modules/.bin` 被放到 `PATH` 首位；安装器取到该目录中的本地 `pi` shim，并把启动器复制到会被依赖安装/清理影响的目录，而不是用户实际使用的 Pi CLI 目录。
+- 修复：安装器按 PATH 扫描候选 Pi CLI，跳过当前包 `node_modules/.bin`，选择后续实际 CLI 目录；Windows/POSIX 均适用。
+- 验证：回归测试覆盖本地 Windows `pi.cmd` shim 位于 PATH 首位的场景；目标目录获得嵌入版本号，npm shim 目录不产生启动器。
+
 ### 2026-08-14：Pi 更新不会自动刷新独立复制的启动器
 
 - 现象：`pi update --extensions` 更新 package 后，PATH 中独立安装的 `pi-usage` 仍可能是旧版本。

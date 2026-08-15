@@ -3,43 +3,37 @@ import {
   chmodSync,
   copyFileSync,
   constants,
+  existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-function findPiPath(platform = process.platform) {
-  const command = platform === "win32" ? "where.exe" : "sh";
-  const args =
-    platform === "win32" ? ["pi.cmd"] : ["-c", "command -v pi"];
-  try {
-    const output = execFileSync(command, args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean);
-  } catch {
-    if (platform !== "win32") return undefined;
-    try {
-      const output = execFileSync("where.exe", ["pi"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      return output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find(Boolean);
-    } catch {
-      return undefined;
+function isInside(directory, candidate, platform) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const relative = pathApi.relative(pathApi.resolve(directory), pathApi.resolve(candidate));
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${pathApi.sep}`) && relative !== ".." && !pathApi.isAbsolute(relative))
+  );
+}
+
+function findPiPath(platform = process.platform, pathValue = process.env.PATH, excludedDirectory) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const pathEntries = (pathValue ?? "").split(platform === "win32" ? ";" : ":").filter(Boolean);
+  const commandNames = platform === "win32" ? ["pi.cmd", "pi.exe", "pi.bat", "pi"] : ["pi"];
+
+  for (const directory of pathEntries) {
+    for (const commandName of commandNames) {
+      const candidate = pathApi.join(directory, commandName);
+      if (excludedDirectory && isInside(excludedDirectory, candidate, platform)) continue;
+      if (existsSync(candidate)) return candidate;
     }
   }
+  return undefined;
 }
 
 function canWrite(directory) {
@@ -86,8 +80,11 @@ export function installLaunchers({
   sourceDir = path.dirname(fileURLToPath(import.meta.url)),
   targetDir,
   platform = process.platform,
+  pathValue = process.env.PATH,
 } = {}) {
-  const piPath = targetDir ? undefined : findPiPath(platform);
+  const piPath = targetDir
+    ? undefined
+    : findPiPath(platform, pathValue, path.resolve(sourceDir, "..", "node_modules", ".bin"));
   const resolvedTargetDir = targetDir ?? resolveTargetDir(piPath, platform);
   if (!resolvedTargetDir) return false;
 
