@@ -14,6 +14,22 @@
 
 ## 已知问题
 
+### 2026-08-15：pi-usage 逐事件写入和全量 split 会放大冷导入成本
+
+- 日期：2026-08-15；
+- 现象：112 个 session、约 213 MB JSONL 的空数据库首次导入约 93.8 秒；独立文件读取、split 和 JSON 解析约 0.8 秒，导入时 Node RSS 约 377 MB。
+- 根因：每个事件都 `await connection.run`，并且每个文件使用 `readFileSync(...).split(/\r?\n/)` 同时保留完整字符串和行数组；追加文件也会重复处理已提交内容。
+- 修复：使用 DuckDB Appender 的 1024 行有界 flush 和每文件事务；改用流式字节解析，持久化 offset/行号/cwd/尾部校验，追加从 checkpoint 继续，回退时全量重建。
+- 验证：优化后同一台机器实际 112 文件首次统计为 `filesRebuilt=112`、`bytesRead=215607665`，第二次为 `filesSkipped=112`、`filesChanged=0`、`durationDates=[]`；`npm test` 34 项全部通过。
+
+### 2026-08-15：EOF 不完整 JSON 不能推进 session checkpoint
+
+- 日期：2026-08-15；
+- 现象：session 文件可能在最后一条 JSON 记录写完前被读取；若把文件大小直接记为已导入位置，后续补全记录会永久丢失或产生重复。
+- 根因：JSONL 的最后一行没有换行时，字节流无法仅凭 EOF 判断它是完整记录还是仍在写入；checkpoint 若越过解析失败的尾部，下一次无法可靠恢复。
+- 修复：只有 JSON.parse 成功的行或以换行结束的完整坏行推进 offset；未完成尾部保留 `has_incomplete_tail`，补写后从原 offset 和原行号继续，并用前缀尾部 SHA-256 校验检测回退。
+- 验证：`node --test --test-name-pattern='流式 checkpoint'` 通过，覆盖不完整尾部、补全后单次导入、同尺寸改写和无变化跳过路径。
+
 ### 2026-08-14：subagents 执行器的绑定代理不会在 reload 后自动恢复
 
 - 现象：reload 或 session replacement 后，工作流状态仍可能显示已绑定的非终态子代理，但 pi-init 不会再次 spawn 它。

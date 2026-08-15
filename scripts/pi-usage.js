@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, mkdirSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -16,6 +17,8 @@ const MODEL_BAR_SEGMENTS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉",
 const MODEL_BAR_RESOLUTION = MODEL_BAR_SEGMENTS.length - 1;
 const TOKEN_SPEED_CUSTOM_TYPE = "pi-token-speed";
 const USAGE_SCHEMA_VERSION = 2;
+const CHECKPOINT_TAIL_BYTES = 64 * 1024;
+const APPENDER_BATCH_SIZE = 1024;
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -151,28 +154,113 @@ function parseSpeedEvent(entry, sourceFile, lineNumber, cwd) {
   };
 }
 
-function scanFile(file, events, activityEvents, speedEvents) {
-  let cwd = "";
-  const lines = readFileSync(file, "utf8").split(/\r?\n/);
-  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    const line = lines[lineNumber];
-    if (!line) continue;
+async function* readJsonlLines(file, startOffset = 0, startLineNumber = 0) {
+  const stream = createReadStream(file, startOffset > 0 ? { start: startOffset } : undefined);
+  let pending = Buffer.alloc(0);
+  let offset = startOffset;
+  let lineNumber = startLineNumber;
+  try {
+    for await (const chunk of stream) {
+      pending = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk;
+      let newlineIndex;
+      while ((newlineIndex = pending.indexOf(0x0a)) !== -1) {
+        const rawLine = pending.subarray(0, newlineIndex);
+        pending = pending.subarray(newlineIndex + 1);
+        const line = rawLine[rawLine.length - 1] === 0x0d
+          ? rawLine.subarray(0, rawLine.length - 1).toString("utf8")
+          : rawLine.toString("utf8");
+        offset += newlineIndex + 1;
+        yield { line, lineNumber, endOffset: offset, terminated: true };
+        lineNumber += 1;
+      }
+    }
+    if (pending.length > 0) {
+      yield {
+        line: pending.toString("utf8"),
+        lineNumber,
+        endOffset: offset + pending.length,
+        terminated: false,
+      };
+    }
+  } finally {
+    stream.destroy();
+  }
+}
+
+async function hashCheckpointTail(file, endOffset) {
+  const hash = createHash("sha256");
+  if (endOffset <= 0) return hash.digest("hex");
+  const start = Math.max(0, endOffset - CHECKPOINT_TAIL_BYTES);
+  const stream = createReadStream(file, { start, end: endOffset - 1 });
+  try {
+    for await (const chunk of stream) hash.update(chunk);
+  } finally {
+    stream.destroy();
+  }
+  return hash.digest("hex");
+}
+
+async function readByte(file, offset) {
+  const stream = createReadStream(file, { start: offset, end: offset });
+  try {
+    for await (const chunk of stream) return chunk[0];
+  } finally {
+    stream.destroy();
+  }
+  return undefined;
+}
+
+async function scanFile(file, options = {}) {
+  const events = [];
+  const activityEvents = [];
+  const speedEvents = [];
+  let cwd = String(options.cwd ?? "");
+  let committedOffset = options.startOffset ?? 0;
+  let nextLineNumber = options.nextLineNumber ?? 0;
+  let lastLineTerminated = true;
+  let hasIncompleteTail = false;
+  for await (const record of readJsonlLines(file, committedOffset, nextLineNumber)) {
     let entry;
     try {
-      entry = JSON.parse(line);
+      entry = JSON.parse(record.line);
     } catch {
+      if (!record.terminated) {
+        hasIncompleteTail = true;
+        break;
+      }
+      committedOffset = record.endOffset;
+      nextLineNumber = record.lineNumber + 1;
+      lastLineTerminated = true;
       continue;
     }
     if (entry.type === "session" && entry.cwd) {
       cwd = String(entry.cwd);
     }
-    const activityEvent = parseActivityEvent(entry, file, lineNumber, cwd);
+    const activityEvent = parseActivityEvent(entry, file, record.lineNumber, cwd);
     if (activityEvent) activityEvents.push(activityEvent);
-    const event = parseUsageEvent(entry, file, lineNumber, cwd);
+    const event = parseUsageEvent(entry, file, record.lineNumber, cwd);
     if (event) events.push(event);
-    const speedEvent = parseSpeedEvent(entry, file, lineNumber, cwd);
+    const speedEvent = parseSpeedEvent(entry, file, record.lineNumber, cwd);
     if (speedEvent) speedEvents.push(speedEvent);
+    committedOffset = record.endOffset;
+    nextLineNumber = record.lineNumber + 1;
+    lastLineTerminated = record.terminated;
   }
+  const metadata = statSync(file);
+  return {
+    metadata: { sourceFile: file, fileSize: metadata.size, modifiedMs: metadata.mtimeMs },
+    checkpoint: {
+      importedOffset: committedOffset,
+      nextLineNumber,
+      cwd,
+      tailHash: await hashCheckpointTail(file, committedOffset),
+      lastLineTerminated,
+      hasIncompleteTail,
+    },
+    events,
+    activityEvents,
+    speedEvents,
+  };
 }
 
 function listSessionFiles(directory, files = []) {
@@ -299,9 +387,25 @@ async function initializeDatabase(connection) {
     CREATE TABLE IF NOT EXISTS session_files (
       source_file VARCHAR PRIMARY KEY,
       file_size BIGINT,
-      modified_ms DOUBLE
+      modified_ms DOUBLE,
+      imported_offset BIGINT,
+      next_line_number BIGINT,
+      checkpoint_cwd VARCHAR,
+      tail_hash VARCHAR,
+      last_line_terminated BOOLEAN,
+      has_incomplete_tail BOOLEAN
     )
   `);
+  for (const column of [
+    "imported_offset BIGINT",
+    "next_line_number BIGINT",
+    "checkpoint_cwd VARCHAR",
+    "tail_hash VARCHAR",
+    "last_line_terminated BOOLEAN",
+    "has_incomplete_tail BOOLEAN",
+  ]) {
+    await connection.run(`ALTER TABLE session_files ADD COLUMN IF NOT EXISTS ${column}`);
+  }
   await connection.run(`
     CREATE TABLE IF NOT EXISTS activity_events (
       source_file VARCHAR,
@@ -364,42 +468,13 @@ async function initializeDatabase(connection) {
   `);
 }
 
-function scanSessionFile(file) {
-  const events = [];
-  const activityEvents = [];
-  const speedEvents = [];
-  scanFile(file, events, activityEvents, speedEvents);
-  const metadata = statSync(file);
-  return {
-    metadata: { sourceFile: file, fileSize: metadata.size, modifiedMs: metadata.mtimeMs },
-    events,
-    activityEvents,
-    speedEvents,
-  };
+async function scanSessionFile(file, options = {}) {
+  return scanFile(file, options);
 }
 
-function scanSpeedEvents(file) {
-  let cwd = "";
-  let sessionRead = false;
-  const speedEvents = [];
-  const lines = readFileSync(file, "utf8").split(/\r?\n/);
-  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    const line = lines[lineNumber];
-    if (!line || (sessionRead && !line.includes(TOKEN_SPEED_CUSTOM_TYPE))) continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type === "session") {
-      cwd = entry.cwd ? String(entry.cwd) : "";
-      sessionRead = true;
-    }
-    const speedEvent = parseSpeedEvent(entry, file, lineNumber, cwd);
-    if (speedEvent) speedEvents.push(speedEvent);
-  }
-  return speedEvents;
+async function scanSpeedEvents(file) {
+  const parsed = await scanSessionFile(file);
+  return parsed.speedEvents;
 }
 
 async function readUsageState(connection) {
@@ -454,55 +529,211 @@ async function readEventDates(connection, sourceFile) {
   return reader.getRowObjects().map((row) => row.event_date).filter(Boolean);
 }
 
-async function insertSpeedEvents(connection, speedEvents) {
-  for (const event of speedEvents) {
-    await connection.run(
-      `
-        INSERT INTO speed_events VALUES (
-          $source_file, $entry_key, $event_timestamp, $event_date,
-          $model, $output_tokens, $generation_seconds, $cwd
-        )
-      `,
-      {
-        source_file: event.sourceFile,
-        entry_key: event.entryKey,
-        event_timestamp: event.eventTimestamp,
-        event_date: event.eventDate,
-        model: event.model,
-        output_tokens: event.outputTokens,
-        generation_seconds: event.generationSeconds,
-        cwd: event.cwd,
-      },
-    );
+async function withTransaction(connection, callback) {
+  await connection.run("BEGIN TRANSACTION");
+  try {
+    const result = await callback();
+    await connection.run("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      await connection.run("ROLLBACK");
+    } catch {
+      // Keep the original error; the connection is closed by the caller.
+    }
+    throw error;
   }
+}
+
+function appendBigInt(appender, value) {
+  appender.appendBigInt(BigInt(Math.trunc(Number(value) || 0)));
+}
+
+async function appendRows(connection, tableName, rows, appendRow) {
+  if (rows.length === 0) return;
+  const appender = await connection.createAppender(tableName);
+  try {
+    for (let index = 0; index < rows.length; index += 1) {
+      appendRow(appender, rows[index]);
+      appender.endRow();
+      if ((index + 1) % APPENDER_BATCH_SIZE === 0) appender.flushSync();
+    }
+    appender.flushSync();
+  } finally {
+    appender.closeSync();
+  }
+}
+
+async function insertUsageEvents(connection, events) {
+  await appendRows(connection, "usage_events", events, (appender, event) => {
+    appender.appendVarchar(event.sourceFile);
+    appender.appendVarchar(event.entryKey);
+    appender.appendVarchar(event.eventTimestamp);
+    appender.appendVarchar(event.eventDate);
+    appender.appendVarchar(event.model);
+    appendBigInt(appender, event.input);
+    appendBigInt(appender, event.output);
+    appendBigInt(appender, event.cacheRead);
+    appendBigInt(appender, event.cacheWrite);
+    appendBigInt(appender, event.tokens);
+    appender.appendDouble(event.cost);
+    appender.appendVarchar(event.cwd);
+  });
+}
+
+async function insertActivityEvents(connection, events) {
+  await appendRows(connection, "activity_events", events, (appender, event) => {
+    appender.appendVarchar(event.sourceFile);
+    appender.appendVarchar(event.entryKey);
+    appender.appendVarchar(event.eventTimestamp);
+    appender.appendVarchar(event.eventDate);
+    appender.appendVarchar(event.eventType);
+    appender.appendVarchar(event.model);
+    appender.appendVarchar(event.cwd);
+  });
+}
+
+async function insertSpeedEvents(connection, speedEvents) {
+  await appendRows(connection, "speed_events", speedEvents, (appender, event) => {
+    appender.appendVarchar(event.sourceFile);
+    appender.appendVarchar(event.entryKey);
+    appender.appendVarchar(event.eventTimestamp);
+    appender.appendVarchar(event.eventDate);
+    appender.appendVarchar(event.model);
+    appender.appendDouble(event.outputTokens);
+    appender.appendDouble(event.generationSeconds);
+    appender.appendVarchar(event.cwd);
+  });
+}
+
+function emitRefreshProgress(options, event) {
+  if (typeof options.onProgress === "function") options.onProgress(event);
 }
 
 async function refreshSpeedEvents(connection, sessionsDirectory) {
-  await connection.run("DELETE FROM speed_events");
-  for (const file of listSessionFiles(sessionsDirectory)) {
-    await insertSpeedEvents(connection, scanSpeedEvents(file));
-  }
+  await withTransaction(connection, async () => {
+    await connection.run("DELETE FROM speed_events");
+    for (const file of listSessionFiles(sessionsDirectory)) {
+      await insertSpeedEvents(connection, await scanSpeedEvents(file));
+    }
+  });
 }
 
-async function refreshSessionFiles(connection, sessionsDirectory) {
-  const storedReader = await connection.runAndReadAll("SELECT source_file, file_size, modified_ms FROM session_files");
+async function canIncrementallyScan(file, metadata, previous) {
+  if (
+    previous.importedOffset === undefined ||
+    previous.nextLineNumber === undefined ||
+    !previous.tailHash ||
+    metadata.size < previous.importedOffset ||
+    metadata.size < previous.fileSize
+  ) {
+    return false;
+  }
+  if (metadata.size === previous.fileSize && metadata.mtimeMs !== previous.modifiedMs) {
+    return false;
+  }
+  if (
+    metadata.size > previous.fileSize &&
+    previous.importedOffset === previous.fileSize &&
+    previous.lastLineTerminated === false &&
+    (await readByte(file, previous.importedOffset)) !== 0x0a
+  ) {
+    return false;
+  }
+  return (await hashCheckpointTail(file, previous.importedOffset)) === previous.tailHash;
+}
+
+function sessionCheckpointParameters(parsed) {
+  return {
+    source_file: parsed.metadata.sourceFile,
+    file_size: parsed.metadata.fileSize,
+    modified_ms: parsed.metadata.modifiedMs,
+    imported_offset: parsed.checkpoint.importedOffset,
+    next_line_number: parsed.checkpoint.nextLineNumber,
+    checkpoint_cwd: parsed.checkpoint.cwd,
+    tail_hash: parsed.checkpoint.tailHash,
+    last_line_terminated: parsed.checkpoint.lastLineTerminated,
+    has_incomplete_tail: parsed.checkpoint.hasIncompleteTail,
+  };
+}
+
+async function refreshSessionFiles(connection, sessionsDirectory, options = {}) {
+  const storedReader = await connection.runAndReadAll(
+    `
+      SELECT source_file, file_size, modified_ms, imported_offset,
+        next_line_number, checkpoint_cwd, tail_hash,
+        last_line_terminated, has_incomplete_tail
+      FROM session_files
+    `,
+  );
   const stored = new Map(
     storedReader.getRowObjects().map((row) => [
       row.source_file,
-      { fileSize: numberValue(row.file_size), modifiedMs: numberValue(row.modified_ms) },
+      {
+        fileSize: numberValue(row.file_size),
+        modifiedMs: numberValue(row.modified_ms),
+        importedOffset: finiteNumber(row.imported_offset),
+        nextLineNumber: finiteNumber(row.next_line_number),
+        cwd: row.checkpoint_cwd ?? "",
+        tailHash: row.tail_hash,
+        lastLineTerminated:
+          row.last_line_terminated === null || row.last_line_terminated === undefined
+            ? undefined
+            : Boolean(row.last_line_terminated),
+        hasIncompleteTail:
+          row.has_incomplete_tail === null || row.has_incomplete_tail === undefined
+            ? undefined
+            : Boolean(row.has_incomplete_tail),
+      },
     ]),
   );
   const files = listSessionFiles(sessionsDirectory);
   const seen = new Set(files);
   const affectedDates = new Set();
+  const stats = {
+    filesSeen: files.length,
+    filesSkipped: 0,
+    filesChanged: 0,
+    filesAppended: 0,
+    filesRebuilt: 0,
+    filesRemoved: 0,
+    bytesRead: 0,
+    events: 0,
+  };
   for (const file of files) {
     const metadata = statSync(file);
     const previous = stored.get(file);
-    if (previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs) {
+    const unchanged = previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs;
+    if (unchanged && previous.importedOffset === undefined) {
+      stats.filesSkipped += 1;
+      emitRefreshProgress(options, { type: "file", file, mode: "skipped", index: stats.filesSkipped, total: files.length });
       continue;
     }
-    for (const date of await readEventDates(connection, file)) affectedDates.add(date);
-    const parsed = scanSessionFile(file);
+    if (
+      unchanged &&
+      previous.tailHash &&
+      (previous.importedOffset === metadata.size || previous.hasIncompleteTail === true) &&
+      (await hashCheckpointTail(file, previous.importedOffset)) === previous.tailHash
+    ) {
+      stats.filesSkipped += 1;
+      emitRefreshProgress(options, { type: "file", file, mode: "skipped", index: stats.filesSkipped, total: files.length });
+      continue;
+    }
+    const incremental = previous ? await canIncrementallyScan(file, metadata, previous) : false;
+    if (!incremental) {
+      for (const date of await readEventDates(connection, file)) affectedDates.add(date);
+    }
+    const startOffset = incremental ? previous.importedOffset : 0;
+    const parsed = await scanSessionFile(
+      file,
+      incremental
+        ? {
+            startOffset,
+            nextLineNumber: previous.nextLineNumber,
+            cwd: previous.cwd,
+          }
+        : undefined,
+    );
     for (const event of [
       ...parsed.events,
       ...parsed.activityEvents,
@@ -510,62 +741,42 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
     ]) {
       affectedDates.add(event.eventDate);
     }
-    await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
-    await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
-    await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: file });
-    for (const event of parsed.events) {
+    await withTransaction(connection, async () => {
+      if (!incremental) {
+        await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
+        await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
+        await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: file });
+      }
+      await insertUsageEvents(connection, parsed.events);
+      await insertActivityEvents(connection, parsed.activityEvents);
+      await insertSpeedEvents(connection, parsed.speedEvents);
       await connection.run(
         `
-          INSERT INTO usage_events VALUES (
-            $source_file, $entry_key, $event_timestamp, $event_date, $model,
-            $input_tokens, $output_tokens, $cache_read_tokens, $cache_write_tokens,
-            $total_tokens, $cost, $cwd
+          INSERT OR REPLACE INTO session_files (
+            source_file, file_size, modified_ms, imported_offset,
+            next_line_number, checkpoint_cwd, tail_hash,
+            last_line_terminated, has_incomplete_tail
+          ) VALUES (
+            $source_file, $file_size, $modified_ms, $imported_offset,
+            $next_line_number, $checkpoint_cwd, $tail_hash,
+            $last_line_terminated, $has_incomplete_tail
           )
         `,
-        {
-          source_file: event.sourceFile,
-          entry_key: event.entryKey,
-          event_timestamp: event.eventTimestamp,
-          event_date: event.eventDate,
-          model: event.model,
-          input_tokens: event.input,
-          output_tokens: event.output,
-          cache_read_tokens: event.cacheRead,
-          cache_write_tokens: event.cacheWrite,
-          total_tokens: event.tokens,
-          cost: event.cost,
-          cwd: event.cwd,
-        },
+        sessionCheckpointParameters(parsed),
       );
-    }
-    for (const event of parsed.activityEvents) {
-      await connection.run(
-        `
-          INSERT INTO activity_events VALUES (
-            $source_file, $entry_key, $event_timestamp, $event_date,
-            $event_type, $model, $cwd
-          )
-        `,
-        {
-          source_file: event.sourceFile,
-          entry_key: event.entryKey,
-          event_timestamp: event.eventTimestamp,
-          event_date: event.eventDate,
-          event_type: event.eventType,
-          model: event.model,
-          cwd: event.cwd,
-        },
-      );
-    }
-    await insertSpeedEvents(connection, parsed.speedEvents);
-    await connection.run(
-      `INSERT OR REPLACE INTO session_files VALUES ($source_file, $file_size, $modified_ms)`,
-      {
-        source_file: parsed.metadata.sourceFile,
-        file_size: parsed.metadata.fileSize,
-        modified_ms: parsed.metadata.modifiedMs,
-      },
-    );
+    });
+    stats.filesChanged += 1;
+    if (incremental) stats.filesAppended += 1;
+    else stats.filesRebuilt += 1;
+    stats.bytesRead += Math.max(0, parsed.checkpoint.importedOffset - startOffset);
+    stats.events += parsed.events.length + parsed.activityEvents.length + parsed.speedEvents.length;
+    emitRefreshProgress(options, {
+      type: "file",
+      file,
+      mode: incremental ? "appended" : "rebuilt",
+      index: stats.filesChanged + stats.filesSkipped,
+      total: files.length,
+    });
   }
   for (const sourceFile of stored.keys()) {
     if (seen.has(sourceFile)) continue;
@@ -574,8 +785,10 @@ async function refreshSessionFiles(connection, sessionsDirectory) {
     await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: sourceFile });
     await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: sourceFile });
     await connection.run("DELETE FROM session_files WHERE source_file = $source_file", { source_file: sourceFile });
+    stats.filesRemoved += 1;
+    emitRefreshProgress(options, { type: "file", file: sourceFile, mode: "removed", total: files.length });
   }
-  return { affectedDates };
+  return { affectedDates, stats };
 }
 
 async function refreshDurationSummary(connection, range, duration) {
@@ -613,6 +826,11 @@ async function refreshDurationSummary(connection, range, duration) {
   }
 }
 
+
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
 
 function numberValue(value) {
   return Number(value) || 0;
@@ -747,17 +965,20 @@ async function withDatabase(databasePath, runtimeDirectory, callback) {
   }
 }
 
-async function refreshUsage(connection, sessionsDirectory, range) {
+async function refreshUsage(connection, sessionsDirectory, range, options = {}) {
+  emitRefreshProgress(options, { type: "start", date: range.date });
   const schemaVersion = await readUsageSchemaVersion(connection);
-  if (schemaVersion !== USAGE_SCHEMA_VERSION && (await hasStoredSessionFiles(connection))) {
-    await refreshSpeedEvents(connection, sessionsDirectory);
-  }
-  const { affectedDates } = await refreshSessionFiles(connection, sessionsDirectory);
-  const dates = new Set([range.date, ...affectedDates]);
+  const schemaMigrated = schemaVersion !== USAGE_SCHEMA_VERSION && (await hasStoredSessionFiles(connection));
+  if (schemaMigrated) await refreshSpeedEvents(connection, sessionsDirectory);
+  const { affectedDates, stats } = await refreshSessionFiles(connection, sessionsDirectory, options);
+  const dates = [...affectedDates].sort();
   for (const date of dates) {
     await refreshDerivedSummaries(connection, dateRange(date));
   }
   await markUsageChecked(connection);
+  const result = { ...stats, durationDates: dates, schemaMigrated };
+  emitRefreshProgress(options, { type: "complete", date: range.date, stats: result });
+  return result;
 }
 
 export async function summarizeUsage(
@@ -765,10 +986,11 @@ export async function summarizeUsage(
   date,
   databasePath = path.join(os.homedir(), ".pi", "agent", "pi-usage.duckdb"),
   runtimeDirectory = path.join(os.homedir(), ".pi", "agent", "pi-usage-runtime"),
+  options = {},
 ) {
   const range = dateRange(date);
   return withDatabase(databasePath, runtimeDirectory, async (connection) => {
-    await refreshUsage(connection, sessionsDirectory, range);
+    await refreshUsage(connection, sessionsDirectory, range, options);
     return readSummary(connection, range);
   });
 }
@@ -778,6 +1000,7 @@ export async function queryUsage(
   databasePath,
   runtimeDirectory,
   sessionsDirectory,
+  options = {},
 ) {
   const range = dateRange(date);
   return withDatabase(databasePath, runtimeDirectory, async (connection) => {
@@ -787,7 +1010,7 @@ export async function queryUsage(
       sessionsDirectory &&
       (schemaVersion !== USAGE_SCHEMA_VERSION || shouldRefreshUsage(state))
     ) {
-      await refreshUsage(connection, sessionsDirectory, range);
+      await refreshUsage(connection, sessionsDirectory, range, options);
     }
     return readSummary(connection, range);
   });
@@ -1002,15 +1225,33 @@ function parseArguments(args, agentDir) {
   return { date, databasePath, update };
 }
 
+function createRefreshProgressReporter() {
+  return (event) => {
+    if (event.type === "start") {
+      console.error("正在扫描 session、增量更新 DuckDB...");
+      return;
+    }
+    if (event.type !== "complete") return;
+    const stats = event.stats;
+    const dates = stats.durationDates.length ? stats.durationDates.join(", ") : "无";
+    console.error(
+      `刷新完成：扫描 ${formatNumber(stats.filesSeen)} 个文件，跳过 ${formatNumber(stats.filesSkipped)} 个，` +
+        `追加 ${formatNumber(stats.filesAppended)} 个，重建 ${formatNumber(stats.filesRebuilt)} 个，` +
+        `移除 ${formatNumber(stats.filesRemoved)} 个，读取 ${formatNumber(stats.bytesRead)} 字节，` +
+        `重算日期：${dates}。`,
+    );
+  };
+}
+
 async function main() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
   const { date, databasePath, update } = parseArguments(process.argv.slice(2), agentDir);
   const sessionsDirectory = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(agentDir, "sessions");
   const runtimeDirectory = path.join(agentDir, "pi-usage-runtime");
-  if (update && process.stderr.isTTY) console.error("正在扫描 session、增量更新 DuckDB...");
+  const options = process.stderr.isTTY ? { onProgress: createRefreshProgressReporter() } : {};
   const summary = update
-    ? await summarizeUsage(sessionsDirectory, date, databasePath, runtimeDirectory)
-    : await queryUsage(date, databasePath, runtimeDirectory, sessionsDirectory);
+    ? await summarizeUsage(sessionsDirectory, date, databasePath, runtimeDirectory, options)
+    : await queryUsage(date, databasePath, runtimeDirectory, sessionsDirectory, options);
   console.log(formatReport(summary, { color: supportsColor() }));
 }
 

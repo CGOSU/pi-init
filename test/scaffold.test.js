@@ -327,6 +327,74 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
   });
 });
 
+test("pi-usage 流式 checkpoint 处理不完整尾部和同尺寸改写", async () => {
+  await withTempDirectory(async (directory) => {
+    const sessions = path.join(directory, "sessions");
+    const databasePath = path.join(directory, "usage.duckdb");
+    const timestamp = new Date();
+    timestamp.setHours(12, 0, 0, 0);
+    const date = timestamp.toLocaleDateString("sv-SE");
+    const message = (input) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: timestamp.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "provider",
+          model: "model",
+          usage: { input, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+        },
+      });
+    await mkdir(sessions, { recursive: true });
+    const file = path.join(sessions, "stream.jsonl");
+    const prefix = [JSON.stringify({ type: "session", cwd: process.cwd() }), message(1)].join("\n");
+    await writeFile(file, prefix, "utf8");
+
+    let summary = await summarizeUsage(sessions, date, databasePath);
+    assert.equal(summary.rows[0].input, 1);
+
+    const partial = message(2).slice(0, -1);
+    await writeFile(file, `${prefix}\n${partial}`, "utf8");
+    summary = await summarizeUsage(sessions, date, databasePath);
+    assert.equal(summary.rows[0].input, 1);
+
+    const { DuckDBInstance } = await import("@duckdb/node-api");
+    const instance = await DuckDBInstance.create(databasePath);
+    const connection = await instance.connect();
+    try {
+      const reader = await connection.runAndReadAll(
+        "SELECT imported_offset, file_size, has_incomplete_tail FROM session_files",
+      );
+      const checkpoint = reader.getRowObjects()[0];
+      assert.ok(checkpoint.imported_offset < checkpoint.file_size);
+      assert.equal(checkpoint.has_incomplete_tail, true);
+    } finally {
+      connection.disconnectSync();
+      instance.closeSync();
+    }
+
+    const completed = `${prefix}\n${message(2).slice(0, -1)}}`;
+    await writeFile(file, completed, "utf8");
+    summary = await summarizeUsage(sessions, date, databasePath);
+    assert.equal(summary.rows[0].calls, 2);
+    assert.equal(summary.rows[0].input, 3);
+
+    await writeFile(file, completed.replace('"input":2', '"input":3'), "utf8");
+    summary = await summarizeUsage(sessions, date, databasePath);
+    assert.equal(summary.rows[0].calls, 2);
+    assert.equal(summary.rows[0].input, 4);
+
+    const progress = [];
+    await summarizeUsage(sessions, date, databasePath, undefined, {
+      onProgress: (event) => progress.push(event),
+    });
+    const completedRefresh = progress.find((event) => event.type === "complete");
+    assert.ok(completedRefresh);
+    assert.equal(completedRefresh.stats.filesSkipped, 1);
+    assert.deepEqual(completedRefresh.stats.durationDates, []);
+  });
+});
+
 test("pi-usage 柱状图使用分数块区分接近的 token 数", () => {
   const report = formatReport({
     date: "2026-08-10",

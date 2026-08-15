@@ -1,5 +1,16 @@
 # 会话记录
 
+### 2026-08-15：完成 pi-usage JSONL 导入 I/O 优化
+
+- 完成内容：将 usage/activity/speed 事件改为 DuckDB Appender 批量写入；每文件的删除、写入和 checkpoint 更新使用事务；speed schema 回填使用单个全量重建事务。
+- 完成内容：将 JSONL 解析改为字节流读取，`session_files` 保存 offset、下一行号、cwd、尾部校验和 EOF 不完整状态；追加只处理新字节，截断、改写或校验失败全量回退；duration summary 只刷新受影响日期。
+- 完成内容：增加可选刷新进度回调和 TTY 摘要；README 补充追加 checkpoint、回退和自动/手动刷新进度说明；增加不完整尾部、补全、同尺寸改写和无变化刷新测试。
+- 验证：`npm test`，34 项全部通过。
+- 验证：`node --test --test-name-pattern='流式 checkpoint'`，目标测试通过。
+- 验证：本机 112 个 session 文件实际进度检查，首次 `filesRebuilt=112`、`bytesRead=215607665`，独立计时约 2.3 秒；第二次 `filesSkipped=112`、`filesChanged=0`、`durationDates=[]`，独立计时约 65 ms。
+- 验证：`git diff --check` 通过，仅有 Git 将 LF 转换为 CRLF 的环境警告。
+- 遗留问题：尚未在真实 TTY 终端观察进度文本，也未在 Linux/macOS 上执行；变更文件的全量回退仍需读取该文件全部内容，这是正确性优先的边界。
+
 ### 2026-08-14：将最终摘要改为整体工作总结与复盘
 
 - 完成内容：最终报告保留冻结规划作为“工作流目标”，新增“整体工作总结”“工作复盘”“汇总验证”；总结和验证按任务顺序从持久化状态确定性汇总，复盘使用已有冻结时间、整体实际执行区间和总耗时，不增加模型调用。更新 local/subagents 共用报告的 TUI 样式和回归测试。
