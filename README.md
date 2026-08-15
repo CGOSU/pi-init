@@ -176,6 +176,23 @@ flowchart LR
 
 `workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subagents`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
 
+### Provider 锁定
+
+项目默认使用 fail-closed Provider 策略。`.pi/role-models.json` 缺少策略时，等价于：
+
+```json
+"providerPolicy": {
+  "mode": "locked",
+  "allowedProviders": ["openai-codex"]
+}
+```
+
+该策略同时约束角色模型、`/model` 选择与循环、会话恢复、工作流自动切换和 Agent 子代理。Agent 省略 `model` 时显式继承当前允许模型；`haiku`、`sonnet` 等未带 `provider/` 的模糊名称，以及 `openrouter/...` 等未允许模型，会在 spawn 前拒绝。需要其他 Provider 时，必须显式编辑并保存 `.pi/role-models.json` 的 `allowedProviders`，同时让所有角色模型使用允许列表中的 Provider；如果变更来自会话暂存，再执行 `/pi-init save`。不会自动 fallback，也没有临时解锁入口。
+
+OpenRouter 调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理调用显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter。Provider 锁不修改全局 `auth.json`，只在当前项目会话中限制模型来源。
+
+Pi 0.84 的 `model_select` 目前是切换后的通知事件，因此扩展会立即恢复到上一个或配置中的安全模型，并在 `session_start`、输入和 provider 请求前再次校验；未来 Pi 增加可取消的 `before_model_select` 后，可进一步从选择源头拒绝。
+
 每个任务完成时会输出任务完成报告，包含任务 ID、任务内容、角色、涉及文件、开始时间、结束时间、总耗时、完成摘要和实际验证结果。总耗时从任务实际进入 `in_progress` 的时间开始计算，到任务完成时间结束；旧版状态若没有开始时间，会明确显示耗时不可用，不会伪造时间。
 
 仅当最后一个任务完成、工作流进入 `completed` 时，才会额外输出统一的“工作流完成报告”。报告分为四部分：冻结的 `state.plan.summary` 作为“工作流目标”；“整体工作总结”按规划任务顺序确定性汇总完成进度和各任务完成摘要；“工作复盘”展示冻结时间、首个任务实际开始到最后任务完成的整体执行区间及总耗时；“汇总验证”按任务顺序列出真实验证结果。规划、架构审阅等待和任务之间的调度等待不计入整体执行耗时；不调用模型生成主观内容。local 与 `subagents` 执行器使用相同格式。中间任务仍只显示任务级报告，不冒充工作流整体完成。

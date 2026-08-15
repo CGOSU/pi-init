@@ -16,6 +16,7 @@ import {
 } from "../scripts/pi-usage.js";
 import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
+  DEFAULT_PROVIDER_POLICY,
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_MODELS,
   DEFAULT_WORKFLOW_EXECUTOR,
@@ -26,6 +27,12 @@ import {
   THINKING_LEVELS,
   filterRoleModels,
   findMatchingRole,
+  assertModelAllowed,
+  assertProviderAllowed,
+  isModelAllowed,
+  isProviderAllowed,
+  normalizeModelReference,
+  resolveProviderPolicy,
   resolveRoleConfig,
   resolveRoleMode,
   resolveWorkflowExecutor,
@@ -91,8 +98,13 @@ function createExtensionHarness(branch = [], options = {}) {
   const commands = new Map();
   const entries = [];
   const notifications = [];
+  const selectCalls = [];
   const renderers = new Map();
   const tools = [];
+  const aborts = [];
+  const defaultModel = options.model ?? { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const availableModels = options.availableModels ?? [defaultModel];
+  let context;
   const pi = {
     on(name, handler) {
       const registered = handlers.get(name) ?? [];
@@ -118,28 +130,30 @@ function createExtensionHarness(branch = [], options = {}) {
       tools.push(tool);
     },
     getThinkingLevel() {
-      return "max";
+      return options.thinkingLevel ?? "max";
     },
     setThinkingLevel() {},
-    async setModel() {
+    async setModel(model) {
+      if (options.setModelResult === false) return false;
+      if (context) context.model = model;
       return true;
     },
     sendMessage() {},
   };
   initProjectExtension(pi);
 
-  const context = {
+  context = {
     cwd: options.cwd ?? process.cwd(),
     mode: options.mode ?? "rpc",
     hasUI: options.hasUI ?? true,
-    model: undefined,
-    scopedModels: [],
+    model: defaultModel,
+    scopedModels: options.scopedModels ?? [],
     modelRegistry: {
-      find() {
-        return undefined;
+      find(provider, id) {
+        return availableModels.find((model) => model.provider === provider && model.id === id);
       },
       getAvailable() {
-        return [];
+        return availableModels;
       },
     },
     isProjectTrusted() {
@@ -153,12 +167,16 @@ function createExtensionHarness(branch = [], options = {}) {
         notifications.push({ message, level });
       },
       setStatus() {},
-      async select() {
-        return undefined;
+      async select(title, items) {
+        selectCalls.push({ title, items });
+        return options.select?.(title, items);
       },
-      async input() {
-        return undefined;
+      async input(title, placeholder) {
+        return options.input?.(title, placeholder);
       },
+    },
+    abort() {
+      aborts.push(true);
     },
     sessionManager: {
       getBranch() {
@@ -166,7 +184,7 @@ function createExtensionHarness(branch = [], options = {}) {
       },
     },
   };
-  return { handlers, commands, entries, notifications, renderers, tools, context };
+  return { handlers, commands, entries, notifications, selectCalls, renderers, tools, aborts, context };
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {
@@ -723,6 +741,10 @@ test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async ()
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "custom-app");
     const roleModels = {
+      providerPolicy: {
+        mode: "locked",
+        allowedProviders: ["provider-architect", "provider-developer", "provider-docs"],
+      },
       mode: "confirm",
       workflowMode: "on",
       workflowExecutor: "subagents",
@@ -761,6 +783,10 @@ test("部分职责配置回退默认值并同步英文 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "partial-app");
     const roleModels = {
+      providerPolicy: {
+        mode: "locked",
+        allowedProviders: ["openai-codex", "provider-architect"],
+      },
       mode: "manual",
       architect: {
         provider: "provider-architect",
@@ -913,6 +939,94 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   assert.match(rendered, /结束时间：/);
   assert.match(rendered, /总耗时：/);
   assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
+});
+
+test("Provider 锁在会话恢复、原生模型切换和输入前阻断非法模型", async () => {
+  const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const unsafe = { provider: "openrouter", id: "anthropic/claude-haiku-4.5" };
+
+  const restored = createExtensionHarness([], {
+    model: unsafe,
+    availableModels: [unsafe, safe],
+    trusted: true,
+  });
+  await emitExtensionEvent(restored, "session_start");
+  assert.deepEqual(restored.context.model, safe);
+  assert.equal(restored.aborts.length, 0);
+
+  const switched = createExtensionHarness([], {
+    model: unsafe,
+    availableModels: [unsafe, safe],
+    trusted: true,
+  });
+  await emitExtensionEvent(switched, "model_select", {
+    model: unsafe,
+    previousModel: safe,
+    source: "set",
+  });
+  assert.deepEqual(switched.context.model, safe);
+  assert.equal(switched.aborts.length, 0);
+
+  const noFallback = createExtensionHarness([], {
+    model: unsafe,
+    availableModels: [unsafe],
+    trusted: true,
+  });
+  await emitExtensionEvent(noFallback, "session_start");
+  const result = await (noFallback.handlers.get("input") ?? [])[0]({
+    source: "interactive",
+    text: "继续工作",
+  }, noFallback.context);
+  assert.deepEqual(result, { action: "handled" });
+  assert.match(noFallback.notifications.at(-1)?.message ?? "", /无法恢复到可用的安全模型/);
+});
+
+test("Agent 子代理在 spawn 前继承安全模型并拒绝模糊或跨 Provider 模型", async () => {
+  const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const harness = createExtensionHarness([], {
+    model: safe,
+    availableModels: [safe],
+    trusted: true,
+  });
+  const handler = (harness.handlers.get("tool_call") ?? [])[0];
+  assert.equal(typeof handler, "function");
+
+  const inherited = { toolName: "Agent", input: {} };
+  assert.equal(await handler(inherited, harness.context), undefined);
+  assert.equal(inherited.input.model, "openai-codex/gpt-5.6-luna");
+
+  const fuzzy = await handler({ toolName: "Agent", input: { model: "haiku" } }, harness.context);
+  assert.equal(fuzzy.block, true);
+  assert.equal(fuzzy.terminate, true);
+  assert.match(fuzzy.reason, /必须显式指定 provider\/model/);
+
+  const crossProvider = await handler(
+    { toolName: "Agent", input: { model: "openrouter/anthropic/claude-sonnet-4" } },
+    harness.context,
+  );
+  assert.equal(crossProvider.block, true);
+  assert.match(crossProvider.reason, /不在允许列表中/);
+});
+
+test("角色模型选择器只展示 providerPolicy 允许的模型", async () => {
+  const safe = { provider: "openai-codex", id: "gpt-5.6-luna", name: "Luna" };
+  const unsafe = { provider: "openrouter", id: "anthropic/claude-sonnet-4", name: "Sonnet" };
+  const harness = createExtensionHarness([], {
+    model: safe,
+    availableModels: [safe, unsafe],
+    trusted: true,
+    input: async () => "",
+    select: async (title, items) => title.startsWith("选择 架构设计 模型")
+      ? items[0]
+      : title.startsWith("推理强度")
+        ? "max"
+        : undefined,
+  });
+  const command = harness.commands.get("pi-init");
+  await command.handler("config architect", harness.context);
+
+  assert.equal(harness.selectCalls[0]?.title, "选择 架构设计 模型");
+  assert.ok(harness.selectCalls[0].items.every((item) => !item.includes("openrouter")));
 });
 
 test("task_workflow 区分中间任务和最终工作流报告并保留样式", () => {
@@ -1188,6 +1302,49 @@ test("自动跨角色且上下文达到阈值时才触发压缩", () => {
       contextUsage: { percent: null },
     }),
     false,
+  );
+});
+
+test("provider 策略默认锁定 openai-codex 并拒绝模糊模型", () => {
+  assert.deepEqual(resolveProviderPolicy(undefined), DEFAULT_PROVIDER_POLICY);
+  assert.deepEqual(resolveRoleConfig(undefined).providerPolicy, DEFAULT_PROVIDER_POLICY);
+  assert.equal(isProviderAllowed("openai-codex"), true);
+  assert.equal(isProviderAllowed("openrouter"), false);
+  assert.equal(isModelAllowed("openai-codex/gpt-5.6-luna"), true);
+  assert.equal(isModelAllowed("openrouter/anthropic/claude-haiku-4.5"), false);
+  assert.equal(isModelAllowed("haiku"), false);
+  assert.equal(isModelAllowed({ provider: "openai-codex", id: "gpt-5.6-luna" }), true);
+  assert.deepEqual(normalizeModelReference("openai-codex/gpt-5.6-luna"), {
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+  });
+  assert.deepEqual(
+    assertModelAllowed(
+      { provider: "openai-codex", model: "gpt-5.6-luna" },
+      DEFAULT_PROVIDER_POLICY,
+    ),
+    { provider: "openai-codex", model: "gpt-5.6-luna" },
+  );
+  assert.equal(assertProviderAllowed("openai-codex", DEFAULT_PROVIDER_POLICY), "openai-codex");
+  assert.throws(() => resolveProviderPolicy({ allowedProviders: [] }), /非空数组/);
+  assert.throws(
+    () => resolveProviderPolicy({ allowedProviders: ["openai-codex", "  "] }),
+    /allowedProviders\[1\].*无效/,
+  );
+  assert.throws(
+    () => resolveProviderPolicy({ allowedProviders: ["openai-codex", "openai-codex"] }),
+    /不能包含重复/,
+  );
+  assert.throws(
+    () => resolveRoleConfig({
+      architect: { provider: "openrouter", model: "claude", thinkingLevel: "max" },
+    }),
+    /不在允许列表中/,
+  );
+  assert.throws(() => assertModelAllowed("sonnet", DEFAULT_PROVIDER_POLICY), /必须显式指定/);
+  assert.throws(
+    () => assertModelAllowed("openrouter/anthropic/claude-sonnet-4", DEFAULT_PROVIDER_POLICY),
+    /不在允许列表中/,
   );
 });
 

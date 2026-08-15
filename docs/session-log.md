@@ -1,5 +1,15 @@
 # 会话记录
 
+### 2026-08-15：增加项目级 Provider fail-closed 锁并升级版本
+
+- 完成内容：新增默认只允许 `openai-codex` 的 `providerPolicy`；旧项目缺少策略字段时同样锁定。角色、模型选择/循环、会话恢复、工作流和 Agent 子代理共用策略，省略 Agent model 继承当前模型，`haiku`/`sonnet` 和 OpenRouter 参数在 spawn 前拒绝。
+- 完成内容：针对当前 Pi 0.84 的通知型 `model_select` 增加 awaited 安全模型恢复，并在 `session_start`、输入、provider 请求前增加 fail-closed 守卫；同步中英文模板、README、决策、踩坑和当前状态文档。
+- 完成内容：版本从 `1.0.6` 升级到 `1.0.7`，同步 `package-lock.json`。
+- 验证：`npm test`，41 项全部通过。
+- 验证：`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、`node --check src/roles.js`、package/package-lock 版本一致性检查和 `git diff --check` 通过；Git 仅提示 Windows 下的 LF/CRLF 转换警告。
+- 验证：使用 `node --input-type=module` 实例化最小 ExtensionAPI harness，`init-project.ts` RPC 扩展加载成功。
+- 遗留问题：Pi 核心尚未提供可取消的 `before_model_select`；当前实现依赖切换后立即回滚和请求前守卫，未来可接入核心事件进一步前移拦截。
+
 ### 2026-08-15：修复 npm lifecycle 中 pi-usage 安装目标错误并升级版本
 
 - 完成内容：修复 `postinstall` 在 `pi update --extensions` 中误选当前包 `node_modules/.bin/pi.cmd` 的问题；安装器现在跳过该本地 shim，选择 PATH 中后续的实际 Pi CLI 目录。

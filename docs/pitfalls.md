@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-08-15：Agent 模糊模型名可能跨 Provider 解析
+
+- 日期：2026-08-15；
+- 现象：部分子会话记录为 OpenRouter/Claude，即使主会话和角色配置默认使用 `openai-codex`。
+- 根因：Agent 工具显式传入 `haiku`/`sonnet`，或 agent 类型携带默认模型时由子代理解析器进行模糊匹配/跨 Provider fallback；这不是主会话 Codex 失败后的自动 fallback。
+- 修复：项目默认启用 fail-closed `providerPolicy`，Agent spawn 前要求显式 `provider/model`，省略 model 时绑定当前允许模型；模型选择、恢复、角色和工作流切换也复用 allowlist。当前 Pi 0.84 的 `model_select` 只能在切换后通知，扩展会立即回滚并在输入/provider 请求前拦截。
+- 验证：`npm test` 覆盖 OpenRouter、`haiku`/`sonnet`、会话恢复、模型切换和 Agent spawn 守卫；未来应在 Pi 核心提供可取消的 `before_model_select` 后补充源头拦截。
+
 ### 2026-08-15：pi-usage 逐事件写入和全量 split 会放大冷导入成本
 
 - 日期：2026-08-15；

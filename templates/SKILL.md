@@ -39,6 +39,7 @@ description: {{SKILL_DESCRIPTION}}
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
 - 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`，并输出包含任务 ID、任务内容、角色、开始时间、结束时间、总耗时、完成摘要和验证结果的任务完成报告。验证数组只能写实际执行过的命令和真实结果；总耗时从任务进入 `in_progress` 的开始时间计算到完成时间。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，缺少扩展、RPC 错误或异常回复都必须安全阻塞。
+- Provider 策略由 `.pi/role-models.json` 顶层 `providerPolicy` 控制，默认是 `{"mode":"locked","allowedProviders":["openai-codex"]}`；缺少该字段的旧项目同样按默认锁定处理。模型选择、循环、恢复、角色/工作流切换和 Agent spawn 都必须使用允许 Provider。Agent 省略 `model` 时继承当前模型，`haiku`/`sonnet` 等未限定 Provider 的名称以及其他 Provider/model 在 spawn 前拒绝；跨 Provider 只能通过显式修改并保存配置启用，不支持临时解锁或隐式 fallback。
 - 使用 `subagents` 时主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并必须返回严格的 `pi-init/task-result@1` JSON，只有合法 `complete` 才能完成任务。
 - 子代理在共享工作区执行，不创建 worktree、不合并分支、不自动提交或推送；reload 后已绑定的非终态子代理不会自动重生，须查看绑定并人工恢复。
 - 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。
@@ -68,6 +69,7 @@ description: {{SKILL_DESCRIPTION}}
 - 切换失败时立即停止该职责并报告错误，不得在错误模型下继续或伪报成功。
 - 自动模式仅在实际跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩一次上下文；压缩保留目标、决策、进度、文件、验证结果和下一步，成功后自动继续任务。确认、手动、首次选角、同角色重复切换和未知上下文不会额外触发。
 - 会话启动、resume 或 reload 时，仅在当前模型和推理强度唯一匹配时恢复角色；重复配置或无法匹配时保持未知。
+- Pi 0.84 的 `model_select` 是切换后的通知事件，扩展会立即恢复到上一个或配置中的安全模型，并在 `session_start`、输入和 provider 请求前再次校验；未来 Pi 提供可取消的 `before_model_select` 后可进一步从选择源头拒绝。
 - 用户可用 `/pi-init role <职责 ID>` 手动验证同一映射；在受信任项目中使用 `/pi-init config [职责 ID]` 暂存模型或推理强度变更，需要持久化时再执行 `/pi-init save`；手动模式下执行 `/pi-init role` 后再重试自动职责。
 
 

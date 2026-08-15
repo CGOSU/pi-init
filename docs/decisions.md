@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-15：项目级 Provider 默认 fail-closed
+
+- 决定：`.pi/role-models.json` 顶层增加 `providerPolicy`；缺少该字段时默认使用 `{ "mode": "locked", "allowedProviders": ["openai-codex"] }`。角色配置、模型选择/循环、会话恢复、工作流和 Agent 子代理共用同一策略；省略 Agent model 继承当前模型，未限定 Provider 的模糊名称直接拒绝。
+- 原因：已确认 OpenRouter 调用来自 Agent 子代理显式的 `haiku`/`sonnet` 参数或 agent 类型默认模型解析，不是 Codex 失败后的 fallback。仅约束角色切换无法覆盖子代理模型解析。
+- 约束：不修改全局凭据；跨 Provider 只能显式编辑并保存 allowlist，不提供临时解锁或隐式 fallback。当前 Pi 0.84 没有可取消的 `before_model_select`，因此 `model_select` 使用 awaited 安全模型回滚，并在请求前再次校验；未来核心 API 可用后再前移到选择源头。
+
 ### 2026-08-15：postinstall 忽略当前 npm 包的 Pi shim
 
 - 决定：`scripts/install-launchers.js` 从 `PATH` 查找 Pi CLI 时，跳过当前包 `node_modules/.bin` 下的 `pi`/`pi.cmd` 等 shim，选择后续实际 Pi CLI 所在目录作为 `pi-usage` 安装目标。
