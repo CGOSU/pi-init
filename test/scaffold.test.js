@@ -1080,8 +1080,8 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
     "任务摘要：",
     "- schema：结构完成",
     "- docs：文档完成",
-    "开始时间：1970-01-01 08:00:00.115+08:00",
-    "结束时间：1970-01-01 08:00:00.175+08:00",
+    "开始时间：1970-01-01 00:00:00+00:00",
+    "结束时间：1970-01-01 00:00:00+00:00",
     "总耗时：60 毫秒",
     "验证：",
     "- schema：npm test：通过",
@@ -1098,8 +1098,8 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
   assert.match(workflowRendered, /<success><bold>任务摘要：<\/bold><\/success>/);
   assert.match(workflowRendered, /<success><bold>验证：<\/bold><\/success>/);
   assert.match(workflowRendered, /<warning><bold>总耗时：60 毫秒<\/bold><\/warning>/);
-  assert.match(workflowRendered, /开始时间：1970-01-01 08:00:00\.115\+08:00/);
-  assert.match(workflowRendered, /结束时间：1970-01-01 08:00:00\.175\+08:00/);
+  assert.match(workflowRendered, /开始时间：1970-01-01 00:00:00\+00:00/);
+  assert.match(workflowRendered, /结束时间：1970-01-01 00:00:00\+00:00/);
   assert.match(workflowRendered, /schema：结构完成/);
   assert.match(workflowRendered, /docs：git diff --check：通过/);
 });
@@ -1212,7 +1212,8 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   for (const field of ["任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "摘要：", "验证：", "目标：", "进度：", "任务摘要："]) {
     assert.match(extension, new RegExp(field));
   }
-  assert.match(extension, /replace\("T", " "\).*\+08:00/);
+  assert.match(extension, /getTimezoneOffset\(\)/);
+  assert.doesNotMatch(extension, /utcPlusEight|8 \* 60 \* 60 \* 1000/);
   assert.doesNotMatch(extension, /工作流摘要：|任务进度：|各任务摘要：/);
   assert.match(extension, /历史任务未记录开始时间/);
   assert.match(extension, /async function configureWorkflow\(ctx: ExtensionCommandContext\)/);

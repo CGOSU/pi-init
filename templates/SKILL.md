@@ -37,7 +37,7 @@ description: {{SKILL_DESCRIPTION}}
 - 运行时角色切换和 `/pi-init config` 变更只存在于当前会话；只有用户明确执行 `/pi-init save`（保存角色配置）才写入 `.pi/role-models.json`。
 - 架构师的每个任务必须包含唯一 `id`、目标 `task`、允许修改的 `files`、可验证的 `acceptanceCriteria`，并在有顺序约束时填写 `dependsOn`；任务默认按依赖就绪顺序串行执行。
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
-- 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`，并输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样只保留目标、进度、任务摘要、整体时间、耗时和验证。验证数组只能写实际执行过的命令和真实结果；报告时间统一使用东八区 `YYYY-MM-DD HH:mm:ss+08:00`。
+- 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`，并输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样只保留目标、进度、任务摘要、整体时间、耗时和验证。验证数组只能写实际执行过的命令和真实结果；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，缺少扩展、RPC 错误或异常回复都必须安全阻塞。
 - Provider 策略由 `.pi/role-models.json` 顶层 `providerPolicy` 控制，默认是 `{"mode":"locked","allowedProviders":["openai-codex"]}`；缺少该字段的旧项目同样按默认锁定处理。模型选择、循环、恢复、角色/工作流切换和 Agent spawn 都必须使用允许 Provider。Agent 省略 `model` 时继承当前模型，`haiku`/`sonnet` 等未限定 Provider 的名称以及其他 Provider/model 在 spawn 前拒绝；跨 Provider 只能通过显式修改并保存配置启用，不支持临时解锁或隐式 fallback。
 - 使用 `subagents` 时主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并必须返回严格的 `pi-init/task-result@1` JSON，只有合法 `complete` 才能完成任务。

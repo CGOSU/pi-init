@@ -1129,8 +1129,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   function formatWorkflowTimestamp(value: unknown, unavailableText: string) {
     if (typeof value !== "number" || !Number.isFinite(value)) return unavailableText;
-    const utcPlusEight = new Date(value + 8 * 60 * 60 * 1000).toISOString();
-    return `${utcPlusEight.slice(0, 19).replace("T", " ")}+08:00`;
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return unavailableText;
+    const pad = (part: number) => String(part).padStart(2, "0");
+    const offsetMinutes = -date.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const absoluteOffset = Math.abs(offsetMinutes);
+    const offset = `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset}`;
   }
 
   function formatWorkflowDuration(milliseconds: number | undefined) {
