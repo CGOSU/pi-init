@@ -33,7 +33,8 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 
 ## Architecture Decomposition and Automatic Task Workflow
 
-- The project task workflow is controlled by top-level `workflowMode` in `.pi/role-models.json`, defaulting to `auto`: `off` rejects new `task_workflow(action=plan)` calls, `on` always orchestrates valid plans, and `auto` bypasses state persistence, role switching, and hidden continuation for plans with at most 2 tasks so the current Architect executes them directly in order; larger plans use the continuous flow. Choose it persistently with `/pi-init config workflow`. For legacy projects without `workflowMode`, `workflowEnabled: true/false` maps to `on/off`; when both fields exist, `workflowMode` wins.
+- The project task workflow is controlled by top-level `workflowMode` in `.pi/role-models.json`, defaulting to `auto`: `off` rejects new `task_workflow(action=plan)` calls, `on` always orchestrates valid plans, and `auto` bypasses state persistence, role switching, and hidden continuation for plans with at most 2 tasks so the current Architect executes them directly in order; larger plans use the continuous flow. Stage it for the current session with `/pi-init config workflow` and persist it only with `/pi-init save`. For legacy projects without `workflowMode`, `workflowEnabled: true/false` maps to `on/off`; when both fields exist, `workflowMode` wins.
+- Runtime role switches and `/pi-init config` changes are session-only; they write `.pi/role-models.json` only after the user explicitly runs `/pi-init save` (Save Role Configuration).
 - Every Architect-created task must include a unique `id`, a goal in `task`, allowed `files`, verifiable `acceptanceCriteria`, and `dependsOn` when ordering matters; tasks run sequentially when their dependencies are ready.
 - When the workflow is enabled, set `reviewRequired` to `true` only when the user's initial request explicitly asks to see or review the architecture first. The workflow then pauses after saving the plan and resumes with `/pi-init workflow resume`; the default is automatic advancement.
 - After receiving a task, the Development and Test Engineer should implement, test, and fix directly instead of pausing for optional preferences. On completion, call `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])` and output a task completion report containing the task ID, task, role, start time, end time, total duration, completion summary, and verification results. The verification list may contain only commands actually run and their real results; measure total duration from the task entering `in_progress` until completion.
@@ -55,18 +56,19 @@ For tasks in this project, treat the repository-root `AGENTS.md` as the single r
 - `/pi-init init [directory]`: initialize from project metadata with one confirmation.
 - `/pi-init advanced [directory]`: edit the project name, language, test command, and Skill before initialization.
 - `/pi-init role <role ID>`: manually switch roles.
-- `/pi-init config [role ID]`: persistently change a role's model and reasoning level.
-- `/pi-init config workflow`: persistently choose the task workflow strategy `off`, `on`, or `auto`; you can also edit `workflowMode` in `.pi/role-models.json` directly. Legacy projects may keep `workflowEnabled`; when the new field is absent, `true/false` maps to `on/off`.
+- `/pi-init config [role ID]`: stage a role's model and reasoning level for the current session.
+- `/pi-init config workflow`: stage the task workflow strategy `off`, `on`, or `auto` for the current session; run `/pi-init save` to write it to the project configuration, or edit `workflowMode` in `.pi/role-models.json` directly. Legacy projects may keep `workflowEnabled`; when the new field is absent, `true/false` maps to `on/off`.
+- `/pi-init save`: explicitly persist the current session's staged role configuration to `.pi/role-models.json`.
 
 ## Automatic Model Switching
 
 - Call `switch_role` before every role starts and again at each role boundary; changing tone is not a model switch.
 - Role IDs: `architect` for Architect, `developer-test` for Development and Test Engineer, and `docs-commit` for Documentation and Wrap-up Engineer.
-- `switch_role` reads the project mapping from `.pi/role-models.json`, calls Pi's model and reasoning-level APIs, and returns the effective result.
+- `switch_role` reads the project defaults plus current-session overrides, calls Pi's model and reasoning-level APIs, and returns the effective result; it never writes project files.
 - If switching fails, stop that role immediately and report the error. Never continue under the wrong model or claim success.
 - In auto mode, only a real role boundary at 50% or more context usage triggers one compaction after the agent is fully settled; it preserves the goal, decisions, progress, files, verification results, and next steps, then resumes the task on success. Confirm, manual, first-role, same-role, and unknown-context switches do not trigger extra compaction.
 - At session start, resume, or reload, restore a role only when the current model and thinking level uniquely match its configuration; otherwise keep the role unknown.
-- Users can verify the same mapping with `/pi-init role <role ID>`; in trusted projects, use `/pi-init config [role ID]` to persistently adjust a role's model or reasoning level; in manual mode, run `/pi-init role` and retry the automatic role boundary.
+- Users can verify the same mapping with `/pi-init role <role ID>`; in trusted projects, use `/pi-init config [role ID]` to stage a model or reasoning-level change and `/pi-init save` to persist it; in manual mode, run `/pi-init role` and retry the automatic role boundary.
 
 
 ## Handoff Contract

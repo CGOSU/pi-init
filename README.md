@@ -126,11 +126,13 @@ pi-usage
 | 开发测试工程师 | `openai-codex/gpt-5.6-luna` | `max` |
 | 文档与收尾工程师 | `openai-codex/gpt-5.6-luna` | `medium` |
 
-角色配置保存在项目的 `.pi/role-models.json`：
+角色默认配置保存在项目的 `.pi/role-models.json`：
 
 - `auto`：自动切换。
 - `confirm`：切换前询问。
 - `manual`：只允许用户手动切换。
+- `/pi-init role` 和 `switch_role` 只切换当前会话，不写项目配置。
+- `/pi-init config [角色]` 与 `/pi-init config workflow` 只暂存当前会话变更；执行 `/pi-init save`（保存角色配置）后才写入 `.pi/role-models.json`。
 
 自动模式仅在实际跨角色且上下文使用率达到 50% 时额外触发一次压缩；压缩会保留目标、决策、进度、文件、验证结果和下一步，成功后自动继续当前任务。会话恢复时会根据当前模型和推理强度唯一匹配并恢复角色。`confirm`、`manual`、首次选角、同角色重复切换和未知上下文不会额外触发。
 
@@ -144,9 +146,10 @@ flowchart LR
   CONFIRM --> ROLE
   MODE -->|manual：手动指定| COMMAND["/pi-init role"]
   COMMAND --> ROLE
-  ROLE --> CONFIG[角色配置<br/>.pi/role-models.json]
-  CONFIG --> MODEL[模型<br/>provider/model]
-  CONFIG --> THINKING[推理强度<br/>off ... max]
+  ROLE --> CONFIG[项目默认配置<br/>.pi/role-models.json]
+  CONFIG --> OVERRIDE[当前会话暂存覆盖]
+  OVERRIDE --> MODEL[模型<br/>provider/model]
+  OVERRIDE --> THINKING[推理强度<br/>off ... max]
   MODEL --> SESSION[当前会话]
   THINKING --> SESSION
 ```
@@ -165,12 +168,13 @@ flowchart LR
 /pi-init role <architect|developer-test|docs-commit>
 /pi-init config [architect|developer-test|docs-commit]
 /pi-init config workflow
+/pi-init save
 /pi-init mode <auto|confirm|manual>
 ```
 
-任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 持久选择 `off`、`on` 或 `auto`，也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，超过 2 个任务才进入编排；已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
+任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 在当前会话暂存 `off`、`on` 或 `auto`，执行 `/pi-init save` 后才写入项目配置；也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，超过 2 个任务才进入编排；已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
-`workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subagents`。活动工作流会持久化创建时的执行器；配置不会把已有工作流切换到另一执行器。
+`workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subagents`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
 
 每个任务完成时会输出任务完成报告，包含任务 ID、任务内容、角色、涉及文件、开始时间、结束时间、总耗时、完成摘要和实际验证结果。总耗时从任务实际进入 `in_progress` 的时间开始计算，到任务完成时间结束；旧版状态若没有开始时间，会明确显示耗时不可用，不会伪造时间。
 
@@ -178,7 +182,7 @@ flowchart LR
 
 未走 `task_workflow` 的普通外部执行也会显示“普通执行时间报告”，字段包括来源、开始时间、结束时间、总耗时和计时口径。它只跟踪 `interactive` 或 `rpc` 输入，时间边界是首次 `agent_start` 到最终 `agent_settled`；这只表示本次 Agent 执行，不等同于工作流任务或业务任务完成。活动工作流、subagents 和扩展隐藏续跑不会重复生成普通记录。报告使用不进入 LLM 上下文的 session custom entry 持久化；reload、会话切换或中断时不会补造未完成记录。
 
-`/pi-init mode` 只临时覆盖当前会话；`/pi-init config` 持久修改项目配置。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，但角色自动切换以项目配置为准。
+`/pi-init mode`、`/pi-init role`、`switch_role` 和 `/pi-init config` 的运行时变更只影响当前会话；只有明确执行 `/pi-init save` 才会把暂存角色配置写入项目文件。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，角色自动切换以当前会话配置为准。
 
 ### subagents 顺序执行器边界
 

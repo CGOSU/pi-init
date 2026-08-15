@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, mkdirSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+const EMBEDDED_PACKAGE_VERSION = "__PI_INIT_VERSION__";
+const SOURCE_PACKAGE_VERSION_MARKER = "__PI_INIT_VERSION__";
 const DUCKDB_PACKAGE = "@duckdb/node-api";
 const DUCKDB_VERSION = "1.5.5-r.3";
 const FIELDS = ["input", "output", "cacheRead", "cacheWrite"];
@@ -19,6 +21,20 @@ const TOKEN_SPEED_CUSTOM_TYPE = "pi-token-speed";
 const USAGE_SCHEMA_VERSION = 2;
 const CHECKPOINT_TAIL_BYTES = 64 * 1024;
 const APPENDER_BATCH_SIZE = 1024;
+
+function resolvePackageVersion() {
+  if (EMBEDDED_PACKAGE_VERSION !== SOURCE_PACKAGE_VERSION_MARKER) return EMBEDDED_PACKAGE_VERSION;
+  try {
+    const manifest = JSON.parse(
+      readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"),
+    );
+    return typeof manifest.version === "string" && manifest.version ? manifest.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+export const PI_USAGE_VERSION = resolvePackageVersion();
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -1187,7 +1203,7 @@ export function formatReport(summary, options = {}) {
     sessionSpanSeconds: 0,
   };
   return [
-    paint(`Pi usage · ${summary.date}`, "36;1", color),
+    paint(`Pi usage · ${summary.date} · v${PI_USAGE_VERSION}`, "36;1", color),
     "",
     paint("Overview", "33;1", color),
     formatOverviewTable(summary, total, color),

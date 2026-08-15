@@ -506,7 +506,7 @@ function shouldOrchestrateConfiguredWorkflow(mode: string, taskCount: number) {
   return shouldOrchestrateWorkflow({ mode, taskCount });
 }
 
-function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
+function roleMenuItems(config: ResolvedRoleConfig, mode: string, hasPendingChanges: boolean) {
   return [
     {
       value: "mode",
@@ -518,31 +518,13 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
       label: `● ${roleLabel(role)} · ${shortModelName(config[role].model)}/${config[role].thinkingLevel}`,
       description: formatRoleModel(config[role]),
     })),
+    {
+      value: "save",
+      label: hasPendingChanges ? "◆ 保存角色配置（有未保存变更）" : "◆ 保存角色配置",
+      description: hasPendingChanges ? "将本次会话的暂存配置写入项目文件" : "当前没有待保存的配置变更",
+    },
     { value: "back", label: "← 返回上一级", description: "不修改其他设置" },
   ];
-}
-
-async function updateRoleConfig(ctx: ExtensionContext, changes: Record<string, unknown>) {
-  const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
-  return withFileMutationQueue(configPath, async () => {
-    const current = resolveRoleConfig(await readRoleConfig(ctx)) as Record<string, unknown>;
-    const next = resolveRoleConfig({ ...current, ...changes });
-    await mkdir(dirname(configPath), { recursive: true });
-    await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-    return next;
-  });
-}
-
-async function writeRoleConfig(
-  ctx: ExtensionContext,
-  role: string,
-  selection: RoleModelConfig,
-) {
-  return updateRoleConfig(ctx, { [role]: selection });
-}
-
-async function writeWorkflowConfig(ctx: ExtensionContext, workflowMode: string, workflowExecutor: string) {
-  return updateRoleConfig(ctx, { workflowMode, workflowExecutor });
 }
 
 function formatResult(result: {
@@ -694,6 +676,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     thinkingLevel: string;
   } | undefined;
   let sessionModeOverride: string | undefined;
+  let sessionRoleConfigOverrides: Record<string, unknown> = {};
   let controlCenterGuideShown = false;
   let roleModeStatus = "auto";
   let workflowModeStatus = "auto";
@@ -731,6 +714,53 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return undefined;
     }
     return activeRole;
+  }
+
+  async function readSessionRoleConfig(ctx: ExtensionContext) {
+    const persisted = await readRoleConfig(ctx);
+    return resolveRoleConfig({
+      ...(persisted && typeof persisted === "object" ? persisted : {}),
+      ...sessionRoleConfigOverrides,
+    }) as ResolvedRoleConfig;
+  }
+
+  function hasPendingRoleConfigChanges() {
+    return Object.keys(sessionRoleConfigOverrides).length > 0;
+  }
+
+  function stageRoleConfig(changes: Record<string, unknown>) {
+    sessionRoleConfigOverrides = { ...sessionRoleConfigOverrides, ...changes };
+  }
+
+  async function saveRoleConfig(ctx: ExtensionCommandContext) {
+    if (!ctx.isProjectTrusted()) {
+      ctx.ui.notify("保存角色配置仅允许在受信任项目中运行；请先信任当前项目", "error");
+      return;
+    }
+    if (!hasPendingRoleConfigChanges()) {
+      ctx.ui.notify("当前没有未保存的角色配置变更。", "info");
+      return;
+    }
+
+    const changes = { ...sessionRoleConfigOverrides };
+    const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
+    try {
+      const next = await withFileMutationQueue(configPath, async () => {
+        const persisted = await readRoleConfig(ctx);
+        const current = persisted && typeof persisted === "object" ? persisted : {};
+        const resolved = resolveRoleConfig({ ...current, ...changes });
+        await mkdir(dirname(configPath), { recursive: true });
+        await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
+        return resolved as ResolvedRoleConfig;
+      });
+      sessionRoleConfigOverrides = {};
+      workflowModeStatus = next.workflowMode;
+      workflowExecutorStatus = next.workflowExecutor;
+      refreshRoleStatus(ctx, sessionModeOverride ?? next.mode);
+      ctx.ui.notify("已保存角色配置到 .pi/role-models.json。", "info");
+    } catch (error) {
+      ctx.ui.notify(`保存角色配置失败：${textOf(error)}`, "error");
+    }
   }
 
   function inactiveWorkflowStateLabel() {
@@ -827,7 +857,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
-    const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+    const config = await readSessionRoleConfig(ctx);
     workflowModeStatus = config.workflowMode;
     workflowExecutorStatus = config.workflowExecutor;
     const target = config[role];
@@ -879,7 +909,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   async function automaticRole(role: string, ctx: ExtensionContext) {
-    const configuredMode = (resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig).mode;
+    const configuredMode = (await readSessionRoleConfig(ctx)).mode;
     const mode = sessionModeOverride ?? configuredMode;
     if (mode === "auto") {
       const previousRole = activeRoleFor(ctx)?.role;
@@ -1490,7 +1520,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           throw new Error("当前已有未结束的工作流，请先完成、取消或处理它");
         }
 
-        const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+        const config = await readSessionRoleConfig(ctx);
         workflowModeStatus = config.workflowMode;
         workflowExecutorStatus = config.workflowExecutor;
         const plan = validateWorkflowPlan({
@@ -1647,7 +1677,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+    const config = await readSessionRoleConfig(ctx);
     const choice = await showMenu(ctx, "任务工作流策略", [
       {
         value: "off",
@@ -1683,16 +1713,19 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     ], { selectedValue: config.workflowExecutor });
     if (!executor || executor === "back") return;
 
-    const next = await writeWorkflowConfig(ctx, choice, executor);
+    if (choice !== config.workflowMode || executor !== config.workflowExecutor) {
+      stageRoleConfig({ workflowMode: choice, workflowExecutor: executor });
+    }
+    const next = await readSessionRoleConfig(ctx);
     workflowModeStatus = next.workflowMode;
     workflowExecutorStatus = next.workflowExecutor;
     refreshRoleStatus(ctx, roleModeStatus);
     ctx.ui.notify(
       next.workflowMode === "off"
-        ? `项目任务工作流已关闭；执行器配置为${workflowExecutorLabel(next.workflowExecutor)}，新规划将被拒绝。`
+        ? `当前会话工作流已关闭；执行器为${workflowExecutorLabel(next.workflowExecutor)}，新规划将被拒绝。保存角色配置后才会写入项目文件。`
         : next.workflowMode === "on"
-          ? `项目任务工作流已设为始终编排，执行器为${workflowExecutorLabel(next.workflowExecutor)}。`
-          : `项目任务工作流已设为自动，执行器为${workflowExecutorLabel(next.workflowExecutor)}；不超过 2 个任务的规划将跳过编排。`,
+          ? `当前会话工作流已设为始终编排，执行器为${workflowExecutorLabel(next.workflowExecutor)}。保存角色配置后才会写入项目文件。`
+          : `当前会话工作流已设为自动，执行器为${workflowExecutorLabel(next.workflowExecutor)}；不超过 2 个任务的规划将跳过编排。保存角色配置后才会写入项目文件。`,
       "info",
     );
   }
@@ -1727,10 +1760,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
       }
-      await writeRoleConfig(ctx, role, selection);
+      stageRoleConfig({ [role]: selection });
       const result = await applyRole(role, ctx);
       ctx.ui.notify(
-        `已更新 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}`,
+        `已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
         "info",
       );
     } catch (error) {
@@ -1744,22 +1777,27 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return;
     }
 
-    let config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+    let config = await readSessionRoleConfig(ctx);
     while (true) {
       const mode = sessionModeOverride ?? config.mode;
-      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode));
+      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode, hasPendingRoleConfigChanges()));
       if (!action || action === "back") return;
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
         continue;
       }
+      if (action === "save") {
+        await saveRoleConfig(ctx);
+        config = await readSessionRoleConfig(ctx);
+        continue;
+      }
       if (action === "workflow") {
         await configureWorkflow(ctx);
-        config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+        config = await readSessionRoleConfig(ctx);
         continue;
       }
       await configureRole(action, ctx);
-      config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      config = await readSessionRoleConfig(ctx);
     }
   }
 
@@ -1797,7 +1835,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     controlCenterGuideShown = true;
     let selectedAction: string | undefined;
     while (true) {
-      const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      const config = await readSessionRoleConfig(ctx);
       workflowModeStatus = config.workflowMode;
       workflowExecutorStatus = config.workflowExecutor;
       const mode = sessionModeOverride ?? config.mode;
@@ -1819,8 +1857,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const action = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
         { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
-        { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或修改三个角色的模型配置" },
-        { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置新 task_workflow 规划的编排策略" },
+        { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或暂存三个角色的模型配置" },
+        { value: "save", label: hasPendingRoleConfigChanges() ? "◆ 保存 · 保存角色配置（有未保存变更）" : "◆ 保存 · 保存角色配置", description: hasPendingRoleConfigChanges() ? "将暂存配置写入 .pi/role-models.json" : "当前没有待保存的配置变更" },
+        { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
@@ -1832,6 +1871,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       selectedAction = action;
       if (action === "config") {
         await configureRoleCenter(ctx);
+        continue;
+      }
+      if (action === "save") {
+        await saveRoleConfig(ctx);
         continue;
       }
       if (action === "workflow-config") {
@@ -1925,7 +1968,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       runtimeDisposed = false;
-      const config = resolveRoleConfig(await readRoleConfig(ctx)) as ResolvedRoleConfig;
+      sessionRoleConfigOverrides = {};
+      const config = await readSessionRoleConfig(ctx);
       currentContext = ctx;
       workflowModeStatus = config.workflowMode;
       workflowExecutorStatus = config.workflowExecutor;
@@ -1955,7 +1999,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "config", "role", "mode", "workflow"];
+        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -1981,10 +2025,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (action === "init") return quickInit(tokens.join(" ") || ".", ctx);
         if (action === "advanced") return advancedInit(tokens.join(" ") || ".", ctx);
         if (action === "config") return configureRole(tokens[0], ctx);
+        if (action === "save") return saveRoleConfig(ctx);
         if (action === "role") return switchRole(tokens[0], ctx);
         if (action === "mode") return setSessionMode(tokens[0], ctx);
         if (action === "workflow") return workflowCommand(tokens.shift(), tokens.shift(), ctx);
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|role|mode|workflow] [参数]", "error");
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");
       }
@@ -2100,7 +2145,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "switch_role",
     label: "Switch Role",
     description:
-      "Switch the active Pi model and reasoning level for a responsibility. Reads the mode and trusted project overrides from .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /pi-init role. Defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
+      "Switch the active Pi model and reasoning level for a responsibility. Reads project defaults and current-session overrides; switching never writes .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /pi-init role. Use /pi-init save to explicitly persist staged role configuration. Defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
     promptSnippet: "Switch model and reasoning level for architect, developer-test, or docs-commit work",
     promptGuidelines: [
       "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",

@@ -9,6 +9,7 @@ import { installLaunchers } from "../scripts/install-launchers.js";
 import {
   dateRange,
   formatReport,
+  PI_USAGE_VERSION,
   queryUsage,
   shouldRefreshUsage,
   summarizeUsage,
@@ -85,9 +86,11 @@ async function withTempDirectory(run) {
   }
 }
 
-function createExtensionHarness(branch = []) {
+function createExtensionHarness(branch = [], options = {}) {
   const handlers = new Map();
+  const commands = new Map();
   const entries = [];
+  const notifications = [];
   const renderers = new Map();
   const tools = [];
   const pi = {
@@ -105,7 +108,9 @@ function createExtensionHarness(branch = []) {
     appendEntry(type, data) {
       entries.push({ type, data });
     },
-    registerCommand() {},
+    registerCommand(name, command) {
+      commands.set(name, command);
+    },
     registerEntryRenderer(type, renderer) {
       renderers.set(type, renderer);
     },
@@ -124,10 +129,36 @@ function createExtensionHarness(branch = []) {
   initProjectExtension(pi);
 
   const context = {
+    cwd: options.cwd ?? process.cwd(),
+    mode: options.mode ?? "rpc",
+    hasUI: options.hasUI ?? true,
     model: undefined,
+    scopedModels: [],
+    modelRegistry: {
+      find() {
+        return undefined;
+      },
+      getAvailable() {
+        return [];
+      },
+    },
+    isProjectTrusted() {
+      return options.trusted ?? false;
+    },
+    getContextUsage() {
+      return { percent: 0 };
+    },
     ui: {
-      notify() {},
+      notify(message, level) {
+        notifications.push({ message, level });
+      },
       setStatus() {},
+      async select() {
+        return undefined;
+      },
+      async input() {
+        return undefined;
+      },
     },
     sessionManager: {
       getBranch() {
@@ -135,7 +166,7 @@ function createExtensionHarness(branch = []) {
       },
     },
   };
-  return { handlers, entries, renderers, tools, context };
+  return { handlers, commands, entries, notifications, renderers, tools, context };
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {
@@ -183,6 +214,13 @@ test("跨平台 Pi 用量统计启动器指向共享脚本", async () => {
   assert.match(files.posixUsage, /pi-usage\.js/);
 });
 
+test("pi-init 与 pi-usage 共用版本并在报告中输出", async () => {
+  const packageManifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  assert.equal(PI_USAGE_VERSION, packageManifest.version);
+  const report = formatReport({ date: "2026-08-15", sessions: 0, rows: [] });
+  assert.ok(report.includes(`Pi usage · 2026-08-15 · v${packageManifest.version}`));
+});
+
 test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
   await withTempDirectory(async (directory) => {
     const packageManifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
@@ -192,7 +230,9 @@ test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
     assert.equal(await installLaunchers({ targetDir: directory, platform: "linux" }), true);
     assert.match(await readFile(path.join(directory, "pi-usage.cmd"), "utf8"), /pi-usage\.js/);
     assert.match(await readFile(path.join(directory, "pi-usage"), "utf8"), /pi-usage\.js/);
-    assert.match(await readFile(path.join(directory, "pi-usage.js"), "utf8"), /DUCKDB_PACKAGE/);
+    const installedUsage = await readFile(path.join(directory, "pi-usage.js"), "utf8");
+    assert.match(installedUsage, /DUCKDB_PACKAGE/);
+    assert.ok(installedUsage.includes(`const EMBEDDED_PACKAGE_VERSION = "${packageManifest.version}";`));
   });
 });
 
@@ -946,6 +986,31 @@ test("活动 subagents 工作流和会话中断不会伪造普通执行报告", 
   assert.equal(interruptedHarness.entries.length, 0);
 });
 
+test("角色配置先写会话，显式保存才落盘", async () => {
+  await withTempDirectory(async (directory) => {
+    const configPath = path.join(directory, ".pi", "role-models.json");
+    const original = `${JSON.stringify(DEFAULT_ROLE_CONFIG, null, 2)}\n`;
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, original, "utf8");
+
+    const harness = createExtensionHarness([], { cwd: directory, trusted: true });
+    const choices = ["始终编排", "保持主会话顺序执行"];
+    harness.context.ui.select = async () => choices.shift();
+    const command = harness.commands.get("pi-init");
+    assert.ok(command);
+
+    await command.handler("config workflow", harness.context);
+    assert.equal(await readFile(configPath, "utf8"), original);
+    assert.match(harness.notifications.at(-1)?.message ?? "", /当前会话工作流/);
+
+    await command.handler("save", harness.context);
+    const saved = JSON.parse(await readFile(configPath, "utf8"));
+    assert.equal(saved.workflowMode, "on");
+    assert.equal(saved.workflowExecutor, "local");
+    assert.match(harness.notifications.at(-1)?.message ?? "", /已保存角色配置/);
+  });
+});
+
 test("角色切换压缩等待 agent 完全结束而不是回合结束", async () => {
   const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
   assert.match(
@@ -976,7 +1041,7 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /历史任务未记录开始时间/);
   assert.match(extension, /async function configureWorkflow\(ctx: ExtensionCommandContext\)/);
   assert.match(extension, /requested === "workflow"/);
-  assert.match(extension, /value: "workflow-config", label: `◆ 变更 · 工作流策略：[\s\S]*?配置新 task_workflow 规划的编排策略/);
+  assert.match(extension, /value: "workflow-config", label: `◆ 变更 · 工作流策略：[\s\S]*?配置当前会话的 task_workflow 编排策略/);
   assert.match(extension, /value: "off"[\s\S]*?value: "on"[\s\S]*?value: "auto"/);
   assert.match(extension, /case "plan":[\s\S]*?config\.workflowMode[\s\S]*?\/pi-init config workflow/);
   assert.match(extension, /createWorkflowState\(\{ \.\.\.plan, executor: config\.workflowExecutor \}\)/);

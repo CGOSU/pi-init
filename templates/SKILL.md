@@ -33,7 +33,8 @@ description: {{SKILL_DESCRIPTION}}
 
 ## 架构拆分与自动任务工作流
 
-- 项目任务工作流由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `task_workflow(action=plan)`，`on` 对所有合法规划始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、角色切换和隐藏续跑，由当前架构师直接按顺序执行；超过 2 个任务才采用连续流程。可用 `/pi-init config workflow` 持久选择。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；两个字段同时存在时以 `workflowMode` 为准。
+- 项目任务工作流由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `task_workflow(action=plan)`，`on` 对所有合法规划始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、角色切换和隐藏续跑，由当前架构师直接按顺序执行；超过 2 个任务才采用连续流程。可用 `/pi-init config workflow` 在当前会话暂存，执行 `/pi-init save` 后才持久化。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；两个字段同时存在时以 `workflowMode` 为准。
+- 运行时角色切换和 `/pi-init config` 变更只存在于当前会话；只有用户明确执行 `/pi-init save`（保存角色配置）才写入 `.pi/role-models.json`。
 - 架构师的每个任务必须包含唯一 `id`、目标 `task`、允许修改的 `files`、可验证的 `acceptanceCriteria`，并在有顺序约束时填写 `dependsOn`；任务默认按依赖就绪顺序串行执行。
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
 - 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`，并输出包含任务 ID、任务内容、角色、开始时间、结束时间、总耗时、完成摘要和验证结果的任务完成报告。验证数组只能写实际执行过的命令和真实结果；总耗时从任务进入 `in_progress` 的开始时间计算到完成时间。
@@ -55,18 +56,19 @@ description: {{SKILL_DESCRIPTION}}
 - `/pi-init init [目录]`：使用项目元数据快速初始化，只需确认一次。
 - `/pi-init advanced [目录]`：编辑项目名称、语言、测试命令和 Skill 后初始化。
 - `/pi-init role <职责 ID>`：手动切换职责。
-- `/pi-init config [职责 ID]`：持久修改职责模型与推理强度。
-- `/pi-init config workflow`：持久选择任务工作流的 `off`、`on` 或 `auto` 策略；也可直接修改 `.pi/role-models.json` 的 `workflowMode`。旧项目可继续使用 `workflowEnabled`，未设置新字段时 `true/false` 分别映射为 `on/off`。
+- `/pi-init config [职责 ID]`：暂存当前会话的职责模型与推理强度变更。
+- `/pi-init config workflow`：暂存当前会话的任务工作流 `off`、`on` 或 `auto` 策略；执行 `/pi-init save` 后才写入项目配置，也可直接修改 `.pi/role-models.json` 的 `workflowMode`。旧项目可继续使用 `workflowEnabled`，未设置新字段时 `true/false` 分别映射为 `on/off`。
+- `/pi-init save`：明确将当前会话暂存的角色配置写入 `.pi/role-models.json`。
 
 ## 自动模型切换
 
 - 每个职责开始前必须先调用 `switch_role`；跨职责时再次调用，不能只改变口吻。
 - 职责 ID：架构师用 `architect`，开发测试工程师用 `developer-test`，文档与收尾工程师用 `docs-commit`。
-- `switch_role` 从 `.pi/role-models.json` 读取项目映射，调用 Pi 的模型与推理强度 API，并返回实际生效结果。
+- `switch_role` 从项目默认映射和当前会话暂存覆盖中读取配置，调用 Pi 的模型与推理强度 API，并返回实际生效结果；不会写入项目文件。
 - 切换失败时立即停止该职责并报告错误，不得在错误模型下继续或伪报成功。
 - 自动模式仅在实际跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩一次上下文；压缩保留目标、决策、进度、文件、验证结果和下一步，成功后自动继续任务。确认、手动、首次选角、同角色重复切换和未知上下文不会额外触发。
 - 会话启动、resume 或 reload 时，仅在当前模型和推理强度唯一匹配时恢复角色；重复配置或无法匹配时保持未知。
-- 用户可用 `/pi-init role <职责 ID>` 手动验证同一映射；在受信任项目中需要持久调整某一职责的模型或推理强度时，可使用 `/pi-init config [职责 ID]`；手动模式下执行 `/pi-init role` 后再重试自动职责。
+- 用户可用 `/pi-init role <职责 ID>` 手动验证同一映射；在受信任项目中使用 `/pi-init config [职责 ID]` 暂存模型或推理强度变更，需要持久化时再执行 `/pi-init save`；手动模式下执行 `/pi-init role` 后再重试自动职责。
 
 
 ## 交接要求

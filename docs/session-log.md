@@ -1,5 +1,25 @@
 # 会话记录
 
+### 2026-08-15：角色配置改为会话暂存并升级版本
+
+- 完成内容：运行时角色切换、角色模型配置和工作流配置改为当前会话草稿；`/pi-init config` 不再直接写 `.pi/role-models.json`，新增 `/pi-init save` 作为显式保存入口。
+- 完成内容：更新控制中心、命令补全、中文/英文 README、AGENTS 和 Skill 模板；版本从 `1.0.4` 升级到 `1.0.5`，同步 `package-lock.json`。
+- 完成内容：增加回归测试，验证配置保存前文件不变、显式保存后才更新。
+- 验证：`npm test`，36 项全部通过；命令输出显示 `pi-init@1.0.5`。
+- 验证：`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、`node --check scripts/pi-usage.js`、`node --check scripts/install-launchers.js` 通过。
+- 验证：`git diff --check` 通过，仅有 Git 将 LF 转换为 CRLF 的环境警告。
+- 遗留问题：无。
+
+### 2026-08-15：同步 pi-init 与 pi-usage 版本并显示版本号
+
+- 完成内容：`pi-usage` 以 `package.json` 的 `version` 作为仓库运行时版本来源，报告标题追加 `v<version>`；安装器复制脚本时将同一版本嵌入独立启动器，避免脱离 package 目录后版本丢失。
+- 完成内容：增加版本一致性、报告输出和安装器嵌入版本的回归测试。
+- 验证：`node --test --test-name-pattern='pi-init 与 pi-usage 共用版本|Pi package 更新时自动刷新' test/scaffold.test.js`，2 项通过。
+- 验证：`node --check scripts/pi-usage.js`、`node --check scripts/install-launchers.js`、`node --check test/scaffold.test.js` 通过。
+- 验证：`npm test`，35 项全部通过。
+- 验证：`git diff --check` 通过。
+- 遗留问题：无。
+
 ### 2026-08-15：完成 pi-usage JSONL 导入 I/O 优化
 
 - 完成内容：将 usage/activity/speed 事件改为 DuckDB Appender 批量写入；每文件的删除、写入和 checkpoint 更新使用事务；speed schema 回填使用单个全量重建事务。
