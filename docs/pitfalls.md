@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-08-15：角色切换压缩与 Pi 自动压缩重复
+
+- 日期：2026-08-15；
+- 现象：角色切换后反复出现 `Compaction failed: Already compacted` 和“角色切换后的上下文压缩失败”警告。
+- 根因：角色切换在上下文达到 50% 时登记待压缩；Pi 内置自动压缩可能在 `agent_settled` 前先完成，扩展随后再次调用 `ctx.compact()`，而 Pi 对以 `compaction` entry 结尾的 branch 返回 `Already compacted`。
+- 修复：在 `agent_settled` 的待压缩处理前检查 branch 尾部；已是 `compaction` 时跳过第二次调用并直接续跑。该错误不是 provider、凭据或摘要请求失败。
+- 验证：`node --test --test-name-pattern='角色切换遇到 Pi 已完成的自动压缩|角色切换压缩等待 agent 完全结束' test/scaffold.test.js` 和 `npm test` 均通过。
+
 ### 2026-08-15：Agent 模糊模型名可能跨 Provider 解析
 
 - 日期：2026-08-15；

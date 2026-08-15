@@ -1059,9 +1059,9 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
 
   const taskReport = [
     "任务完成报告",
-    "任务 ID：schema",
+    "任务：schema · 更新结构",
     "总耗时：10 毫秒",
-    "完成摘要：结构完成",
+    "摘要：结构完成",
   ].join("\n");
   const taskRendered = workflowTool.renderResult(
     { isError: false, content: [{ type: "text", text: taskReport }], details: intermediate },
@@ -1075,17 +1075,15 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
 
   const workflowReport = [
     "工作流完成报告",
-    "工作流目标：冻结认证改造",
-    "整体工作总结：",
-    "完成进度：2/2",
+    "目标：冻结认证改造",
+    "进度：2/2",
+    "任务摘要：",
     "- schema：结构完成",
     "- docs：文档完成",
-    "工作复盘：",
-    "冻结时间：1970-01-01T00:00:00.100Z",
-    "实际开始时间：1970-01-01T00:00:00.115Z",
-    "结束时间：1970-01-01T00:00:00.175Z",
-    "整体总耗时：60 毫秒",
-    "汇总验证：",
+    "开始时间：1970-01-01 08:00:00.115+08:00",
+    "结束时间：1970-01-01 08:00:00.175+08:00",
+    "总耗时：60 毫秒",
+    "验证：",
     "- schema：npm test：通过",
     "- docs：git diff --check：通过",
   ].join("\n");
@@ -1095,13 +1093,13 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
     theme,
   ).render(240).join("\n");
   assert.match(workflowRendered, /<accent><bold>◆ 工作流完成报告<\/bold><\/accent>/);
-  assert.match(workflowRendered, /<success><bold>工作流目标：冻结认证改造<\/bold><\/success>/);
-  assert.match(workflowRendered, /<success><bold>整体工作总结：<\/bold><\/success>/);
-  assert.match(workflowRendered, /<success><bold>完成进度：2\/2<\/bold><\/success>/);
-  assert.match(workflowRendered, /<success><bold>工作复盘：<\/bold><\/success>/);
-  assert.match(workflowRendered, /<warning><bold>整体总耗时：60 毫秒<\/bold><\/warning>/);
-  assert.match(workflowRendered, /实际开始时间：1970-01-01T00:00:00\.115Z/);
-  assert.match(workflowRendered, /结束时间：1970-01-01T00:00:00\.175Z/);
+  assert.match(workflowRendered, /<success><bold>目标：冻结认证改造<\/bold><\/success>/);
+  assert.match(workflowRendered, /<success><bold>进度：2\/2<\/bold><\/success>/);
+  assert.match(workflowRendered, /<success><bold>任务摘要：<\/bold><\/success>/);
+  assert.match(workflowRendered, /<success><bold>验证：<\/bold><\/success>/);
+  assert.match(workflowRendered, /<warning><bold>总耗时：60 毫秒<\/bold><\/warning>/);
+  assert.match(workflowRendered, /开始时间：1970-01-01 08:00:00\.115\+08:00/);
+  assert.match(workflowRendered, /结束时间：1970-01-01 08:00:00\.175\+08:00/);
   assert.match(workflowRendered, /schema：结构完成/);
   assert.match(workflowRendered, /docs：git diff --check：通过/);
 });
@@ -1173,6 +1171,30 @@ test("角色切换压缩等待 agent 完全结束而不是回合结束", async (
   assert.doesNotMatch(extension, /pi\.on\("turn_end"[\\s\\S]{0,160}startPendingRoleCompaction/);
 });
 
+test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async () => {
+  const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
+  const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const harness = createExtensionHarness([{ type: "compaction" }], {
+    model: architectModel,
+    availableModels: [architectModel, developerModel],
+  });
+  let compactCalls = 0;
+  harness.context.compact = () => {
+    compactCalls++;
+  };
+  const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
+  assert.ok(switchRole);
+
+  await switchRole.execute("architect", { role: "architect" }, undefined, undefined, harness.context);
+  harness.context.getContextUsage = () => ({ percent: 60 });
+  await switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
+  await emitExtensionEvent(harness, "agent_settled");
+
+  assert.equal(compactCalls, 0);
+  assert.equal(harness.context.model.id, developerModel.id);
+  assert.equal(harness.notifications.some(({ message }) => message.includes("Already compacted")), false);
+});
+
 test("扩展注册顺序工作流并提供自动推进和显式审阅入口", async () => {
   const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
   assert.match(extension, /name: "task_workflow"/);
@@ -1187,9 +1209,10 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   assert.match(extension, /pi\.on\("agent_start"[\s\S]*?markWorkflowTaskStarted\(workflowState, task\.id\)/);
   assert.match(extension, /function formatWorkflowTaskCompletion\(task: ReturnType<typeof getWorkflowTask>\)/);
   assert.match(extension, /function formatWorkflowCompletion\(state: ReturnType<typeof createWorkflowState>\)/);
-  for (const field of ["任务 ID：", "任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "完成摘要：", "验证结果：", "工作流目标：", "整体工作总结：", "完成进度：", "工作复盘：", "冻结时间：", "实际开始时间：", "整体总耗时：", "汇总验证："]) {
+  for (const field of ["任务：", "角色：", "开始时间：", "结束时间：", "总耗时：", "摘要：", "验证：", "目标：", "进度：", "任务摘要："]) {
     assert.match(extension, new RegExp(field));
   }
+  assert.match(extension, /replace\("T", " "\).*\+08:00/);
   assert.doesNotMatch(extension, /工作流摘要：|任务进度：|各任务摘要：/);
   assert.match(extension, /历史任务未记录开始时间/);
   assert.match(extension, /async function configureWorkflow\(ctx: ExtensionCommandContext\)/);

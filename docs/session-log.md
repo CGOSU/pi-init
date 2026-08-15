@@ -1,5 +1,19 @@
 # 会话记录
 
+### 2026-08-15：精简工作流报告并改用东八区时间
+
+- 完成内容：精简任务和最终工作流报告，移除重复的文件列表、内部角色 ID、冻结时间和冗余分段，保留交付摘要、时间、耗时与验证信息。
+- 完成内容：开始/结束时间改为 `YYYY-MM-DD HH:mm:ss+08:00`，持久化时间戳保持不变；普通执行时间报告同步使用该格式。
+- 验证：`npm test`，42 项全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：未在真实长上下文模型会话中进行端到端演练。
+
+### 2026-08-15：避免角色切换重复触发已完成的自动压缩
+
+- 完成内容：定位 `Already compacted` 为 Pi 内置自动压缩与角色切换定制压缩在 `agent_settled` 边界重复执行；扩展现在检测 branch 尾部的 `compaction` entry 后直接续跑。
+- 完成内容：增加角色切换回归测试，确认不会再次调用 `ctx.compact()` 或显示该警告。
+- 验证：`npm test`，42 项全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：未在真实长上下文模型会话中进行端到端演练。
+
 ### 2026-08-15：增加项目级 Provider fail-closed 锁并升级版本
 
 - 完成内容：新增默认只允许 `openai-codex` 的 `providerPolicy`；旧项目缺少策略字段时同样锁定。角色、模型选择/循环、会话恢复、工作流和 Agent 子代理共用策略，省略 Agent model 继承当前模型，`haiku`/`sonnet` 和 OpenRouter 参数在 spawn 前拒绝。

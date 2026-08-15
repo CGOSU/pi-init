@@ -956,6 +956,15 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
     };
 
+    // Pi may have auto-compacted immediately before agent_settled. Calling the
+    // manual API again in that state only produces "Already compacted".
+    if (ctx.sessionManager.getBranch().at(-1)?.type === "compaction") {
+      roleCompactionInFlight = false;
+      ctx.ui.setStatus("pi-init-compaction", undefined);
+      continueAfterTransition();
+      return;
+    }
+
     ctx.compact({
       customInstructions: ROLE_SWITCH_COMPACTION_INSTRUCTIONS,
       onComplete: () => {
@@ -1119,9 +1128,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   }
 
   function formatWorkflowTimestamp(value: unknown, unavailableText: string) {
-    return typeof value === "number" && Number.isFinite(value)
-      ? new Date(value).toISOString()
-      : unavailableText;
+    if (typeof value !== "number" || !Number.isFinite(value)) return unavailableText;
+    const utcPlusEight = new Date(value + 8 * 60 * 60 * 1000).toISOString();
+    return `${utcPlusEight.slice(0, 19).replace("T", " ")}+08:00`;
   }
 
   function formatWorkflowDuration(milliseconds: number | undefined) {
@@ -1169,11 +1178,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (index === 0) return theme.fg("accent", theme.bold(`◆ ${line}`));
       if (line.startsWith("总耗时：") || line.startsWith("整体总耗时：")) return theme.fg("warning", theme.bold(line));
       if (
-        line.startsWith("完成摘要：") ||
-        line.startsWith("工作流目标：") ||
-        line.startsWith("整体工作总结：") ||
-        line.startsWith("完成进度：") ||
-        line.startsWith("工作复盘：")
+        line.startsWith("摘要：") ||
+        line.startsWith("目标：") ||
+        line.startsWith("进度：") ||
+        line.startsWith("任务摘要：") ||
+        line.startsWith("验证：")
       ) return theme.fg("success", theme.bold(line));
       if (line.startsWith("验证结果：") || line.startsWith("汇总验证：")) {
         return theme.fg("success", theme.bold(line));
@@ -1213,15 +1222,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const verification = task.verification?.map((item) => `- ${item}`).join("\n") ?? "- 无";
     return [
       "任务完成报告",
-      `任务 ID：${task.id}`,
-      `任务：${task.task}`,
-      `角色：${roleLabel(task.role)}（${task.role}）`,
-      `涉及文件：${task.files.join(", ")}`,
+      `任务：${task.id} · ${task.task}`,
+      `角色：${roleLabel(task.role)}`,
       `开始时间：${formatWorkflowTimestamp(task.startedAt, "不可用（历史任务未记录开始时间）")}`,
       `结束时间：${formatWorkflowTimestamp(task.completedAt, "不可用（任务未记录结束时间）")}`,
       `总耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
-      `完成摘要：${task.completionSummary ?? "无"}`,
-      `验证结果：\n${verification}`,
+      `摘要：${task.completionSummary ?? "无"}`,
+      `验证：\n${verification}`,
     ].join("\n");
   }
 
@@ -1244,16 +1251,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     return [
       "工作流完成报告",
-      `工作流目标：${state.plan.summary}`,
-      "整体工作总结：",
-      `完成进度：${progress.completed}/${progress.total}`,
+      `目标：${state.plan.summary}`,
+      `进度：${progress.completed}/${progress.total}`,
+      "任务摘要：",
       taskSummaries,
-      "工作复盘：",
-      `冻结时间：${formatWorkflowTimestamp(state.createdAt, "不可用（无效的冻结时间）")}`,
-      `实际开始时间：${formatWorkflowTimestamp(bounds.startedAt, "不可用（工作流未记录有效的实际开始时间）")}`,
+      `开始时间：${formatWorkflowTimestamp(bounds.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
       `结束时间：${formatWorkflowTimestamp(bounds.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
-      `整体总耗时：${formatWorkflowExecutionDuration(state)}`,
-      "汇总验证：",
+      `总耗时：${formatWorkflowExecutionDuration(state)}`,
+      "验证：",
       verification,
     ].join("\n");
   }
