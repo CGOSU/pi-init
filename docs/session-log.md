@@ -4,7 +4,7 @@
 
 - 完成内容：确认历史“模型随意切换”根因为 Agent 子代理模糊模型名（`haiku`/`sonnet`）、agent 类型默认模型解析和宿主跨 Provider fallback，主会话无自动 fallback；据此移除 `providerPolicy` 整套机制。
 - 完成内容：`src/roles.js` 删除 `resolveProviderPolicy`/`isProviderAllowed`/`isModelAllowed`/`assertProviderAllowed`/`assertModelAllowed`，`resolveRoleConfig` 不再输出 `providerPolicy`；扩展删除 `enforceProviderPolicy`/`restoreAllowedModel`/`configuredFallbackModel` 和 `model_select` 回滚、输入/provider 请求前守卫，manual 写回不再联动 allowlist。
-- 完成内容：Agent spawn 保留精确引用纪律（省略注入完整 `provider/model`、模糊名称拒绝、注册表精确存在校验，全模式统一）；`/pi-init config` 候选列表展示全部已注册模型。
+- 完成内容：Agent spawn 保留精确引用纪律（省略注入完整 `provider/model`、模糊名称拒绝、注册表精确存在校验，全模式统一）；`/pi-init config` 候选列表展示全部已注册模型；修复 `model_select` 后状态栏不刷新——现在所有模式、所有路径（含 manual 写回被跳过的情况）统一刷新底部状态。
 - 完成内容：同步中英文模板、README、决策/当前状态文档；版本从 `1.0.8` 升级到 `1.1.0`。
 - 验证：`npm test`，44 项全部通过（覆盖无回滚、写回、spawn 纪律、全量候选和 roles 单元语义）；`git diff --check` 通过。
 - 遗留问题：完全限定的跨 Provider 引用不再被拦截；未在真实 Pi TUI 中端到端演练。

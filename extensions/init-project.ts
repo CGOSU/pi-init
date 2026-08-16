@@ -808,7 +808,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       });
       delete sessionRoleConfigOverrides[role];
       activeRole = { role, ...reference, thinkingLevel };
-      refreshRoleStatus(ctx, "manual");
       ctx.ui.notify(
         `手动模式写回：${roleLabel(role)} → ${reference.provider}/${reference.model} 已写入 .pi/role-models.json。`,
         "info",
@@ -2005,11 +2004,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     try {
       config = await readSessionRoleConfig(ctx);
     } catch {
+      refreshRoleStatus(ctx, roleModeStatus);
       return;
     }
     if (isManualRoleMode(config)) {
       await writeBackManualModelSelection(event, ctx, config);
     }
+    refreshRoleStatus(ctx, effectiveRoleMode(config));
   });
 
   pi.on("tool_call", async (event, ctx) => {

@@ -93,6 +93,7 @@ function createExtensionHarness(branch = [], options = {}) {
   const entries = [];
   const notifications = [];
   const selectCalls = [];
+  const statusCalls = [];
   const renderers = new Map();
   const tools = [];
   const aborts = [];
@@ -160,7 +161,9 @@ function createExtensionHarness(branch = [], options = {}) {
       notify(message, level) {
         notifications.push({ message, level });
       },
-      setStatus() {},
+      setStatus(name, text) {
+        statusCalls.push({ name, text });
+      },
       async select(title, items) {
         selectCalls.push({ title, items });
         return options.select?.(title, items);
@@ -178,7 +181,7 @@ function createExtensionHarness(branch = [], options = {}) {
       },
     },
   };
-  return { handlers, commands, entries, notifications, selectCalls, renderers, tools, aborts, context };
+  return { handlers, commands, entries, notifications, selectCalls, statusCalls, renderers, tools, aborts, context };
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {
@@ -958,6 +961,9 @@ test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async (
     await inputHandler({ source: "interactive", text: "继续工作" }, switched.context),
     { action: "continue" },
   );
+
+  const status = switched.statusCalls.filter((call) => call.name === "pi-init").at(-1);
+  assert.match(status?.text ?? "", /claude-haiku-4\.5/);
 });
 
 test("手动模式原生模型切换写回配置且不重复写入", async () => {
@@ -979,6 +985,10 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
     harness.context.model = unsafe;
     await emitExtensionEvent(harness, "model_select", { model: unsafe, previousModel: safe, source: "user" });
     assert.deepEqual(harness.context.model, unsafe);
+
+    const piInitStatus = harness.statusCalls.filter((call) => call.name === "pi-init").at(-1);
+    assert.match(piInitStatus?.text ?? "", /claude-haiku-4\.5/);
+    assert.match(piInitStatus?.text ?? "", /手动/);
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.deepEqual(persisted["developer-test"], {
