@@ -187,7 +187,14 @@ flowchart LR
 }
 ```
 
-该策略同时约束角色模型、`/model` 选择与循环、会话恢复、工作流自动切换和 Agent 子代理。Agent 省略 `model` 时显式继承当前允许模型；`haiku`、`sonnet` 等未带 `provider/` 的模糊名称，以及 `openrouter/...` 等未允许模型，会在 spawn 前拒绝。需要其他 Provider 时，必须显式编辑并保存 `.pi/role-models.json` 的 `allowedProviders`，同时让所有角色模型使用允许列表中的 Provider；如果变更来自会话暂存，再执行 `/pi-init save`。不会自动 fallback，也没有临时解锁入口。
+该策略同时约束角色模型、`/model` 选择与循环、会话恢复、工作流自动切换和 Agent 子代理。Agent 省略 `model` 时显式继承当前允许模型；`haiku`、`sonnet` 等未带 `provider/` 的模糊名称，以及 `openrouter/...` 等未允许模型，会在 spawn 前拒绝。
+
+需要使用其他 Provider 时，唯一途径是修改 `.pi/role-models.json` 的 `allowedProviders` 并确保所有角色模型都使用允许列表中的 Provider，然后让修改持久化生效：
+
+- 直接编辑文件：保存后即持久化，无需其他操作。
+- 通过 `/pi-init config` 等运行时命令修改：变更只存在于当前会话，必须再执行 `/pi-init save` 才会写入项目文件；不保存的话新会话会丢失该变更。
+
+策略本身不做任何静默放行：请求未允许的模型时直接失败，不会自动改用其他允许的模型（无 fallback），也不提供“本次放行”“跳过校验”之类的临时解锁入口。
 
 OpenRouter 调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理调用显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter。Provider 锁不修改全局 `auth.json`，只在当前项目会话中限制模型来源。
 
