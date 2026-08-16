@@ -19,7 +19,7 @@
 - 默认按“架构分析 → 任务拆分 → 开发测试逐项执行 → 文档与收尾”的流水线工作；除非用户一开始明确要求先审阅架构，否则架构师完成规划后不得停下来询问下一步选择。
 - 项目任务工作流策略由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `plan`，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行，超过 2 个任务才进入自动工作流。可通过 `/pi-init config workflow` 在当前会话暂存，执行 `/pi-init save` 后才持久化，或直接修改该配置字段。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；关闭时不要调用 `plan`。
 - 运行时角色切换和 `/pi-init config` 变更只存在于当前会话，不得直接写入 `.pi/role-models.json`；只有用户明确执行 `/pi-init save`（保存角色配置）时才持久化。
-- Provider 默认 fail-closed：`.pi/role-models.json` 缺少 `providerPolicy` 时也按 `{"mode":"locked","allowedProviders":["openai-codex"]}` 处理。主会话模型选择、模型循环、会话恢复、角色/工作流切换和 Agent 子代理都不得跨 Provider；Agent 省略 `model` 时继承当前允许模型，`haiku`、`sonnet` 等未带 `provider/` 的模糊名称必须在 spawn 前拒绝。需要其他 Provider 时只能显式编辑并保存 `providerPolicy`，不提供临时解锁或隐式 fallback；唯一例外是 `mode: "manual"`：守卫全部旁路、直连宿主，原生 `/model` 切换不回滚，并把活动角色的模型直接写回 `.pi/role-models.json`（新 Provider 会同时追加进允许列表）。
+- 模型引用必须精确：主会话与 Agent 子代理都使用完整 `provider/model`；省略 Agent `model` 时继承当前完整模型，`haiku`、`sonnet` 等未带 `provider/` 的模糊名称在 spawn 前拒绝，指定的模型必须精确存在，不做模糊匹配或跨 Provider fallback。更换 Provider 直接修改角色模型（`/pi-init config` 任意已注册模型可选，`/pi-init save` 持久化，或直接编辑 `.pi/role-models.json`）。
 - 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；完成时输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样保持精简；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，并且缺少扩展、RPC 错误或异常回复都必须安全阻塞任务。
 - 使用 `subagents` 时，主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并且必须返回严格的 `pi-init/task-result@1` JSON 结果，只有合法 `complete` 才能完成任务。

@@ -130,7 +130,7 @@ pi-usage
 
 - `auto`：自动切换。
 - `confirm`：切换前询问。
-- `manual`：手动模式，直连宿主。阻止自动换角，Provider 守卫全部旁路（原生 `/model` 切换不回滚、输入和子代理不再拦截），并且原生 `/model` 的选择会把活动角色的模型直接写回 `.pi/role-models.json`；若所选 Provider 不在允许列表，会同时追加进允许列表，保证切回 `auto`/`confirm` 时配置仍然合法。写回需要受信任项目和活动角色，否则只提示不写文件。
+- `manual`：手动模式。阻止自动换角；原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`。写回需要受信任项目和活动角色，否则只提示不写文件。
 - `/pi-init role` 和 `switch_role` 只切换当前会话，不写项目配置。
 - `/pi-init config [角色]` 与 `/pi-init config workflow` 只暂存当前会话变更；执行 `/pi-init save`（保存角色配置）后才写入 `.pi/role-models.json`。
 
@@ -176,31 +176,24 @@ flowchart LR
 
 `workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subagents`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
 
-### Provider 锁定
+### 模型引用策略
 
-项目默认使用 fail-closed Provider 策略。`.pi/role-models.json` 缺少策略时，等价于：
+模型安全来自精确引用，不维护 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧配置中的该字段会被忽略）：
 
-```json
-"providerPolicy": {
-  "mode": "locked",
-  "allowedProviders": ["openai-codex"]
-}
-```
+- 所有角色模型、Agent 子代理和 `subagents` 委派都使用完整 `provider/model` 引用。
+- Agent 省略 `model` 时，扩展在 spawn 前注入当前完整 `provider/model`，不给宿主解析器模糊匹配的机会。
+- `haiku`、`sonnet` 等未带 `provider/` 的模糊名称在 spawn 前直接拒绝。
+- 显式指定的模型必须在注册表中精确存在；不存在的引用直接报错，不模糊匹配、不跨 Provider fallback。
 
-该策略同时约束角色模型、`/model` 选择与循环、会话恢复、工作流自动切换和 Agent 子代理。Agent 省略 `model` 时显式继承当前允许模型；`haiku`、`sonnet` 等未带 `provider/` 的模糊名称，以及 `openrouter/...` 等未允许模型，会在 spawn 前拒绝。
+历史上 OpenRouter 意外调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter——精确引用纪律针对的正是这三条路径。
 
-需要使用其他 Provider 时，唯一途径是修改 `.pi/role-models.json` 的 `allowedProviders` 并确保所有角色模型都使用允许列表中的 Provider，然后让修改持久化生效：
+原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截。需要使用其他 Provider 时：
 
-- 直接编辑文件：保存后即持久化，无需其他操作。
-- 通过 `/pi-init config` 等运行时命令修改：变更只存在于当前会话，必须再执行 `/pi-init save` 才会写入项目文件；不保存的话新会话会丢失该变更。
+- `/pi-init config [角色]`：候选列表展示全部已注册模型（含刚登录的 Provider），随时暂存，执行 `/pi-init save` 持久化。
+- 直接编辑 `.pi/role-models.json` 的角色模型：保存即生效。
+- 手动模式（`mode: "manual"`）：原生 `/model` 切换会把活动角色的模型直接写回 `.pi/role-models.json`。
 
-策略本身不做任何静默放行：请求未允许的模型时直接失败，不会自动改用其他允许的模型（无 fallback），也不提供“本次放行”“跳过校验”之类的临时解锁入口。
-
-OpenRouter 调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理调用显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter。Provider 锁不修改全局 `auth.json`，只在当前项目会话中限制模型来源。
-
-Pi 0.84 的 `model_select` 目前是切换后的通知事件，因此扩展会立即恢复到上一个或配置中的安全模型，并在 `session_start`、输入和 provider 请求前再次校验；未来 Pi 增加可取消的 `before_model_select` 后，可进一步从选择源头拒绝。
-
-手动模式（`mode: "manual"`）是这条策略唯一的显式出口：所有守卫旁路，会话直连宿主层，原生 `/model` 切换不回滚，并且会把活动角色的模型直接写回 `.pi/role-models.json`——所选 Provider 不在允许列表时同步追加，文件始终自洽。也就是说，想启用新登录的 Provider，除了直接编辑配置文件，还可以把模式切成手动后用原生 `/model` 选择，配置会自动更新。
+注意取舍：完全限定的跨 Provider 引用（如 AI 主动写 `openrouter/...`）不会被拦截——如果你需要严格限制可用 Provider，应当自行在配置中只保留对应角色模型。
 
 每个任务完成时会输出精简的任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。总耗时从任务实际进入 `in_progress` 的时间开始计算，到任务完成时间结束；旧版状态若没有开始时间，会明确显示耗时不可用，不会伪造时间。
 

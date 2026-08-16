@@ -13,17 +13,13 @@ import {
 
 import { createScaffold } from "../src/scaffold.js";
 import {
-  PROVIDER_POLICY_MODES,
   ROLE_MODES,
   ROLE_NAMES,
   THINKING_LEVELS,
   WORKFLOW_EXECUTORS,
   WORKFLOW_MODES,
-  assertModelAllowed,
-  assertProviderAllowed,
   filterRoleModels,
   findMatchingRole,
-  isModelAllowed,
   normalizeModelReference,
   resolveRoleConfig,
   roleLabel,
@@ -78,15 +74,6 @@ const roleModelSchema = Type.Object({
   }),
 });
 const roleModelsSchema = Type.Object({
-  providerPolicy: Type.Optional(Type.Object({
-    mode: Type.Optional(StringEnum(PROVIDER_POLICY_MODES, {
-      description: "Provider 策略模式；当前仅支持 locked",
-    })),
-    allowedProviders: Type.Array(Type.String(), {
-      minItems: 1,
-      description: "允许使用的 Provider ID；默认只有 openai-codex",
-    }),
-  }, { description: "项目级 Provider 白名单" })),
   workflowMode: Type.Optional(StringEnum(WORKFLOW_MODES, {
     description: "任务工作流策略：off、on 或 auto（auto 在不超过 2 个任务时跳过编排）",
   })),
@@ -280,13 +267,7 @@ type ReportTheme = {
   bold: (text: string) => string;
 };
 
-type ProviderPolicy = {
-  mode: string;
-  allowedProviders: string[];
-};
-
 type ResolvedRoleConfig = {
-  providerPolicy: ProviderPolicy;
   mode: string;
   workflowMode: string;
   workflowExecutor: string;
@@ -295,14 +276,13 @@ type ResolvedRoleConfig = {
   "docs-commit": RoleModelConfig;
 };
 
-function getAvailableRoleModels(ctx: ExtensionContext, policy: ProviderPolicy) {
+function getAvailableRoleModels(ctx: ExtensionContext) {
   const source =
     ctx.scopedModels.length > 0
       ? ctx.scopedModels.map(({ model }) => model)
       : ctx.modelRegistry.getAvailable();
   const unique = new Map<string, (typeof source)[number]>();
   for (const model of source) {
-    if (!isModelAllowed(model, policy)) continue;
     unique.set(`${model.provider}/${model.id}`, model);
   }
   return [...unique.values()].sort((a, b) =>
@@ -311,10 +291,9 @@ function getAvailableRoleModels(ctx: ExtensionContext, policy: ProviderPolicy) {
 }
 
 /*
- * Keep the role picker and every runtime transition on the same policy. The
- * host's model registry is read-only from an extension, so filtering is the
- * earliest UI-level protection available on Pi versions without a cancellable
- * before_model_select event.
+ * The role picker lists the full host registry. Model safety comes from exact
+ * references instead of an allowlist: every spawn and role apply must use a
+ * fully qualified provider/model that exists in the registry.
  */
 async function selectModelWithSearch(ctx: ExtensionContext, role: string, models: any[]) {
   if (ctx.mode !== "tui") {
@@ -414,8 +393,8 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
   return models.find((model) => `${model.provider}/${model.id}` === result);
 }
 
-async function selectRoleModel(ctx: ExtensionContext, role: string, policy: ProviderPolicy) {
-  const models = getAvailableRoleModels(ctx, policy);
+async function selectRoleModel(ctx: ExtensionContext, role: string) {
+  const models = getAvailableRoleModels(ctx);
   if (models.length === 0) {
     throw new Error("当前没有可用模型；请先配置模型凭据或调整模型范围");
   }
@@ -449,10 +428,10 @@ async function selectRoleModel(ctx: ExtensionContext, role: string, policy: Prov
   } satisfies RoleModelConfig;
 }
 
-async function collectRoleModels(ctx: ExtensionContext, policy: ProviderPolicy) {
+async function collectRoleModels(ctx: ExtensionContext) {
   const roleModels: Record<string, RoleModelConfig> = {};
   for (const role of ROLE_NAMES) {
-    const selection = await selectRoleModel(ctx, role, policy);
+    const selection = await selectRoleModel(ctx, role);
     if (!selection) return undefined;
     roleModels[role] = selection;
   }
@@ -673,7 +652,7 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
   ]);
   if (!roleConfiguration || roleConfiguration === "cancel") return undefined;
   const roleModels = roleConfiguration === "custom"
-    ? await collectRoleModels(ctx, resolveRoleConfig(undefined).providerPolicy)
+    ? await collectRoleModels(ctx)
     : undefined;
   if (roleConfiguration === "custom" && !roleModels) return undefined;
 
@@ -734,8 +713,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
     | undefined;
   let roleCompactionInFlight = false;
-  let restoringModel = false;
-  let providerPolicyBlockedReason: string | undefined;
 
   function activeRoleFor(ctx: ExtensionContext) {
     if (
@@ -756,92 +733,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       ...(persisted && typeof persisted === "object" ? persisted : {}),
       ...sessionRoleConfigOverrides,
     }) as ResolvedRoleConfig;
-  }
-
-  function modelKey(model: { provider?: unknown; id?: unknown } | undefined) {
-    return model && typeof model.provider === "string" && typeof model.id === "string"
-      ? `${model.provider}/${model.id}`
-      : undefined;
-  }
-
-  function modelLabel(model: { provider?: unknown; id?: unknown } | undefined) {
-    return modelKey(model) ?? "<未选择模型>";
-  }
-
-  function configuredFallbackModel(ctx: ExtensionContext, config: ResolvedRoleConfig) {
-    for (const role of ["architect", "developer-test", "docs-commit"] as const) {
-      const target = config[role];
-      if (!isModelAllowed(target, config.providerPolicy)) continue;
-      const model = ctx.modelRegistry.find(target.provider, target.model);
-      if (model && isModelAllowed(model, config.providerPolicy)) return model;
-    }
-    return undefined;
-  }
-
-  async function restoreAllowedModel(
-    ctx: ExtensionContext,
-    config: ResolvedRoleConfig,
-    preferredModel?: any,
-  ) {
-    const candidates = [preferredModel, configuredFallbackModel(ctx, config)];
-    const seen = new Set<string>();
-    for (const candidate of candidates) {
-      const key = modelKey(candidate);
-      if (!key || seen.has(key) || !isModelAllowed(candidate, config.providerPolicy)) continue;
-      seen.add(key);
-      if (modelKey(ctx.model) === key) return candidate;
-      restoringModel = true;
-      try {
-        if (await pi.setModel(candidate)) return candidate;
-      } catch {
-        // Try the next configured safe model, if any.
-      } finally {
-        restoringModel = false;
-      }
-    }
-    return undefined;
-  }
-
-  async function enforceProviderPolicy(
-    ctx: ExtensionContext,
-    options: { preferredModel?: any; notify?: boolean; restore?: boolean } = {},
-  ) {
-    let config: ResolvedRoleConfig;
-    try {
-      config = await readSessionRoleConfig(ctx);
-    } catch (error) {
-      const reason = `Provider 策略无效，已阻止本次请求：${textOf(error)}`;
-      providerPolicyBlockedReason = reason;
-      if (options.notify) ctx.ui.notify(reason, "error");
-      return { ok: false as const, reason };
-    }
-
-    // 手动模式直连宿主：角色层守卫全部旁路，模型由用户和宿主自行决定。
-    if (effectiveRoleMode(config) === "manual") {
-      providerPolicyBlockedReason = undefined;
-      return { ok: true as const, config, model: ctx.model, restored: false };
-    }
-
-    if (ctx.model && isModelAllowed(ctx.model, config.providerPolicy)) {
-      providerPolicyBlockedReason = undefined;
-      return { ok: true as const, config, model: ctx.model, restored: false };
-    }
-
-    const attempted = modelLabel(ctx.model ?? options.preferredModel);
-    const restored = options.restore === false
-      ? undefined
-      : await restoreAllowedModel(ctx, config, options.preferredModel);
-    if (restored) {
-      providerPolicyBlockedReason = undefined;
-      return { ok: true as const, config, model: restored, restored: true };
-    }
-
-    const reason = ctx.model || options.preferredModel
-      ? `已阻止模型 ${attempted}：providerPolicy 只允许 ${config.providerPolicy.allowedProviders.join(", ")}，且无法恢复到可用的安全模型。`
-      : `已阻止本次请求：当前没有模型，且 providerPolicy 只允许 ${config.providerPolicy.allowedProviders.join(", ")}；请配置可用的允许模型。`;
-    providerPolicyBlockedReason = reason;
-    if (options.notify) ctx.ui.notify(reason, "error");
-    return { ok: false as const, config, reason };
   }
 
   function hasPendingRoleConfigChanges() {
@@ -905,13 +796,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const changes: Record<string, unknown> = {
       [role]: { ...reference, thinkingLevel },
     };
-    const providerNewlyAllowed = !config.providerPolicy.allowedProviders.includes(reference.provider);
-    if (providerNewlyAllowed) {
-      changes.providerPolicy = {
-        mode: config.providerPolicy.mode,
-        allowedProviders: [...config.providerPolicy.allowedProviders, reference.provider],
-      };
-    }
 
     const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
     try {
@@ -923,13 +807,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
       });
       delete sessionRoleConfigOverrides[role];
-      if (providerNewlyAllowed) delete sessionRoleConfigOverrides.providerPolicy;
       activeRole = { role, ...reference, thinkingLevel };
       refreshRoleStatus(ctx, "manual");
       ctx.ui.notify(
-        `手动模式写回：${roleLabel(role)} → ${reference.provider}/${reference.model} 已写入 .pi/role-models.json` +
-          (providerNewlyAllowed ? `，${reference.provider} 已加入 Provider 允许列表` : "") +
-          "。",
+        `手动模式写回：${roleLabel(role)} → ${reference.provider}/${reference.model} 已写入 .pi/role-models.json。`,
         "info",
       );
     } catch (error) {
@@ -994,10 +875,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const model = ctx.model
       ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
       : "未选择模型";
-    const policyStatus = providerPolicyBlockedReason ? " · ⚠ Provider 锁定" : "";
     ctx.ui.setStatus(
       "pi-init",
-      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model}${policyStatus} · 工作流 · ${workflowStatusLabel()}`,
+      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStatusLabel()}`,
     );
   }
 
@@ -1077,15 +957,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     workflowExecutorStatus = config.workflowExecutor;
     const target = config[role as keyof Pick<ResolvedRoleConfig, "architect" | "developer-test" | "docs-commit">];
     if (!target) throw new Error(`未知角色：${role}`);
-    assertProviderAllowed(target.provider, config.providerPolicy, `职责 ${roleLabel(role)} provider`);
     const model = ctx.modelRegistry.find(target.provider, target.model);
     if (!model) {
       throw new Error(
         `角色 ${roleLabel(role)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
       );
-    }
-    if (!isModelAllowed(model, config.providerPolicy)) {
-      throw new Error(`角色 ${roleLabel(role)} 的模型被 providerPolicy 拒绝：${target.provider}/${target.model}`);
     }
     if (!(await pi.setModel(model))) {
       throw new Error(`角色 ${roleLabel(role)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
@@ -1162,7 +1038,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     const decision = await showMenu(ctx, `建议切换到「${roleLabel(role)}」`, [
       { value: "accept", label: "采用建议", description: "切换到项目配置的模型" },
-      { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角，原生模型切换直接写回配置" },
+      { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角" },
       { value: "cancel", label: "取消" },
     ]);
     if (decision === "accept") {
@@ -1459,10 +1335,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       throw new Error("未检测到 pi.events；请确认已加载 @tintinweb/pi-subagents");
     }
 
-    const gate = await enforceProviderPolicy(ctx, { notify: true });
-    if (!gate.ok) throw new Error(gate.reason);
-    const model = normalizeModelReference(gate.model ?? ctx.model, "子代理当前模型");
-    assertModelAllowed(model, gate.config.providerPolicy, "子代理当前模型");
+    const model = normalizeModelReference(ctx.model, "子代理当前模型");
 
     const replyChannel = `subagents:rpc:spawn:reply:${requestId}`;
     const type = WORKFLOW_SUBAGENT_TYPES[task.role as keyof typeof WORKFLOW_SUBAGENT_TYPES];
@@ -1860,7 +1733,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         label: roleModeLabel(value),
         description:
           value === "auto" ? "按任务自动选择角色和模型"
-          : value === "manual" ? "跳出角色层守卫，原生 /model 切换直接写回项目配置"
+          : value === "manual" ? "不自动换角，原生 /model 切换直接写回项目配置"
           : undefined,
       })),
     );
@@ -1986,7 +1859,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     try {
       const config = await readSessionRoleConfig(ctx);
-      const selection = await selectRoleModel(ctx, role, config.providerPolicy);
+      const selection = await selectRoleModel(ctx, role);
       if (!selection) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
@@ -2127,48 +2000,37 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("model_select", async (event, ctx) => {
     currentContext = ctx;
-    if (restoringModel) return;
 
     let config: ResolvedRoleConfig;
     try {
       config = await readSessionRoleConfig(ctx);
     } catch {
-      await enforceProviderPolicy(ctx, { preferredModel: event.previousModel, notify: true, restore: false });
-      ctx.abort?.();
       return;
     }
     if (isManualRoleMode(config)) {
       await writeBackManualModelSelection(event, ctx, config);
-      return;
     }
-    if (isModelAllowed(event.model, config.providerPolicy)) return;
-
-    const gate = await enforceProviderPolicy(ctx, {
-      preferredModel: event.previousModel,
-      notify: true,
-    });
-    if (!gate.ok) ctx.abort?.();
   });
 
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "Agent" && event.toolName !== "agent") return;
 
-    const gate = await enforceProviderPolicy(ctx, { notify: true });
-    if (!gate.ok) {
-      return { block: true, terminate: true, reason: gate.reason };
-    }
-    // 手动模式直连宿主：子代理模型交由宿主解析，不注入继承也不做允许校验。
-    if (isManualRoleMode(gate.config)) return;
-
     const input = event.input as Record<string, unknown>;
     if (input.model === undefined) {
-      const current = normalizeModelReference(gate.model ?? ctx.model, "Agent 当前模型");
+      if (!ctx.model) {
+        return {
+          block: true,
+          terminate: true,
+          reason: "已阻止 Agent 子代理：当前没有可用模型，无法继承 provider/model",
+        };
+      }
+      const current = normalizeModelReference(ctx.model, "Agent 当前模型");
       input.model = `${current.provider}/${current.model}`;
       return;
     }
 
     try {
-      const requested = assertModelAllowed(input.model, gate.config.providerPolicy, "Agent model");
+      const requested = normalizeModelReference(input.model, "Agent model");
       if (!ctx.modelRegistry.find(requested.provider, requested.model)) {
         throw new Error(
           `模型不存在：${requested.provider}/${requested.model}；禁止按模糊名称或其他 provider fallback`,
@@ -2183,21 +2045,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("before_provider_request", async (event, ctx) => {
-    const gate = await enforceProviderPolicy(ctx, { notify: true, restore: false });
-    if (!gate.ok) ctx.abort?.();
-    return event.payload;
-  });
-
   pi.on("input", async (event, ctx) => {
     if (typeof event.text === "string" && event.text.trim().startsWith("/")) {
       return { action: "continue" };
-    }
-    const gate = await enforceProviderPolicy(ctx, { notify: true });
-    if (!gate.ok) {
-      pendingExternalRunSource = undefined;
-      acceptedExternalRunSource = undefined;
-      return { action: "handled" };
     }
     if (!isExternalRunSource(event.source)) return { action: "continue" };
     if (workflowState && isWorkflowActive(workflowState)) {
@@ -2210,13 +2060,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
-    const gate = await enforceProviderPolicy(ctx, { notify: true });
-    if (!gate.ok) {
-      pendingExternalRunSource = undefined;
-      acceptedExternalRunSource = undefined;
-      ctx.abort?.();
-      return;
-    }
     if (internalContinuationPending) {
       internalContinuationPending = false;
       pendingExternalRunSource = undefined;
@@ -2265,8 +2108,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     runtimeDisposed = true;
-    restoringModel = false;
-    providerPolicyBlockedReason = undefined;
     pendingExternalRunSource = undefined;
     acceptedExternalRunSource = undefined;
     externalRunTiming = undefined;
@@ -2281,27 +2122,23 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       runtimeDisposed = false;
-      restoringModel = false;
-      providerPolicyBlockedReason = undefined;
       sessionRoleConfigOverrides = {};
       const config = await readSessionRoleConfig(ctx);
       currentContext = ctx;
       workflowModeStatus = config.workflowMode;
       workflowExecutorStatus = config.workflowExecutor;
-      const gate = await enforceProviderPolicy(ctx, { notify: true });
-      const effectiveModel = gate.ok ? gate.model : undefined;
-      const role = findMatchingRole(config, effectiveModel ?? ctx.model, pi.getThinkingLevel());
-      activeRole = role && (effectiveModel ?? ctx.model)
+      const role = findMatchingRole(config, ctx.model, pi.getThinkingLevel());
+      activeRole = role && ctx.model
         ? {
             role,
-            provider: (effectiveModel ?? ctx.model)!.provider,
-            model: (effectiveModel ?? ctx.model)!.id,
+            provider: ctx.model.provider,
+            model: ctx.model.id,
             thinkingLevel: pi.getThinkingLevel(),
           }
         : undefined;
       restoreWorkflowState(ctx);
       setRoleStatus(ctx, sessionModeOverride ?? config.mode);
-      if (gate.ok) await scheduleWorkflow(ctx);
+      await scheduleWorkflow(ctx);
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
     }
@@ -2309,7 +2146,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_tree", async (_event, ctx) => {
     restoreWorkflowState(ctx);
-    await enforceProviderPolicy(ctx, { notify: true });
     refreshRoleStatus(ctx, roleModeStatus);
   });
 

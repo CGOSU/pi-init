@@ -7,11 +7,6 @@ export const WORKFLOW_EXECUTORS = ["local", "subagents"];
 export const DEFAULT_WORKFLOW_EXECUTOR = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
-export const PROVIDER_POLICY_MODES = ["locked"];
-export const DEFAULT_PROVIDER_POLICY = Object.freeze({
-  mode: "locked",
-  allowedProviders: Object.freeze(["openai-codex"]),
-});
 
 export const ROLE_LABELS = {
   architect: "架构设计",
@@ -42,49 +37,6 @@ function normalizeProviderName(value, label) {
     throw new Error(`${label} 无效：${value}`);
   }
   return normalized;
-}
-
-/**
- * Resolve the project-level provider policy. A missing policy is deliberately
- * fail-closed so legacy projects cannot start using a newly available provider.
- */
-export function resolveProviderPolicy(config) {
-  if (config === undefined) {
-    return {
-      mode: DEFAULT_PROVIDER_POLICY.mode,
-      allowedProviders: [...DEFAULT_PROVIDER_POLICY.allowedProviders],
-    };
-  }
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error("providerPolicy 必须是对象");
-  }
-
-  const mode = config.mode ?? DEFAULT_PROVIDER_POLICY.mode;
-  if (!PROVIDER_POLICY_MODES.includes(mode)) {
-    throw new Error(`providerPolicy.mode 无效：${mode}`);
-  }
-  if (!Array.isArray(config.allowedProviders) || config.allowedProviders.length === 0) {
-    throw new Error("providerPolicy.allowedProviders 必须是非空数组");
-  }
-
-  const allowedProviders = config.allowedProviders.map((provider, index) =>
-    normalizeProviderName(provider, `providerPolicy.allowedProviders[${index}]`),
-  );
-  if (new Set(allowedProviders).size !== allowedProviders.length) {
-    throw new Error("providerPolicy.allowedProviders 不能包含重复 provider");
-  }
-
-  return { mode, allowedProviders };
-}
-
-export function isProviderAllowed(provider, policy = DEFAULT_PROVIDER_POLICY) {
-  if (typeof provider !== "string" || !provider.trim()) return false;
-  try {
-    const resolvedPolicy = resolveProviderPolicy(policy);
-    return resolvedPolicy.allowedProviders.includes(provider.trim());
-  } catch {
-    return false;
-  }
 }
 
 function resolveModelReference(value, label = "模型") {
@@ -119,31 +71,6 @@ function resolveModelReference(value, label = "模型") {
  */
 export function normalizeModelReference(value, label = "模型") {
   return resolveModelReference(value, label);
-}
-
-export function isModelAllowed(value, policy = DEFAULT_PROVIDER_POLICY) {
-  try {
-    const reference = resolveModelReference(value);
-    return isProviderAllowed(reference.provider, policy);
-  } catch {
-    return false;
-  }
-}
-
-export function assertProviderAllowed(provider, policy, label = "provider") {
-  if (!isProviderAllowed(provider, policy)) {
-    const resolvedPolicy = resolveProviderPolicy(policy);
-    throw new Error(
-      `${label} ${provider ?? "<missing>"} 不在允许列表中：${resolvedPolicy.allowedProviders.join(", ")}`,
-    );
-  }
-  return provider.trim();
-}
-
-export function assertModelAllowed(value, policy, label = "模型") {
-  const reference = resolveModelReference(value, label);
-  assertProviderAllowed(reference.provider, policy, `${label} provider`);
-  return reference;
 }
 
 export function shouldCompactOnRoleSwitch({ mode, previousRole, nextRole, contextUsage }) {
@@ -189,7 +116,6 @@ export const DEFAULT_ROLE_MODELS = {
 };
 
 export const DEFAULT_ROLE_CONFIG = {
-  providerPolicy: DEFAULT_PROVIDER_POLICY,
   mode: DEFAULT_ROLE_MODE,
   workflowMode: DEFAULT_WORKFLOW_MODE,
   workflowExecutor: DEFAULT_WORKFLOW_EXECUTOR,
@@ -277,17 +203,13 @@ export function filterRoleModels(models, query) {
 }
 
 export function resolveRoleConfig(config) {
-  const providerPolicy = resolveProviderPolicy(config?.providerPolicy);
   const resolved = {
-    providerPolicy,
     mode: resolveRoleMode(config),
     workflowMode: resolveWorkflowMode(config),
     workflowExecutor: resolveWorkflowExecutor(config),
   };
   for (const role of ROLE_NAMES) {
-    const model = resolveRoleModel(config, role);
-    assertProviderAllowed(model.provider, providerPolicy, `职责 ${role} provider`);
-    resolved[role] = model;
+    resolved[role] = resolveRoleModel(config, role);
   }
   return resolved;
 }

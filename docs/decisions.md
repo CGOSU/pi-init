@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-08-16：以精确模型引用替代 Provider 白名单
+
+- 决定：移除 `providerPolicy` 及整套 fail-closed 机制（allowlist 解析、`model_select` 回滚、`session_start`/输入/provider 请求前守卫、Agent spawn 白名单校验），改为精确引用纪律：Agent 省略 `model` 时注入当前完整 `provider/model`，未带 `provider/` 的模糊名称在 spawn 前拒绝，显式指定的模型必须在注册表中精确存在。原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截；`/pi-init config` 候选展示全部已注册模型，跨 Provider 选择随时可暂存。旧配置中的 `providerPolicy` 字段被忽略。
+- 原因：排查确认历史 OpenRouter 意外调用全部来自模糊名称解析和 agent 类型默认模型 fallback，主会话不存在自动 fallback；白名单对根因是冗余防护，却让每条配置路径都要联动维护 allowlist，复杂度持续膨胀。精确引用直接覆盖全部三条根因路径，且天然支持随时增删角色模型。
+- 约束：完全限定的跨 Provider 引用（如 AI 主动写 `openrouter/...`）不再被拦截，需要严格限制 Provider 时由角色模型配置本身表达；manual 模式语义收窄为“不自动换角 + 原生 `/model` 写回配置”，spawn 纪律在所有模式下统一生效。
+- 替代：替代 2026-08-15“项目级 Provider 默认 fail-closed”和同日“手动模式直连宿主并写回配置”中关于守卫旁路、allowlist 追加的表述；两条决策的历史背景（OpenRouter 根因排查）仍然有效。
+
 ### 2026-08-16：手动模式直连宿主并写回配置
 
 - 决定：`mode: "manual"` 语义升级为"直连宿主"：`enforceProviderPolicy` 及 `model_select`、输入、provider 请求前守卫全部旁路，Agent 子代理不再注入继承模型也不做允许校验；原生 `/model` 切换不回滚，并把活动角色的模型直接写回 `.pi/role-models.json`，所选 Provider 不在允许列表时同步追加，保证切回 `auto`/`confirm` 时文件仍可通过 `resolveRoleConfig` 校验。写回要求受信任项目和活动角色，否则仅提示；同值切换幂等跳过。
