@@ -1,5 +1,14 @@
 # 会话记录
 
+### 2026-08-16：手动模式直连宿主并写回配置，升级版本
+
+- 完成内容：澄清 README 中 fail-closed Provider 策略的歧义表述（配置修改途径分条列出，fallback 与临时解锁单独成段）。
+- 完成内容：`mode: "manual"` 语义升级为直连宿主：`enforceProviderPolicy` 在 manual 下直接放行（覆盖 `session_start`、输入、provider 请求前守卫），Agent `tool_call` 门禁不再注入继承模型；`model_select` 在 manual 下改走 `writeBackManualModelSelection`，把活动角色的模型写回 `.pi/role-models.json` 并按需追加 Provider 允许列表，同值切换幂等跳过，无活动角色或非受信任项目仅提示。
+- 完成内容：新增测试覆盖守卫旁路、写回（含允许列表扩展）、幂等、无活动角色提示和 Agent 门禁放行；同步中英文 `AGENTS.md`/`SKILL.md` 模板、README 模式说明和 Provider 锁定章节、根 `AGENTS.md`。
+- 完成内容：版本从 `1.0.7` 升级到 `1.0.8`。
+- 验证：`npm test`，44 项全部通过（含 2 项新增）；`git diff --check` 通过。
+- 遗留问题：未在真实 Pi TUI 会话中端到端演练 manual 写回；`/pi-init config` 选择列表仍按允许列表过滤，manual 下暂不放开。
+
 ### 2026-08-15：报告时间改为系统本地时区
 
 - 完成内容：报告时间从固定 UTC+8 改为使用运行 Pi 的系统本地时区，并显示数值时区偏移；持久化 Unix 时间戳保持不变。

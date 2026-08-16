@@ -39,7 +39,7 @@ description: {{SKILL_DESCRIPTION}}
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
 - 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`，并输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样只保留目标、进度、任务摘要、整体时间、耗时和验证。验证数组只能写实际执行过的命令和真实结果；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，缺少扩展、RPC 错误或异常回复都必须安全阻塞。
-- Provider 策略由 `.pi/role-models.json` 顶层 `providerPolicy` 控制，默认是 `{"mode":"locked","allowedProviders":["openai-codex"]}`；缺少该字段的旧项目同样按默认锁定处理。模型选择、循环、恢复、角色/工作流切换和 Agent spawn 都必须使用允许 Provider。Agent 省略 `model` 时继承当前模型，`haiku`/`sonnet` 等未限定 Provider 的名称以及其他 Provider/model 在 spawn 前拒绝；跨 Provider 只能通过显式修改并保存配置启用，不支持临时解锁或隐式 fallback。
+- Provider 策略由 `.pi/role-models.json` 顶层 `providerPolicy` 控制，默认是 `{"mode":"locked","allowedProviders":["openai-codex"]}`；缺少该字段的旧项目同样按默认锁定处理。模型选择、循环、恢复、角色/工作流切换和 Agent spawn 都必须使用允许 Provider。Agent 省略 `model` 时继承当前模型，`haiku`/`sonnet` 等未限定 Provider 的名称以及其他 Provider/model 在 spawn 前拒绝；跨 Provider 只能通过显式修改并保存配置启用，不支持临时解锁或隐式 fallback；唯一例外是手动模式：`mode: "manual"` 下守卫全部旁路、直连宿主，原生 `/model` 切换会把活动角色的模型直接写回 `.pi/role-models.json`，并在需要时把新 Provider 追加进允许列表。
 - 使用 `subagents` 时主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并必须返回严格的 `pi-init/task-result@1` JSON，只有合法 `complete` 才能完成任务。
 - 子代理在共享工作区执行，不创建 worktree、不合并分支、不自动提交或推送；reload 后已绑定的非终态子代理不会自动重生，须查看绑定并人工恢复。
 - 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。
@@ -48,7 +48,7 @@ description: {{SKILL_DESCRIPTION}}
 ## 职责切换模式
 
 - `.pi/role-models.json` 顶层的 `mode` 可设为 `auto`、`confirm` 或 `manual`，默认是 `auto`。
-- `auto` 直接执行自动职责切换；`confirm` 在自动切换时先询问，默认选中“采用建议”，也可切换为手动模式或取消；`manual` 阻止自动换角，必须先用 `/pi-init role <职责 ID>`。
+- `auto` 直接执行自动职责切换；`confirm` 在自动切换时先询问，默认选中“采用建议”，也可切换为手动模式或取消；`manual` 阻止自动换角并直连宿主：Provider 守卫旁路，原生 `/model` 切换不回滚，且会把活动角色的模型（含新 Provider 加入允许列表）直接写回 `.pi/role-models.json`；仍可用 `/pi-init role <职责 ID>` 手动换角。
 - `/pi-init mode <模式>` 只覆盖当前会话，不修改项目配置；要修改默认行为，编辑 `.pi/role-models.json`。
 
 ## 用户入口

@@ -22,7 +22,7 @@ export const ROLE_LABELS = {
 export const ROLE_MODE_LABELS = {
   auto: "自动（推荐）",
   confirm: "确认后切换",
-  manual: "手动控制",
+  manual: "手动（直连宿主）",
 };
 
 export function roleLabel(role) {

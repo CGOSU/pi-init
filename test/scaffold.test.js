@@ -981,6 +981,80 @@ test("Provider 锁在会话恢复、原生模型切换和输入前阻断非法�
   assert.match(noFallback.notifications.at(-1)?.message ?? "", /无法恢复到可用的安全模型/);
 });
 
+test("手动模式直连宿主：守卫旁路且原生模型切换写回配置", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ mode: "manual" }));
+
+    const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const unsafe = { provider: "openrouter", id: "anthropic/claude-haiku-4.5" };
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      model: safe,
+      availableModels: [safe, unsafe],
+      trusted: true,
+    });
+    await emitExtensionEvent(harness, "session_start");
+    assert.deepEqual(harness.context.model, safe);
+
+    harness.context.model = unsafe;
+    await emitExtensionEvent(harness, "model_select", { model: unsafe, previousModel: safe, source: "user" });
+    assert.deepEqual(harness.context.model, unsafe);
+
+    const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.deepEqual(persisted["developer-test"], {
+      provider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+      thinkingLevel: "max",
+    });
+    assert.ok(persisted.providerPolicy.allowedProviders.includes("openrouter"));
+    assert.match(harness.notifications.at(-1)?.message ?? "", /已写入 \.pi\/role-models\.json/);
+    assert.match(harness.notifications.at(-1)?.message ?? "", /openrouter 已加入 Provider 允许列表/);
+
+    const notificationsBefore = harness.notifications.length;
+    const fileBefore = await readFile(path.join(directory, ".pi", "role-models.json"), "utf8");
+    await emitExtensionEvent(harness, "model_select", { model: unsafe, previousModel: unsafe, source: "user" });
+    assert.equal(harness.notifications.length, notificationsBefore);
+    assert.equal(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"), fileBefore);
+
+    const inputHandler = (harness.handlers.get("input") ?? [])[0];
+    assert.deepEqual(
+      await inputHandler({ source: "interactive", text: "继续" }, harness.context),
+      { action: "continue" },
+    );
+
+    const agentHandler = (harness.handlers.get("tool_call") ?? [])[0];
+    const agentInput = {};
+    assert.equal(await agentHandler({ toolName: "Agent", input: agentInput }, harness.context), undefined);
+    assert.equal(agentInput.model, undefined);
+  });
+});
+
+test("手动模式下无活动角色的原生切换只提示不写文件", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ mode: "manual" }));
+
+    const model = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      model,
+      availableModels: [model],
+      trusted: true,
+      thinkingLevel: "off",
+    });
+    await emitExtensionEvent(harness, "session_start");
+
+    const next = { provider: "openrouter", id: "anthropic/claude-haiku-4.5" };
+    harness.context.model = next;
+    await emitExtensionEvent(harness, "model_select", { model: next, previousModel: model, source: "user" });
+
+    const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.deepEqual(persisted, { mode: "manual" });
+    assert.match(harness.notifications.at(-1)?.message ?? "", /无活动角色/);
+  });
+});
+
 test("Agent 子代理在 spawn 前继承安全模型并拒绝模糊或跨 Provider 模型", async () => {
   const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
   const harness = createExtensionHarness([], {

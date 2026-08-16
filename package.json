@@ -1,10 +1,12 @@
 {
   "name": "pi-init",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "为项目生成 AI Coding 协作规则、项目记忆和自动模型切换 Skill",
   "type": "module",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "files": [
     "extensions",
     "src",
@@ -20,7 +22,9 @@
     "@duckdb/node-api": "1.5.5-r.3"
   },
   "pi": {
-    "extensions": ["./extensions/init-project.ts"]
+    "extensions": [
+      "./extensions/init-project.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

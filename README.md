@@ -130,7 +130,7 @@ pi-usage
 
 - `auto`：自动切换。
 - `confirm`：切换前询问。
-- `manual`：只允许用户手动切换。
+- `manual`：手动模式，直连宿主。阻止自动换角，Provider 守卫全部旁路（原生 `/model` 切换不回滚、输入和子代理不再拦截），并且原生 `/model` 的选择会把活动角色的模型直接写回 `.pi/role-models.json`；若所选 Provider 不在允许列表，会同时追加进允许列表，保证切回 `auto`/`confirm` 时配置仍然合法。写回需要受信任项目和活动角色，否则只提示不写文件。
 - `/pi-init role` 和 `switch_role` 只切换当前会话，不写项目配置。
 - `/pi-init config [角色]` 与 `/pi-init config workflow` 只暂存当前会话变更；执行 `/pi-init save`（保存角色配置）后才写入 `.pi/role-models.json`。
 
@@ -144,7 +144,7 @@ flowchart LR
   MODE -->|auto：自动决定| ROLE[角色<br/>架构师 / 开发测试 / 文档与收尾]
   MODE -->|confirm：先询问| CONFIRM[用户确认]
   CONFIRM --> ROLE
-  MODE -->|manual：手动指定| COMMAND["/pi-init role"]
+  MODE -->|manual：直连宿主| COMMAND["/pi-init role<br/>原生 /model 写回配置"]
   COMMAND --> ROLE
   ROLE --> CONFIG[项目默认配置<br/>.pi/role-models.json]
   CONFIG --> OVERRIDE[当前会话暂存覆盖]
@@ -199,6 +199,8 @@ flowchart LR
 OpenRouter 调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理调用显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter。Provider 锁不修改全局 `auth.json`，只在当前项目会话中限制模型来源。
 
 Pi 0.84 的 `model_select` 目前是切换后的通知事件，因此扩展会立即恢复到上一个或配置中的安全模型，并在 `session_start`、输入和 provider 请求前再次校验；未来 Pi 增加可取消的 `before_model_select` 后，可进一步从选择源头拒绝。
+
+手动模式（`mode: "manual"`）是这条策略唯一的显式出口：所有守卫旁路，会话直连宿主层，原生 `/model` 切换不回滚，并且会把活动角色的模型直接写回 `.pi/role-models.json`——所选 Provider 不在允许列表时同步追加，文件始终自洽。也就是说，想启用新登录的 Provider，除了直接编辑配置文件，还可以把模式切成手动后用原生 `/model` 选择，配置会自动更新。
 
 每个任务完成时会输出精简的任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。总耗时从任务实际进入 `in_progress` 的时间开始计算，到任务完成时间结束；旧版状态若没有开始时间，会明确显示耗时不可用，不会伪造时间。
 

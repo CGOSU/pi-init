@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-08-16：手动模式直连宿主并写回配置
+
+- 决定：`mode: "manual"` 语义升级为"直连宿主"：`enforceProviderPolicy` 及 `model_select`、输入、provider 请求前守卫全部旁路，Agent 子代理不再注入继承模型也不做允许校验；原生 `/model` 切换不回滚，并把活动角色的模型直接写回 `.pi/role-models.json`，所选 Provider 不在允许列表时同步追加，保证切回 `auto`/`confirm` 时文件仍可通过 `resolveRoleConfig` 校验。写回要求受信任项目和活动角色，否则仅提示；同值切换幂等跳过。
+- 原因：fail-closed 默认缺少显式出口，用户 `pi login` 新 Provider 后只能手工编辑 JSON 才能启用；手动模式是用户显式选择的托管状态，由宿主决定模型来源，写回让选择自动沉淀为项目配置。
+- 约束：`auto`/`confirm` 模式行为与 2026-08-15 的 fail-closed 决策完全一致；本决定是该决策在 manual 模式下的显式例外，不是隐式 fallback，也没有绕过模式的临时解锁。`/pi-init config` 选择列表仍按允许列表过滤；工作流自动换角在 manual 下依旧关闭。
+- 替代：补充 2026-08-15“项目级 Provider 默认 fail-closed”中“不提供临时解锁”的绝对表述；该决策的默认行为不变。
+
 ### 2026-08-15：工作流报告时间跟随系统本地时区
 
 - 决定：报告开始/结束时间使用运行 Pi 的系统本地时区，并以 `YYYY-MM-DD HH:mm:ss±HH:MM` 显示；持久化仍保存 Unix 时间戳。

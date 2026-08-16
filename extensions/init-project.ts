@@ -816,6 +816,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return { ok: false as const, reason };
     }
 
+    // 手动模式直连宿主：角色层守卫全部旁路，模型由用户和宿主自行决定。
+    if (effectiveRoleMode(config) === "manual") {
+      providerPolicyBlockedReason = undefined;
+      return { ok: true as const, config, model: ctx.model, restored: false };
+    }
+
     if (ctx.model && isModelAllowed(ctx.model, config.providerPolicy)) {
       providerPolicyBlockedReason = undefined;
       return { ok: true as const, config, model: ctx.model, restored: false };
@@ -842,8 +848,93 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return Object.keys(sessionRoleConfigOverrides).length > 0;
   }
 
+  function effectiveRoleMode(config: Pick<ResolvedRoleConfig, "mode">) {
+    return sessionModeOverride ?? config.mode;
+  }
+
+  function isManualRoleMode(config: Pick<ResolvedRoleConfig, "mode">) {
+    return effectiveRoleMode(config) === "manual";
+  }
+
   function stageRoleConfig(changes: Record<string, unknown>) {
     sessionRoleConfigOverrides = { ...sessionRoleConfigOverrides, ...changes };
+  }
+
+  /**
+   * Manual mode faces the host directly: a native /model switch is the user's
+   * explicit choice, so instead of rolling it back we write it back to the
+   * project config for the active role, extending the provider allowlist to
+   * keep the file valid for auto/confirm sessions.
+   */
+  async function writeBackManualModelSelection(
+    event: { model?: unknown },
+    ctx: ExtensionContext,
+    config: ResolvedRoleConfig,
+  ) {
+    const role = activeRole?.role;
+    if (!role || !ROLE_NAMES.includes(role)) {
+      ctx.ui.notify(
+        "手动模式下模型已由宿主切换；当前无活动角色，未写入 .pi/role-models.json。",
+        "info",
+      );
+      return;
+    }
+    if (!ctx.isProjectTrusted()) {
+      ctx.ui.notify("手动模式写回仅允许在受信任项目中运行；本次切换未写入项目文件。", "info");
+      return;
+    }
+
+    let reference: { provider: string; model: string };
+    try {
+      reference = normalizeModelReference(event.model, "手动切换模型");
+    } catch (error) {
+      ctx.ui.notify(`手动模式下忽略无法解析的模型切换：${textOf(error)}`, "warning");
+      return;
+    }
+
+    const current = config[role as keyof Pick<ResolvedRoleConfig, "architect" | "developer-test" | "docs-commit">];
+    const thinkingNow = pi.getThinkingLevel();
+    const thinkingLevel = (THINKING_LEVELS as readonly string[]).includes(thinkingNow)
+      ? thinkingNow
+      : current.thinkingLevel;
+    if (current.provider === reference.provider && current.model === reference.model) {
+      activeRole = { role, ...reference, thinkingLevel };
+      return;
+    }
+
+    const changes: Record<string, unknown> = {
+      [role]: { ...reference, thinkingLevel },
+    };
+    const providerNewlyAllowed = !config.providerPolicy.allowedProviders.includes(reference.provider);
+    if (providerNewlyAllowed) {
+      changes.providerPolicy = {
+        mode: config.providerPolicy.mode,
+        allowedProviders: [...config.providerPolicy.allowedProviders, reference.provider],
+      };
+    }
+
+    const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
+    try {
+      await withFileMutationQueue(configPath, async () => {
+        const persisted = await readRoleConfig(ctx);
+        const persistedBase = persisted && typeof persisted === "object" ? persisted : {};
+        const resolved = resolveRoleConfig({ ...persistedBase, ...changes });
+        await mkdir(dirname(configPath), { recursive: true });
+        await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
+      });
+      delete sessionRoleConfigOverrides[role];
+      if (providerNewlyAllowed) delete sessionRoleConfigOverrides.providerPolicy;
+      activeRole = { role, ...reference, thinkingLevel };
+      refreshRoleStatus(ctx, "manual");
+      ctx.ui.notify(
+        `手动模式写回：${roleLabel(role)} → ${reference.provider}/${reference.model} 已写入 .pi/role-models.json` +
+          (providerNewlyAllowed ? `，${reference.provider} 已加入 Provider 允许列表` : "") +
+          "。",
+        "info",
+      );
+    } catch (error) {
+      ctx.ui.notify(`手动模式写回失败：${textOf(error)}`, "error");
+    }
   }
 
   async function saveRoleConfig(ctx: ExtensionCommandContext) {
@@ -1071,7 +1162,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     const decision = await showMenu(ctx, `建议切换到「${roleLabel(role)}」`, [
       { value: "accept", label: "采用建议", description: "切换到项目配置的模型" },
-      { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角" },
+      { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角，原生模型切换直接写回配置" },
       { value: "cancel", label: "取消" },
     ]);
     if (decision === "accept") {
@@ -1767,7 +1858,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       ROLE_MODES.map((value) => ({
         value,
         label: roleModeLabel(value),
-        description: value === "auto" ? "按任务自动选择角色和模型" : undefined,
+        description:
+          value === "auto" ? "按任务自动选择角色和模型"
+          : value === "manual" ? "跳出角色层守卫，原生 /model 切换直接写回项目配置"
+          : undefined,
       })),
     );
     if (!mode) return undefined;
@@ -2043,6 +2137,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       ctx.abort?.();
       return;
     }
+    if (isManualRoleMode(config)) {
+      await writeBackManualModelSelection(event, ctx, config);
+      return;
+    }
     if (isModelAllowed(event.model, config.providerPolicy)) return;
 
     const gate = await enforceProviderPolicy(ctx, {
@@ -2059,6 +2157,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (!gate.ok) {
       return { block: true, terminate: true, reason: gate.reason };
     }
+    // 手动模式直连宿主：子代理模型交由宿主解析，不注入继承也不做允许校验。
+    if (isManualRoleMode(gate.config)) return;
 
     const input = event.input as Record<string, unknown>;
     if (input.model === undefined) {
