@@ -93,6 +93,7 @@ function createExtensionHarness(branch = [], options = {}) {
   const entries = [];
   const notifications = [];
   const selectCalls = [];
+  const customCalls = [];
   const statusCalls = [];
   const renderers = new Map();
   const tools = [];
@@ -171,6 +172,28 @@ function createExtensionHarness(branch = [], options = {}) {
       async input(title, placeholder) {
         return options.input?.(title, placeholder);
       },
+      async custom(factory, customOptions) {
+        const call = { options: customOptions };
+        customCalls.push(call);
+        let result;
+        const done = (value) => {
+          call.done = true;
+          result = value;
+        };
+        call.component = factory(
+          { requestRender() {} },
+          {
+            fg: (_color, text) => text,
+            bg: (_color, text) => text,
+            bold: (text) => text,
+          },
+          {},
+          done,
+        );
+        await options.custom?.(call);
+        if (!call.done) done(undefined);
+        return result;
+      },
     },
     abort() {
       aborts.push(true);
@@ -181,7 +204,7 @@ function createExtensionHarness(branch = [], options = {}) {
       },
     },
   };
-  return { handlers, commands, entries, notifications, selectCalls, statusCalls, renderers, tools, aborts, context };
+  return { handlers, commands, entries, notifications, selectCalls, customCalls, statusCalls, renderers, tools, aborts, context };
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {
@@ -1094,6 +1117,57 @@ test("角色模型选择器展示全部已注册模型并可暂存跨 Provider �
   assert.equal(harness.selectCalls[0]?.title, "选择 架构设计 模型");
   assert.ok(harness.selectCalls[0].items.some((item) => item.includes("openrouter")));
   assert.match(harness.notifications.at(-1)?.message ?? "", /已暂存/);
+});
+
+test("TUI 工作流状态使用弹窗并显示任务进度", async () => {
+  const state = createWorkflowState({
+    summary: "冻结认证改造",
+    reviewRequired: true,
+    tasks: [
+      { id: "schema", task: "更新结构", files: ["src/schema.js"], acceptanceCriteria: ["测试通过"] },
+      { id: "docs", task: "更新文档", files: ["README.md"], acceptanceCriteria: ["文档同步"], role: "docs-commit", dependsOn: ["schema"] },
+    ],
+  }, 100);
+  const harness = createExtensionHarness(
+    [{ type: "custom", customType: "pi-init-workflow", data: state }],
+    {
+      mode: "tui",
+      custom: async (call) => {
+        call.component.handleInput("\u001b");
+        assert.equal(call.done, true);
+      },
+    },
+  );
+  await emitExtensionEvent(harness, "session_start");
+  await harness.commands.get("pi-init").handler("workflow status", harness.context);
+
+  assert.equal(harness.customCalls.length, 1);
+  assert.equal(harness.customCalls[0].options.overlay, true);
+  assert.equal(harness.customCalls[0].options.overlayOptions.anchor, "center");
+  assert.equal(harness.customCalls[0].options.overlayOptions.width, "80%");
+  const rendered = harness.customCalls[0].component.render(100).join("\n");
+  assert.match(rendered, /工作流任务进度/);
+  assert.match(rendered, /冻结认证改造/);
+  assert.match(rendered, /暂停原因  architecture-review/);
+  assert.match(rendered, /待处理 · schema/);
+  assert.match(rendered, /待处理 · docs/);
+});
+
+test("非 TUI 工作流状态继续使用通知文本", async () => {
+  const state = createWorkflowState({
+    summary: "冻结认证改造",
+    tasks: [{ id: "schema", task: "更新结构", files: ["src/schema.js"], acceptanceCriteria: ["测试通过"] }],
+  }, 100);
+  const harness = createExtensionHarness(
+    [{ type: "custom", customType: "pi-init-workflow", data: state }],
+    { mode: "rpc" },
+  );
+  await emitExtensionEvent(harness, "session_start");
+  await harness.commands.get("pi-init").handler("workflow status", harness.context);
+
+  assert.equal(harness.customCalls.length, 0);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /状态：running/);
+  assert.ok((harness.notifications.at(-1)?.message ?? "").includes("- [in_progress] schema"));
 });
 
 test("task_workflow 区分中间任务和最终工作流报告并保留样式", () => {

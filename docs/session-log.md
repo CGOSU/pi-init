@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-18：将工作流进度查看改为 TUI 弹窗
+
+- 完成内容：`/pi-init workflow status` 以及控制中心的“查看任务进度”在 TUI 中改为居中 overlay 弹窗，显示状态、进度、执行器、规划、暂停原因和可滚动任务列表；RPC 等非 TUI 模式继续使用原有通知文本。
+- 完成内容：增加 TUI 弹窗和非 TUI 回退测试，覆盖 overlay 配置及任务状态展示。
+- 验证：`npm test`，46 项全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：未在真实交互式 Pi TUI 中进行视觉验收。
+
 ### 2026-08-16：以精确模型引用替代 fail-closed Provider 白名单，升级版本
 
 - 完成内容：确认历史“模型随意切换”根因为 Agent 子代理模糊模型名（`haiku`/`sonnet`）、agent 类型默认模型解析和宿主跨 Provider fallback，主会话无自动 fallback；据此移除 `providerPolicy` 整套机制。

@@ -1093,6 +1093,96 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return lines.join("\n");
   }
 
+  async function showWorkflowProgress(ctx: ExtensionCommandContext) {
+    if (!ctx.hasUI || ctx.mode !== "tui") {
+      ctx.ui.notify(formatWorkflowState(), "info");
+      return;
+    }
+
+    const state = workflowState;
+    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+      const statusLabel = state?.status === "running"
+        ? "运行中"
+        : state?.status === "paused"
+          ? "已暂停"
+          : state?.status === "completed"
+            ? "已完成"
+            : state?.status === "cancelled"
+              ? "已取消"
+              : "无活动";
+      const progress = state ? workflowProgress(state) : undefined;
+      const taskItems: SelectItem[] = state?.tasks.map((task) => {
+        const taskStatus = task.status === "completed"
+          ? "✓ 已完成"
+          : task.status === "in_progress"
+            ? "● 进行中"
+            : task.status === "blocked"
+              ? "! 已阻塞"
+              : "○ 待处理";
+        return {
+          value: task.id,
+          label: `${taskStatus} · ${task.id}`,
+          description: `${roleLabel(task.role)} · ${task.task}${task.completionSummary ? ` · ${task.completionSummary}` : ""}`,
+        };
+      }) ?? [];
+      if (taskItems.length === 0) {
+        taskItems.push({ value: "close", label: "当前没有活动工作流", description: "按 Enter 或 Esc 关闭" });
+      }
+
+      const list = new SelectList(taskItems, Math.min(taskItems.length, 5), {
+        selectedPrefix: (text) => theme.fg("accent", text),
+        selectedText: (text) => theme.fg("accent", text),
+        description: (text) => theme.fg("muted", text),
+        scrollInfo: (text) => theme.fg("dim", text),
+        noMatch: (text) => theme.fg("warning", text),
+      });
+      list.onSelect = () => done();
+      list.onCancel = () => done();
+
+      const content = new Box(2, 0);
+      content.addChild(new Text(theme.fg("accent", theme.bold("工作流任务进度")), 0, 0));
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("text", state
+        ? [
+            `状态  ${statusLabel}`,
+            `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
+            `执行器  ${workflowExecutorLabel(state.executor)}`,
+            `规划  ${state.plan.summary}`,
+            ...(state.currentTaskId ? [`当前任务  ${state.currentTaskId}`] : []),
+            ...(state.pauseReason ? [`暂停原因  ${state.pauseReason}${state.taskPauseReason ? ` · ${state.taskPauseReason}` : ""}`] : []),
+          ].join("\n")
+        : "当前没有活动工作流。"), 0, 0));
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("text", "任务列表"), 0, 0));
+      content.addChild(list);
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("dim", "↑↓ 浏览 · Enter 或 Esc 关闭"), 0, 0));
+
+      const container = new Container();
+      container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+      container.addChild(content);
+      container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+
+      return {
+        render: (width: number) => container.render(width),
+        invalidate: () => container.invalidate(),
+        handleInput: (data: string) => {
+          list.handleInput(data);
+          tui.requestRender();
+        },
+      };
+    }, {
+      overlay: true,
+      overlayOptions: {
+        anchor: "center",
+        width: "80%",
+        minWidth: 50,
+        maxHeight: "90%",
+        margin: 1,
+      },
+    });
+  }
+
   function formatWorkflowTimestamp(value: unknown, unavailableText: string) {
     if (typeof value !== "number" || !Number.isFinite(value)) return unavailableText;
     const date = new Date(value);
@@ -1566,7 +1656,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   async function workflowCommand(action: string | undefined, taskId: string | undefined, ctx: ExtensionCommandContext) {
     if (action === undefined || action === "status") {
-      ctx.ui.notify(formatWorkflowState(), "info");
+      await showWorkflowProgress(ctx);
       return;
     }
     if (!workflowState) {
