@@ -1961,10 +1961,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
         { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
         { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或暂存三个角色的模型配置" },
-        { value: "save", label: hasPendingRoleConfigChanges() ? "◆ 保存 · 保存角色配置（有未保存变更）" : "◆ 保存 · 保存角色配置", description: hasPendingRoleConfigChanges() ? "将暂存配置写入 .pi/role-models.json" : "当前没有待保存的配置变更" },
         { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
+                { value: "save", label: hasPendingRoleConfigChanges() ? "◆ 保存 · 保存角色配置（有未保存变更）" : "◆ 保存 · 保存角色配置", description: hasPendingRoleConfigChanges() ? "将暂存配置写入 .pi/role-models.json" : "当前没有待保存的配置变更" },
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
       ], { summary, selectedValue: selectedAction });
