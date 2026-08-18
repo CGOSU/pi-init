@@ -1130,8 +1130,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
 
       const list = new SelectList(taskItems, Math.min(taskItems.length, 5), {
-        selectedPrefix: (text) => theme.fg("accent", text),
-        selectedText: (text) => theme.fg("accent", text),
+        selectedPrefix: (text) => theme.bg("selectedBg", theme.fg("accent", text)),
+        selectedText: (text) => theme.bg("selectedBg", theme.fg("text", text)),
         description: (text) => theme.fg("muted", text),
         scrollInfo: (text) => theme.fg("dim", text),
         noMatch: (text) => theme.fg("warning", text),
@@ -1139,8 +1139,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       list.onSelect = () => done();
       list.onCancel = () => done();
 
-      const content = new Box(2, 0);
-      content.addChild(new Text(theme.fg("accent", theme.bold("工作流任务进度")), 0, 0));
+      const content = new Box(2, 1, (text) => theme.bg("customMessageBg", text));
+      content.addChild(new Text(theme.bg("selectedBg", theme.fg("text", theme.bold(" 工作流任务进度 "))), 0, 0));
       content.addChild(new Spacer(1));
       content.addChild(new Text(theme.fg("text", state
         ? [
@@ -1153,15 +1153,29 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           ].join("\n")
         : "当前没有活动工作流。"), 0, 0));
       content.addChild(new Spacer(1));
-      content.addChild(new Text(theme.fg("text", "任务列表"), 0, 0));
+      content.addChild(new Text(theme.fg("accent", theme.bold("任务列表")), 0, 0));
       content.addChild(list);
       content.addChild(new Spacer(1));
-      content.addChild(new Text(theme.fg("dim", "↑↓ 浏览 · Enter 或 Esc 关闭"), 0, 0));
+      content.addChild(new Text(theme.fg("muted", "↑↓ 浏览 · Enter 或 Esc 关闭"), 0, 0));
 
+      const panelBorder = (left: string, right: string) => ({
+        render: (width: number) => [
+          theme.fg("borderAccent", `${left}${"─".repeat(Math.max(0, width - 2))}${right}`),
+        ],
+        invalidate: () => {},
+      });
+      const panelFrame = {
+        render: (width: number) => {
+          const innerWidth = Math.max(1, width - 2);
+          const side = theme.fg("borderAccent", "│");
+          return content.render(innerWidth).map((line) => `${side}${line}${side}`);
+        },
+        invalidate: () => content.invalidate(),
+      };
       const container = new Container();
-      container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
-      container.addChild(content);
-      container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+      container.addChild(panelBorder("┌", "┐"));
+      container.addChild(panelFrame);
+      container.addChild(panelBorder("└", "┘"));
 
       return {
         render: (width: number) => container.render(width),

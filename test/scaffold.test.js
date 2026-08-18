@@ -1146,6 +1146,8 @@ test("TUI 工作流状态使用弹窗并显示任务进度", async () => {
   assert.equal(harness.customCalls[0].options.overlayOptions.anchor, "center");
   assert.equal(harness.customCalls[0].options.overlayOptions.width, "80%");
   const rendered = harness.customCalls[0].component.render(100).join("\n");
+  assert.match(rendered, /┌/);
+  assert.match(rendered, /│/);
   assert.match(rendered, /工作流任务进度/);
   assert.match(rendered, /冻结认证改造/);
   assert.match(rendered, /暂停原因  architecture-review/);

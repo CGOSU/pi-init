@@ -2,8 +2,8 @@
 
 ### 2026-08-18：将工作流进度查看改为 TUI 弹窗
 
-- 完成内容：`/pi-init workflow status` 以及控制中心的“查看任务进度”在 TUI 中改为居中 overlay 弹窗，显示状态、进度、执行器、规划、暂停原因和可滚动任务列表；RPC 等非 TUI 模式继续使用原有通知文本。
-- 完成内容：增加 TUI 弹窗和非 TUI 回退测试，覆盖 overlay 配置及任务状态展示。
+- 完成内容：`/pi-init workflow status` 以及控制中心的“查看任务进度”在 TUI 中改为居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、执行器、规划、暂停原因和可滚动任务列表；RPC 等非 TUI 模式继续使用原有通知文本。
+- 完成内容：增加 TUI 弹窗和非 TUI 回退测试，覆盖 overlay 配置、四边框和任务状态展示。
 - 验证：`npm test`，46 项全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
 - 遗留问题：未在真实交互式 Pi TUI 中进行视觉验收。
 
