@@ -21,9 +21,9 @@
 - 运行时角色切换和 `/pi-init config` 变更只存在于当前会话，不得直接写入 `.pi/role-models.json`；只有用户明确执行 `/pi-init save`（保存角色配置）时才持久化。
 - 模型引用必须精确：主会话与 Agent 子代理都使用完整 `provider/model`；省略 Agent `model` 时继承当前完整模型，`haiku`、`sonnet` 等未带 `provider/` 的模糊名称在 spawn 前拒绝，指定的模型必须精确存在，不做模糊匹配或跨 Provider fallback。更换 Provider 直接修改角色模型（`/pi-init config` 任意已注册模型可选，`/pi-init save` 持久化，或直接编辑 `.pi/role-models.json`）。
 - 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；完成时输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样保持精简；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务。
-- 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subagents` 只通过 `pi.events` RPC 顺序委派，并且缺少扩展、RPC 错误或异常回复都必须安全阻塞任务。
-- 使用 `subagents` 时，主会话是 `task_workflow` 状态的唯一写入者；子代理只执行当前任务，不调用 `task_workflow`，并且必须返回严格的 `pi-init/task-result@1` JSON 结果，只有合法 `complete` 才能完成任务。
-- 子代理在共享工作区执行；不得创建 worktree、合并分支、自动提交或推送。reload 后已绑定的非终态子代理不会自动重生，应先查看持久化绑定再人工恢复。
+- 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subtask` 通过主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话，缺少工具或异常回复都必须安全阻塞任务。
+- 使用 `subtask` 时，主会话是 `task_workflow` 状态的唯一写入者；fork 只执行当前任务，不调用 `task_workflow`，并且必须返回严格的 `pi-init/task-result@1` JSON 结果，只有合法 `complete` 才能完成任务。
+- fork 在共享工作区执行；不得创建 worktree、合并分支、自动提交或推送。reload 后非终态的已派发任务不会自动重新派发，应先查看工作流状态再人工恢复（`/pi-init workflow retry <taskId>` 或 cancel 后重新规划）。
 - 不要因为偏好、风格或可选方案向用户提问。只有用户明确要求架构审阅，或遇到缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息时才暂停；把合理假设记录在任务结果中。
 - 用户明确要求先看架构时，且工作流已启用，架构师将 `reviewRequired` 设为 `true`，保存规划后暂停；用户审阅后执行 `/pi-init workflow resume`。阻塞任务使用 `block`，处理完原因后使用 `/pi-init workflow retry <taskId>`。
 

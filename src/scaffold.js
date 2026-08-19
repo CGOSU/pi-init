@@ -21,8 +21,6 @@ const PLATFORM_NAMES = {
 
 const TEMPLATE_FILES = [
   ["AGENTS.md", () => "AGENTS.md"],
-  ["agents/pi-init-developer-test.md", () => ".pi/agents/pi-init-developer-test.md", false],
-  ["agents/pi-init-docs-commit.md", () => ".pi/agents/pi-init-docs-commit.md", false],
   ["docs/clean-code.md", () => "docs/clean-code.md"],
   ["docs/current-state.md", () => "docs/current-state.md"],
   ["docs/decisions.md", () => "docs/decisions.md"],

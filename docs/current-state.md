@@ -20,12 +20,12 @@
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。成功后注入隐藏续跑消息，失败仅提示并保留已切换角色。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，由当前架构角色直接顺序执行，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。任务和最终工作流报告均保留摘要、时间、耗时和验证，开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
-- 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subagents、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
+- 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
 - 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖；`.pi/role-models.json` 保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。
 - 模型安全来自精确引用而非 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧字段被忽略）：Agent 省略 `model` 时注入当前完整 `provider/model`，`haiku`/`sonnet` 等模糊名称在 spawn 前拒绝，指定的模型必须在注册表中精确存在；原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截（见 `docs/decisions.md` 2026-08-16）。`/pi-init config` 候选列表展示全部已注册模型，跨 Provider 选择随时可暂存。
-- `workflowExecutor: "subagents"` 通过 `pi.events` RPC 顺序委派 `pi-init-developer-test`/`pi-init-docs-commit`，主扩展唯一写入工作流状态；严格校验 `pi-init/task-result@1`，RPC/扩展/结果失败安全阻塞，取消或阻塞发送 stop 请求，reload 不自动重生已绑定代理。
-- 初始化额外生成 `.pi/agents/pi-init-developer-test.md` 和 `.pi/agents/pi-init-docs-commit.md`；代理仅开放 read/bash/edit/write，关闭 extensions、skills 和嵌套子代理，并在共享工作区执行。
+- `workflowExecutor` 支持 `local`（默认）和 `subtask`：后者由主会话调用 `subtask` 工具把当前就绪任务顺序委派到独立的对话 fork，结果经 `subtask-result` custom 消息回到会话后自动推进；主扩展唯一写入工作流状态，严格校验 `pi-init/task-result@1`，缺少工具或无效结果安全阻塞，reload 不自动重新派发非终态任务。旧配置值 `subagents`（已停止接入的 `@tintinweb/pi-subagents` RPC）自动映射为 `subtask`。
+- 初始化不再生成 `.pi/agents/*.md` 代理脚手架（pi-subagents 专用，随 RPC 执行器一并移除）；subtask fork 复用主会话角色与工具，不需要额外代理定义。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。生成规则同时约束 `read`/`edit` 参数和精确替换失败后的重读流程。
 - 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令、Skill 名称和职责模型。
@@ -37,11 +37,12 @@
 
 ## 待处理
 
-- `task_workflow` 与 pi-subagents 的真实模型连续多任务端到端演练、真实生命周期事件和 reload 后人工恢复尚未执行；当前覆盖纯状态机/协议/脚手架测试和扩展 RPC 加载检查。
+- `task_workflow` 与 pi-subtask 的真实模型连续多任务端到端演练、fork 生命周期和 reload 后人工恢复尚未执行；当前覆盖纯状态机/协议/脚手架测试和扩展加载检查。
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
 
+- 2026-08-19：`workflowExecutor` 从 `subagents`（`@tintinweb/pi-subagents` RPC）切换到 `subtask`（gary149/pi-subtask 对话 fork）：主会话调用 `subtask` 工具派发、`subtask-result` 消息回传后自动推进；旧值 `subagents` 兼容映射为新执行器，不再生成 `.pi/agents/*.md` 脚手架。README、模板和文档同步更新。
 - 2026-08-18：TUI 工作流状态查看改为居中 overlay 弹窗，增加主题背景、标题高亮和四边框以强化弹窗识别，并保留非 TUI 通知回退；增加对应回归测试。
 - 2026-08-16：移除 fail-closed Provider 白名单，改为精确模型引用：删除 `providerPolicy` 解析、`model_select` 回滚和 `session_start`/输入/provider 请求前守卫，Agent spawn 保留“省略注入完整模型、模糊拒绝、精确存在校验”；`/pi-init config` 展示全部已注册模型；版本更新为 `1.1.0`。
 - 2026-08-16：手动模式升级为直连宿主：原生 `/model` 切换不回滚并把活动角色模型直接写回 `.pi/role-models.json`；同步中英文模板、README 和决策文档；版本更新为 `1.0.8`。

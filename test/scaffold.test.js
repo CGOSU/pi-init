@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import initProjectExtension from "../extensions/init-project.ts";
+import initProjectExtension from "../extensions/index.ts";
 import { installLaunchers } from "../scripts/install-launchers.js";
 import {
   dateRange,
@@ -38,7 +38,6 @@ import {
 import {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
-  bindWorkflowAgent,
   blockWorkflowTask,
   beginWorkflowDelegation,
   cancelWorkflow,
@@ -50,7 +49,6 @@ import {
   getWorkflowExecutionDuration,
   hydrateWorkflowState,
   markWorkflowTaskStarted,
-  recordWorkflowDelegationFailure,
   recordWorkflowNudge,
   resumeWorkflow,
   retryWorkflowTask,
@@ -60,13 +58,11 @@ import {
   workflowProgress,
 } from "../src/workflow.js";
 import {
-  SUBAGENT_RESULT_MAX_BYTES,
-  SUBAGENT_RESULT_PROTOCOL,
-  matchesSubagentEvent,
-  parseSubagentResult,
-  parseSubagentSpawnReply,
-  subagentFailureReason,
-} from "../src/subagents.js";
+  SUBTASK_RESULT_MAX_BYTES,
+  SUBTASK_RESULT_PROTOCOL,
+  extractSubtaskResultJson,
+  parseSubtaskResult,
+} from "../src/subtask.js";
 import {
   completeRunTiming,
   createRunTiming,
@@ -98,8 +94,10 @@ function createExtensionHarness(branch = [], options = {}) {
   const renderers = new Map();
   const tools = [];
   const aborts = [];
+  const sentMessages = [];
   const defaultModel = options.model ?? { provider: "openai-codex", id: "gpt-5.6-luna" };
   const availableModels = options.availableModels ?? [defaultModel];
+  const activeTools = options.activeTools ?? [];
   let context;
   const pi = {
     on(name, handler) {
@@ -129,12 +127,17 @@ function createExtensionHarness(branch = [], options = {}) {
       return options.thinkingLevel ?? "max";
     },
     setThinkingLevel() {},
+    getActiveTools() {
+      return activeTools;
+    },
     async setModel(model) {
       if (options.setModelResult === false) return false;
       if (context) context.model = model;
       return true;
     },
-    sendMessage() {},
+    async sendMessage(message, options) {
+      sentMessages.push({ message, options });
+    },
   };
   initProjectExtension(pi);
 
@@ -204,7 +207,7 @@ function createExtensionHarness(branch = [], options = {}) {
       },
     },
   };
-  return { handlers, commands, entries, notifications, selectCalls, customCalls, statusCalls, renderers, tools, aborts, context };
+  return { handlers, commands, entries, notifications, selectCalls, customCalls, statusCalls, renderers, tools, aborts, context, sentMessages };
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {
@@ -665,8 +668,6 @@ test("生成默认文件结构和动态 Skill", async () => {
 
     assert.deepEqual(result.files, [
       "AGENTS.md",
-      ".pi/agents/pi-init-developer-test.md",
-      ".pi/agents/pi-init-docs-commit.md",
       "docs/clean-code.md",
       "docs/current-state.md",
       "docs/decisions.md",
@@ -676,8 +677,6 @@ test("生成默认文件结构和动态 Skill", async () => {
       ".pi/skills/example-app/SKILL.md",
     ]);
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
-    const developerAgent = await readFile(path.join(target, ".pi/agents/pi-init-developer-test.md"), "utf8");
-    const docsAgent = await readFile(path.join(target, ".pi/agents/pi-init-docs-commit.md"), "utf8");
     const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
     const roleModels = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
     const skill = normalizeNewlines(
@@ -699,17 +698,9 @@ test("生成默认文件结构和动态 Skill", async () => {
     assert.match(agents, /workflowExecutor/);
     assert.match(agents, /pi-init\/task-result@1/);
     assert.match(agents, /共享工作区/);
-    for (const agent of [developerAgent, docsAgent]) {
-      assert.match(agent, /^---\n/);
-      assert.match(agent, /tools: read, bash, edit, write/);
-      assert.match(agent, /extensions: false/);
-      assert.match(agent, /skills: false/);
-      assert.match(agent, /allowed_subagents: none/);
-      assert.match(agent, /shared checkout/);
-      assert.match(agent, /Do not create worktrees, branches, merges, commits, or pushes/);
-      assert.match(agent, /pi-init\/task-result@1/);
-      assert.doesNotMatch(agent, /isolation:\s*worktree/);
-    }
+    assert.match(agents, /subtask/);
+    assert.doesNotMatch(agents, /pi-subagents/);
+    assert.doesNotMatch(agents, /\.pi\/agents\//);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
     assert.match(cleanCode, /## Hard rules/);
@@ -763,7 +754,7 @@ test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async ()
     const roleModels = {
       mode: "confirm",
       workflowMode: "on",
-      workflowExecutor: "subagents",
+      workflowExecutor: "subtask",
       architect: {
         provider: "provider-architect",
         model: "model-architect",
@@ -789,7 +780,7 @@ test("自定义三职责配置会同步规范化 JSON 和中文 Skill", async ()
     );
     assert.deepEqual(config, resolveRoleConfig(roleModels));
     assert.equal(config.workflowMode, "on");
-    assert.equal(config.workflowExecutor, "subagents");
+    assert.equal(config.workflowExecutor, "subtask");
     assertSkillMatchesRoleConfig(skill, config);
     assert.match(skill, /\/pi-init config/);
   });
@@ -1247,26 +1238,22 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
   assert.match(workflowRendered, /docs：git diff --check：通过/);
 });
 
-test("活动 subagents 工作流和会话中断不会伪造普通执行报告", async () => {
-  const workflow = bindWorkflowAgent(
-    beginWorkflowDelegation(
-      startWorkflowTask(
-        createWorkflowState({
-          executor: "subagents",
-          summary: "委派任务",
-          tasks: [{ id: "task", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
-        }, 100),
-        "task",
-        110,
-      ),
-      { taskId: "task", requestId: "request", type: "workflow-developer" },
-      120,
+test("活动 subtask 工作流和会话中断不会伪造普通执行报告", async () => {
+  const workflow = beginWorkflowDelegation(
+    startWorkflowTask(
+      createWorkflowState({
+        executor: "subtask",
+        summary: "委派任务",
+        tasks: [{ id: "task", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+      }, 100),
+      "task",
+      110,
     ),
-    { taskId: "task", agentId: "agent" },
-    130,
+    { taskId: "task", requestId: "request", type: "workflow-developer" },
+    120,
   );
   const branch = [{ type: "custom", customType: "pi-init-workflow", data: workflow }];
-  const workflowHarness = createExtensionHarness(branch);
+  const workflowHarness = createExtensionHarness(branch, { activeTools: ["subtask"] });
   await emitExtensionEvent(workflowHarness, "session_tree");
   await runExternalAgent(workflowHarness, "rpc");
   assert.equal(workflowHarness.entries.length, 0);
@@ -1278,6 +1265,67 @@ test("活动 subagents 工作流和会话中断不会伪造普通执行报告", 
   await emitExtensionEvent(interruptedHarness, "session_shutdown");
   await emitExtensionEvent(interruptedHarness, "agent_settled");
   assert.equal(interruptedHarness.entries.length, 0);
+});
+
+test("subtask 执行器派发对话 fork，缺少工具阻塞，结果回传后自动推进", async () => {
+  const workflow = createWorkflowState({
+    executor: "subtask",
+    summary: "委派实现任务",
+    tasks: [{ id: "implementation", task: "实现特性", files: ["src/feature.js"], acceptanceCriteria: ["测试通过"] }],
+  }, 100);
+  const harness = createExtensionHarness(
+    [{ type: "custom", customType: "pi-init-workflow", data: workflow }],
+    { activeTools: ["subtask"] },
+  );
+  await emitExtensionEvent(harness, "session_tree");
+  await emitExtensionEvent(harness, "agent_settled");
+
+  assert.equal(harness.sentMessages.length, 1);
+  const dispatch = harness.sentMessages[0].message;
+  assert.equal(dispatch.customType, "pi-init-subtask-dispatch");
+  assert.equal(dispatch.display, false);
+  assert.match(dispatch.content, /PI-INIT SUBTASK WORKFLOW/);
+  assert.match(dispatch.content, /task 参数必须原样使用下面整段文本/);
+  assert.match(dispatch.content, /实现特性/);
+  const dispatchedState = harness.entries.findLast((entry) => entry.type === "pi-init-workflow")?.data;
+  assert.equal(dispatchedState.currentTaskId, "implementation");
+  assert.equal(dispatchedState.tasks[0].delegation.status, "spawning");
+
+  const prompt = dispatch.content.split("（逐字不变，不要改写、截断或概括）：\n\n")[1].split("\n\n调用 subtask 工具后")[0];
+  const branch = harness.context.sessionManager.getBranch();
+  branch.push({
+    type: "custom_message",
+    customType: "subtask-result",
+    details: {
+      name: "pi-init-subtask-dispatch",
+      task: prompt,
+      status: "done",
+      resultText: JSON.stringify({
+        protocol: SUBTASK_RESULT_PROTOCOL,
+        outcome: "complete",
+        completionSummary: "特性已实现",
+        verification: ["npm test：通过"],
+      }),
+    },
+  });
+  await emitExtensionEvent(harness, "agent_settled");
+  const finished = harness.entries.findLast((entry) => entry.type === "pi-init-workflow")?.data;
+  assert.equal(finished.status, "completed");
+  assert.equal(finished.tasks[0].status, "completed");
+  assert.equal(finished.tasks[0].completionSummary, "特性已实现");
+  assert.equal(finished.tasks[0].delegation.status, "completed");
+
+  const missingToolHarness = createExtensionHarness(
+    [{ type: "custom", customType: "pi-init-workflow", data: workflow }],
+    { activeTools: [] },
+  );
+  await emitExtensionEvent(missingToolHarness, "session_tree");
+  await emitExtensionEvent(missingToolHarness, "agent_settled");
+  assert.equal(missingToolHarness.sentMessages.length, 0);
+  assert.match(missingToolHarness.notifications.at(-1)?.message ?? "", /subtask 工具/);
+  const blocked = missingToolHarness.entries.findLast((entry) => entry.type === "pi-init-workflow")?.data;
+  assert.equal(blocked.status, "paused");
+  assert.equal(blocked.tasks[0].delegation, undefined);
 });
 
 test("角色配置先写会话，显式保存才落盘", async () => {
@@ -1306,7 +1354,7 @@ test("角色配置先写会话，显式保存才落盘", async () => {
 });
 
 test("角色切换压缩等待 agent 完全结束而不是回合结束", async () => {
-  const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
+  const extension = await readFile(path.join(process.cwd(), "extensions", "index.ts"), "utf8");
   assert.match(
     extension,
     /pi\.on\("agent_settled",\s*async \(_event, ctx\) => \{[\s\S]*?startPendingRoleCompaction\(ctx\);\s*await scheduleWorkflow\(ctx\);\s*\}\);/,
@@ -1339,7 +1387,7 @@ test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async (
 });
 
 test("扩展注册顺序工作流并提供自动推进和显式审阅入口", async () => {
-  const extension = await readFile(path.join(process.cwd(), "extensions", "init-project.ts"), "utf8");
+  const extension = await readFile(path.join(process.cwd(), "extensions", "index.ts"), "utf8");
   assert.match(extension, /name: "task_workflow"/);
   assert.match(extension, /action: StringEnum\(\["plan", "status", "complete", "block", "resume", "retry", "cancel"\]/);
   assert.match(extension, /workflowMode: Type\.Optional\(StringEnum\(WORKFLOW_MODES/);
@@ -1378,28 +1426,24 @@ test("扩展注册顺序工作流并提供自动推进和显式审阅入口", as
   const roleMenu = extension.match(/function roleMenuItems[\s\S]*?\n}\n/)?.[0] ?? "";
   assert.doesNotMatch(roleMenu, /value: "workflow"/);
   assert.match(extension, /\/pi-init workflow retry/);
-  assert.match(extension, /subagents:rpc:spawn/);
-  assert.match(extension, /subagents:rpc:spawn:reply:/);
-  assert.match(extension, /subagents:completed/);
-  assert.match(
-    extension,
-    /async function handleSubagentCompleted[\s\S]*?formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?await scheduleWorkflow\(ctx\);/,
-  );
+  assert.match(extension, /function workflowSubtaskPrompt\(/);
+  assert.match(extension, /PI-INIT SUBTASK WORKFLOW/);
+  assert.match(extension, /SUBTASK_RESULT_PROTOCOL/);
+  assert.match(extension, /customType: "pi-init-subtask-dispatch"/);
+  assert.match(extension, /display: false/);
+  assert.match(extension, /function consumeSubtaskResult\(/);
+  assert.match(extension, /customType === "subtask-result"/);
+  assert.match(extension, /details\.task !== workflowSubtaskPrompt/);
+  assert.match(extension, /parseSubtaskResult/);
   assert.match(
     extension,
     /case "complete":[\s\S]*?const taskCompletionReport = formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?formatWorkflowCompletion\(next\)[\s\S]*?content: \[\{ type: "text", text: `\$\{completionReport\}/,
   );
-  assert.match(
-    extension,
-    /handleSubagentCompleted[\s\S]*?const taskCompletionReport = formatWorkflowTaskCompletion\(completedTask\)[\s\S]*?formatWorkflowCompletion\(next\)[\s\S]*?ctx\.ui\.notify\(completionReport, "info"\)/,
-  );
-  assert.match(extension, /subagents:failed/);
-  assert.match(extension, /parseSubagentResult/);
-  assert.match(extension, /matchesSubagentEvent/);
-  assert.match(extension, /Do not create worktrees, merge branches, commit, or push/);
+  assert.match(extension, /getActiveTools/);
+  assert.doesNotMatch(extension, /subagents:rpc:spawn|subagents:rpc:stop|subagents:completed|subagents:failed/);
   assert.doesNotMatch(extension, /from ["']@tintinweb\/pi-subagents/);
   assert.doesNotMatch(extension, /isolation:\s*["']worktree/);
-  assert.match(extension, /A restored delegated task stays attached to its original worker/);
+  assert.match(extension, /A restored delegated task stays attached to its fork/);
   assert.match(extension, /name: "switch_role"/);
   assert.doesNotMatch(extension, /parallel_develop/);
   assert.match(
@@ -1513,7 +1557,8 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.equal(resolveWorkflowMode({ workflowMode: "auto", workflowEnabled: false }), "auto");
   assert.equal(resolveWorkflowExecutor(undefined), DEFAULT_WORKFLOW_EXECUTOR);
   assert.equal(resolveWorkflowExecutor({ workflowExecutor: "local" }), "local");
-  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "subagents" }), "subagents");
+  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "subtask" }), "subtask");
+  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "subagents" }), "subtask");
   assert.throws(() => resolveWorkflowExecutor({ workflowExecutor: "remote" }), /workflowExecutor 无效/);
   assert.throws(
     () => resolveWorkflowMode({ workflowEnabled: "yes" }),
@@ -1530,7 +1575,7 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     () => shouldOrchestrateWorkflow({ mode: "auto", taskCount: 0 }),
     /工作流任务数无效/,
   );
-  assert.equal(resolveRoleConfig({ workflowExecutor: "subagents" }).workflowExecutor, "subagents");
+  assert.equal(resolveRoleConfig({ workflowExecutor: "subagents" }).workflowExecutor, "subtask");
   assert.deepEqual(resolveRoleModel(undefined, "architect"), DEFAULT_ROLE_MODELS.architect);
   assert.deepEqual(
     resolveRoleModel(
@@ -1676,9 +1721,9 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
   );
 });
 
-test("subagents 工作流保存绑定、失败和取消状态", () => {
+test("subtask 工作流保存委派、失败和取消状态", () => {
   const planned = createWorkflowState({
-    executor: "subagents",
+    executor: "subtask",
     summary: "委派实现任务",
     tasks: [{
       id: "implementation",
@@ -1699,42 +1744,38 @@ test("subagents 工作流保存绑定、失败和取消状态", () => {
     status: "spawning",
     createdAt: 120,
   });
-  const running = bindWorkflowAgent(spawning, { taskId: "implementation", agentId: "agent-1" }, 130);
-  assert.equal(running.tasks[0].delegation.status, "running");
-  assert.equal(running.tasks[0].delegation.agentId, "agent-1");
-  const failed = recordWorkflowDelegationFailure(
-    running,
-    { taskId: "implementation", agentId: "agent-1", reason: "子代理返回无效结果" },
-    140,
+  assert.throws(
+    () => beginWorkflowDelegation(createWorkflowState({ executor: "local", summary: "本地", tasks: [{ id: "implementation", task: "本地执行", files: ["src"], acceptanceCriteria: ["完成"] }] }, 90), {
+      taskId: "implementation",
+      requestId: "request",
+      type: "workflow-developer",
+    }),
+    /subtask 执行器/,
   );
-  assert.equal(failed.tasks[0].delegation.status, "failed");
-  assert.equal(failed.tasks[0].delegation.reason, "子代理返回无效结果");
-  const blocked = blockWorkflowTask(failed, { taskId: "implementation", reason: "结果协议无效" }, 150);
+  const blocked = blockWorkflowTask(spawning, { taskId: "implementation", reason: "结果协议无效" }, 150);
   assert.equal(blocked.status, "paused");
   assert.equal(blocked.tasks[0].delegation.status, "failed");
+  assert.equal(blocked.tasks[0].delegation.reason, "结果协议无效");
 
   const retried = retryWorkflowTask(blocked, "implementation", 160);
   assert.equal(retried.tasks[0].startedAt, undefined);
   assert.equal(retried.tasks[0].executionStartedAt, undefined);
   assert.equal(retried.tasks[0].completedAt, undefined);
-  const rebound = bindWorkflowAgent(
-    beginWorkflowDelegation(startWorkflowTask(retried, "implementation", 170), {
-      taskId: "implementation",
-      requestId: "request-2",
-      type: "workflow-developer",
-    }, 180),
-    { taskId: "implementation", agentId: "agent-2" },
-    190,
+  assert.equal(retried.tasks[0].delegation, undefined);
+  const redelegated = beginWorkflowDelegation(
+    startWorkflowTask(retried, "implementation", 170),
+    { taskId: "implementation", requestId: "request-2", type: "workflow-developer" },
+    180,
   );
-  const cancelled = cancelWorkflow(rebound, 200);
+  const cancelled = cancelWorkflow(redelegated, 200);
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.tasks[0].delegation.status, "stop-requested");
   assert.equal(requestWorkflowDelegationStop(cancelled), cancelled);
 });
 
-test("子代理结果协议严格验证完成、阻塞和异常结果", () => {
-  const complete = parseSubagentResult(JSON.stringify({
-    protocol: SUBAGENT_RESULT_PROTOCOL,
+test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {
+  const complete = parseSubtaskResult(JSON.stringify({
+    protocol: SUBTASK_RESULT_PROTOCOL,
     outcome: "complete",
     completionSummary: "实现完成",
     verification: ["npm test：通过", "npm test：通过"],
@@ -1744,14 +1785,14 @@ test("子代理结果协议严格验证完成、阻塞和异常结果", () => {
     completionSummary: "实现完成",
     verification: ["npm test：通过"],
   });
-  assert.deepEqual(parseSubagentResult(JSON.stringify({
-    protocol: SUBAGENT_RESULT_PROTOCOL,
+  assert.deepEqual(parseSubtaskResult(JSON.stringify({
+    protocol: SUBTASK_RESULT_PROTOCOL,
     outcome: "blocked",
     reason: "缺少凭据",
   })), { outcome: "blocked", reason: "缺少凭据" });
   assert.throws(
-    () => parseSubagentResult(JSON.stringify({
-      protocol: SUBAGENT_RESULT_PROTOCOL,
+    () => parseSubtaskResult(JSON.stringify({
+      protocol: SUBTASK_RESULT_PROTOCOL,
       outcome: "complete",
       completionSummary: "完成",
       verification: [],
@@ -1759,8 +1800,8 @@ test("子代理结果协议严格验证完成、阻塞和异常结果", () => {
     /verification 必须是非空数组/,
   );
   assert.throws(
-    () => parseSubagentResult(JSON.stringify({
-      protocol: SUBAGENT_RESULT_PROTOCOL,
+    () => parseSubtaskResult(JSON.stringify({
+      protocol: SUBTASK_RESULT_PROTOCOL,
       outcome: "complete",
       completionSummary: "完成",
       verification: ["通过"],
@@ -1769,17 +1810,17 @@ test("子代理结果协议严格验证完成、阻塞和异常结果", () => {
     /不支持的字段/,
   );
   assert.throws(
-    () => parseSubagentResult("x".repeat(SUBAGENT_RESULT_MAX_BYTES + 1)),
+    () => parseSubtaskResult("x".repeat(SUBTASK_RESULT_MAX_BYTES + 1)),
     /结果过大/,
   );
-  assert.deepEqual(parseSubagentSpawnReply({ success: true, data: { id: "agent-1" } }), { id: "agent-1" });
-  assert.throws(() => parseSubagentSpawnReply({ success: false, error: "未安装" }), /未安装/);
-  assert.equal(matchesSubagentEvent({ id: "agent-1", type: "workflow-developer" }, {
-    agentId: "agent-1",
-    type: "workflow-developer",
-  }), true);
-  assert.equal(matchesSubagentEvent({ id: "agent-2", type: "workflow-developer" }, { agentId: "agent-1" }), false);
-  assert.match(subagentFailureReason({ error: "子代理失败" }), /子代理失败/);
+  assert.deepEqual(
+    extractSubtaskResultJson("```json\n" + JSON.stringify({ protocol: SUBTASK_RESULT_PROTOCOL, outcome: "blocked", reason: "卡住" }) + "\n```"),
+    JSON.stringify({ protocol: SUBTASK_RESULT_PROTOCOL, outcome: "blocked", reason: "卡住" }),
+  );
+  assert.throws(
+    () => parseSubtaskResult("不是 JSON"),
+    /JSON/,
+  );
 });
 
 test("架构工作流只有明确审阅要求时才暂停，并支持阻塞重试", () => {
@@ -1892,8 +1933,6 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     });
 
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
-    const developerAgent = await readFile(path.join(target, ".pi/agents/pi-init-developer-test.md"), "utf8");
-    const docsAgent = await readFile(path.join(target, ".pi/agents/pi-init-docs-commit.md"), "utf8");
     const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
     const skill = await readFile(path.join(target, ".pi/skills/mall-app/SKILL.md"), "utf8");
     assert.match(agents, /## Project Purpose/);
@@ -1906,12 +1945,8 @@ test("英文模板和显式中文项目 slug 可用", async () => {
     assert.match(agents, /workflowExecutor/);
     assert.match(agents, /pi-init\/task-result@1/);
     assert.match(agents, /shared checkout/);
-    for (const agent of [developerAgent, docsAgent]) {
-      assert.match(agent, /tools: read, bash, edit, write/);
-      assert.match(agent, /extensions: false/);
-      assert.match(agent, /skills: false/);
-      assert.match(agent, /allowed_subagents: none/);
-    }
+    assert.match(agents, /subtask/);
+    assert.doesNotMatch(agents, /pi-subagents/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);

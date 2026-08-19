@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-08-19：`subagents` 执行器替换为 pi-subtask 对话 fork
+
+- 决定：`workflowExecutor` 可选值从 `subagents` 改名为 `subtask`，接入 `gary149/pi-subtask`（对话 fork，v0.7.4）并采用模型驱动接入：主会话调用模型侧 `subtask` 工具把当前就绪任务顺序委派到独立 fork，fork 完成时通过 `pi.sendMessage({customType:"subtask-result", details})` 把结果消息送回会话，扩展扫描 branch 中最新 `subtask-result`，用 `details.task` 与派发提示词逐字相等确定归属，再严格解析 `details.resultText`（`pi-init/task-result@1`）。派发消息（`pi-init-subtask-dispatch`）`display:false` 不进入 LLM 上下文。旧配置值 `subagents` 自动映射为 `subtask`；不再生成 `.pi/agents/*.md` 代理脚手架，fork 复用主会话角色与工具。
+- 原因：pi-subtask 没有扩展 RPC 接口（不订阅任何 `pi.events` 频道，只暴露 `/subtask` 命令和模型侧 `subtask` 工具），无法沿用 `@tintinweb/pi-subagents` 的 `pi.events` RPC 通道；模型驱动接入是唯一可行的集成面，且结果随 fork 回传后天然只有主会话推进工作流，无并发写入风险。沿用 `pi-init/task-result@1` 严格协议保证只认真实完成的 `complete`。
+- 约束：fork 在共享工作区执行，不创建 worktree、不并行、不合并、不提交或推送；主会话是 `task_workflow` 状态的唯一写入者，fork 不调用 `task_workflow`。缺少 `subtask` 工具、`details.task` 不匹配、状态非 `done`、结果不符合协议时都安全阻塞而不猜测推进。reload 后非终态的已派发任务不会自动重新派发；取消或阻塞只清工作流状态，运行中的 fork 由 pi-subtask 面板管理，不伪造完成。任务创建时持久化 executor，之后配置变更不切换已有工作流。
+- 替代：替代 2026-08-14“通过 pi.events 接入可选的 pi-subagents 顺序执行器”；该决策的历史背景（本地回退、顺序委派、严格协议、reload 不重生）仍然有效，执行器实现面已更换。
+
 ### 2026-08-16：以精确模型引用替代 Provider 白名单
 
 - 决定：移除 `providerPolicy` 及整套 fail-closed 机制（allowlist 解析、`model_select` 回滚、`session_start`/输入/provider 请求前守卫、Agent spawn 白名单校验），改为精确引用纪律：Agent 省略 `model` 时注入当前完整 `provider/model`，未带 `provider/` 的模糊名称在 spawn 前拒绝，显式指定的模型必须在注册表中精确存在。原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截；`/pi-init config` 候选展示全部已注册模型，跨 Provider 选择随时可暂存。旧配置中的 `providerPolicy` 字段被忽略。

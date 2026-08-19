@@ -9,7 +9,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
-- 工作流执行器默认是 `local`；可选择通过 `pi.events` 使用已安装的 `@tintinweb/pi-subagents` 顺序委派当前任务，主会话仍拥有唯一的工作流状态。
+- 工作流执行器默认是 `local`；可选择 `subtask`，由主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话并自动推进，主会话仍拥有唯一的工作流状态。
 - 未进入 `task_workflow` 的普通外部 Agent 执行会在 TUI 中显示开始时间、结束时间和总耗时报告，并与工作流任务完成报告分开。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
 - 记录项目宿主环境和平台相关命令约定。
@@ -19,7 +19,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 直接在本仓库启动扩展：
 
 ```bash
-pi --no-extensions -e ./extensions/init-project.ts
+pi --no-extensions -e ./extensions/index.ts
 ```
 
 然后在 Pi 中执行：
@@ -40,13 +40,13 @@ pi install https://github.com/CGOSU/pi-init
 pi install git:github.com/CGOSU/pi-init
 ```
 
-如果要启用 `subagents` 执行器，还需要在同一个 Pi 环境中单独安装并启用第三方扩展；pi-init 不会复制或声明该依赖：
+如果要启用 `subtask` 执行器，还需要在同一个 Pi 环境中单独安装并启用第三方扩展；pi-init 不会复制或声明该依赖：
 
 ```bash
-pi install npm:@tintinweb/pi-subagents
+pi install npm:pi-subtask
 ```
 
-未安装该扩展时请保持 `workflowExecutor: "local"`；subagents 模式会在缺少 RPC 时安全阻塞当前任务。
+未安装该扩展时请保持 `workflowExecutor: "local"`；`subtask` 模式会在缺少工具时安全阻塞当前任务。`1.2.0` 之前的旧配置值 `subagents` 会自动映射到 `subtask`，不会切换到已停止接入的 `@tintinweb/pi-subagents` RPC 执行器。
 
 仅当前会话临时使用：
 
@@ -174,13 +174,13 @@ flowchart LR
 
 任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 在当前会话暂存 `off`、`on` 或 `auto`，执行 `/pi-init save` 后才写入项目配置；也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，超过 2 个任务才进入编排；已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
-`workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subagents`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
+`workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subtask`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
 
 ### 模型引用策略
 
 模型安全来自精确引用，不维护 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧配置中的该字段会被忽略）：
 
-- 所有角色模型、Agent 子代理和 `subagents` 委派都使用完整 `provider/model` 引用。
+- 所有角色模型、Agent 子代理和 `subtask` 委派都使用完整 `provider/model` 引用。
 - Agent 省略 `model` 时，扩展在 spawn 前注入当前完整 `provider/model`，不给宿主解析器模糊匹配的机会。
 - `haiku`、`sonnet` 等未带 `provider/` 的模糊名称在 spawn 前直接拒绝。
 - 显式指定的模型必须在注册表中精确存在；不存在的引用直接报错，不模糊匹配、不跨 Provider fallback。
@@ -197,19 +197,19 @@ flowchart LR
 
 每个任务完成时会输出精简的任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。总耗时从任务实际进入 `in_progress` 的时间开始计算，到任务完成时间结束；旧版状态若没有开始时间，会明确显示耗时不可用，不会伪造时间。
 
-仅当最后一个任务完成、工作流进入 `completed` 时，才会额外输出统一的精简工作流报告，包含目标、进度、任务摘要、整体开始/结束时间、总耗时和汇总验证。规划、架构审阅等待和任务之间的调度等待不计入整体执行耗时；不调用模型生成主观内容。local 与 `subagents` 执行器使用相同格式。中间任务仍只显示任务级报告，不冒充工作流整体完成。报告中的开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
+仅当最后一个任务完成、工作流进入 `completed` 时，才会额外输出统一的精简工作流报告，包含目标、进度、任务摘要、整体开始/结束时间、总耗时和汇总验证。规划、架构审阅等待和任务之间的调度等待不计入整体执行耗时；不调用模型生成主观内容。local 与 `subtask` 执行器使用相同格式。中间任务仍只显示任务级报告，不冒充工作流整体完成。报告中的开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 
-未走 `task_workflow` 的普通外部执行也会显示“普通执行时间报告”，字段包括来源、开始时间、结束时间、总耗时和计时口径。它只跟踪 `interactive` 或 `rpc` 输入，时间边界是首次 `agent_start` 到最终 `agent_settled`；这只表示本次 Agent 执行，不等同于工作流任务或业务任务完成。活动工作流、subagents 和扩展隐藏续跑不会重复生成普通记录。报告使用不进入 LLM 上下文的 session custom entry 持久化；reload、会话切换或中断时不会补造未完成记录。
+未走 `task_workflow` 的普通外部执行也会显示“普通执行时间报告”，字段包括来源、开始时间、结束时间、总耗时和计时口径。它只跟踪 `interactive` 或 `rpc` 输入，时间边界是首次 `agent_start` 到最终 `agent_settled`；这只表示本次 Agent 执行，不等同于工作流任务或业务任务完成。活动工作流、subtask 和扩展隐藏续跑不会重复生成普通记录。报告使用不进入 LLM 上下文的 session custom entry 持久化；reload、会话切换或中断时不会补造未完成记录。
 
 `/pi-init mode`、`/pi-init role`、`switch_role` 和 `/pi-init config` 的运行时变更只影响当前会话；只有明确执行 `/pi-init save` 才会把暂存角色配置写入项目文件。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，角色自动切换以当前会话配置为准。
 
-### subagents 顺序执行器边界
+### subtask 顺序执行器边界
 
-启用 `workflowExecutor: "subagents"` 后，pi-init 通过 `pi.events` RPC 发送 `subagents:rpc:spawn`，并只顺序委派当前就绪任务。子代理在共享工作区运行，不创建 worktree、不并行、不合并分支、不自动提交或推送；主会话是 `task_workflow` 状态的唯一写入者，子代理不能调用该工具。
+启用 `workflowExecutor: "subtask"` 后，主会话调用 `subtask` 工具把当前就绪任务顺序委派到独立的对话 fork。fork 在共享工作区运行，不创建 worktree、不并行、不合并分支、不自动提交或推送；主会话是 `task_workflow` 状态的唯一写入者，fork 不能调用该工具。派发消息（`pi-init-subtask-dispatch`）不进入 LLM 上下文，fork 的提示词内嵌严格的 `pi-init/task-result@1` 协议，结果通过 `subtask-result` custom 消息回到会话。
 
-子代理完成事件必须携带符合 `pi-init/task-result@1` 的严格 JSON 结果；只有 `outcome: "complete"` 且包含真实验证记录的结果才会完成任务。无效结果、失败事件、缺少 pi-subagents 扩展、RPC 错误或超时都会安全阻塞任务，而不会猜测性推进。
+fork 返回的结果必须携带符合 `pi-init/task-result@1` 的严格 JSON；只有 `outcome: "complete"` 且包含真实验证记录的结果才会完成任务。无效结果、非 done 状态或缺少 `subtask` 工具都会安全阻塞任务，而不会猜测性推进。运行中的 fork 由 pi-subtask 面板管理，可在其中停止或查看；pi-init 取消或阻塞工作流时不会伪造任务完成，必要时仍需人工确认 fork 状态。
 
-reload 不会自动重生已经绑定的非终态子代理，以避免共享工作区并发写入。持久化的 request/agent 绑定只用于状态展示和人工恢复；取消或阻塞活动任务时，pi-init 会发送停止请求，但不会伪造任务完成，必要时仍需人工确认代理状态。
+reload 不会自动重新派发非终态的已委派任务，以避免共享工作区并发写入。持久化的 delegation 只用于状态展示和人工恢复；旧配置值 `subagents`（pi-subagents RPC）自动映射到 `subtask`，但不会把工作流切换到已停止接入的 RPC 执行器。
 
 ### 工作流运行时版本不一致
 
@@ -219,7 +219,7 @@ reload 不会自动重生已经绑定的非终态子代理，以避免共享工�
 pi update --extensions
 ```
 
-然后在当前 Pi 会话执行 `/reload`；本地开发直接重启 Pi，并使用同一份 `extensions/init-project.ts` 与 `src/roles.js`。pi-init `1.0.4` 起会把该情况转换为可操作的错误提示，不会继续以不确定的策略创建工作流。
+然后在当前 Pi 会话执行 `/reload`；本地开发直接重启 Pi，并使用同一份 `extensions/index.ts` 与 `src/roles.js`。pi-init `1.0.4` 起会把该情况转换为可操作的错误提示，不会继续以不确定的策略创建工作流。
 
 ## 全局协作规则
 

@@ -1,5 +1,14 @@
 # 会话记录
 
+### 2026-08-19：`subagents` 执行器替换为 pi-subtask 对话 fork
+
+- 完成内容：`workflowExecutor` 可选值改为 `subtask`（`gary149/pi-subtask` 对话 fork），旧值 `subagents` 自动映射兼容；删除 `@tintinweb/pi-subagents` 的 `pi.events` RPC 通道（spawn/stop/completed/failed）、request 序列与绑定清理、`WORKFLOW_SUBAGENT_TYPES`。
+- 完成内容：模型驱动接入——主会话调用 `subtask` 工具派发（`pi-init-subtask-dispatch` custom 消息，`display:false`），fork 结果经 `subtask-result` custom 消息回传；`src/subtask.js` 提供 `pi-init/task-result@1` 严格解析（剥 markdown 围栏、complete 需非空验证、blocked 需原因）；`scheduleWorkflow` 改为派发/消费两分支，`details.task` 与派发提示词逐字相等才归属。
+- 完成内容：删除 `.pi/agents/*.md` 代理脚手架（scaffold TEMPLATE_FILES 与 `templates/agents/`），fork 复用主会话角色与工具；派发前探测 `pi.getActiveTools()`，缺少 `subtask` 工具安全阻塞；取消/阻塞不再发送 stop RPC。
+- 完成内容：同步中英文模板、README、决策/当前状态/陷阱/会话记录；版本号保持 `1.1.0`。
+- 验证：`node --check extensions/index.ts`、`node --check src/subtask.js`、`node --check src/workflow.js`、`node --check src/roles.js`、`node --check src/scaffold.js`、`git diff --check` 通过；`npm test` 全部通过。
+- 遗留问题：真实 pi-subtask 模型驱动连续任务、fork 生命周期和 reload 后人工恢复尚未演练；未提交或推送。
+
 ### 2026-08-18：将工作流进度查看改为 TUI 弹窗
 
 - 完成内容：`/pi-init workflow status` 以及控制中心的“查看任务进度”在 TUI 中改为居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、执行器、规划、暂停原因和可滚动任务列表；RPC 等非 TUI 模式继续使用原有通知文本。

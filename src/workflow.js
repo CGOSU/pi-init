@@ -2,7 +2,7 @@ export const WORKFLOW_STATE_VERSION = 2;
 export const WORKFLOW_MAX_TASKS = 12;
 export const WORKFLOW_MAX_NUDGES = 2;
 export const WORKFLOW_TASK_ROLES = ["developer-test", "docs-commit"];
-export const WORKFLOW_EXECUTORS = ["local", "subagents"];
+export const WORKFLOW_EXECUTORS = ["local", "subtask"];
 export const WORKFLOW_DELEGATION_STATUSES = [
   "spawning",
   "running",
@@ -21,7 +21,8 @@ function requireText(value, label) {
 }
 
 function normalizeExecutor(value) {
-  const executor = value ?? "local";
+  // Legacy "subagents" (pi-subagents RPC) maps to the "subtask" executor.
+  const executor = value === "subagents" ? "subtask" : value ?? "local";
   if (!WORKFLOW_EXECUTORS.includes(executor)) {
     throw new Error(`工作流执行器无效：${executor}`);
   }
@@ -355,7 +356,7 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
 
 export function beginWorkflowDelegation(state, { taskId, requestId, type }, now = Date.now()) {
   if (!state || state.status !== "running") throw new Error("工作流当前不可委派任务");
-  if (state.executor !== "subagents") throw new Error("当前工作流未使用 subagents 执行器");
+  if (state.executor !== "subtask") throw new Error("当前工作流未使用 subtask 执行器");
   if (state.currentTaskId !== taskId) {
     throw new Error(`只能委派当前任务 ${state.currentTaskId ?? "（无）"}`);
   }
@@ -371,45 +372,6 @@ export function beginWorkflowDelegation(state, { taskId, requestId, type }, now 
     status: "spawning",
     createdAt: now,
   };
-  return result;
-}
-
-export function bindWorkflowAgent(state, { taskId, agentId }, now = Date.now()) {
-  if (!state || state.status !== "running") throw new Error("工作流当前不可绑定子代理");
-  if (state.currentTaskId !== taskId) {
-    throw new Error(`只能绑定当前任务 ${state.currentTaskId ?? "（无）"}`);
-  }
-
-  const result = cloneState(state, now);
-  const task = getWorkflowTask(result, taskId);
-  if (!task.delegation || task.delegation.status !== "spawning") {
-    throw new Error(`任务 ${taskId} 没有等待绑定的子代理请求`);
-  }
-  task.delegation.agentId = requireText(agentId, "子代理 ID");
-  task.delegation.status = "running";
-  task.delegation.startedAt = now;
-  return result;
-}
-
-function requireWorkflowAgent(state, taskId, agentId) {
-  const task = getWorkflowTask(state, taskId);
-  if (!task?.delegation || task.delegation.agentId !== agentId) {
-    throw new Error(`任务 ${taskId} 未绑定子代理 ${agentId}`);
-  }
-  return task;
-}
-
-export function recordWorkflowDelegationFailure(state, { taskId, agentId, reason }, now = Date.now()) {
-  if (!state || state.status !== "running") throw new Error("工作流当前不可记录子代理失败");
-  if (state.currentTaskId !== taskId) {
-    throw new Error(`只能记录当前任务 ${state.currentTaskId ?? "（无）"} 的子代理失败`);
-  }
-
-  const result = cloneState(state, now);
-  const task = requireWorkflowAgent(result, taskId, agentId);
-  task.delegation.status = "failed";
-  task.delegation.reason = requireText(reason, "子代理失败原因");
-  task.delegation.completedAt = now;
   return result;
 }
 

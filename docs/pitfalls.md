@@ -46,19 +46,18 @@
 - 修复：只有 JSON.parse 成功的行或以换行结束的完整坏行推进 offset；未完成尾部保留 `has_incomplete_tail`，补写后从原 offset 和原行号继续，并用前缀尾部 SHA-256 校验检测回退。
 - 验证：`node --test --test-name-pattern='流式 checkpoint'` 通过，覆盖不完整尾部、补全后单次导入、同尺寸改写和无变化跳过路径。
 
-### 2026-08-14：subagents 执行器的绑定代理不会在 reload 后自动恢复
+### 2026-08-19：subtask 执行器已派发任务不会在 reload 后自动重新派发
 
-- 现象：reload 或 session replacement 后，工作流状态仍可能显示已绑定的非终态子代理，但 pi-init 不会再次 spawn 它。
-- 根因：自动重生会在共享工作区产生并发写入；子代理生命周期由独立的 `@tintinweb/pi-subagents` 扩展管理，主扩展无法安全猜测其存活状态。
-- 修复：持久化 requestId、agentId、类型和 delegation 状态；恢复时只展示绑定并保持任务不自动派发，取消或阻塞时发送 documented stop RPC。需要继续执行时由用户确认代理状态后人工恢复。
-- 验证：`npm test` 覆盖绑定、取消和扩展契约；扩展 RPC 加载检查成功。真实 reload 后人工恢复尚未演练。
+- 现象：reload 或 session replacement 后，工作流状态仍显示已委派给 fork 的非终态任务，但 pi-init 不会再次调用 `subtask` 工具派发它。
+- 根因：自动重新派发会在共享工作区产生并发写入；fork 的存活状态由独立的 `gary149/pi-subtask` 扩展管理，主扩展无法安全猜测其结果是否已回传。
+- 修复：持久化 delegation（requestId、类型、status）；`scheduleWorkflow` 只在 `workflowState.currentTaskId` 且存在 delegation 时尝试消费回传的 `subtask-result`，找不到匹配结果就保持等待，绝不自动重新派发。需要继续时由用户确认 fork 状态后 `/pi-init workflow retry <taskId>` 或 cancel 重新规划。
+- 验证：`npm test` 覆盖派发、结果消费、取消和协议；真实 reload 后人工恢复尚未演练。
 
-### 2026-08-14：pi-subagents 是可选的外部扩展而不是 pi-init 依赖
+### 2026-08-19：pi-subtask 是可选的外部扩展而不是 pi-init 依赖
 
-- 现象：将 `workflowExecutor` 设为 `subagents`，但同一 Pi 环境没有启用 `@tintinweb/pi-subagents` 时，无法收到 spawn RPC 回复。
-- 根因：pi-init 只依赖 documented `pi.events` 通道，不能导入或复制第三方生命周期实现。
-- 修复：默认保持 `workflowExecutor: "local"`；README 和生成规则要求单独安装并启用扩展，主扩展对缺少 RPC、超时和异常回复安全阻塞任务。
-- 验证：协议/脚手架测试和扩展加载检查通过；未伪造第三方真实模型运行结果。
+- 现象：将 `workflowExecutor` 设为 `subtask`，但同一 Pi 环境没有启用 `gary149/pi-subtask` 时，`pi.getActiveTools()` 不含 `subtask` 工具，任务无法派发。
+- 根因：pi-subtask 没有扩展 RPC 接口（不订阅 `pi.events`），pi-init 不能导入或复制其实现，只能依赖模型侧 `subtask` 工具存在。
+- 修复：派发前用 `pi.getActiveTools()` 探测 `subtask` 工具，缺失时安全阻塞任务并提示安装启用扩展；默认保持 `workflowExecutor: "local"`；README 和生成规则要求单独安装 `pi install npm:pi-subtask`，主扩展对缺少工具和无效结果安全阻塞任务。
 
 ### 2026-08-15：npm lifecycle 的本地 Pi shim 会遮蔽实际 CLI
 
@@ -131,9 +130,9 @@
 
 ### 2026-08-04：已安装扩展与 `-e` 本地扩展会重复注册工具
 
-- 现象：直接运行 `pi -e ./extensions/init-project.ts` 报错，提示 `init_project` 与已安装的同名工具冲突。
+- 现象：直接运行 `pi -e ./extensions/index.ts` 报错，提示 `init_project` 与已安装的同名工具冲突。
 - 根因：Pi 同时加载了用户级已安装包和命令行指定的本地扩展。
-- 修复：开发验证时使用 `--no-extensions -e ./extensions/init-project.ts`，只加载当前文件。
+- 修复：开发验证时使用 `--no-extensions -e ./extensions/index.ts`，只加载当前文件。
 - 验证：见 `docs/session-log.md` 中 2026-08-04 的 extension 加载检查。
 
 ### 2026-08-04：Skill 指令本身不会切换模型
