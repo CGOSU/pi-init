@@ -3,6 +3,7 @@ import {
   chmodSync,
   copyFileSync,
   constants,
+  readdirSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -64,16 +65,35 @@ function readPackageVersion(sourceDir) {
   return manifest.version;
 }
 
+function copyPiUsageSupport(sourceDir, targetDir, version) {
+  const sourceSupportDir = path.join(sourceDir, "pi-usage");
+  const targetSupportDir = path.join(targetDir, "pi-usage-lib");
+  mkdirSync(targetSupportDir, { recursive: true });
+  for (const entry of readdirSync(sourceSupportDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceSupportDir, entry.name);
+    const targetPath = path.join(targetSupportDir, entry.name);
+    if (entry.isDirectory()) {
+      throw new Error(`pi-usage 支持目录不应包含嵌套目录：${entry.name}`);
+    }
+    if (entry.name === "version.js") {
+      const source = readFileSync(sourcePath, "utf8");
+      const marker = 'const EMBEDDED_PACKAGE_VERSION = "__PI_INIT_VERSION__";';
+      if (!source.includes(marker)) throw new Error("pi-usage/version.js 缺少版本号占位符");
+      writeFileSync(
+        targetPath,
+        source.replace(marker, () => `const EMBEDDED_PACKAGE_VERSION = ${JSON.stringify(version)};`),
+      );
+    } else {
+      copyFileSync(sourcePath, targetPath);
+    }
+  }
+}
+
 function copyVersionedUsageScript(sourceDir, targetDir, version) {
-  const sourcePath = path.join(sourceDir, "pi-usage.js");
-  const targetPath = path.join(targetDir, "pi-usage.js");
-  const source = readFileSync(sourcePath, "utf8");
-  const marker = 'const EMBEDDED_PACKAGE_VERSION = "__PI_INIT_VERSION__";';
-  if (!source.includes(marker)) throw new Error("pi-usage.js 缺少版本号占位符");
-  writeFileSync(
-    targetPath,
-    source.replace(marker, () => `const EMBEDDED_PACKAGE_VERSION = ${JSON.stringify(version)};`),
-  );
+  const source = readFileSync(path.join(sourceDir, "pi-usage.js"), "utf8");
+  const target = source.replaceAll("./pi-usage/", "./pi-usage-lib/");
+  writeFileSync(path.join(targetDir, "pi-usage.js"), target);
+  copyPiUsageSupport(sourceDir, targetDir, version);
 }
 
 export function installLaunchers({

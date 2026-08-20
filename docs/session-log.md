@@ -1,5 +1,19 @@
 # 会话记录
 
+### 2026-08-20：完成代码拆分、物理行数门禁和最终验证
+
+- 完成内容：将 2389 行单体测试拆为职责测试文件和共享 harness；将 `src/workflow.js`、`extensions/index.ts` 与 `scripts/pi-usage.js` 拆为职责模块，同时保留三个公共 facade。pi-usage 安装器会携带 `scripts/pi-usage/` 支持文件，Windows/POSIX 启动行为保持不变。
+- 完成内容：新增 `scripts/check-line-count.js` 和 `test/line-count.test.js`，递归检查指定 JavaScript/TypeScript 扩展名，排除 `.git`/`node_modules`，并由 `npm test` 在 Node 测试前执行 500 行门禁。测试覆盖 LF、CRLF、CR、无末尾换行，以及 500/501 行边界和 CLI 违规报告。
+- 验证：`node scripts/check-line-count.js` 通过；`npm test` 57 项全部通过；`node --test test/line-count.test.js` 3 项全部通过；`node --check scripts/check-line-count.js && node --check test/line-count.test.js` 通过；`npm pack --dry-run` 通过；`git diff --check` 通过（仅 Windows 换行转换警告）。
+- 遗留问题：真实 Pi 模型连续工作流、subtask fork 生命周期、reload 后人工恢复以及 Linux/macOS 本地验证仍未执行；未提交或推送。
+
+### 2026-08-20：接入活动工作流方向变更和 revision 重规划
+
+- 完成内容：普通 `interactive`/`rpc` 自然语言输入在活动工作流中记录 `revisionId` 和用户方向；当前任务完成或 subtask 结果回传后进入重规划边界，不启动旧计划的下一个任务。架构师通过 `task_workflow(action="replan")` 提交新计划后才恢复调度。
+- 完成内容：补充 local、subtask、reload 以及 manual/confirm 角色边界测试；subtask fork 不由 pi-init 自动终止或重新派发，立即停止仍使用既有 cancel 流程。README、双语生成模板和项目决策/状态文档已同步。
+- 验证：`npm test`，53 项全部通过；`node --check test/scaffold.test.js` 通过；`git diff --check` 通过（仅 Windows 换行转换警告）。
+- 遗留问题：真实 Pi 模型连续工作流、subtask fork 生命周期和 reload 后人工恢复仍未端到端演练。
+
 ### 2026-08-19：`subagents` 执行器替换为 pi-subtask 对话 fork
 
 - 完成内容：`workflowExecutor` 可选值改为 `subtask`（`gary149/pi-subtask` 对话 fork），旧值 `subagents` 自动映射兼容；删除 `@tintinweb/pi-subagents` 的 `pi.events` RPC 通道（spawn/stop/completed/failed）、request 序列与绑定清理、`WORKFLOW_SUBAGENT_TYPES`。

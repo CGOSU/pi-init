@@ -8,6 +8,19 @@
 
 ## 已确认决策
 
+### 2026-08-20：代码拆分保留公共 facade 并以物理行数检查约束边界
+
+- 决定：将测试、工作流状态、扩展基础/角色/工作流职责和 pi-usage 支持逻辑拆到职责明确的多文件；保留 `extensions/index.ts` 默认扩展入口、`src/workflow.js` 具名导出 facade，以及 `scripts/pi-usage.js` 具名导出和可执行 facade。pi-usage 安装器同时复制 `scripts/pi-usage/` 支持模块到独立支持目录并重写安装入口的相对导入。
+- 决定：仓库内 `.js`、`.mjs`、`.cjs`、`.ts`、`.mts`、`.cts`、`.tsx` 文件的物理行数上限为 500，`scripts/check-line-count.js` 递归检查并排除 `.git` 与 `node_modules`；`npm test` 先执行该检查再运行 Node 原生测试。
+- 原因：按职责拆分降低单体文件变化耦合，同时 facade 保持现有调用方和安装后的启动方式不变；将行数约束放入默认测试命令，能在新增或重构代码超过边界时立即失败，而不依赖人工审查。
+- 约束：行数计算必须兼容 LF、CRLF、CR 和无末尾换行；不新增运行时依赖；工作流 version 1/2/3、revision 审计、local/subtask、manual/confirm 和真实验证语义继续由现有状态机与扩展测试覆盖。
+
+### 2026-08-20：活动工作流方向变更在任务边界进行 revision 重规划
+
+- 决定：活动工作流中的普通自然语言方向变更或新增后续工作统一记录为带 `revisionId` 的 revision；当前任务完成后才暂停旧计划并进入 `replanning`，只有架构师可通过 `task_workflow(action="replan")` 提交未完成后续的新计划。
+- 原因：不增加用户侧命令或文本解析器，同时避免当前任务被半途切换；保留已完成任务及其摘要、真实验证记录，并让 reload 后仍可追溯方向和计划替换。
+- 约束：新计划沿用现有角色、依赖校验、最多 12 个任务和无新增依赖的约束；local 不先调度旧后续任务，subtask 不自动终止或重新派发运行中的 fork，必要时由用户使用既有 cancel 流程或人工确认 fork 状态。
+
 ### 2026-08-19：`subagents` 执行器替换为 pi-subtask 对话 fork
 
 - 决定：`workflowExecutor` 可选值从 `subagents` 改名为 `subtask`，接入 `gary149/pi-subtask`（对话 fork，v0.7.4）并采用模型驱动接入：主会话调用模型侧 `subtask` 工具把当前就绪任务顺序委派到独立 fork，fork 完成时通过 `pi.sendMessage({customType:"subtask-result", details})` 把结果消息送回会话，扩展扫描 branch 中最新 `subtask-result`，用 `details.task` 与派发提示词逐字相等确定归属，再严格解析 `details.resultText`（`pi-init/task-result@1`）。派发消息（`pi-init-subtask-dispatch`）`display:false` 不进入 LLM 上下文。旧配置值 `subagents` 自动映射为 `subtask`；不再生成 `.pi/agents/*.md` 代理脚手架，fork 复用主会话角色与工具。

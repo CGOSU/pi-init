@@ -39,11 +39,13 @@ description: {{SKILL_DESCRIPTION}}
 - 工作流启用且用户在初始请求中明确要求“先看架构/先审阅方案”时，才把 `reviewRequired` 设为 `true`。此时保存计划后暂停，用户审阅后执行 `/pi-init workflow resume`；默认值必须是自动推进。
 - 工作流启用并收到任务后，开发测试工程师应直接实现、测试和修正，不因可选偏好停顿；完成时必须调用 `task_workflow(action=complete, taskId=..., completionSummary=..., verification=[...])`，并输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样只保留目标、进度、任务摘要、整体时间、耗时和验证。验证数组只能写实际执行过的命令和真实结果；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subtask` 由主会话调用 `subtask` 工具把当前任务委派到对话 fork，fork 结果消息回到会话后自动推进；缺少工具或异常回复都必须安全阻塞。
+- 活动工作流中的方向变更使用普通自然语言提交；扩展记录带 `revisionId` 的 revision，并在当前任务完成后的边界暂停旧计划。只有架构师可用 `task_workflow(action="replan")` 提交未完成任务的新计划；已完成任务、摘要和验证记录不可修改。立即停止当前任务时使用既有 `/pi-init workflow cancel` 流程。
+- 使用 `subtask` 时，revision 不会让 pi-init 自动终止或重新派发运行中的 fork，也不会启动旧计划的下一个任务；fork 状态需要人工确认或停止。
 - 模型引用必须精确：角色模型、`switch_role`、`/pi-init config`、Agent spawn 和子代理委派都使用完整 `provider/model`。Agent 省略 `model` 时继承当前完整模型，`haiku`/`sonnet` 等未限定 Provider 的名称在 spawn 前拒绝，指定的模型必须在注册表中精确存在，不做模糊匹配或跨 Provider fallback。需要其他 Provider 时用 `/pi-init config`（全部已注册模型可选，随时暂存，`/pi-init save` 持久化）或直接编辑 `.pi/role-models.json`。
 - 使用 `subtask` 时主会话是 `task_workflow` 状态的唯一写入者；fork 只执行当前任务，不调用 `task_workflow`，并必须返回严格的 `pi-init/task-result@1` JSON，只有合法 `complete` 才能完成任务。
 - fork 在共享工作区执行，不创建 worktree、不合并分支、不自动提交或推送；reload 后非终态的已派发任务不会自动重新派发，须查看状态并人工恢复。
 - 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。
-- 工作流在任务完成后由扩展自动切换配置角色和模型，并通过隐藏续跑消息启动下一任务；不要手动重复分配或要求用户触发下一步。若模型忘记提交完成结果，系统会自动提醒有限次数，仍未提交才暂停。
+- 工作流在任务完成后由扩展自动切换配置角色和模型，并通过隐藏续跑消息启动下一任务；但存在待处理 revision 时必须先交给架构师重规划，不得启动旧后续任务。不要手动重复分配或要求用户触发下一步。若模型忘记提交完成结果，系统会自动提醒有限次数，仍未提交才暂停。
 
 ## 职责切换模式
 

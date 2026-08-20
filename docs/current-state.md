@@ -20,6 +20,7 @@
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。成功后注入隐藏续跑消息，失败仅提示并保留已切换角色。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，由当前架构角色直接顺序执行，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。任务和最终工作流报告均保留摘要、时间、耗时和验证，开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
+- 活动工作流支持普通自然语言方向变更：扩展持久化 `pendingRevision`/`revisions`，当前任务完成后进入 `replanning`，由架构师通过 `task_workflow(action="replan")` 仅重规划未完成后续任务；local 和 `subtask` 均不会先启动旧后续任务，运行中的 subtask fork 不由 pi-init 自动终止或重派，立即停止仍使用既有 cancel 流程。
 - 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
 - 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖；`.pi/role-models.json` 保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。
@@ -32,7 +33,7 @@
 - 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，按“初始化/变更/工作流”分组菜单；工作流策略已从“角色与模型”中移到顶层变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，取消配置会返回上一级菜单，初始化通知默认只显示文件数量和冲突摘要。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、执行器、规划、暂停原因和可滚动任务列表；RPC 等非 TUI 模式继续使用原有通知文本。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
-- 测试命令为 `npm test`；包版本为 `1.1.0`，扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
+- 测试命令为 `npm test`；该命令先执行 `scripts/check-line-count.js`，递归保证受检 JavaScript/TypeScript 文件不超过 500 个物理行，再运行 Node 原生测试。包版本为 `1.1.0`，扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
 - 提供跨平台 `scripts/pi-usage.*` 用量统计命令；Windows PowerShell 安装器会把所需文件复制到 Pi 所在的 npm 可执行目录，POSIX 安装器优先使用 Pi 可执行目录、无写权限时回退到用户 bin 目录。`pi-usage` 普通查询在首次查询、距离上次检查超过 1 小时或跨自然日时自动执行增量检查，其余时间直接读取 DuckDB；`--update` 始终强制检查。报告标题会显示与 `pi-init` 共用的 package 版本号，启动器安装时从 `package.json` 嵌入该版本。`postinstall` 查找 Pi 时会跳过当前 npm 包 `node_modules/.bin` 中的本地 `pi` shim，避免 `pi update --extensions` 把启动器复制到随后会被清理的依赖目录。角色模型和工作流配置变更默认只存在当前会话，执行 `/pi-init save` 才写入 `.pi/role-models.json`。Models 表还可导入 `pi-token-speed` 扩展写入的有效生成时长，按模型展示加权平均 TPS；扩展在 `message_end` 生命周期记录样本，避免等待 `agent_end` 或重复记录。
 
 ## 待处理
@@ -42,6 +43,8 @@
 
 ## 最近一次更新
 
+- 2026-08-20：完成测试、工作流状态、扩展职责和 pi-usage 的职责拆分；保留 `extensions/index.ts`、`src/workflow.js`、`scripts/pi-usage.js` 公共 facade，并让安装器携带 pi-usage 支持模块。新增 500 物理行数门禁及边界测试；最终验证见 `docs/session-log.md`。
+- 2026-08-20：工作流支持普通自然语言方向变更和 revision 审计；任务边界暂停旧计划，由架构师通过 `replan` 提交未完成后续的新计划，local/subtask 和 manual/confirm 边界均安全暂停。README、双语模板和项目记忆已同步。
 - 2026-08-19：`workflowExecutor` 从 `subagents`（`@tintinweb/pi-subagents` RPC）切换到 `subtask`（gary149/pi-subtask 对话 fork）：主会话调用 `subtask` 工具派发、`subtask-result` 消息回传后自动推进；旧值 `subagents` 兼容映射为新执行器，不再生成 `.pi/agents/*.md` 脚手架。README、模板和文档同步更新。
 - 2026-08-18：TUI 工作流状态查看改为居中 overlay 弹窗，增加主题背景、标题高亮和四边框以强化弹窗识别，并保留非 TUI 通知回退；增加对应回归测试。
 - 2026-08-16：移除 fail-closed Provider 白名单，改为精确模型引用：删除 `providerPolicy` 解析、`model_select` 回滚和 `session_start`/输入/provider 请求前守卫，Agent spawn 保留“省略注入完整模型、模糊拒绝、精确存在校验”；`/pi-init config` 展示全部已注册模型；版本更新为 `1.1.0`。
