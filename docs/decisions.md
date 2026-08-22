@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-20：Agent 未限定 Provider 的模型名继承当前会话模型
+
+- 决定：Agent 省略 `model`，或传入不含 `/` 的非空模糊名称（如 `haiku`、`sonnet`）时，使用当前会话的完整 `provider/model` 并提示；包含 `/` 的显式引用仍要求在模型注册表中精确存在，不做跨 Provider fallback。
+- 原因：兼容 Explore 等预设传入的模糊别名，同时避免把别名交给宿主解析器而意外切换 Provider；完整引用继续保持 fail-closed，拼写错误不会静默改写。
+- 约束：当前会话没有模型时，省略或模糊模型仍安全阻止；角色配置和 `normalizeModelReference` 的完整引用校验不放宽。
+
 ### 2026-08-20：代码拆分保留公共 facade 并以物理行数检查约束边界
 
 - 决定：将测试、工作流状态、扩展基础/角色/工作流职责和 pi-usage 支持逻辑拆到职责明确的多文件；保留 `extensions/index.ts` 默认扩展入口、`src/workflow.js` 具名导出 facade，以及 `scripts/pi-usage.js` 具名导出和可执行 facade。pi-usage 安装器同时复制 `scripts/pi-usage/` 支持模块到独立支持目录并重写安装入口的相对导入。

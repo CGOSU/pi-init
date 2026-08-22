@@ -167,7 +167,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (event.toolName !== "Agent" && event.toolName !== "agent") return;
 
     const input = event.input as Record<string, unknown>;
-    if (input.model === undefined) {
+    const inheritCurrentModel = (alias?: string) => {
       if (!ctx.model) {
         return {
           block: true,
@@ -177,7 +177,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
       const current = normalizeModelReference(ctx.model, "Agent 当前模型");
       input.model = `${current.provider}/${current.model}`;
-      return;
+      if (alias) ctx.ui.notify(`Agent 子代理模型 ${alias} 未指定 provider，已继承当前会话模型 ${input.model}`, "info");
+    };
+    if (input.model === undefined) return inheritCurrentModel();
+    if (typeof input.model === "string" && input.model.trim() && !input.model.includes("/")) {
+      return inheritCurrentModel(input.model.trim());
     }
 
     try {

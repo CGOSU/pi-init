@@ -188,12 +188,11 @@ flowchart LR
 
 模型安全来自精确引用，不维护 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧配置中的该字段会被忽略）：
 
-- 所有角色模型、Agent 子代理和 `subtask` 委派都使用完整 `provider/model` 引用。
-- Agent 省略 `model` 时，扩展在 spawn 前注入当前完整 `provider/model`，不给宿主解析器模糊匹配的机会。
-- `haiku`、`sonnet` 等未带 `provider/` 的模糊名称在 spawn 前直接拒绝。
-- 显式指定的模型必须在注册表中精确存在；不存在的引用直接报错，不模糊匹配、不跨 Provider fallback。
+- 角色模型和完整模型引用使用 `provider/model`；Agent 省略 `model` 时，扩展在 spawn 前注入当前完整 `provider/model`。
+- Agent 传入未带 `/` 的模糊名称（如 `haiku`、`sonnet`）时，不尝试跨 Provider 匹配，而是继承当前会话模型并提示用户。
+- 显式指定完整 `provider/model` 时，模型必须在注册表中精确存在；不存在的引用直接报错，不模糊匹配、不跨 Provider fallback。
 
-历史上 OpenRouter 意外调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter——精确引用纪律针对的正是这三条路径。
+历史上 OpenRouter 意外调用的根因不是 Codex 失败后的 fallback，而是 Agent 子代理显式传入了 `haiku`/`sonnet`，或 agent 类型默认模型经模糊解析落到了 OpenRouter——现在未限定 Provider 的名称只继承当前会话模型，不再交给宿主跨 Provider 解析。
 
 原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截。需要使用其他 Provider 时：
 

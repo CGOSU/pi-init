@@ -190,7 +190,7 @@ test("手动模式下无活动角色的原生切换只提示不写文件", async
   });
 });
 
-test("Agent 子代理在 spawn 前继承精确模型并拒绝模糊或不存在的模型", async () => {
+test("Agent 子代理继承当前模型并拒绝不存在的精确模型", async () => {
   const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
   const other = { provider: "openrouter", id: "anthropic/claude-sonnet-4" };
   const harness = createExtensionHarness([], {
@@ -205,10 +205,12 @@ test("Agent 子代理在 spawn 前继承精确模型并拒绝模糊或不存在�
   assert.equal(await handler(inherited, harness.context), undefined);
   assert.equal(inherited.input.model, "openai-codex/gpt-5.6-luna");
 
-  const fuzzy = await handler({ toolName: "Agent", input: { model: "haiku" } }, harness.context);
-  assert.equal(fuzzy.block, true);
-  assert.equal(fuzzy.terminate, true);
-  assert.match(fuzzy.reason, /必须显式指定 provider\/model/);
+  for (const alias of ["haiku", "sonnet"]) {
+    const fuzzy = { toolName: "Agent", input: { model: alias } };
+    assert.equal(await handler(fuzzy, harness.context), undefined);
+    assert.equal(fuzzy.input.model, "openai-codex/gpt-5.6-luna");
+  }
+  assert.equal(harness.notifications.filter(({ message }) => message.includes("已继承当前会话模型")).length, 2);
 
   const exact = { toolName: "Agent", input: { model: "openrouter/anthropic/claude-sonnet-4" } };
   assert.equal(await handler(exact, harness.context), undefined);

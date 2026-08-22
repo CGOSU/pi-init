@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-20：Agent 模糊模型名继承当前会话模型
+
+- 完成内容：Agent 工具调用现在将未带 `/` 的非空模型名（如 `haiku`、`sonnet`）改为当前会话完整 `provider/model`，并发送提示；完整 `provider/model` 仍要求注册表精确匹配，不存在时阻止。
+- 完成内容：更新 README、中英文生成模板和项目记忆，明确 Explore 等 Agent 预设的继承行为和跨 Provider 边界。
+- 验证：`node --test test/extension-roles.test.js` 8 项通过；`npm test` 57 项全部通过；`node scripts/check-line-count.js` 通过；`git diff --check` 通过（仅 Windows 换行转换警告）。
+- 遗留问题：尚未提交或推送本次模型继承变更。
+
 ### 2026-08-20：完成代码拆分、物理行数门禁和最终验证
 
 - 完成内容：将 2389 行单体测试拆为职责测试文件和共享 harness；将 `src/workflow.js`、`extensions/index.ts` 与 `scripts/pi-usage.js` 拆为职责模块，同时保留三个公共 facade。pi-usage 安装器会携带 `scripts/pi-usage/` 支持文件，Windows/POSIX 启动行为保持不变。

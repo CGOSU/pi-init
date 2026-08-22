@@ -65,9 +65,9 @@ function resolveModelReference(value, label = "模型") {
 }
 
 /**
- * Normalize an explicit Agent model argument or a Pi Model object.
- * Unqualified aliases (for example `haiku` or `sonnet`) are rejected because
- * their provider is selected by the host and can silently resolve elsewhere.
+ * Normalize a fully qualified Agent model argument or a Pi Model object.
+ * The Agent tool-call guard handles unqualified aliases before calling this
+ * helper so they inherit the current session model instead of host resolution.
  */
 export function normalizeModelReference(value, label = "模型") {
   return resolveModelReference(value, label);

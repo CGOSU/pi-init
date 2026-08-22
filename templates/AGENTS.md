@@ -19,7 +19,7 @@
 - 默认按“架构分析 → 任务拆分 → 开发测试逐项执行 → 文档与收尾”的流水线工作；除非用户一开始明确要求先审阅架构，否则架构师完成规划后不得停下来询问下一步选择。
 - 项目任务工作流策略由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `plan`，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行，超过 2 个任务才进入自动工作流。可通过 `/pi-init config workflow` 在当前会话暂存，执行 `/pi-init save` 后才持久化，或直接修改该配置字段。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；关闭时不要调用 `plan`。
 - 运行时角色切换和 `/pi-init config` 变更只存在于当前会话，不得直接写入 `.pi/role-models.json`；只有用户明确执行 `/pi-init save`（保存角色配置）时才持久化。
-- 模型引用必须精确：主会话与 Agent 子代理都使用完整 `provider/model`；省略 Agent `model` 时继承当前完整模型，`haiku`、`sonnet` 等未带 `provider/` 的模糊名称在 spawn 前拒绝，指定的模型必须精确存在，不做模糊匹配或跨 Provider fallback。更换 Provider 直接修改角色模型（`/pi-init config` 任意已注册模型可选，`/pi-init save` 持久化，或直接编辑 `.pi/role-models.json`）。
+- 模型引用必须明确：主会话和完整 Agent 模型使用 `provider/model`；省略 Agent `model`，或传入 `haiku`、`sonnet` 等未带 `provider/` 的模糊名称时，继承当前完整模型并提示；完整 `provider/model` 必须精确存在，不做跨 Provider fallback。更换 Provider 直接修改角色模型（`/pi-init config` 任意已注册模型可选，`/pi-init save` 持久化，或直接编辑 `.pi/role-models.json`）。
 - 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；完成时输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样保持精简；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。没有待处理 revision 时，工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务；有 revision 时先交给架构师重规划。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subtask` 通过主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话，缺少工具或异常回复都必须安全阻塞任务。
 - 活动工作流中用户继续使用普通自然语言描述方向变更或新增后续工作；扩展会记录带 `revisionId` 的 revision，并在当前任务完成后的边界暂停旧计划。架构师只规划未完成任务，并通过 `task_workflow(action="replan")` 提交新计划；已完成任务、摘要和验证记录不可修改。若必须立即停止当前任务，使用既有 `/pi-init workflow cancel` 流程。
