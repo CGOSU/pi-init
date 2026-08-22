@@ -77,6 +77,31 @@ const {
   assertSkillMatchesRoleConfig,
 } = helpers;
 
+test("恢复工作流直接选择分支末尾的最新状态", async () => {
+  const older = createWorkflowState({
+    summary: "旧工作流",
+    tasks: [{ id: "old-task", task: "旧任务", files: ["src/old.js"], acceptanceCriteria: ["完成"] }],
+  }, 100);
+  const newer = createWorkflowState({
+    summary: "新工作流",
+    tasks: [{ id: "new-task", task: "新任务", files: ["src/new.js"], acceptanceCriteria: ["完成"] }],
+  }, 200);
+  const harness = createExtensionHarness([
+    { type: "custom", customType: "pi-init-workflow", data: older },
+    { type: "custom", customType: "other-entry", data: { ignored: true } },
+    { type: "custom", customType: "pi-init-workflow", data: newer },
+    { type: "custom", customType: "other-entry", data: { ignored: true } },
+  ]);
+
+  await emitExtensionEvent(harness, "session_tree");
+  await harness.commands.get("pi-init").handler("workflow status", harness.context);
+
+  const status = harness.notifications.at(-1)?.message ?? "";
+  assert.match(status, /新工作流/);
+  assert.match(status, /new-task/);
+  assert.doesNotMatch(status, /旧工作流|old-task/);
+});
+
 test("活动 subtask 工作流和会话中断不会伪造普通执行报告", async () => {
   const workflow = beginWorkflowDelegation(
     startWorkflowTask(

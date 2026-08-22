@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-22：保留 pi-init 启动按需加载和尾部状态扫描优化
+
+- 决定：保留 `control-center.ts` 与 `scaffold-runtime.ts` 的扩展实例内 Promise 缓存按需加载，并将工作流恢复改为从 session branch 末尾直接 `findLast` 最新 `pi-init-workflow` entry；不修改 Pi 核心的模型网络刷新策略。
+- 原因：12 组交替 fresh RPC 样本中，无扩展与 pi-init 的 wall 中位数分别为 808.2 ms 与 824.7 ms，增量 16.5 ms；此前基线增量为 25.7 ms，改善约 9.2 ms，超过约 5 ms 的保留阈值。`PI_TIMING` 还显示扩展首阶段中位数为 9.0 ms 与 28.5 ms；按需加载没有破坏注册和生命周期兼容性。
+- 约束：按需模块首次实际使用时加载并在当前扩展实例复用；`init_project`、`/pi-init` 子命令和工作流恢复语义保持不变；网络目录刷新继续由 Pi 在 TUI 初始化后后台管理。基准命令为无扩展/本地 `./extensions/index.ts` 的 fresh RPC，输入 `get_commands`，每组交替执行。
+
 ### 2026-08-20：原生 Agent 模型路由交还 Pi 宿主，保留 subtask 工作流
 
 - 决定：移除 pi-init 对原生 `Agent`/`agent` 工具调用的模型注入、模糊名称回退和注册表校验；原生 Agent 子代理完全采用 Pi 宿主的模型选择。保留 `workflowExecutor: "subtask"` 的派发、结果协议、状态持久化和 `subagents` 兼容映射。

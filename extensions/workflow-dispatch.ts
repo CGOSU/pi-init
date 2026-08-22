@@ -68,9 +68,9 @@ export function createWorkflowDispatch(
 
   function restoreWorkflowState(ctx: ExtensionContext) {
     deps.setCurrentContext(ctx);
-    const entry = [...ctx.sessionManager.getBranch()]
-      .reverse()
-      .find((item) => item.type === "custom" && item.customType === "pi-init-workflow");
+    const entry = ctx.sessionManager.getBranch().findLast(
+      (item) => item.type === "custom" && item.customType === "pi-init-workflow",
+    );
     const data = entry && "data" in entry ? entry.data : undefined;
     try {
       state.workflowState = data && typeof data === "object" && Array.isArray((data as { tasks?: unknown }).tasks)

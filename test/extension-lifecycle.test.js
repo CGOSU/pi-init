@@ -179,6 +179,31 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   assert.match(activeHarness.sentMessages[0].message.content, /验证注册/);
 });
 
+test("init_project 首次使用按需加载脚手架并支持 dryRun", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory, hasUI: false });
+    const initProject = harness.tools.find((tool) => tool.name === "init_project");
+    assert.ok(initProject);
+
+    const params = {
+      targetDir: ".",
+      projectName: "Lazy Project",
+      slug: "lazy-project",
+      description: "验证按需加载",
+      language: "zh-CN",
+      testCommand: "npm test",
+      dryRun: true,
+    };
+    const first = await initProject.execute("first", params, undefined, undefined, harness.context);
+    const second = await initProject.execute("second", params, undefined, undefined, harness.context);
+
+    assert.equal(first.details.dryRun, true);
+    assert.equal(first.details.projectName, "Lazy Project");
+    assert.deepEqual(second.details.files, first.details.files);
+    await assert.rejects(readFile(path.join(directory, "AGENTS.md")), /ENOENT/);
+  });
+});
+
 test("自动跨角色且上下文达到阈值时才触发压缩", () => {
   assert.equal(ROLE_SWITCH_COMPACTION_THRESHOLD, 50);
   const usage = { percent: 50 };

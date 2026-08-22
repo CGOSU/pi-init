@@ -1,5 +1,13 @@
 # 会话记录
 
+### 2026-08-22：完成 pi-init 启动优化验证
+
+- 完成内容：将控制中心和脚手架运行时改为扩展实例内 Promise 缓存的按需加载；工作流恢复改为使用 branch 的 `findLast`，避免复制和 reverse 整个 session branch；新增对应 dryRun 和最新状态回归测试。
+- 基准方法：在 Windows 当前环境使用 fresh `pi.cmd` 进程，交替执行 12 组（共 24 个进程），命令分别为 `pi.cmd --no-session --no-extensions --no-skills --mode rpc` 与 `pi.cmd --no-session --no-extensions --no-skills -e ./extensions/index.ts --mode rpc`，每次输入 `{"id":"commands","type":"get_commands"}`，同时设置 `PI_TIMING=1`。
+- 实际结果：无扩展 wall 中位数 808.2 ms，main TOTAL 中位数 58.5 ms，扩展首阶段（llama.cpp factory）9.0 ms；加载 pi-init wall 中位数 824.7 ms，main TOTAL 79.0 ms，`extensions/index.ts` module import 28.5 ms；wall 增量 16.5 ms。此前同机基线为 769.8/795.5 ms、增量 25.7 ms，本次增量改善约 9.2 ms，因此保留按需加载，未回退。
+- 验证：`npm test`，58 项全部通过；`node --test test/extension-workflow.test.js`，6 项通过；`node scripts/check-line-count.js` 通过；`git diff --check` 通过，仅有 Windows 下 Git 的 LF/CRLF 转换提示。
+- 遗留问题：尚未完成真实交互式 TUI 首屏、正常网络、离线和慢网络场景的分阶段基准；网络刷新仍由 Pi 核心管理。
+
 ### 2026-08-20：移除原生 Agent 模型守卫并保留 subtask
 
 - 完成内容：删除 pi-init 对原生 `Agent`/`agent` tool_call 的模型注入、模糊名称回退和注册表校验；保留普通 Agent 的计时生命周期，以及 `workflowExecutor: "subtask"` 的派发、结果协议、状态持久化和旧 `subagents` 兼容。

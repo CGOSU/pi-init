@@ -20,7 +20,6 @@ import {
 } from "../src/workflow.js";
 import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/run-timing.js";
 import { Text } from "@earendil-works/pi-tui";
-import { createControlCenter } from "./control-center.ts";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
@@ -34,13 +33,10 @@ import {
   type ResolvedRoleConfig,
   type RunTimingEntryData,
 } from "./contracts.ts";
-import {
-  advancedInit,
-  formatResult,
-  quickInit,
-  runScaffold,
-  type ScaffoldOutcome,
-} from "./scaffold-runtime.ts";
+type ControlCenterModule = typeof import("./control-center.ts");
+type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
+type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
+type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
@@ -83,14 +79,25 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     dispatch: workflowDispatch,
     report: workflowReport,
   });
-  const controlCenter = createControlCenter({
-    state: runtimeState,
-    roleRuntime,
-    quickInit,
-    advancedInit,
-    getThinkingLevel: () => pi.getThinkingLevel(),
-    workflowCommand: workflowActions.workflowCommand,
-  });
+  let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
+  let controlCenterPromise: Promise<ControlCenter> | undefined;
+
+  function loadScaffoldRuntime() {
+    return scaffoldRuntimePromise ??= import("./scaffold-runtime.ts");
+  }
+
+  function loadControlCenter() {
+    return controlCenterPromise ??= import("./control-center.ts").then(({ createControlCenter }) =>
+      createControlCenter({
+        state: runtimeState,
+        roleRuntime,
+        quickInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).quickInit(targetDir, ctx),
+        advancedInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).advancedInit(targetDir, ctx),
+        getThinkingLevel: () => pi.getThinkingLevel(),
+        workflowCommand: workflowActions.workflowCommand,
+      }),
+    );
+  }
 
   function settleExternalRunTiming() {
     const timing = externalRunTiming;
@@ -290,13 +297,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const tokens = args.trim().split(/\s+/).filter(Boolean);
       const action = tokens.shift();
       try {
-        if (!action) return controlCenter.showControlCenter(ctx);
-        if (action === "init") return quickInit(tokens.join(" ") || ".", ctx);
-        if (action === "advanced") return advancedInit(tokens.join(" ") || ".", ctx);
-        if (action === "config") return controlCenter.configureRole(tokens[0], ctx);
+        if (!action) return (await loadControlCenter()).showControlCenter(ctx);
+        if (action === "init") return (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx);
+        if (action === "advanced") return (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx);
+        if (action === "config") return (await loadControlCenter()).configureRole(tokens[0], ctx);
         if (action === "save") return roleRuntime.saveRoleConfig(ctx);
-        if (action === "role") return controlCenter.switchRole(tokens[0], ctx);
-        if (action === "mode") return controlCenter.setSessionMode(tokens[0], ctx);
+        if (action === "role") return (await loadControlCenter()).switchRole(tokens[0], ctx);
+        if (action === "mode") return (await loadControlCenter()).setSessionMode(tokens[0], ctx);
         if (action === "workflow") return workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx);
         ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
       } catch (error) {
@@ -355,8 +362,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         dryRun: params.dryRun,
         roleModels: params.roleModels,
       };
-      const result = await runScaffold(ctx, targetDir, options, "conflicts");
-      const text = formatResult(result);
+      const scaffold = await loadScaffoldRuntime();
+      const result = await scaffold.runScaffold(ctx, targetDir, options, "conflicts");
+      const text = scaffold.formatResult(result);
 
       return {
         content: [{ type: "text", text }],
