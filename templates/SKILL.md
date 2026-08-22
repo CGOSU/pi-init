@@ -41,7 +41,7 @@ description: {{SKILL_DESCRIPTION}}
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subtask` 由主会话调用 `subtask` 工具把当前任务委派到对话 fork，fork 结果消息回到会话后自动推进；缺少工具或异常回复都必须安全阻塞。
 - 活动工作流中的方向变更使用普通自然语言提交；扩展记录带 `revisionId` 的 revision，并在当前任务完成后的边界暂停旧计划。只有架构师可用 `task_workflow(action="replan")` 提交未完成任务的新计划；已完成任务、摘要和验证记录不可修改。立即停止当前任务时使用既有 `/pi-init workflow cancel` 流程。
 - 使用 `subtask` 时，revision 不会让 pi-init 自动终止或重新派发运行中的 fork，也不会启动旧计划的下一个任务；fork 状态需要人工确认或停止。
-- 模型引用必须明确：角色模型、`switch_role`、`/pi-init config` 和完整 Agent/subtask 模型使用 `provider/model`。Agent 省略 `model`，或传入 `haiku`/`sonnet` 等未限定 Provider 的名称时继承当前完整模型并提示；完整引用必须在注册表中精确存在，不做跨 Provider fallback。需要其他 Provider 时用 `/pi-init config`（全部已注册模型可选，随时暂存，`/pi-init save` 持久化）或直接编辑 `.pi/role-models.json`。
+- 模型引用必须明确：角色模型、`switch_role`、`/pi-init config` 和 `subtask` 工作流配置使用完整 `provider/model`，并要求引用精确存在；原生 Agent 子代理由 Pi 宿主决定模型，pi-init 不注入、不校验、不拦截其 `model` 参数。需要其他角色 Provider 时用 `/pi-init config`（全部已注册模型可选，随时暂存，`/pi-init save` 持久化）或直接编辑 `.pi/role-models.json`。
 - 使用 `subtask` 时主会话是 `task_workflow` 状态的唯一写入者；fork 只执行当前任务，不调用 `task_workflow`，并必须返回严格的 `pi-init/task-result@1` JSON，只有合法 `complete` 才能完成任务。
 - fork 在共享工作区执行，不创建 worktree、不合并分支、不自动提交或推送；reload 后非终态的已派发任务不会自动重新派发，须查看状态并人工恢复。
 - 如果缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息，调用 `task_workflow(action=block, taskId=..., reason=...)`，不要猜测性完成；解决后用 `/pi-init workflow retry <taskId>`。

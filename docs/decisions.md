@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-08-20：原生 Agent 模型路由交还 Pi 宿主，保留 subtask 工作流
+
+- 决定：移除 pi-init 对原生 `Agent`/`agent` 工具调用的模型注入、模糊名称回退和注册表校验；原生 Agent 子代理完全采用 Pi 宿主的模型选择。保留 `workflowExecutor: "subtask"` 的派发、结果协议、状态持久化和 `subagents` 兼容映射。
+- 原因：原生 Agent 守卫重复实现宿主模型路由，增加代码和维护成本；`subtask` 是 pi-init 工作流的独立执行器，仍承担任务边界、验证和状态一致性，不能一并删除。
+- 约束：角色模型和 subtask 配置仍使用完整 `provider/model`；普通 Agent 的计时生命周期继续保留；需要限制原生 Agent 模型时由 Pi 宿主或调用方负责。
+- 替代：替代下方 2026-08-20“Agent 未限定 Provider 的模型名继承当前会话模型”中对原生 Agent 的注入和回退决定；该条目关于问题根因的历史记录仍保留。
+
 ### 2026-08-20：Agent 未限定 Provider 的模型名继承当前会话模型
 
 - 决定：Agent 省略 `model`，或传入不含 `/` 的非空模糊名称（如 `haiku`、`sonnet`）时，使用当前会话的完整 `provider/model` 并提示；包含 `/` 的显式引用仍要求在模型注册表中精确存在，不做跨 Provider fallback。

@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-08-20：原生 Agent 守卫与 subtask 执行器不是同一边界
+
+- 日期：2026-08-20；
+- 现象：删除原生 Agent 模型守卫时若连带删除 `subtask`，会破坏工作流派发、结果协议和状态恢复。
+- 根因：Pi 原生 `Agent`/`agent` 是宿主工具调用；`subtask` 是 pi-init 管理的独立工作流执行器，两者只共享“子任务”概念，不共享生命周期或状态入口。
+- 修复：仅移除 `extensions/index.ts` 的原生 Agent `tool_call` 守卫，保留 Agent 计时生命周期和全部 `subtask` 模块/兼容映射。
+- 验证：`node --test test/extension-roles.test.js test/extension-lifecycle.test.js` 14 项通过；`node scripts/check-line-count.js` 通过。
+
 ### 2026-08-20：Agent 模糊模型名不能交给宿主解析
 
 - 日期：2026-08-20；

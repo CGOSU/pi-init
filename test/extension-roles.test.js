@@ -158,10 +158,6 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
       { action: "continue" },
     );
 
-    const agentHandler = (harness.handlers.get("tool_call") ?? [])[0];
-    const agentInput = {};
-    assert.equal(await agentHandler({ toolName: "Agent", input: agentInput }, harness.context), undefined);
-    assert.equal(agentInput.model, "openrouter/anthropic/claude-haiku-4.5");
   });
 });
 
@@ -188,39 +184,6 @@ test("手动模式下无活动角色的原生切换只提示不写文件", async
     assert.deepEqual(persisted, { mode: "manual" });
     assert.match(harness.notifications.at(-1)?.message ?? "", /无活动角色/);
   });
-});
-
-test("Agent 子代理继承当前模型并拒绝不存在的精确模型", async () => {
-  const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
-  const other = { provider: "openrouter", id: "anthropic/claude-sonnet-4" };
-  const harness = createExtensionHarness([], {
-    model: safe,
-    availableModels: [safe, other],
-    trusted: true,
-  });
-  const handler = (harness.handlers.get("tool_call") ?? [])[0];
-  assert.equal(typeof handler, "function");
-
-  const inherited = { toolName: "Agent", input: {} };
-  assert.equal(await handler(inherited, harness.context), undefined);
-  assert.equal(inherited.input.model, "openai-codex/gpt-5.6-luna");
-
-  for (const alias of ["haiku", "sonnet"]) {
-    const fuzzy = { toolName: "Agent", input: { model: alias } };
-    assert.equal(await handler(fuzzy, harness.context), undefined);
-    assert.equal(fuzzy.input.model, "openai-codex/gpt-5.6-luna");
-  }
-  assert.equal(harness.notifications.filter(({ message }) => message.includes("已继承当前会话模型")).length, 2);
-
-  const exact = { toolName: "Agent", input: { model: "openrouter/anthropic/claude-sonnet-4" } };
-  assert.equal(await handler(exact, harness.context), undefined);
-
-  const missing = await handler(
-    { toolName: "Agent", input: { model: "openai-codex/gpt-5.6-sol" } },
-    harness.context,
-  );
-  assert.equal(missing.block, true);
-  assert.match(missing.reason, /模型不存在/);
 });
 
 test("角色模型选择器展示全部已注册模型并可暂存跨 Provider 选择", async () => {

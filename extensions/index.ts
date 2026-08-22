@@ -8,7 +8,6 @@ import {
   ROLE_MODES,
   ROLE_NAMES,
   findMatchingRole,
-  normalizeModelReference,
   roleLabel,
 } from "../src/roles.js";
 import {
@@ -162,43 +161,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
     return true;
   }
-
-  pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "Agent" && event.toolName !== "agent") return;
-
-    const input = event.input as Record<string, unknown>;
-    const inheritCurrentModel = (alias?: string) => {
-      if (!ctx.model) {
-        return {
-          block: true,
-          terminate: true,
-          reason: "已阻止 Agent 子代理：当前没有可用模型，无法继承 provider/model",
-        };
-      }
-      const current = normalizeModelReference(ctx.model, "Agent 当前模型");
-      input.model = `${current.provider}/${current.model}`;
-      if (alias) ctx.ui.notify(`Agent 子代理模型 ${alias} 未指定 provider，已继承当前会话模型 ${input.model}`, "info");
-    };
-    if (input.model === undefined) return inheritCurrentModel();
-    if (typeof input.model === "string" && input.model.trim() && !input.model.includes("/")) {
-      return inheritCurrentModel(input.model.trim());
-    }
-
-    try {
-      const requested = normalizeModelReference(input.model, "Agent model");
-      if (!ctx.modelRegistry.find(requested.provider, requested.model)) {
-        throw new Error(
-          `模型不存在：${requested.provider}/${requested.model}；禁止按模糊名称或其他 provider fallback`,
-        );
-      }
-    } catch (error) {
-      return {
-        block: true,
-        terminate: true,
-        reason: `已阻止 Agent 子代理：${textOf(error)}`,
-      };
-    }
-  });
 
   pi.on("input", async (event, ctx) => {
     if (typeof event.text === "string" && event.text.trim().startsWith("/")) {

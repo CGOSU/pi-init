@@ -105,9 +105,8 @@ export function getAvailableRoleModels(ctx: ExtensionContext) {
 }
 
 /*
- * The role picker lists the full host registry. Model safety comes from exact
- * references instead of an allowlist: every spawn and role apply must use a
- * fully qualified provider/model that exists in the registry.
+ * The role picker lists the full host registry. Role configuration uses exact
+ * fully qualified provider/model references instead of an allowlist.
  */
 async function selectModelWithSearch(ctx: ExtensionContext, role: string, models: any[]) {
   if (ctx.mode !== "tui") {

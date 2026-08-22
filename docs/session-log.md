@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-20：移除原生 Agent 模型守卫并保留 subtask
+
+- 完成内容：删除 pi-init 对原生 `Agent`/`agent` tool_call 的模型注入、模糊名称回退和注册表校验；保留普通 Agent 的计时生命周期，以及 `workflowExecutor: "subtask"` 的派发、结果协议、状态持久化和旧 `subagents` 兼容。
+- 完成内容：同步 README、中英文生成模板和项目记忆，明确原生 Agent 由 Pi 宿主选择模型，subtask 仍由 pi-init 管理。
+- 验证：`node --test test/extension-roles.test.js test/extension-lifecycle.test.js` 14 项通过；`node scripts/check-line-count.js` 通过；`git diff --check` 通过（仅 Windows 换行转换警告）。
+- 遗留问题：完整 `npm test` 和本次变更的提交/推送尚未执行。
+
 ### 2026-08-20：Agent 模糊模型名继承当前会话模型
 
 - 完成内容：Agent 工具调用现在将未带 `/` 的非空模型名（如 `haiku`、`sonnet`）改为当前会话完整 `provider/model`，并发送提示；完整 `provider/model` 仍要求注册表精确匹配，不存在时阻止。
