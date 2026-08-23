@@ -1,5 +1,11 @@
 # 会话记录
 
+### 2026-08-22：工作流进度面板显示整体开始时间和已完成任务耗时
+
+- 完成内容：工作流 TUI 进度弹窗和非 TUI 状态文本增加总任务开始时间；已完成任务条目追加基于任务开始/结束时间计算的耗时，历史缺失时间戳时沿用不可用提示。
+- 验证：定向运行 `node --test --test-name-pattern='TUI 工作流状态使用弹窗并显示任务进度|非 TUI 工作流状态继续使用通知文本' test/extension-roles.test.js`，2 项通过；`npm test`，58 项全部通过；`node --check extensions/workflow-report.ts`、`node --check test/extension-roles.test.js` 和 `git diff --check` 通过。
+- 遗留问题：未在真实交互式 Pi TUI 中进行视觉验收。
+
 ### 2026-08-22：完成 pi-init 启动优化验证
 
 - 完成内容：将控制中心和脚手架运行时改为扩展实例内 Promise 缓存的按需加载；工作流恢复改为使用 branch 的 `findLast`，避免复制和 reverse 整个 session branch；新增对应 dryRun 和最新状态回归测试。

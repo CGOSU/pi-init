@@ -217,6 +217,14 @@ test("TUI 工作流状态使用弹窗并显示任务进度", async () => {
       { id: "docs", task: "更新文档", files: ["README.md"], acceptanceCriteria: ["文档同步"], role: "docs-commit", dependsOn: ["schema"] },
     ],
   }, 100);
+  state.startedAt = 115;
+  state.tasks[0] = {
+    ...state.tasks[0],
+    status: "completed",
+    startedAt: 115,
+    completedAt: 125,
+    completionSummary: "结构完成",
+  };
   const harness = createExtensionHarness(
     [{ type: "custom", customType: "pi-init-workflow", data: state }],
     {
@@ -239,8 +247,9 @@ test("TUI 工作流状态使用弹窗并显示任务进度", async () => {
   assert.match(rendered, /│/);
   assert.match(rendered, /工作流任务进度/);
   assert.match(rendered, /冻结认证改造/);
+  assert.match(rendered, /总任务开始时间\s+.*1970/);
+  assert.match(rendered, /已完成 · schema · 10 毫秒/);
   assert.match(rendered, /暂停原因  architecture-review/);
-  assert.match(rendered, /待处理 · schema/);
   assert.match(rendered, /待处理 · docs/);
 });
 
@@ -249,6 +258,16 @@ test("非 TUI 工作流状态继续使用通知文本", async () => {
     summary: "冻结认证改造",
     tasks: [{ id: "schema", task: "更新结构", files: ["src/schema.js"], acceptanceCriteria: ["测试通过"] }],
   }, 100);
+  state.status = "completed";
+  state.startedAt = 115;
+  state.completedAt = 125;
+  state.tasks[0] = {
+    ...state.tasks[0],
+    status: "completed",
+    startedAt: 115,
+    completedAt: 125,
+    completionSummary: "结构完成",
+  };
   const harness = createExtensionHarness(
     [{ type: "custom", customType: "pi-init-workflow", data: state }],
     { mode: "rpc" },
@@ -257,8 +276,9 @@ test("非 TUI 工作流状态继续使用通知文本", async () => {
   await harness.commands.get("pi-init").handler("workflow status", harness.context);
 
   assert.equal(harness.customCalls.length, 0);
-  assert.match(harness.notifications.at(-1)?.message ?? "", /状态：running/);
-  assert.ok((harness.notifications.at(-1)?.message ?? "").includes("- [in_progress] schema"));
+  assert.match(harness.notifications.at(-1)?.message ?? "", /状态：completed/);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /总任务开始时间：.*1970/);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /- \[completed\] schema.*耗时：10 毫秒/);
 });
 
 test("task_workflow 区分中间任务和最终工作流报告并保留样式", () => {

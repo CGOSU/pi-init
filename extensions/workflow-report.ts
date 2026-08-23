@@ -45,6 +45,7 @@ export function createWorkflowReport(
     const lines = [
       `状态：${workflowState.status}`,
       `进度：${progress.completed}/${progress.total}`,
+      `总任务开始时间：${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
       `执行器：${workflowExecutorLabel(workflowState.executor)}`,
       `规划：${workflowState.plan.summary}`,
     ];
@@ -59,6 +60,7 @@ export function createWorkflowReport(
     lines.push(
       ...workflowState.tasks.map((task) =>
         `- [${task.status}] ${task.id} · ${task.role} · ${task.task}` +
+        (task.status === "completed" ? ` · 耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}` : "") +
         (task.completionSummary ? ` · ${task.completionSummary}` : ""),
       ),
     );
@@ -95,7 +97,7 @@ export function createWorkflowReport(
               : "○ 待处理";
         return {
           value: task.id,
-          label: `${taskStatus} · ${task.id}`,
+          label: `${taskStatus} · ${task.id}${task.status === "completed" ? ` · ${formatWorkflowDuration(getWorkflowTaskDuration(task))}` : ""}`,
           description: `${roleLabel(task.role)} · ${task.task}${task.completionSummary ? ` · ${task.completionSummary}` : ""}`,
         };
       }) ?? [];
@@ -120,6 +122,7 @@ export function createWorkflowReport(
         ? [
             `状态  ${statusLabel}`,
             `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
+            `总任务开始时间  ${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
             `执行器  ${workflowExecutorLabel(workflowState.executor)}`,
             `规划  ${workflowState.plan.summary}`,
             ...(workflowState.currentTaskId ? [`当前任务  ${workflowState.currentTaskId}`] : []),
