@@ -46,6 +46,7 @@ export function createWorkflowReport(
       `状态：${workflowState.status}`,
       `进度：${progress.completed}/${progress.total}`,
       `总任务开始时间：${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
+      `总任务已运行时间：${formatWorkflowElapsedDuration(workflowState)}`,
       `执行器：${workflowExecutorLabel(workflowState.executor)}`,
       `规划：${workflowState.plan.summary}`,
     ];
@@ -58,11 +59,12 @@ export function createWorkflowReport(
       lines.push(`用户方向：${workflowState.pendingRevision.direction}`);
     }
     lines.push(
-      ...workflowState.tasks.map((task) =>
-        `- [${task.status}] ${task.id} · ${task.role} · ${task.task}` +
-        (task.status === "completed" ? ` · 耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}` : "") +
-        (task.completionSummary ? ` · ${task.completionSummary}` : ""),
-      ),
+      ...workflowState.tasks.map((task) => {
+        const taskDuration = formatWorkflowTaskDuration(task);
+        return `- [${task.status}] ${task.id} · ${task.role} · ${task.task}`
+          + (taskDuration ? ` · ${taskDuration}` : "")
+          + (task.completionSummary ? ` · ${task.completionSummary}` : "");
+      }),
     );
     return lines.join("\n");
   }
@@ -95,10 +97,16 @@ export function createWorkflowReport(
             : task.status === "blocked"
               ? "! 已阻塞"
               : "○ 待处理";
+        const taskDuration = formatWorkflowTaskDuration(task);
         return {
           value: task.id,
-          label: `${taskStatus} · ${task.id}${task.status === "completed" ? ` · ${formatWorkflowDuration(getWorkflowTaskDuration(task))}` : ""}`,
-          description: `${roleLabel(task.role)} · ${task.task}${task.completionSummary ? ` · ${task.completionSummary}` : ""}`,
+          label: `${taskStatus} · ${task.id}`,
+          description: [
+            taskDuration,
+            roleLabel(task.role),
+            task.task,
+            task.completionSummary,
+          ].filter(Boolean).join(" · "),
         };
       }) ?? [];
       if (taskItems.length === 0) {
@@ -111,6 +119,9 @@ export function createWorkflowReport(
         description: (text) => theme.fg("muted", text),
         scrollInfo: (text) => theme.fg("dim", text),
         noMatch: (text) => theme.fg("warning", text),
+      }, {
+        minPrimaryColumnWidth: 26,
+        maxPrimaryColumnWidth: 32,
       });
       list.onSelect = () => done();
       list.onCancel = () => done();
@@ -123,6 +134,7 @@ export function createWorkflowReport(
             `状态  ${statusLabel}`,
             `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
             `总任务开始时间  ${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
+            `总任务已运行时间  ${formatWorkflowElapsedDuration(workflowState)}`,
             `执行器  ${workflowExecutorLabel(workflowState.executor)}`,
             `规划  ${workflowState.plan.summary}`,
             ...(workflowState.currentTaskId ? [`当前任务  ${workflowState.currentTaskId}`] : []),
@@ -205,6 +217,30 @@ export function createWorkflowReport(
     const remainingMilliseconds = milliseconds % 1000;
     if (remainingMilliseconds > 0) parts.push(`${remainingMilliseconds} 毫秒`);
     return parts.join(" ");
+  }
+
+  function getWorkflowElapsedDuration(workflowState: WorkflowState, now = Date.now()) {
+    const { startedAt, completedAt } = getWorkflowExecutionBounds(workflowState);
+    const endAt = workflowState.status === "completed"
+      ? completedAt
+      : workflowState.status === "running"
+        ? now
+        : workflowState.updatedAt;
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endAt) || endAt < startedAt) return undefined;
+    return endAt - startedAt;
+  }
+
+  function formatWorkflowElapsedDuration(workflowState: WorkflowState) {
+    const duration = getWorkflowElapsedDuration(workflowState);
+    return duration === undefined
+      ? "不可用（工作流未记录有效的开始时间）"
+      : formatWorkflowDuration(duration);
+  }
+
+  function formatWorkflowTaskDuration(task: WorkflowState["tasks"][number]) {
+    return task.status === "completed"
+      ? `耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`
+      : undefined;
   }
 
   function formatRunTimingDuration(milliseconds: number | undefined) {

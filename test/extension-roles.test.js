@@ -218,6 +218,7 @@ test("TUI 工作流状态使用弹窗并显示任务进度", async () => {
     ],
   }, 100);
   state.startedAt = 115;
+  state.updatedAt = 125;
   state.tasks[0] = {
     ...state.tasks[0],
     status: "completed",
@@ -243,12 +244,15 @@ test("TUI 工作流状态使用弹窗并显示任务进度", async () => {
   assert.equal(harness.customCalls[0].options.overlayOptions.anchor, "center");
   assert.equal(harness.customCalls[0].options.overlayOptions.width, "80%");
   const rendered = harness.customCalls[0].component.render(100).join("\n");
+  const narrowRendered = harness.customCalls[0].component.render(60).join("\n");
   assert.match(rendered, /┌/);
   assert.match(rendered, /│/);
   assert.match(rendered, /工作流任务进度/);
   assert.match(rendered, /冻结认证改造/);
   assert.match(rendered, /总任务开始时间\s+.*1970/);
-  assert.match(rendered, /已完成 · schema · 10 毫秒/);
+  assert.match(rendered, /总任务已运行时间\s+10 毫秒/);
+  assert.match(rendered, /已完成 · schema\s+耗时：10 毫秒/);
+  assert.match(narrowRendered, /已完成 · schema\s+耗时：10 毫秒/);
   assert.match(rendered, /暂停原因  architecture-review/);
   assert.match(rendered, /待处理 · docs/);
 });
@@ -278,7 +282,33 @@ test("非 TUI 工作流状态继续使用通知文本", async () => {
   assert.equal(harness.customCalls.length, 0);
   assert.match(harness.notifications.at(-1)?.message ?? "", /状态：completed/);
   assert.match(harness.notifications.at(-1)?.message ?? "", /总任务开始时间：.*1970/);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /总任务已运行时间：10 毫秒/);
   assert.match(harness.notifications.at(-1)?.message ?? "", /- \[completed\] schema.*耗时：10 毫秒/);
+});
+
+test("活动工作流状态显示当前已运行时间", async () => {
+  const startedAt = Date.now() - 2_000;
+  const state = createWorkflowState({
+    summary: "运行时间测试",
+    tasks: [{ id: "schema", task: "执行任务", files: ["src/schema.js"], acceptanceCriteria: ["测试通过"] }],
+  }, startedAt - 100);
+  state.status = "running";
+  state.startedAt = startedAt;
+  state.currentTaskId = "schema";
+  state.tasks[0] = {
+    ...state.tasks[0],
+    status: "in_progress",
+    startedAt,
+    executionStartedAt: startedAt,
+  };
+  const harness = createExtensionHarness([
+    { type: "custom", customType: "pi-init-workflow", data: state },
+  ]);
+  await emitExtensionEvent(harness, "session_start");
+  await harness.commands.get("pi-init").handler("workflow status", harness.context);
+
+  const message = harness.notifications.at(-1)?.message ?? "";
+  assert.match(message, /总任务已运行时间：(?:\d+ 秒|\d+ 毫秒)/);
 });
 
 test("task_workflow 区分中间任务和最终工作流报告并保留样式", () => {
