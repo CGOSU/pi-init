@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-25：同一任务期间连续方向输入合并为一个 revision
+
+- 决定：活动工作流同一任务执行期间收到的连续普通 `interactive`/`rpc` 输入，按到达顺序合并到同一个 `pendingRevision` 和审计 `revision` 的 `direction` 文本，保留首个 `revisionId`、请求时间和任务边界；当前任务完成后才进入 `replanning`，架构师收到完整合并指令后才能应用新计划。
+- 原因：持续输入应表达同一轮方向调整，忽略后续指令会丢失用户意图，逐条创建 revision 又会造成多个待处理边界和重复重规划。
+- 约束：合并使用换行连接的纯文本，不新增状态版本或配置；新计划应用前不启动旧后续任务，local/subtask、取消、重试和历史单字符串 `direction` 状态保持兼容；斜杠命令不进入合并路径。
+
 ### 2026-08-22：保留 pi-init 启动按需加载和尾部状态扫描优化
 
 - 决定：保留 `control-center.ts` 与 `scaffold-runtime.ts` 的扩展实例内 Promise 缓存按需加载，并将工作流恢复改为从 session branch 末尾直接 `findLast` 最新 `pi-init-workflow` entry；不修改 Pi 核心的模型网络刷新策略。

@@ -15,6 +15,7 @@ import {
   getWorkflowTask,
   isWorkflowActive,
   markWorkflowTaskStarted,
+  appendWorkflowReplanDirection,
   requestWorkflowReplan,
   workflowProgress,
 } from "../src/workflow.js";
@@ -147,10 +148,17 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     ) return false;
 
     if (runtimeState.workflowState.pendingRevision) {
-      ctx.ui.notify(
-        `工作流已记录 revision ${runtimeState.workflowState.pendingRevision.revisionId}，当前描述不会直接进入旧任务；请等待架构师重规划。`,
-        "info",
-      );
+      const revision = runtimeState.workflowState.pendingRevision;
+      try {
+        const next = appendWorkflowReplanDirection(runtimeState.workflowState, event.text.trim());
+        workflowReport.persistWorkflowState(next, ctx);
+        ctx.ui.notify(
+          `已将新指令合并到待处理 revision ${revision.revisionId}，将在任务边界交给架构师重规划。`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(`无法记录工作流方向变更：${textOf(error)}`, "warning");
+      }
       return true;
     }
 

@@ -22,7 +22,7 @@
 - 模型引用必须明确：角色模型和 `subtask` 工作流配置使用完整 `provider/model`，并要求引用精确存在；原生 Agent 子代理由 Pi 宿主决定模型，pi-init 不注入、不校验、不拦截其 `model` 参数。更换角色 Provider 直接修改角色模型（`/pi-init config` 任意已注册模型可选，`/pi-init save` 持久化，或直接编辑 `.pi/role-models.json`）。
 - 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；完成时输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样保持精简；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。没有待处理 revision 时，工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务；有 revision 时先交给架构师重规划。
 - 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subtask` 通过主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话，缺少工具或异常回复都必须安全阻塞任务。
-- 活动工作流中用户继续使用普通自然语言描述方向变更或新增后续工作；扩展会记录带 `revisionId` 的 revision，并在当前任务完成后的边界暂停旧计划。架构师只规划未完成任务，并通过 `task_workflow(action="replan")` 提交新计划；已完成任务、摘要和验证记录不可修改。若必须立即停止当前任务，使用既有 `/pi-init workflow cancel` 流程。
+- 活动工作流中用户继续使用普通自然语言描述方向变更或新增后续工作；同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并为一个带 `revisionId` 的待处理 revision，不创建多个 revision。扩展在当前任务完成后的边界暂停旧计划；架构师根据完整合并指令只规划未完成任务，并通过 `task_workflow(action="replan")` 提交新计划。在新计划应用前不得启动旧后续任务；已完成任务、摘要和验证记录不可修改。若必须立即停止当前任务，使用既有 `/pi-init workflow cancel` 流程。
 - 使用 `subtask` 时，主会话是 `task_workflow` 状态的唯一写入者；fork 只执行当前任务，不调用 `task_workflow`，并且必须返回严格的 `pi-init/task-result@1` JSON 结果，只有合法 `complete` 才能完成任务。方向变更不会由 pi-init 自动终止或重新派发 fork，也不会启动旧计划的下一个任务；运行中的 fork 需要人工确认或停止。
 - fork 在共享工作区执行；不得创建 worktree、合并分支、自动提交或推送。reload 后非终态的已派发任务不会自动重新派发，应先查看工作流状态再人工恢复（`/pi-init workflow retry <taskId>` 或 cancel 后重新规划）。
 - 不要因为偏好、风格或可选方案向用户提问。只有用户明确要求架构审阅，或遇到缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息时才暂停；把合理假设记录在任务结果中。

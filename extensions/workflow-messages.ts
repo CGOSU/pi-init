@@ -71,7 +71,7 @@ export function createWorkflowMessages(
     return [
       "[PI-INIT 工作流重规划]",
       `工作流当前 revisionId：${request.revisionId}`,
-      `用户新增方向或需求：${request.direction}`,
+      `用户新增方向或需求（按提交顺序合并的全部指令）：\n${request.direction.split("\n").map((item) => `- ${item}`).join("\n")}`,
       `当前工作流目标：${workflowState.plan.summary}`,
       workflowState.plan.constraints.length > 0 ? `原架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `已完成任务（不可修改）：\n${completed.join("\n")}` : "",

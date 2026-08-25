@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
 import test from "node:test";
 import * as helpers from "./helpers.js";
+
+// 扩展测试不应读取开发者本机 .pi/role-models.json，用空的隔离目录回退到默认角色配置。
+const ISOLATED_CWD = mkdtempSync("pi-init-extension-tests-");
 
 const {
   mkdtemp,
@@ -193,7 +197,10 @@ test("subtask 执行器派发对话 fork，缺少工具阻塞，结果回传后�
 });
 
 test("普通方向描述会被记录，并在架构重规划后才调度新的本地任务", async () => {
-  const architectModel = { provider: "openai-codex", id: "gpt-5.6-terra" };
+  const architectModel = {
+    provider: DEFAULT_ROLE_MODELS.architect.provider,
+    id: DEFAULT_ROLE_MODELS.architect.model,
+  };
   const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
   const state = createWorkflowState({
     summary: "原始工作流",
@@ -205,6 +212,7 @@ test("普通方向描述会被记录，并在架构重规划后才调度新的�
   const harness = createExtensionHarness(
     [{ type: "custom", customType: "pi-init-workflow", data: state }],
     {
+      cwd: ISOLATED_CWD,
       model: developerModel,
       availableModels: [developerModel, architectModel],
       trusted: true,
@@ -267,6 +275,92 @@ test("普通方向描述会被记录，并在架构重规划后才调度新的�
   assert.match(harness.sentMessages[2].message.content, /新增缓存回归测试/);
   assert.doesNotMatch(harness.sentMessages[2].message.content, /旧后续任务/);
   assert.equal(harness.aborts.length, 0);
+});
+
+test("连续方向描述合并到同一 revision，重规划提示包含全部指令", async () => {
+  const architectModel = {
+    provider: DEFAULT_ROLE_MODELS.architect.provider,
+    id: DEFAULT_ROLE_MODELS.architect.model,
+  };
+  const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const state = createWorkflowState({
+    summary: "原始工作流",
+    tasks: [
+      { id: "current", task: "当前实现", files: ["src/current.js"], acceptanceCriteria: ["完成"] },
+      { id: "old-next", task: "旧后续任务", files: ["src/old-next.js"], acceptanceCriteria: ["完成"] },
+    ],
+  }, 100);
+  const harness = createExtensionHarness(
+    [{ type: "custom", customType: "pi-init-workflow", data: state }],
+    {
+      cwd: ISOLATED_CWD,
+      model: developerModel,
+      availableModels: [developerModel, architectModel],
+      trusted: true,
+    },
+  );
+  await emitExtensionEvent(harness, "session_start");
+
+  const inputHandler = harness.handlers.get("input")?.[0];
+  const firstInput = await inputHandler(
+    { text: "新增缓存层", source: "interactive", streamingBehavior: "followUp" },
+    harness.context,
+  );
+  assert.equal(firstInput.action, "handled");
+  const secondInput = await inputHandler(
+    { text: "报表改为异步导出", source: "rpc", streamingBehavior: "followUp" },
+    harness.context,
+  );
+  assert.equal(secondInput.action, "handled");
+  await inputHandler(
+    { text: "补充回归测试", source: "interactive", streamingBehavior: "followUp" },
+    harness.context,
+  );
+
+  const requested = harness.entries.findLast((entry) => entry.type === "pi-init-workflow")?.data;
+  assert.equal(requested.pendingRevision.revisionId, requested.revisions.find((r) => r.status === "requested").revisionId);
+  assert.deepEqual(requested.pendingRevision.direction, "新增缓存层\n报表改为异步导出\n补充回归测试");
+  assert.equal(requested.status, "running");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /已将新指令合并到待处理 revision/);
+
+  const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
+  await workflowTool.execute("complete-current", {
+    action: "complete",
+    taskId: "current",
+    completionSummary: "当前实现完成",
+    verification: ["npm test：通过"],
+  }, undefined, undefined, harness.context);
+  assert.equal(harness.sentMessages.length, 1);
+
+  await emitExtensionEvent(harness, "agent_settled");
+  assert.equal(harness.sentMessages.length, 2);
+  assert.equal(harness.sentMessages[1].message.customType, "pi-init-workflow-replan");
+  for (const instruction of ["新增缓存层", "报表改为异步导出", "补充回归测试"]) {
+    assert.match(harness.sentMessages[1].message.content, new RegExp(`- ${instruction}`));
+  }
+  assert.doesNotMatch(harness.sentMessages[1].message.content, /旧后续任务.*缓存|调度旧计划/);
+  assert.equal(harness.context.model.id, architectModel.id);
+
+  await workflowTool.execute("apply-replan", {
+    action: "replan",
+    revisionId: requested.pendingRevision.revisionId,
+    summary: "合并指令后的新计划",
+    constraints: [],
+    tasks: [{
+      id: "merged-work",
+      task: "按合并指令实现",
+      files: ["src/merged.js"],
+      acceptanceCriteria: ["测试通过"],
+    }],
+  }, undefined, undefined, harness.context);
+  const applied = harness.entries.findLast((entry) => entry.type === "pi-init-workflow")?.data;
+  assert.equal(applied.status, "running");
+  assert.equal(applied.tasks.some((task) => task.id === "old-next"), false);
+
+  await emitExtensionEvent(harness, "agent_settled");
+  assert.equal(harness.sentMessages.length, 3);
+  assert.equal(harness.sentMessages[2].message.customType, "pi-init-workflow-task");
+  assert.doesNotMatch(harness.sentMessages[2].message.content, /旧后续任务/);
 });
 
 test("subtask 结果遇到方向变更后不重派旧任务并进入架构重规划", async () => {

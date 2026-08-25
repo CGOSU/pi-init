@@ -54,6 +54,7 @@ const {
   markWorkflowTaskStarted,
   recordWorkflowNudge,
   requestWorkflowReplan,
+  appendWorkflowReplanDirection,
   applyWorkflowReplan,
   resumeWorkflow,
   retryWorkflowTask,

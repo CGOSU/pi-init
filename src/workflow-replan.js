@@ -73,6 +73,28 @@ export function requestWorkflowReplan(state, { revisionId, direction } = {}, now
   return result;
 }
 
+function mergeReplanDirections(directions) {
+  return directions.map((item) => item.trim()).filter(Boolean).join("\n");
+}
+
+export function appendWorkflowReplanDirection(state, direction, now = Date.now()) {
+  if (!state || !state.pendingRevision) {
+    throw new Error("工作流没有待处理的重规划请求");
+  }
+
+  const text = requireText(direction, "工作流重规划方向");
+  const result = cloneState(state, now);
+  const pendingRevision = result.pendingRevision;
+  const merged = mergeReplanDirections([pendingRevision.direction, text]);
+  pendingRevision.direction = merged;
+  const revision = result.revisions.find(
+    (item) => item.revisionId === pendingRevision.revisionId && item.status === "requested",
+  );
+  if (!revision) throw new Error("工作流重规划 revisionId 已应用或不存在");
+  revision.direction = merged;
+  return result;
+}
+
 export function applyWorkflowReplan(
   state,
   { revisionId, summary, constraints, tasks, retainTaskIds, preserveTaskIds } = {},
