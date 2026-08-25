@@ -2,7 +2,7 @@ export { USAGE_SCHEMA_VERSION } from "./database.js";
 import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, readByte, scanSessionFile, scanSpeedEvents, shouldRefreshUsage } from "./core.js";
+import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, parseUsageRange, readByte, scanSessionFile, scanSpeedEvents, shouldRefreshUsage } from "./core.js";
 import { USAGE_SCHEMA_VERSION, hasStoredSessionFiles, insertActivityEvents, insertSpeedEvents, insertUsageEvents, markUsageChecked, readEventDates, readUsageSchemaVersion, readUsageState, withDatabase, withTransaction } from "./database.js";
 
 function emitRefreshProgress(options, event) {
@@ -277,11 +277,11 @@ async function readSummary(connection, range) {
         COALESCE(SUM(total_tokens), 0) AS tokens,
         COALESCE(SUM(cost), 0) AS cost
       FROM usage_events
-      WHERE event_date = $date
+      WHERE event_date >= $start_date AND event_date <= $end_date
       GROUP BY model
       ORDER BY cost DESC
     `,
-    { date: range.date },
+    { start_date: range.startDate, end_date: range.endDate },
   );
   const speedReader = await connection.runAndReadAll(
     `
@@ -289,18 +289,25 @@ async function readSummary(connection, range) {
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
         COALESCE(SUM(generation_seconds), 0) AS generation_seconds
       FROM speed_events
-      WHERE event_date = $date
+      WHERE event_date >= $start_date AND event_date <= $end_date
       GROUP BY model
     `,
-    { date: range.date },
+    { start_date: range.startDate, end_date: range.endDate },
   );
   const sessionsReader = await connection.runAndReadAll(
-    "SELECT COUNT(DISTINCT source_file) AS sessions FROM usage_events WHERE event_date = $date",
-    { date: range.date },
+    "SELECT COUNT(DISTINCT source_file) AS sessions FROM usage_events WHERE event_date >= $start_date AND event_date <= $end_date",
+    { start_date: range.startDate, end_date: range.endDate },
   );
   const durationReader = await connection.runAndReadAll(
-    "SELECT * FROM duration_summaries WHERE report_date = $date AND scope = 'overall'",
-    { date: range.date },
+    `
+      SELECT
+        COALESCE(SUM(active_seconds), 0) AS active_seconds,
+        COALESCE(SUM(model_wait_seconds), 0) AS model_wait_seconds,
+        COALESCE(SUM(session_span_seconds), 0) AS session_span_seconds
+      FROM duration_summaries
+      WHERE report_date >= $start_date AND report_date <= $end_date AND scope = 'overall'
+    `,
+    { start_date: range.startDate, end_date: range.endDate },
   );
   const speedByModel = new Map(
     speedReader.getRowObjects().map((row) => [
@@ -331,7 +338,7 @@ async function readSummary(connection, range) {
   );
   const durationRow = durationReader.getRowObjects()[0];
   const duration = {
-    sessions: numberValue(durationRow?.sessions),
+    sessions: numberValue(sessionsReader.getRowObjects()[0]?.sessions),
     activeSeconds: numberValue(durationRow?.active_seconds),
     modelWaitSeconds: numberValue(durationRow?.model_wait_seconds),
     sessionSpanSeconds: numberValue(durationRow?.session_span_seconds),
@@ -369,7 +376,7 @@ export async function summarizeUsage(
   runtimeDirectory = path.join(os.homedir(), ".pi", "agent", "pi-usage-runtime"),
   options = {},
 ) {
-  const range = dateRange(date);
+  const range = parseUsageRange(date);
   return withDatabase(databasePath, runtimeDirectory, async (connection) => {
     await refreshUsage(connection, sessionsDirectory, range, options);
     return readSummary(connection, range);
@@ -383,7 +390,7 @@ export async function queryUsage(
   sessionsDirectory,
   options = {},
 ) {
-  const range = dateRange(date);
+  const range = parseUsageRange(date);
   return withDatabase(databasePath, runtimeDirectory, async (connection) => {
     const state = await readUsageState(connection);
     const schemaVersion = await readUsageSchemaVersion(connection);

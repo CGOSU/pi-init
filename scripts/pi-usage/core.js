@@ -54,9 +54,67 @@ export function dateRange(value) {
   ) {
     throw new Error("日期必须是 YYYY-MM-DD");
   }
+  const dateValue = localDateString(date);
   const end = new Date(date);
   end.setDate(end.getDate() + 1);
-  return { date: localDateString(date), start: date, end };
+  return { date: dateValue, startDate: dateValue, endDate: dateValue, start: date, end };
+}
+
+function combineDateRanges(startRange, endRange) {
+  const end = new Date(endRange.start);
+  end.setDate(end.getDate() + 1);
+  const label =
+    startRange.date === endRange.date ? startRange.date : `${startRange.date} → ${endRange.date}`;
+  return {
+    date: label,
+    startDate: startRange.date,
+    endDate: endRange.date,
+    start: new Date(startRange.start),
+    end,
+  };
+}
+
+function parseMonth(value) {
+  const parts = value.match(/^(\d{4})-(\d{2})$/);
+  if (!parts) return undefined;
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const start = new Date(year, month - 1, 1);
+  if (start.getFullYear() !== year || start.getMonth() !== month - 1) {
+    throw new Error("月份必须是 YYYY-MM");
+  }
+  const end = new Date(year, month, 0);
+  return combineDateRanges(dateRange(localDateString(start)), dateRange(localDateString(end)));
+}
+
+export function parseUsageRange(values) {
+  const argumentsList = Array.isArray(values) ? values : values === undefined ? [] : [values];
+  if (argumentsList.length > 2) throw new Error("最多指定两个日期");
+  if (argumentsList.length === 2) {
+    const [start, end] = argumentsList.map((value) => dateRange(value));
+    if (start.start > end.start) throw new Error("开始日期不能晚于结束日期");
+    return combineDateRanges(start, end);
+  }
+  if (argumentsList.length === 0) return combineDateRanges(dateRange(), dateRange());
+
+  const value = argumentsList[0].toLowerCase();
+  if (value === "yesterday") {
+    const end = dateRange();
+    const start = new Date(end.start);
+    start.setDate(start.getDate() - 1);
+    const day = dateRange(localDateString(start));
+    return combineDateRanges(day, day);
+  }
+  const days = value.match(/^(\d+)d$/);
+  if (days) {
+    const count = Number(days[1]);
+    if (count < 1) throw new Error("天数必须是正整数，例如 7d");
+    const end = dateRange();
+    const start = new Date(end.start);
+    start.setDate(start.getDate() - count + 1);
+    return combineDateRanges(dateRange(localDateString(start)), end);
+  }
+  return parseMonth(value) ?? combineDateRanges(dateRange(value), dateRange(value));
 }
 
 function entryDate(entry) {

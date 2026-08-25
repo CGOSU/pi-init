@@ -1,5 +1,18 @@
 # 会话记录
 
+### 2026-08-25：为 pi-usage 增加自然日范围查询
+
+- 完成内容：新增 `yesterday`、`Nd`、`YYYY-MM`、单日和双日期闭区间语法；跨日查询聚合 token、费用、调用次数、加权 TPS 和逐日时长，并按源文件去重 session。保留无参数和单日查询兼容行为，不修改 DuckDB schema。
+- 文档：同步 README、当前状态和设计决策。
+- 验证：`node --test test/pi-usage-range.test.js`，2 项通过；`node --check scripts/pi-usage/core.js`、`scripts/pi-usage/refresh.js`、`scripts/pi-usage/cli.js`、`test/pi-usage-range.test.js` 通过；`npm test`，56 项全部通过；实际 CLI `node scripts/pi-usage.js 2026-08-24 2026-08-25 --db <临时数据库>` 输出范围标题正确。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-25：删除遗留临时目录的扩展工作流测试
+
+- 完成内容：按用户要求删除 `test/extension-workflow.test.js`；该测试使用相对路径创建 `pi-init-extension-tests-*` 临时目录且未清理，会污染仓库根目录。
+- 验证：`npm test`，54 项全部通过；Git 状态确认该测试文件已删除。
+- 遗留问题：此前产生的空临时目录和 `pi-init-dbg-*` 调试目录尚未删除。
+
 ### 2026-08-25：合并任务执行期间连续方向输入并在边界重规划
 
 - 完成内容：新增 `appendWorkflowReplanDirection`，把同一任务期间连续的普通 `interactive`/`rpc` 输入按顺序合并到单一 `pendingRevision`/审计 revision；扩展通知和架构重规划提示均展示完整指令，任务边界前不启动旧后续任务。新增核心合并、持久化重载、local 集成和 subtask 边界回归测试；为满足 500 行门禁将核心合并测试拆到 `test/workflow-replan-directions.test.js`。

@@ -4,7 +4,7 @@ import { queryUsage, summarizeUsage } from "./refresh.js";
 import { formatNumber, formatReport, supportsColor } from "./report.js";
 
 function parseArguments(args, agentDir) {
-  let date;
+  const rangeArguments = [];
   let update = false;
   let databasePath = process.env.PI_USAGE_DB || path.join(agentDir, "pi-usage.duckdb");
   for (let index = 0; index < args.length; index += 1) {
@@ -13,16 +13,16 @@ function parseArguments(args, agentDir) {
       update = true;
     } else if (argument === "--db") {
       databasePath = args[++index];
-      if (!databasePath) throw new Error("--db 需要数据库路径");
+      if (!databasePath || databasePath.startsWith("--")) throw new Error("--db 需要数据库路径");
     } else if (argument.startsWith("--")) {
       throw new Error(`未知参数：${argument}`);
-    } else if (date) {
-      throw new Error("只能指定一个日期");
+    } else if (rangeArguments.length >= 2) {
+      throw new Error("最多指定两个日期");
     } else {
-      date = argument;
+      rangeArguments.push(argument);
     }
   }
-  return { date, databasePath, update };
+  return { rangeArguments, databasePath, update };
 }
 
 function createRefreshProgressReporter() {
@@ -45,12 +45,12 @@ function createRefreshProgressReporter() {
 
 export async function runCli() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  const { date, databasePath, update } = parseArguments(process.argv.slice(2), agentDir);
+  const { rangeArguments, databasePath, update } = parseArguments(process.argv.slice(2), agentDir);
   const sessionsDirectory = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(agentDir, "sessions");
   const runtimeDirectory = path.join(agentDir, "pi-usage-runtime");
   const options = process.stderr.isTTY ? { onProgress: createRefreshProgressReporter() } : {};
   const summary = update
-    ? await summarizeUsage(sessionsDirectory, date, databasePath, runtimeDirectory, options)
-    : await queryUsage(date, databasePath, runtimeDirectory, sessionsDirectory, options);
+    ? await summarizeUsage(sessionsDirectory, rangeArguments, databasePath, runtimeDirectory, options)
+    : await queryUsage(rangeArguments, databasePath, runtimeDirectory, sessionsDirectory, options);
   console.log(formatReport(summary, { color: supportsColor() }));
 }
