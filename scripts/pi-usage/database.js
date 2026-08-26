@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { loadDuckDb, localDateString } from "./core.js";
 
-export const USAGE_SCHEMA_VERSION = 2;
+export const USAGE_SCHEMA_VERSION = 3;
 const APPENDER_BATCH_SIZE = 1024;
 
 function numberValue(value) {
@@ -100,6 +100,18 @@ export async function initializeDatabase(connection) {
       schema_version INTEGER
     )
   `);
+}
+
+export async function clearDerivedData(connection) {
+  for (const table of [
+    "usage_events",
+    "activity_events",
+    "speed_events",
+    "duration_summaries",
+    "session_files",
+  ]) {
+    await connection.run(`DELETE FROM ${table}`);
+  }
 }
 
 export async function readUsageState(connection) {

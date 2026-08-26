@@ -12,7 +12,7 @@
 ## 已知状态
 
 - 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。控制中心和脚手架运行时已改为扩展实例内 Promise 缓存的按需加载，工作流恢复从 session branch 末尾直接查找最新状态。
-- `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。
+- `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。schema v3 使用稳定 entry key（Pi id 或 legacy 哈希）跨 fork 文件去重 usage、speed、activity 和 session；schema 不一致时事务化清理并全量重建所有派生表与 checkpoint。
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`；`AGENTS.md` 要求任务开始前先读取 Clean Code 规则。
 - 生成的中英文项目 Skill 均包含精确字符串替换规则：读取最新内容、要求唯一匹配、使用最小上下文、支持同一编辑中的多个非重叠替换，并在修改后检查 diff。
@@ -43,6 +43,7 @@
 
 ## 最近一次更新
 
+- 2026-08-26：修复 Pi fork/branch 复制历史 entry 导致的重复统计；schema v3 按稳定 entry key 去重 usage、speed、activity、session 和 duration，首次升级事务化重建 DuckDB 派生缓存；`npm test` 通过 58 项。
 - 2026-08-25：`pi-usage` 新增 `yesterday`、`Nd`、`YYYY-MM`、单日和双日期闭区间查询；跨日汇总按源文件去重 session，`npm test` 通过 56 项。
 - 2026-08-25：删除会在仓库根目录遗留临时目录的 `test/extension-workflow.test.js`；剩余测试通过，`npm test` 通过 54 项。
 - 2026-08-25：活动工作流将同一任务期间连续 interactive/rpc 方向输入按顺序合并为单一 revision，并在任务边界将完整指令交给架构师重规划；新增核心、local 集成和 subtask 边界回归覆盖，删除工作流扩展测试前曾通过 61 项。

@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-26：修复 pi-usage fork 历史重复统计
+
+- 完成内容：为 usage、speed、activity 事件改用跨 session 文件稳定 entry key；schema 升级到 v3，首次升级事务化清理并重建 DuckDB 派生事件、duration summary 和 session checkpoint，session JSONL 保持只读。
+- 完成内容：查询边界按稳定 key 去重 usage、speed、activity 和 session；fork 后新 entry 继续计入，纯复制文件不再增加 token、费用、TPS、时长或 session。
+- 验证：临时 DuckDB fork/复制数据回归核对通过；`node --test test/pi-usage-range.test.js test/pi-usage.test.js` 16 项通过；`npm test` 58 项通过；`git diff --check` 通过（仅有 Windows LF/CRLF 转换提示）。
+- 遗留问题：尚未提交或推送。
+
 ### 2026-08-25：为 pi-usage 增加自然日范围查询
 
 - 完成内容：新增 `yesterday`、`Nd`、`YYYY-MM`、单日和双日期闭区间语法；跨日查询聚合 token、费用、调用次数、加权 TPS 和逐日时长，并按源文件去重 session。保留无参数和单日查询兼容行为，不修改 DuckDB schema。

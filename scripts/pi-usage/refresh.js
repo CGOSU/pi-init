@@ -2,20 +2,11 @@ export { USAGE_SCHEMA_VERSION } from "./database.js";
 import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, parseUsageRange, readByte, scanSessionFile, scanSpeedEvents, shouldRefreshUsage } from "./core.js";
-import { USAGE_SCHEMA_VERSION, hasStoredSessionFiles, insertActivityEvents, insertSpeedEvents, insertUsageEvents, markUsageChecked, readEventDates, readUsageSchemaVersion, readUsageState, withDatabase, withTransaction } from "./database.js";
+import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, parseUsageRange, readByte, scanSessionFile, shouldRefreshUsage } from "./core.js";
+import { USAGE_SCHEMA_VERSION, clearDerivedData, insertActivityEvents, insertSpeedEvents, insertUsageEvents, markUsageChecked, readEventDates, readUsageSchemaVersion, readUsageState, withDatabase, withTransaction } from "./database.js";
 
 function emitRefreshProgress(options, event) {
   if (typeof options.onProgress === "function") options.onProgress(event);
-}
-
-async function refreshSpeedEvents(connection, sessionsDirectory) {
-  await withTransaction(connection, async () => {
-    await connection.run("DELETE FROM speed_events");
-    for (const file of listSessionFiles(sessionsDirectory)) {
-      await insertSpeedEvents(connection, await scanSpeedEvents(file));
-    }
-  });
 }
 
 async function canIncrementallyScan(file, metadata, previous) {
@@ -54,6 +45,66 @@ function sessionCheckpointParameters(parsed) {
     last_line_terminated: parsed.checkpoint.lastLineTerminated,
     has_incomplete_tail: parsed.checkpoint.hasIncompleteTail,
   };
+}
+
+async function insertSessionCheckpoint(connection, parsed) {
+  await connection.run(
+    `
+      INSERT OR REPLACE INTO session_files (
+        source_file, file_size, modified_ms, imported_offset,
+        next_line_number, checkpoint_cwd, tail_hash,
+        last_line_terminated, has_incomplete_tail
+      ) VALUES (
+        $source_file, $file_size, $modified_ms, $imported_offset,
+        $next_line_number, $checkpoint_cwd, $tail_hash,
+        $last_line_terminated, $has_incomplete_tail
+      )
+    `,
+    sessionCheckpointParameters(parsed),
+  );
+}
+
+async function rebuildSessionFiles(connection, sessionsDirectory, options = {}) {
+  const files = listSessionFiles(sessionsDirectory);
+  const parsedFiles = [];
+  const affectedDates = new Set();
+  const stats = {
+    filesSeen: files.length,
+    filesSkipped: 0,
+    filesChanged: files.length,
+    filesAppended: 0,
+    filesRebuilt: files.length,
+    filesRemoved: 0,
+    bytesRead: 0,
+    events: 0,
+  };
+  for (const file of files) {
+    const parsed = await scanSessionFile(file);
+    parsedFiles.push(parsed);
+    for (const event of [...parsed.events, ...parsed.activityEvents, ...parsed.speedEvents]) {
+      affectedDates.add(event.eventDate);
+    }
+    stats.bytesRead += parsed.checkpoint.importedOffset;
+    stats.events += parsed.events.length + parsed.activityEvents.length + parsed.speedEvents.length;
+  }
+
+  await withTransaction(connection, async () => {
+    await clearDerivedData(connection);
+    for (const parsed of parsedFiles) {
+      await insertUsageEvents(connection, parsed.events);
+      await insertActivityEvents(connection, parsed.activityEvents);
+      await insertSpeedEvents(connection, parsed.speedEvents);
+      await insertSessionCheckpoint(connection, parsed);
+    }
+    for (const date of [...affectedDates].sort()) {
+      await refreshDerivedSummaries(connection, dateRange(date));
+    }
+    await markUsageChecked(connection);
+  });
+  files.forEach((file, index) => {
+    emitRefreshProgress(options, { type: "file", file, mode: "rebuilt", index: index + 1, total: files.length });
+  });
+  return { affectedDates, stats };
 }
 
 async function refreshSessionFiles(connection, sessionsDirectory, options = {}) {
@@ -149,20 +200,7 @@ async function refreshSessionFiles(connection, sessionsDirectory, options = {}) 
       await insertUsageEvents(connection, parsed.events);
       await insertActivityEvents(connection, parsed.activityEvents);
       await insertSpeedEvents(connection, parsed.speedEvents);
-      await connection.run(
-        `
-          INSERT OR REPLACE INTO session_files (
-            source_file, file_size, modified_ms, imported_offset,
-            next_line_number, checkpoint_cwd, tail_hash,
-            last_line_terminated, has_incomplete_tail
-          ) VALUES (
-            $source_file, $file_size, $modified_ms, $imported_offset,
-            $next_line_number, $checkpoint_cwd, $tail_hash,
-            $last_line_terminated, $has_incomplete_tail
-          )
-        `,
-        sessionCheckpointParameters(parsed),
-      );
+      await insertSessionCheckpoint(connection, parsed);
     });
     stats.filesChanged += 1;
     if (incremental) stats.filesAppended += 1;
@@ -243,9 +281,14 @@ function averageTps(speed) {
 async function readActivityEvents(connection, range) {
   const reader = await connection.runAndReadAll(
     `
+      WITH unique_events AS (
+        SELECT source_file, entry_key, event_timestamp, event_date, event_type, model, cwd,
+          ROW_NUMBER() OVER (PARTITION BY entry_key ORDER BY source_file) AS occurrence
+        FROM activity_events
+      )
       SELECT source_file, entry_key, event_timestamp, event_date, event_type, model, cwd
-      FROM activity_events
-      WHERE event_date = $date
+      FROM unique_events
+      WHERE occurrence = 1 AND event_date = $date
       ORDER BY source_file, event_timestamp, entry_key
     `,
     { date: range.date },
@@ -269,6 +312,12 @@ async function refreshDerivedSummaries(connection, range) {
 async function readSummary(connection, range) {
   const rowsReader = await connection.runAndReadAll(
     `
+      WITH unique_events AS (
+        SELECT model, input_tokens, output_tokens, cache_read_tokens,
+          cache_write_tokens, total_tokens, cost, entry_key, event_date,
+          ROW_NUMBER() OVER (PARTITION BY entry_key ORDER BY source_file) AS occurrence
+        FROM usage_events
+      )
       SELECT model, COUNT(*) AS calls,
         COALESCE(SUM(input_tokens), 0) AS input,
         COALESCE(SUM(output_tokens), 0) AS output,
@@ -276,8 +325,8 @@ async function readSummary(connection, range) {
         COALESCE(SUM(cache_write_tokens), 0) AS cacheWrite,
         COALESCE(SUM(total_tokens), 0) AS tokens,
         COALESCE(SUM(cost), 0) AS cost
-      FROM usage_events
-      WHERE event_date >= $start_date AND event_date <= $end_date
+      FROM unique_events
+      WHERE occurrence = 1 AND event_date >= $start_date AND event_date <= $end_date
       GROUP BY model
       ORDER BY cost DESC
     `,
@@ -285,17 +334,31 @@ async function readSummary(connection, range) {
   );
   const speedReader = await connection.runAndReadAll(
     `
+      WITH unique_events AS (
+        SELECT model, output_tokens, generation_seconds, event_date, entry_key,
+          ROW_NUMBER() OVER (PARTITION BY entry_key ORDER BY source_file) AS occurrence
+        FROM speed_events
+      )
       SELECT model,
         COALESCE(SUM(output_tokens), 0) AS output_tokens,
         COALESCE(SUM(generation_seconds), 0) AS generation_seconds
-      FROM speed_events
-      WHERE event_date >= $start_date AND event_date <= $end_date
+      FROM unique_events
+      WHERE occurrence = 1 AND event_date >= $start_date AND event_date <= $end_date
       GROUP BY model
     `,
     { start_date: range.startDate, end_date: range.endDate },
   );
   const sessionsReader = await connection.runAndReadAll(
-    "SELECT COUNT(DISTINCT source_file) AS sessions FROM usage_events WHERE event_date >= $start_date AND event_date <= $end_date",
+    `
+      WITH unique_events AS (
+        SELECT source_file, event_date, entry_key,
+          ROW_NUMBER() OVER (PARTITION BY entry_key ORDER BY source_file) AS occurrence
+        FROM usage_events
+      )
+      SELECT COUNT(DISTINCT source_file) AS sessions
+      FROM unique_events
+      WHERE occurrence = 1 AND event_date >= $start_date AND event_date <= $end_date
+    `,
     { start_date: range.startDate, end_date: range.endDate },
   );
   const durationReader = await connection.runAndReadAll(
@@ -356,8 +419,14 @@ async function readSummary(connection, range) {
 async function refreshUsage(connection, sessionsDirectory, range, options = {}) {
   emitRefreshProgress(options, { type: "start", date: range.date });
   const schemaVersion = await readUsageSchemaVersion(connection);
-  const schemaMigrated = schemaVersion !== USAGE_SCHEMA_VERSION && (await hasStoredSessionFiles(connection));
-  if (schemaMigrated) await refreshSpeedEvents(connection, sessionsDirectory);
+  const schemaMigrated = schemaVersion !== USAGE_SCHEMA_VERSION;
+  if (schemaMigrated) {
+    const { affectedDates, stats } = await rebuildSessionFiles(connection, sessionsDirectory, options);
+    const dates = [...affectedDates].sort();
+    const result = { ...stats, durationDates: dates, schemaMigrated };
+    emitRefreshProgress(options, { type: "complete", date: range.date, stats: result });
+    return result;
+  }
   const { affectedDates, stats } = await refreshSessionFiles(connection, sessionsDirectory, options);
   const dates = [...affectedDates].sort();
   for (const date of dates) {

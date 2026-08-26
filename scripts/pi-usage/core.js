@@ -140,6 +140,14 @@ function usageForEntry(entry) {
   return undefined;
 }
 
+function stableEntryKey(entry, lineNumber) {
+  if (entry.id !== undefined && entry.id !== null && String(entry.id)) {
+    return `id:${String(entry.id)}`;
+  }
+  const serialized = JSON.stringify(entry) ?? "";
+  return `legacy:${createHash("sha256").update(`${lineNumber}:${serialized}`).digest("hex")}`;
+}
+
 function parseActivityEvent(entry, sourceFile, lineNumber, cwd) {
   if (entry.type === "custom" && entry.customType === TOKEN_SPEED_CUSTOM_TYPE) return undefined;
   const date = entryDate(entry);
@@ -152,7 +160,7 @@ function parseActivityEvent(entry, sourceFile, lineNumber, cwd) {
       : "";
   return {
     sourceFile,
-    entryKey: String(lineNumber),
+    entryKey: stableEntryKey(entry, lineNumber),
     eventTimestamp: date.toISOString(),
     eventDate: localDateString(date),
     eventType: role || entry.type || "unknown",
@@ -169,7 +177,7 @@ function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
   const fields = Object.fromEntries(FIELDS.map((field) => [field, Number(usage[field]) || 0]));
   return {
     sourceFile,
-    entryKey: String(lineNumber),
+    entryKey: stableEntryKey(entry, lineNumber),
     eventTimestamp: date.toISOString(),
     eventDate: localDateString(date),
     model: value.model,
@@ -202,7 +210,7 @@ function parseSpeedEvent(entry, sourceFile, lineNumber, cwd) {
   }
   return {
     sourceFile,
-    entryKey: String(lineNumber),
+    entryKey: stableEntryKey(entry, lineNumber),
     eventTimestamp: date.toISOString(),
     eventDate: localDateString(date),
     model: `${provider}/${model}`,

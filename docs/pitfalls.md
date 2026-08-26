@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-08-26：Pi fork 复制历史 entry 会跨文件重复累计
+
+- 日期：2026-08-26；
+- 现象：同一逻辑 session 被 fork 或复制后，按 `source_file + lineNumber` 导入会重复计算历史 usage、speed、active/model-wait/session-span 和 session 数。
+- 根因：Pi fork 保留历史 entry id，但复制到新 JSONL 文件后源文件和行号不同；文件级主键只能保证单文件幂等，不能识别跨文件的同一逻辑 entry。
+- 修复：导入使用 Pi entry id 或 legacy 哈希生成稳定 key；查询 usage、speed、activity 和 session 时跨文件按 key 去重。schema v3 首次运行事务化重建旧 DuckDB 派生数据。
+- 验证：fork 源文件、纯复制文件和带新调用 fork 的临时 DuckDB 回归测试通过；`node --test test/pi-usage-range.test.js test/pi-usage.test.js` 16 项、`npm test` 58 项通过。
+
 ### 2026-08-25：Node 临时目录前缀不能省略系统临时目录
 
 - 日期：2026-08-25；

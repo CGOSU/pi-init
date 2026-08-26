@@ -8,6 +8,19 @@
 
 ## 已确认决策
 
+### 2026-08-26：pi-usage 按稳定 entry 身份去重 fork 历史
+
+- 决定：usage、speed 和 activity 事件使用 Pi entry id 作为跨 session 文件稳定 key；无 id 的旧 entry 使用包含行号和完整 JSON 的 SHA-256 legacy key。报表读取按 key 选择唯一事件，session 按去重后 usage 的 canonical source_file 计数。
+- 原因：Pi fork 会复制历史 JSONL entry，按源文件和行号累计会重复计算 token、费用、TPS、活动时长和 session；只在导入时去重无法覆盖已有派生数据，读取边界去重能保持事实源不变。
+- 约束：fork 后新生成且 id 不同的 entry 仍计入；Total 继续为 input + output + cacheRead + cacheWrite，Cache Read 仍属于累计用量；不得修改 session JSONL 或引入额外依赖。
+
+### 2026-08-26：pi-usage schema v3 首次升级事务化重建
+
+- 决定：entry key 变化触发 schema v3 全量重建，事务内清理 usage/activity/speed、duration summary 和 session checkpoint，再从 JSONL 重建并写入新 schema；移除旧的只回填 speed_events 迁移。
+- 原因：旧缓存使用源文件行号，无法可靠转换为跨文件逻辑 key；全量重建是最小且确定的迁移路径，失败可回滚，JSONL 继续作为只读事实源。
+- 约束：首次升级会重新扫描所有 session，完成后恢复增量 checkpoint；无变化的后续刷新仍走现有增量路径。
+- 替代：替代下方 2026-08-13“DuckDB schema 升级只回填新增 speed_events”的迁移决定。
+
 ### 2026-08-25：pi-usage 使用简洁自然日范围语法
 
 - 决定：保留无参数和单个 `YYYY-MM-DD` 的兼容行为，新增 `yesterday`、`Nd`、`YYYY-MM` 和两个 `YYYY-MM-DD` 位置参数；`Nd` 包含今天，显式日期范围首尾均包含。

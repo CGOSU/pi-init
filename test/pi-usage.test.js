@@ -408,7 +408,7 @@ test("pi-usage 按模型汇总加权平均 token 速度", async () => {
   });
 });
 
-test("pi-usage TPS schema migration only backfills speed samples", async () => {
+test("pi-usage schema migration rebuilds usage and speed data", async () => {
   await withTempDirectory(async (directory) => {
     const sessions = path.join(directory, "sessions");
     const databasePath = path.join(directory, "usage.duckdb");
@@ -453,10 +453,17 @@ test("pi-usage TPS schema migration only backfills speed samples", async () => {
       instance.closeSync();
     }
 
-    const summary = await summarizeUsage(sessions, date, databasePath);
+    const progress = [];
+    const summary = await summarizeUsage(sessions, date, databasePath, undefined, {
+      onProgress: (event) => progress.push(event),
+    });
     const row = summary.rows.find((value) => value.model === "provider/model");
-    assert.equal(row.input, 999);
+    assert.equal(row.input, 1);
     assert.equal(row.avgTps, 10);
+    const completeRefresh = progress.find((event) => event.type === "complete");
+    assert.ok(completeRefresh);
+    assert.equal(completeRefresh.stats.schemaMigrated, true);
+    assert.equal(completeRefresh.stats.filesRebuilt, 1);
   });
 });
 
