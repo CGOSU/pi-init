@@ -267,6 +267,47 @@ export async function collectRoleModels(ctx: ExtensionContext) {
 }
 
 export async function input(ctx: ExtensionCommandContext, title: string, placeholder: string) {
-  const value = await ctx.ui.input(title, placeholder);
-  return value === undefined ? undefined : value.trim();
+  if (ctx.mode !== "tui") {
+    const value = await ctx.ui.input(title, placeholder);
+    return value === undefined ? undefined : value.trim();
+  }
+
+  const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+    const field = new Input();
+    let focused = false;
+    const container = new Container();
+    container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    container.addChild(new Spacer(1));
+    container.addChild(field);
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("dim", `${placeholder} · Enter 确认 · Esc 返回`), 1, 0));
+    container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
+
+    return {
+      get focused() {
+        return focused;
+      },
+      set focused(value: boolean) {
+        focused = value;
+        field.focused = value;
+      },
+      render: (width: number) => container.render(width),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        if (matchesKey(data, Key.escape)) {
+          done(MENU_BACK);
+        } else if (matchesKey(data, Key.ctrl("c"))) {
+          done(null);
+        } else if (matchesKey(data, Key.enter) || data === "\n") {
+          done(field.getValue());
+        } else {
+          field.handleInput(data);
+        }
+        tui.requestRender();
+      },
+    };
+  });
+
+  return result === null || result === undefined ? undefined : result.trim();
 }

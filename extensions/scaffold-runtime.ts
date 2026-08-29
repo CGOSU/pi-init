@@ -6,7 +6,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createScaffold } from "../src/scaffold.js";
-import { collectRoleModels, input, isMenuBack, showMenu } from "./ui.ts";
+import { collectRoleModels, input, isMenuBack, MENU_BACK, showMenu } from "./ui.ts";
 
 function normalizeTargetDir(value: string) {
   const target = value.trim();
@@ -145,6 +145,7 @@ export async function runScaffold(
 async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
   const metadata = await readProjectMetadata(ctx, targetDir);
   const projectName = await input(ctx, "项目名称", metadata.projectName);
+  if (isMenuBack(projectName)) return MENU_BACK;
   if (projectName === undefined) return undefined;
 
   const language = await showMenu(ctx, "模板语言", [
@@ -159,12 +160,15 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
     "项目定位（可留空）",
     metadata.description ?? "例如：客户账户管理门户",
   );
+  if (isMenuBack(description)) return MENU_BACK;
   if (description === undefined) return undefined;
 
   const testCommand = await input(ctx, "测试命令（可留空）", metadata.testCommand ?? "例如：npm test");
+  if (isMenuBack(testCommand)) return MENU_BACK;
   if (testCommand === undefined) return undefined;
 
   const slug = await input(ctx, "Skill 名称（可留空自动生成）", metadata.projectName);
+  if (isMenuBack(slug)) return MENU_BACK;
   if (slug === undefined) return undefined;
 
   const roleConfiguration = await showMenu(ctx, "角色模型", [
@@ -217,6 +221,7 @@ export async function advancedInit(targetDir: string, ctx: ExtensionCommandConte
     throw new Error("高级初始化需要交互式 UI；无 UI 环境请使用 /pi-init init <目录>");
   }
   const options = await collectOptions(ctx, targetDir);
+  if (isMenuBack(options)) return;
   if (!options) {
     ctx.ui.notify("已取消项目初始化。", "warning");
     return;
