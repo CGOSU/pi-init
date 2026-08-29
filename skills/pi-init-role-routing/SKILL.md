@@ -1,0 +1,66 @@
+---
+name: pi-init-role-routing
+description: >
+  处理使用 pi-init 初始化项目、执行代码和测试、维护项目文档或完成交付收尾时使用；
+  根据项目 roleModels 映射选择已启用角色，在角色边界调用 switch_role，并按需使用 task_workflow 顺序推进工作。
+metadata:
+  primary-category: workflow
+  related-categories: coding, documentation, project-management
+---
+
+# pi-init 公共职责路由
+
+这是随 `pi-init` package 发布的公共 Skill。它维护角色职责、路由、交接和通用工作流规则；项目不应复制或生成角色 Skill。
+
+## 使用边界
+
+1. 先读取仓库根目录的 `AGENTS.md`，再按其中顺序读取项目记忆文档。
+2. 根据交付物选择最少职责；只有跨模块架构、技术选型、数据模型、安全、性能或不可逆迁移才先交给架构师。
+3. 本 Skill 的角色说明按需读取：
+   - [`roles/architect.md`](roles/architect.md)
+   - [`roles/developer-test.md`](roles/developer-test.md)
+   - [`roles/docs-commit.md`](roles/docs-commit.md)
+4. 不在项目中生成 `.pi/skills/<slug>/SKILL.md`，也不要维护该 Skill 的副本。项目 `AGENTS.md` 只需引用本 Skill。
+
+## 项目角色来源
+
+- 项目角色和模型的唯一启用来源是 `.pi/role-models.json` 的 `roleModels` 映射；保存版本为 `schemaVersion: 2`。
+- 映射中的每个键都是角色 ID，值包含该角色的 `provider`、`model` 和 `thinkingLevel`。只有映射中存在的角色才启用。
+- 合法但未配置的角色不得借用其他角色的模型或自动 fallback；需要该角色时先执行 `/pi-init config <role-id>`，然后再重试。
+- 角色 ID 使用小写字母、数字和单个连字符。内置角色 ID 为 `architect`、`developer-test` 和 `docs-commit`；项目也可以配置其他合法 ID。
+- 旧版顶层角色字段只用于读取兼容；只有用户明确执行 `/pi-init save` 时才迁移为 `roleModels`，不要主动改写项目配置。
+- Skill 不嵌入任何具体 provider、model 或 thinkingLevel 值；这些值始终从当前项目映射读取。
+
+## 精确文件修改
+
+- 修改文件前先读取最新内容；使用精确的 `oldText` → `newText` 替换，不使用模糊匹配、正则或仅凭行号定位。
+- `oldText` 必须在原始文件中唯一匹配；匹配为 0 次或多次时停止，重新读取并调整上下文，不猜测修改。
+- `oldText` 只包含足以唯一定位的最小上下文；保留未改文本，避免整文件重写。
+- 同一文件多个不相邻改动应在一次编辑中提交为多个互不重叠的替换；每个替换都以原始文件为基准匹配。
+- 修改后检查实际 diff，确认没有意外改动，再运行相关验证。
+
+## 路由和角色切换
+
+1. 架构师负责跨边界分析、冻结方案和任务拆分；实现型改动交给开发测试工程师；代码完成并验证后再交给文档与收尾工程师。
+2. 开发测试工程师不写项目文档；文档与收尾工程师不写代码。遇到疑问、需求分析或跨职责冲突时交回架构师。
+3. 每个职责开始前都调用 `switch_role`，每次职责边界也再次调用；切换模型不能只改变回答口吻。
+4. 只请求当前 `roleModels` 中已配置的角色。切换失败、模型不存在、凭据不可用或角色缺失时停止并报告，不猜测继续。
+5. `mode: auto` 立即按映射切换；`confirm` 在自动切换前请求确认；`manual` 不自动换角，需用户执行 `/pi-init role <role-id>`。运行时配置先暂存，只有用户明确执行 `/pi-init save` 才持久化。
+6. 不因偏好或可选方案暂停询问。只有用户明确要求审阅架构，或缺少产品决策、权限/凭据、破坏性操作确认、不可恢复信息或真实阻塞时才暂停。
+
+## 顺序工作流
+
+- 架构师先检查仓库，再用 `task_workflow(action="plan")` 提交摘要、不可改变的约束、任务、文件范围、依赖和验收标准。任务最多 12 个，角色必须是当前项目已配置的合法角色；省略角色时默认 `developer-test`。
+- `architect` 是唯一可以执行 `plan` 和 `replan` 的角色；其他已配置角色可以执行分配给自己的任务。
+- `workflowMode` 为 `off` 时不要创建新工作流；`on` 始终编排；`auto` 对小计划可直接顺序执行，复杂计划才进入持久化工作流。只有初始请求明确要求架构审阅时才设置 `reviewRequired: true`。
+- 开发测试工程师每次只执行当前任务。完成前必须实际验证，并调用 `task_workflow(action="complete")`，在 `verification` 中只填写真实执行过的命令和结果；遇到真正阻塞使用 `block`，不要伪造完成。
+- 活动工作流中的普通方向变更合并到当前任务的单一 `revisionId`；当前任务到达边界后暂停旧计划。只有架构师可用 `task_workflow(action="replan")` 应用新计划；新计划应用前不得启动旧后续任务。
+- `subtask` 执行器下主会话是状态唯一写入者。fork 不调用 `task_workflow`，不创建 worktree，不合并、提交或推送，并必须返回严格的 `pi-init/task-result@1` 结果；无效结果安全阻塞。
+- Ctrl+C、显式取消和 `/pi-init workflow cancel` 取消流程或工作流；普通错误不能被写成成功。
+
+## 交接和交付
+
+- 架构交付应包含决定、原因、约束、风险和可验证验收标准。
+- 代码交付应包含修改文件、实现摘要、实际验证命令和结果；除非用户明确授权，不提交或推送。
+- 文档交付应包含文档/版本变化、最终 diff 摘要、收尾检查及授权的 Git 结果。
+- 报告只陈述已验证事实；不要在代码、文档、日志或提交中记录令牌、密码、私钥等敏感信息。

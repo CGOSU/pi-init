@@ -1,7 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   ROLE_MODES,
-  ROLE_NAMES,
   roleLabel,
   roleModeLabel,
 } from "../src/roles.js";
@@ -41,10 +40,10 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string, hasPendingChang
       label: `● 模式 · ${roleModeLabel(mode)}`,
       description: "只影响本次会话，不修改项目文件",
     },
-    ...ROLE_NAMES.map((role) => ({
+    ...Object.keys(config.roleModels).map((role) => ({
       value: role,
-      label: `● ${roleLabel(role)} · ${shortModelName(config[role].model)}/${config[role].thinkingLevel}`,
-      description: formatRoleModel(config[role]),
+      label: `● ${roleLabel(role)} · ${shortModelName(config.roleModels[role].model)}/${config.roleModels[role].thinkingLevel}`,
+      description: formatRoleModel(config.roleModels[role]),
     })),
     {
       value: "save",
@@ -83,14 +82,20 @@ export function createControlCenter(deps: ControlCenterDependencies) {
   }
 
   async function switchRole(requested: string | undefined, ctx: ExtensionCommandContext) {
+    const config = await roleRuntime.readSessionRoleConfig(ctx);
+    const roleNames = Object.keys(config.roleModels);
+    if (roleNames.length === 0) {
+      ctx.ui.notify("当前没有已配置角色；请先执行 /pi-init config <角色 ID> 配置模型。", "error");
+      return;
+    }
     const role = requested || await showMenu(
       ctx,
       "切换角色",
-      ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
+      roleNames.map((value) => ({ value, label: roleLabel(value) })),
     );
     if (!role || isMenuBack(role)) return;
-    if (!ROLE_NAMES.includes(role)) {
-      ctx.ui.notify(`未知角色：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+    if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
+      ctx.ui.notify(`角色 ${role} 未配置模型；可用值：${roleNames.join(", ")}`, "error");
       return;
     }
     try {
@@ -176,14 +181,16 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       ctx.ui.notify("/pi-init config 仅允许在受信任项目中运行；请先信任当前项目", "error");
       return;
     }
+    const config = await roleRuntime.readSessionRoleConfig(ctx);
+    const roleNames = Object.keys(config.roleModels);
     const role = requested || await showMenu(
       ctx,
       "配置角色模型",
-      ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
+      roleNames.map((value) => ({ value, label: roleLabel(value) })),
     );
     if (!role || isMenuBack(role)) return;
-    if (!ROLE_NAMES.includes(role)) {
-      ctx.ui.notify(`未知角色：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
+    if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
+      ctx.ui.notify(`角色 ${role} 未配置模型；可用值：${roleNames.join(", ")}`, "error");
       return;
     }
     if (!ctx.hasUI) {
@@ -192,13 +199,13 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     }
 
     try {
-      const selection = await selectRoleModel(ctx, role);
+      const selection = await selectRoleModel(ctx, role, config.roleModels[role]);
       if (isMenuBack(selection)) return;
       if (!selection) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
       }
-      roleRuntime.stageRoleConfig({ [role]: selection });
+      roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
       const result = await roleRuntime.applyRole(role, ctx);
       ctx.ui.notify(
         `已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
@@ -270,8 +277,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
       const action = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
-        { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和 Skill" },
-        { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或暂存三个角色的模型配置" },
+        { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和角色模型" },
+        { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或暂存已配置角色的模型" },
         { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },

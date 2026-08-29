@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-30：迁移到 package 公共角色 Skill 和动态 roleModels
+
+- 完成内容：新增随 package 发布的 `skills/pi-init-role-routing/` 公共 Skill 及三个角色说明；脚手架和高级初始化不再生成或询问项目级角色 Skill/slug，项目已有 Skill 不自动删除。README、当前状态和设计决策补充了 `schemaVersion: 2`、`roleModels` 动态启用、添加新角色的两步流程，以及旧配置和旧项目 Skill 的迁移边界。
+- 文档：更新 `README.md`、`docs/current-state.md`、`docs/decisions.md`；未修改 `docs/pitfalls.md`，本次没有新增可复发陷阱。
+- 验证：`node --test test/scaffold.test.js test/extension-roles.test.js test/extension-lifecycle.test.js`，36 项全部通过；`npm test`，70 项全部通过；`node --check` 覆盖本次修改的 JS/TS 文件，全部通过；`npm pack --dry-run` 显示 package 包含公共 Skill 主文件和三个角色文件；最终 `git diff --check` 通过，仅有 Windows 下预期的 LF/CRLF 转换提示。
+- 遗留问题：未提交或推送；真实 Pi 模型连续工作流、subtask fork 生命周期和跨平台 CI 仍按当前状态文档记录的范围待执行。
+
 ### 2026-08-30：完成高级初始化 TUI 的逐级 Esc 导航
 
 - 完成内容：恢复文本输入时将光标移到末尾；自定义角色模型在模型、推理强度和角色之间逐级返回并保留选择；高级初始化最终确认区分确认、显式取消和 Esc 返回角色模型步骤。控制中心消费首项 MENU_BACK 后重新显示自身，直接高级命令传播 MENU_BACK 返回调用方；快速初始化和非 TUI 确认行为保持原有路径。

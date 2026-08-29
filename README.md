@@ -4,9 +4,10 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 
 ## 功能
 
-- 生成项目级 `AGENTS.md`、记忆文档和 `.pi/skills/<slug>/SKILL.md`。
+- 生成项目级 `AGENTS.md`、记忆文档和 `.pi/role-models.json`。
+- 随 package 发布公共 `pi-init-role-routing` Skill，提供角色职责、路由和工作流规则；新项目不再生成项目级角色 Skill。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
-- 根据任务在架构、开发测试、文档提交三类角色之间切换模型。
+- 根据任务在公共 Skill 定义的职责之间切换模型，项目通过 `roleModels` 映射启用角色。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 工作流执行器默认是 `local`；可选择 `subtask`，由主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话并自动推进，主会话仍拥有唯一的工作流状态。
@@ -46,7 +47,7 @@ pi install git:github.com/CGOSU/pi-init
 pi install npm:pi-subtask
 ```
 
-未安装该扩展时请保持 `workflowExecutor: "local"`；`subtask` 模式会在缺少工具时安全阻塞当前任务。`1.2.0` 之前的旧配置值 `subagents` 会自动映射到 `subtask`，不会切换到已停止接入的 `@tintinweb/pi-subagents` RPC 执行器。
+未安装该扩展时请保持 `workflowExecutor: "local"`；`subtask` 模式会在缺少工具时安全阻塞当前任务。旧配置值 `subagents` 会自动映射到 `subtask`，不会切换到已停止接入的 `@tintinweb/pi-subagents` RPC 执行器。
 
 仅当前会话临时使用：
 
@@ -100,25 +101,45 @@ pi-usage
 │   ├── session-log.md
 │   └── pitfalls.md
 └── .pi/
-    ├── agents/
-    │   ├── pi-init-developer-test.md
-    │   └── pi-init-docs-commit.md
-    ├── role-models.json
-    ├── skills/
-    │   └── <project-slug>/
-    │       └── SKILL.md
+    └── role-models.json
 ```
 
-初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径才会询问项目名称、语言、项目定位、测试命令和 Skill 名称。当前项目初始化完成后会自动 reload。生成的 `AGENTS.md` 会要求先读取随模板生成的 `docs/clean-code.md`，并记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
+初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径可编辑项目名称、语言、项目定位、测试命令和角色模型，不再询问 Skill 名称或 slug。当前项目初始化完成后会自动 reload。生成的 `AGENTS.md` 会引用随 package 发布的 `pi-init-role-routing` Skill，要求先读取随模板生成的 `docs/clean-code.md`，并记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
 
 默认模板面向 CGOSU 工作流，包含团队知识库和 Git 身份规则。其他团队使用前，请修改：
 
 - `templates/AGENTS.md`
 - `templates/en/AGENTS.md`
 
+## 公共角色 Skill 与动态配置
+
+`skills/pi-init-role-routing/SKILL.md` 随 pi-init package 发布，并包含 `roles/architect.md`、`roles/developer-test.md` 和 `roles/docs-commit.md`。它是职责语义和路由的唯一公共来源，不会复制到 `~/.pi/agent/skills`，脚手架也不会生成 `.pi/skills/<slug>/SKILL.md`。
+
+项目角色和模型的唯一项目级来源是 `.pi/role-models.json` 的 `roleModels` 映射；映射中的键即启用的角色，值必须包含精确的 `provider`、`model` 和 `thinkingLevel`。保存结构使用 `schemaVersion: 2`，例如：
+
+```json
+{
+  "schemaVersion": 2,
+  "roleModels": {
+    "architect": { "provider": "provider", "model": "model", "thinkingLevel": "max" },
+    "developer-test": { "provider": "provider", "model": "model", "thinkingLevel": "max" },
+    "docs-commit": { "provider": "provider", "model": "model", "thinkingLevel": "medium" }
+  }
+}
+```
+
+添加新角色只需两步：
+
+1. 在项目 `.pi/role-models.json` 的 `roleModels` 中加入合法的小写角色 ID及其模型映射；
+2. 在公共 Skill package 的 `roles/<role-id>.md` 增加对应职责说明，并更新 package。
+
+运行时不维护独立角色注册表；已配置的新角色可用于菜单和工作流任务，未配置的角色不会 fallback 到其他模型。更新 package 后执行 `pi update --extensions`，再在当前会话执行 `/reload`；本地开发可重启 Pi 或重新加载本地扩展。
+
+旧版配置中的顶层 `architect`、`developer-test` 和 `docs-commit` 字段仍会自动读取，但只有用户明确执行 `/pi-init save` 时才规范化写入 `schemaVersion: 2` 与 `roleModels`。旧项目已有的 `.pi/skills/<slug>/SKILL.md` 不会被脚手架自动删除；请人工确认内容后再删除。用户自定义的其他 Skill 同样不会被修改。
+
 ## 角色编排
 
-项目级 Skill 按交付物选择角色：
+公共 Skill 按交付物选择角色；默认模型映射如下：
 
 | 角色 | 默认模型 | 推理强度 |
 | --- | --- | --- |
@@ -126,7 +147,7 @@ pi-usage
 | 开发测试工程师 | `openai-codex/gpt-5.6-luna` | `max` |
 | 文档与收尾工程师 | `openai-codex/gpt-5.6-luna` | `medium` |
 
-角色默认配置保存在项目的 `.pi/role-models.json`：
+内置角色的默认配置保存在项目的 `.pi/role-models.json`；项目也可加入其他合法角色 ID：
 
 - `auto`：自动切换。
 - `confirm`：切换前询问。
@@ -165,8 +186,8 @@ flowchart LR
 ```text
 /pi-init init [目录]
 /pi-init advanced [目录]
-/pi-init role <architect|developer-test|docs-commit>
-/pi-init config [architect|developer-test|docs-commit]
+/pi-init role <role-id>
+/pi-init config [role-id]
 /pi-init config workflow
 /pi-init save
 /pi-init mode <auto|confirm|manual>

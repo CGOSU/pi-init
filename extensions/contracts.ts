@@ -1,6 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { ROLE_NAMES, THINKING_LEVELS, WORKFLOW_EXECUTORS, WORKFLOW_MODES } from "../src/roles.js";
+import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_EXECUTORS, WORKFLOW_MODES } from "../src/roles.js";
 import { WORKFLOW_MAX_TASKS } from "../src/workflow.js";
 
 export type RoleModelConfig = {
@@ -21,12 +21,11 @@ export type ReportTheme = {
 };
 
 export type ResolvedRoleConfig = {
+  schemaVersion: number;
   mode: string;
   workflowMode: string;
   workflowExecutor: string;
-  architect: RoleModelConfig;
-  "developer-test": RoleModelConfig;
-  "docs-commit": RoleModelConfig;
+  roleModels: Record<string, RoleModelConfig>;
 };
 
 export type MenuItem = {
@@ -49,7 +48,21 @@ export const roleModelSchema = Type.Object({
   }),
 });
 
+export const roleModelsMapSchema = Type.Record(
+  Type.String({
+    pattern: ROLE_ID_PATTERN.source,
+    description: "角色 ID：小写字母、数字和单连字符",
+  }),
+  roleModelSchema,
+  { description: "项目启用的角色及其模型映射" },
+);
+
 export const roleModelsSchema = Type.Object({
+  schemaVersion: Type.Optional(Type.Integer({
+    minimum: 1,
+    maximum: 2,
+    description: "角色模型配置版本；当前保存版本为 2",
+  })),
   workflowMode: Type.Optional(StringEnum(WORKFLOW_MODES, {
     description: "任务工作流策略：off、on 或 auto（auto 在不超过 2 个任务时跳过编排）",
   })),
@@ -59,15 +72,12 @@ export const roleModelsSchema = Type.Object({
   workflowExecutor: Type.Optional(StringEnum(WORKFLOW_EXECUTORS, {
     description: "工作流执行器：local 或 subtask；默认 local",
   })),
-  architect: Type.Optional(roleModelSchema),
-  "developer-test": Type.Optional(roleModelSchema),
-  "docs-commit": Type.Optional(roleModelSchema),
-});
+  roleModels: Type.Optional(roleModelsMapSchema),
+}, { additionalProperties: true });
 
 export const initProjectParameters = Type.Object({
   targetDir: Type.Optional(Type.String({ description: "目标项目目录，默认是当前工作目录" })),
   projectName: Type.Optional(Type.String({ description: "项目显示名称" })),
-  slug: Type.Optional(Type.String({ description: "Pi Skill 名称" })),
   description: Type.Optional(Type.String({ description: "项目定位" })),
   language: Type.Optional(Type.String({ description: "模板语言：zh-CN 或 en" })),
   testCommand: Type.Optional(Type.String({ description: "项目测试命令" })),
@@ -75,14 +85,16 @@ export const initProjectParameters = Type.Object({
   roleModels: Type.Optional(roleModelsSchema),
 });
 
-export const roleNameSchema = StringEnum(ROLE_NAMES, {
-  description: "要切换的角色：architect、developer-test 或 docs-commit",
+export const roleNameSchema = Type.String({
+  pattern: ROLE_ID_PATTERN.source,
+  description: "要切换的角色 ID；必须是小写字母、数字和单连字符",
 });
 
 export const switchRoleParameters = Type.Object({ role: roleNameSchema });
 
-export const workflowTaskRoleSchema = StringEnum(["developer-test", "docs-commit"] as const, {
-  description: "任务执行角色；默认使用 developer-test",
+export const workflowTaskRoleSchema = Type.String({
+  pattern: ROLE_ID_PATTERN.source,
+  description: "任务执行角色 ID；必须是小写字母、数字和单连字符，默认使用 developer-test",
 });
 
 export const workflowTaskSchema = Type.Object({

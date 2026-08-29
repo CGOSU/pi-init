@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import {
-  ROLE_NAMES,
+  getRoleNames,
   THINKING_LEVELS,
   filterRoleModels,
   roleLabel,
@@ -283,11 +283,14 @@ export async function selectRoleModel(
   }
 }
 
-export async function collectRoleModels(ctx: ExtensionContext) {
+export async function collectRoleModels(
+  ctx: ExtensionContext,
+  roles = getRoleNames(undefined),
+) {
   const roleModels: Record<string, RoleModelConfig> = {};
   let roleIndex = 0;
-  while (roleIndex < ROLE_NAMES.length) {
-    const role = ROLE_NAMES[roleIndex];
+  while (roleIndex < roles.length) {
+    const role = roles[roleIndex];
     const selection = await selectRoleModel(ctx, role, roleModels[role]);
     if (isMenuBack(selection)) {
       if (roleIndex === 0) return MENU_BACK;

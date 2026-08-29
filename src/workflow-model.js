@@ -1,7 +1,8 @@
+import { normalizeRoleId } from "./roles.js";
+
 export const WORKFLOW_STATE_VERSION = 3;
 export const WORKFLOW_MAX_TASKS = 12;
 export const WORKFLOW_MAX_NUDGES = 2;
-export const WORKFLOW_TASK_ROLES = ["developer-test", "docs-commit"];
 export const WORKFLOW_EXECUTORS = ["local", "subtask"];
 export const WORKFLOW_DELEGATION_STATUSES = [
   "spawning",
@@ -120,10 +121,7 @@ export function normalizeTask(task, index) {
     throw new Error(`工作流任务 ${id} 的 id 必须是小写字母、数字、点、下划线或连字符`);
   }
 
-  const role = task.role ?? "developer-test";
-  if (!WORKFLOW_TASK_ROLES.includes(role)) {
-    throw new Error(`工作流任务 ${id} 的 role 无效：${role}`);
-  }
+  const role = normalizeRoleId(task.role ?? "developer-test", `工作流任务 ${id} 的 role `);
 
   const files = normalizeTextList(task.files, `工作流任务 ${id} 的 files`, { required: true });
   const acceptanceCriteria = normalizeTextList(

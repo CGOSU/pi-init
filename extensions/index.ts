@@ -6,7 +6,6 @@ import {
 
 import {
   ROLE_MODES,
-  ROLE_NAMES,
   findMatchingRole,
   roleLabel,
 } from "../src/roles.js";
@@ -245,6 +244,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     acceptedExternalRunSource = undefined;
     externalRunTiming = undefined;
     runtimeState.internalContinuationPending = false;
+    runtimeState.configuredRoleNames = [];
     runtimeState.currentContext = undefined;
   });
 
@@ -252,6 +252,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     try {
       runtimeState.runtimeDisposed = false;
       runtimeState.sessionRoleConfigOverrides = {};
+      runtimeState.configuredRoleNames = [];
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       runtimeState.currentContext = ctx;
       runtimeState.workflowModeStatus = config.workflowMode;
@@ -289,9 +290,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
       const action = tokens[0];
       const values = action === "role"
-        ? ROLE_NAMES
+        ? runtimeState.configuredRoleNames
         : action === "config"
-          ? [...ROLE_NAMES, "workflow"]
+          ? [...runtimeState.configuredRoleNames, "workflow"]
           : action === "mode"
           ? ROLE_MODES
           : action === "workflow"
@@ -324,8 +325,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "init_project",
     label: "Initialize Project",
     description:
-      "Generate AGENTS.md, four docs memory files, .pi/role-models.json, and a role-routing .pi/skills/<slug>/SKILL.md in a project. AGENTS.md also records the host platform and command conventions detected during initialization. The Skill defines technical level, model type, and Pi reasoning level for architecture, development/testing, and documentation/commit work. Existing generated files may be overwritten after confirmation.",
-    promptSnippet: "Initialize project context files and an intelligent responsibility-routing Skill",
+      "Generate AGENTS.md, project memory docs, and .pi/role-models.json. The package-published pi-init-role-routing Skill provides shared role semantics; project AGENTS.md references it and no project-level role Skill is generated. AGENTS.md also records the host platform and command conventions detected during initialization. Existing generated files may be overwritten after confirmation.",
+    promptSnippet: "Initialize project context files and use the package-published pi-init-role-routing Skill",
     promptGuidelines: [
       "Use init_project when the user asks to initialize a project with AI Coding collaboration context.",
       "Before calling init_project, inspect available project metadata and provide description and testCommand when known.",
@@ -363,7 +364,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const targetDir = params.targetDir ?? ".";
       const options = {
         projectName: params.projectName,
-        slug: params.slug,
         description: params.description,
         language: params.language,
         testCommand: params.testCommand,
@@ -432,11 +432,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "switch_role",
     label: "Switch Role",
     description:
-      "Switch the active Pi model and reasoning level for a responsibility. Reads project defaults and current-session overrides; switching never writes .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /pi-init role. Use /pi-init save to explicitly persist staged role configuration. Defaults are architect=openai-codex/gpt-5.6-sol:max, developer-test=openai-codex/gpt-5.6-luna:max, docs-commit=openai-codex/gpt-5.6-luna:medium.",
-    promptSnippet: "Switch model and reasoning level for architect, developer-test, or docs-commit work",
+      "Switch the active Pi model and reasoning level for a configured responsibility. Reads the project roleModels mapping and current-session overrides; switching never writes .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /pi-init role. Use /pi-init save to explicitly persist staged role configuration.",
+    promptSnippet: "Switch model and reasoning level for a configured project role",
     promptGuidelines: [
       "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
-      "Use switch_role role=architect for architecture, role=developer-test for implementation and testing, and role=docs-commit for documentation or authorized Git operations.",
+      "Use the role ID required by the current task; architect remains the planning role, while other configured role IDs may execute their assigned work.",
       "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
     ],
     parameters: switchRoleParameters,

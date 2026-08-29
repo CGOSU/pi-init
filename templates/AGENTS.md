@@ -7,8 +7,9 @@
 3. `docs/decisions.md`：已经确认的设计决策；
 4. `docs/session-log.md` 中最近的相关记录；
 5. `docs/pitfalls.md` 中与当前任务相关的历史问题；
-6. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
-7. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+6. 随 `pi-init` package 发布的 `pi-init-role-routing` Skill 及其中当前职责对应的 `roles/*.md`：角色职责和路由只从公共 Skill 读取；项目 `.pi/role-models.json` 仅通过 `roleModels` 映射启用角色和配置模型，不生成或维护项目级 Skill；
+7. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
+8. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
 
 ## 项目定位
 

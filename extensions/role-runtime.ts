@@ -8,9 +8,10 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-  ROLE_NAMES,
   THINKING_LEVELS,
+  mergeRoleConfig,
   normalizeModelReference,
+  normalizeRoleId,
   resolveRoleConfig,
   roleLabel,
   roleModeLabel,
@@ -73,10 +74,12 @@ export function createRoleRuntime(
 
   async function readSessionRoleConfig(ctx: ExtensionContext) {
     const persisted = await readRoleConfig(ctx);
-    return resolveRoleConfig({
-      ...(persisted && typeof persisted === "object" ? persisted : {}),
-      ...state.sessionRoleConfigOverrides,
-    }) as ResolvedRoleConfig;
+    const resolved = resolveRoleConfig(mergeRoleConfig(
+      persisted && typeof persisted === "object" ? persisted : {},
+      state.sessionRoleConfigOverrides,
+    )) as ResolvedRoleConfig;
+    state.configuredRoleNames = Object.keys(resolved.roleModels);
+    return resolved;
   }
 
   function activeRoleFor(ctx: ExtensionContext) {
@@ -96,7 +99,38 @@ export function createRoleRuntime(
   }
 
   function stageRoleConfig(changes: Record<string, unknown>) {
-    state.sessionRoleConfigOverrides = { ...state.sessionRoleConfigOverrides, ...changes };
+    const next = { ...state.sessionRoleConfigOverrides, ...changes };
+    const roleModels = state.sessionRoleConfigOverrides.roleModels
+      && typeof state.sessionRoleConfigOverrides.roleModels === "object"
+      && !Array.isArray(state.sessionRoleConfigOverrides.roleModels)
+      ? { ...(state.sessionRoleConfigOverrides.roleModels as Record<string, unknown>) }
+      : {};
+    let hasRoleModels = Object.keys(roleModels).length > 0;
+    if (changes.roleModels && typeof changes.roleModels === "object" && !Array.isArray(changes.roleModels)) {
+      Object.assign(roleModels, changes.roleModels);
+      hasRoleModels = true;
+    }
+    for (const [role, value] of Object.entries(changes)) {
+      if (!["schemaVersion", "mode", "workflowMode", "workflowEnabled", "workflowExecutor", "roleModels", "providerPolicy"].includes(role)
+        && value && typeof value === "object" && !Array.isArray(value)) {
+        roleModels[role] = value;
+        delete next[role];
+        hasRoleModels = true;
+      }
+    }
+    if (hasRoleModels) next.roleModels = roleModels;
+    state.sessionRoleConfigOverrides = next;
+  }
+
+  function clearStagedRoleConfig(role: string) {
+    const roleModels = state.sessionRoleConfigOverrides.roleModels;
+    if (!roleModels || typeof roleModels !== "object" || Array.isArray(roleModels)) return;
+    const remaining = { ...(roleModels as Record<string, unknown>) };
+    delete remaining[role];
+    const next = { ...state.sessionRoleConfigOverrides };
+    if (Object.keys(remaining).length > 0) next.roleModels = remaining;
+    else delete next.roleModels;
+    state.sessionRoleConfigOverrides = next;
   }
 
   async function writeBackManualModelSelection(
@@ -105,7 +139,7 @@ export function createRoleRuntime(
     config: ResolvedRoleConfig,
   ) {
     const role = state.activeRole?.role;
-    if (!role || !ROLE_NAMES.includes(role)) {
+    if (!role || !Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
       ctx.ui.notify(
         "手动模式下模型已由宿主切换；当前无活动角色，未写入 .pi/role-models.json。",
         "info",
@@ -125,7 +159,7 @@ export function createRoleRuntime(
       return;
     }
 
-    const current = config[role as keyof Pick<ResolvedRoleConfig, "architect" | "developer-test" | "docs-commit">];
+    const current = config.roleModels[role];
     const thinkingNow = pi.getThinkingLevel();
     const thinkingLevel = (THINKING_LEVELS as readonly string[]).includes(thinkingNow)
       ? thinkingNow
@@ -136,18 +170,21 @@ export function createRoleRuntime(
     }
 
     const changes: Record<string, unknown> = {
-      [role]: { ...reference, thinkingLevel },
+      roleModels: {
+        [role]: { ...reference, thinkingLevel },
+      },
     };
     const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
     try {
       await withFileMutationQueue(configPath, async () => {
         const persisted = await readRoleConfig(ctx);
         const persistedBase = persisted && typeof persisted === "object" ? persisted : {};
-        const resolved = resolveRoleConfig({ ...persistedBase, ...changes });
+        const resolved = resolveRoleConfig(mergeRoleConfig(persistedBase, changes));
         await mkdir(dirname(configPath), { recursive: true });
         await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
       });
-      delete state.sessionRoleConfigOverrides[role];
+      clearStagedRoleConfig(role);
+      state.configuredRoleNames = Object.keys((await readSessionRoleConfig(ctx)).roleModels);
       state.activeRole = { role, ...reference, thinkingLevel };
       ctx.ui.notify(
         `手动模式写回：${roleLabel(role)} → ${reference.provider}/${reference.model} 已写入 .pi/role-models.json。`,
@@ -163,27 +200,40 @@ export function createRoleRuntime(
       ctx.ui.notify("保存角色配置仅允许在受信任项目中运行；请先信任当前项目", "error");
       return;
     }
-    if (!hasPendingRoleConfigChanges()) {
-      ctx.ui.notify("当前没有未保存的角色配置变更。", "info");
-      return;
-    }
 
+    const hasPendingChanges = hasPendingRoleConfigChanges();
     const changes = { ...state.sessionRoleConfigOverrides };
     const configPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "role-models.json");
     try {
-      const next = await withFileMutationQueue(configPath, async () => {
+      const outcome = await withFileMutationQueue(configPath, async () => {
         const persisted = await readRoleConfig(ctx);
         const current = persisted && typeof persisted === "object" ? persisted : {};
-        const resolved = resolveRoleConfig({ ...current, ...changes });
+        const resolved = resolveRoleConfig(mergeRoleConfig(current, changes)) as ResolvedRoleConfig;
+        const canonical = persisted && typeof persisted === "object"
+          && persisted.schemaVersion === resolved.schemaVersion
+          && Object.prototype.hasOwnProperty.call(persisted, "roleModels");
+        if (!hasPendingChanges && (!persisted || canonical)) {
+          return { resolved, changed: false };
+        }
         await mkdir(dirname(configPath), { recursive: true });
         await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
-        return resolved as ResolvedRoleConfig;
+        return { resolved, changed: true };
       });
+      if (!outcome.changed) {
+        ctx.ui.notify("当前没有未保存的角色配置变更。", "info");
+        return;
+      }
       state.sessionRoleConfigOverrides = {};
-      state.workflowModeStatus = next.workflowMode;
-      state.workflowExecutorStatus = next.workflowExecutor;
-      refreshRoleStatus(ctx, state.sessionModeOverride ?? next.mode);
-      ctx.ui.notify("已保存角色配置到 .pi/role-models.json。", "info");
+      state.configuredRoleNames = Object.keys(outcome.resolved.roleModels);
+      state.workflowModeStatus = outcome.resolved.workflowMode;
+      state.workflowExecutorStatus = outcome.resolved.workflowExecutor;
+      refreshRoleStatus(ctx, state.sessionModeOverride ?? outcome.resolved.mode);
+      ctx.ui.notify(
+        hasPendingChanges
+          ? "已保存角色配置到 .pi/role-models.json。"
+          : "已将旧版角色配置迁移为 roleModels 结构。",
+        "info",
+      );
     } catch (error) {
       ctx.ui.notify(`保存角色配置失败：${textOf(error)}`, "error");
     }
@@ -300,24 +350,27 @@ export function createRoleRuntime(
   }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
+    const normalizedRole = normalizeRoleId(role);
     const config = await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;
     state.workflowExecutorStatus = config.workflowExecutor;
-    const target = config[role as keyof Pick<ResolvedRoleConfig, "architect" | "developer-test" | "docs-commit">];
-    if (!target) throw new Error(`未知角色：${role}`);
+    const target = config.roleModels[normalizedRole];
+    if (!target) {
+      throw new Error(`角色 ${normalizedRole} 未配置模型；请先执行 /pi-init config ${normalizedRole}`);
+    }
     const model = ctx.modelRegistry.find(target.provider, target.model);
     if (!model) {
       throw new Error(
-        `角色 ${roleLabel(role)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
+        `角色 ${roleLabel(normalizedRole)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
       );
     }
     if (!(await pi.setModel(model))) {
-      throw new Error(`角色 ${roleLabel(role)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
+      throw new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
     }
 
     pi.setThinkingLevel(target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
     const result = {
-      role,
+      role: normalizedRole,
       provider: target.provider,
       model: target.model,
       thinkingLevel: pi.getThinkingLevel(),
@@ -328,9 +381,10 @@ export function createRoleRuntime(
   }
 
   function currentRole(role: string, ctx: ExtensionContext) {
+    const normalizedRole = normalizeRoleId(role);
     const result = ctx.model
       ? {
-          role,
+          role: normalizedRole,
           provider: ctx.model.provider,
           model: ctx.model.id,
           thinkingLevel: pi.getThinkingLevel(),
@@ -339,56 +393,60 @@ export function createRoleRuntime(
     if (
       !state.activeRole ||
       !result ||
-      state.activeRole.role !== role ||
+      state.activeRole.role !== normalizedRole ||
       state.activeRole.provider !== result.provider ||
       state.activeRole.model !== result.model ||
       state.activeRole.thinkingLevel !== result.thinkingLevel
     ) {
-      throw new Error(`当前为手动模式，请先执行 /pi-init role ${role}`);
+      throw new Error(`当前为手动模式，请先执行 /pi-init role ${normalizedRole}`);
     }
     return result;
   }
 
   async function automaticRole(role: string, ctx: ExtensionContext) {
-    const configuredMode = (await readSessionRoleConfig(ctx)).mode;
-    const mode = state.sessionModeOverride ?? configuredMode;
+    const normalizedRole = normalizeRoleId(role);
+    const config = await readSessionRoleConfig(ctx);
+    if (!Object.prototype.hasOwnProperty.call(config.roleModels, normalizedRole)) {
+      throw new Error(`角色 ${normalizedRole} 未配置模型；请先执行 /pi-init config ${normalizedRole}`);
+    }
+    const mode = state.sessionModeOverride ?? config.mode;
     if (mode === "auto") {
       const previousRole = activeRoleFor(ctx)?.role;
       const compactAfterSwitch = shouldCompactOnRoleSwitch({
         mode,
         previousRole,
-        nextRole: role,
+        nextRole: normalizedRole,
         contextUsage: ctx.getContextUsage(),
       });
-      const result = await applyRole(role, ctx);
+      const result = await applyRole(normalizedRole, ctx);
       const transition = compactAfterSwitch && previousRole
         ? { fromRole: previousRole, toRole: result.role }
         : undefined;
       if (transition) state.pendingRoleCompaction = transition;
-      return { mode, requestedRole: role, result, transition };
+      return { mode, requestedRole: normalizedRole, result, transition };
     }
     if (mode === "manual") {
-      return { mode, requestedRole: role, result: currentRole(role, ctx) };
+      return { mode, requestedRole: normalizedRole, result: currentRole(normalizedRole, ctx) };
     }
 
-    if (state.activeRole?.role === role) {
+    if (state.activeRole?.role === normalizedRole) {
       try {
-        return { mode, requestedRole: role, result: currentRole(role, ctx) };
+        return { mode, requestedRole: normalizedRole, result: currentRole(normalizedRole, ctx) };
       } catch {
         // The user changed the model or thinking level; confirm the role again.
       }
     }
     if (!ctx.hasUI) {
-      throw new Error(`角色切换模式为确认后切换，但当前环境无法确认；请先执行 /pi-init role ${role} 或 /pi-init mode auto`);
+      throw new Error(`角色切换模式为确认后切换，但当前环境无法确认；请先执行 /pi-init role ${normalizedRole} 或 /pi-init mode auto`);
     }
 
-    const decision = await showMenu(ctx, `建议切换到「${roleLabel(role)}」`, [
+    const decision = await showMenu(ctx, `建议切换到「${roleLabel(normalizedRole)}」`, [
       { value: "accept", label: "采用建议", description: "切换到项目配置的模型" },
       { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角" },
       { value: "cancel", label: "取消" },
     ]);
     if (decision === "accept") {
-      return { mode, requestedRole: role, result: await applyRole(role, ctx) };
+      return { mode, requestedRole: normalizedRole, result: await applyRole(normalizedRole, ctx) };
     }
     if (decision === "manual") {
       state.sessionModeOverride = "manual";
@@ -396,12 +454,12 @@ export function createRoleRuntime(
       const selected = await showMenu(
         ctx,
         "手动选择角色",
-        ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
+        Object.keys(config.roleModels).map((value) => ({ value, label: roleLabel(value) })),
       );
       if (!selected || isMenuBack(selected)) throw new Error("已取消手动角色选择");
       return {
         mode: "manual",
-        requestedRole: role,
+        requestedRole: normalizedRole,
         result: await applyRole(selected, ctx),
       };
     }

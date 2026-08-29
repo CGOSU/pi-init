@@ -70,12 +70,10 @@ const {
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-  normalizeNewlines,
   withTempDirectory,
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
-  assertSkillMatchesRoleConfig,
 } = helpers;
 
 test("架构工作流按依赖顺序推进并在完成后选择下一任务", () => {
@@ -151,6 +149,24 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   assert.deepEqual(getWorkflowExecutionBounds(finished), { startedAt: 115, completedAt: 160 });
   assert.equal(getWorkflowExecutionDuration(finished), 45);
   assert.deepEqual(workflowProgress(finished), { completed: 3, total: 3, blocked: 0, currentTaskId: undefined });
+});
+
+test("工作流任务支持合法的动态角色 ID并保留默认开发角色", () => {
+  const state = createWorkflowState({
+    summary: "动态角色工作流",
+    tasks: [
+      { id: "review", role: "qa-review", task: "执行评审", files: ["src/review.js"], acceptanceCriteria: ["评审完成"] },
+      { id: "implementation", task: "执行实现", files: ["src/feature.js"], acceptanceCriteria: ["测试通过"] },
+    ],
+  });
+  assert.deepEqual(state.tasks.map((task) => task.role), ["qa-review", "developer-test"]);
+  assert.throws(
+    () => createWorkflowState({
+      summary: "非法角色",
+      tasks: [{ id: "task", role: "qa_review", task: "执行", files: ["src"], acceptanceCriteria: ["完成"] }],
+    }),
+    /role 无效/,
+  );
 });
 
 test("工作流重规划保留已完成任务、支持新增并审计被替换任务", () => {

@@ -9,7 +9,7 @@ import {
   retryWorkflowTask,
   validateWorkflowPlan,
 } from "../src/workflow.js";
-import { shouldOrchestrateWorkflow } from "../src/roles.js";
+import { roleLabel, shouldOrchestrateWorkflow } from "../src/roles.js";
 import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowDispatch } from "./workflow-dispatch.ts";
@@ -32,6 +32,17 @@ export function createWorkflowActions(
       );
     }
     return shouldOrchestrateWorkflow({ mode, taskCount });
+  }
+
+  function assertConfiguredTaskRoles(config: { roleModels: Record<string, unknown> }, tasks: Array<{ id: string; role: string }>) {
+    const configuredRoles = new Set(Object.keys(config.roleModels));
+    for (const task of tasks) {
+      if (!configuredRoles.has(task.role)) {
+        throw new Error(
+          `工作流任务 ${task.id} 要求角色 ${roleLabel(task.role)}，但该角色未配置模型；请先执行 /pi-init config ${task.role}`,
+        );
+      }
+    }
   }
 
   async function workflowCommand(
@@ -106,6 +117,7 @@ export function createWorkflowActions(
           tasks: params.tasks,
           reviewRequired: params.reviewRequired,
         });
+        assertConfiguredTaskRoles(config, plan.tasks);
         if (config.workflowMode === "off") {
           throw new Error(
             "task_workflow 当前策略为 off；请先执行 /pi-init config workflow 选择 on 或 auto，或在 .pi/role-models.json 中将 workflowMode 设为 on/auto",
@@ -148,6 +160,13 @@ export function createWorkflowActions(
         if (state.workflowState.status !== "replanning") {
           throw new Error("当前没有等待应用的工作流重规划");
         }
+        const config = await deps.roleRuntime.readSessionRoleConfig(ctx);
+        const plan = validateWorkflowPlan({
+          summary: params.summary,
+          constraints: params.constraints,
+          tasks: params.tasks,
+        });
+        assertConfiguredTaskRoles(config, plan.tasks);
         const next = applyWorkflowReplan(state.workflowState, {
           revisionId: params.revisionId,
           summary: params.summary,

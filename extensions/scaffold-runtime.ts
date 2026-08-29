@@ -5,7 +5,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { ROLE_NAMES } from "../src/roles.js";
+import { DEFAULT_ROLE_NAMES } from "../src/roles.js";
 import { createScaffold } from "../src/scaffold.js";
 import type { RoleModelConfig } from "./contracts.ts";
 import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
@@ -107,7 +107,6 @@ type AdvancedOptions = {
   language: string;
   description?: string;
   testCommand?: string;
-  slug?: string;
   roleConfiguration: "default" | "custom";
   roleModels?: Record<string, RoleModelConfig>;
 };
@@ -118,8 +117,8 @@ async function collectRoleModelsForInit(
 ) {
   const roleModels = { ...initialRoleModels };
   let roleIndex = 0;
-  while (roleIndex < ROLE_NAMES.length) {
-    const role = ROLE_NAMES[roleIndex];
+  while (roleIndex < DEFAULT_ROLE_NAMES.length) {
+    const role = DEFAULT_ROLE_NAMES[roleIndex];
     const selection = await selectRoleModel(ctx, role, roleModels[role]);
     if (isMenuBack(selection)) {
       if (roleIndex === 0) return MENU_BACK;
@@ -174,7 +173,7 @@ export async function runScaffold(
       }
       const message = [
         `项目：${preview.projectName}`,
-        `语言：${preview.language} · Skill：${preview.projectSlug}`,
+        `语言：${preview.language}`,
         ...(typeof options.testCommand === "string" && options.testCommand
           ? [`测试：${options.testCommand}`]
           : []),
@@ -208,12 +207,11 @@ async function collectOptions(
   let language = initial?.language;
   let description = initial?.description;
   let testCommand = initial?.testCommand;
-  let slug = initial?.slug;
   let roleConfiguration: AdvancedOptions["roleConfiguration"] | undefined = initial?.roleConfiguration;
   let roleModels = initial?.roleModels;
   let step = initialStep;
 
-  while (step <= 5) {
+  while (step <= 4) {
     if (step === 0) {
       const value = await input(ctx, "项目名称", metadata.projectName, projectName);
       if (isMenuBack(value)) return MENU_BACK;
@@ -268,25 +266,13 @@ async function collectOptions(
       continue;
     }
 
-    if (step === 4) {
-      const value = await input(ctx, "Skill 名称（可留空自动生成）", metadata.projectName, slug);
-      if (isMenuBack(value)) {
-        step = 3;
-        continue;
-      }
-      if (value === undefined) return undefined;
-      slug = value;
-      step = 5;
-      continue;
-    }
-
     const value = await showMenu(ctx, "角色模型", [
       { value: "default", label: "使用默认配置", description: "推荐，后续可在 /pi-init config 中修改" },
-      { value: "custom", label: "逐个配置", description: "为三个角色选择模型和推理强度" },
+      { value: "custom", label: "逐个配置", description: "为默认角色逐个选择模型和推理强度" },
       { value: "cancel", label: "取消" },
     ], { selectedValue: roleConfiguration });
     if (isMenuBack(value)) {
-      step = 4;
+      step = 3;
       continue;
     }
     if (!value || value === "cancel") return undefined;
@@ -308,7 +294,6 @@ async function collectOptions(
     language: language ?? "zh-CN",
     description: description || undefined,
     testCommand: testCommand || undefined,
-    slug: slug || undefined,
     roleConfiguration: roleConfiguration === "custom" ? "custom" : "default",
     ...(roleModels ? { roleModels } : {}),
   } satisfies AdvancedOptions;
@@ -350,7 +335,7 @@ export async function advancedInit(targetDir: string, ctx: ExtensionCommandConte
 
   let draft: AdvancedOptions | undefined;
   while (true) {
-    const options = await collectOptions(ctx, targetDir, draft, draft ? 5 : 0);
+    const options = await collectOptions(ctx, targetDir, draft, draft ? 4 : 0);
     if (isMenuBack(options)) return MENU_BACK;
     if (!options) {
       ctx.ui.notify("已取消项目初始化。", "warning");

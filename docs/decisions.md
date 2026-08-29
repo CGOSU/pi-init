@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-08-30：职责语义迁移到 package 公共 Skill
+
+- 决定：由随 `pi-init` package 发布的 `skills/pi-init-role-routing/` 维护角色语义、路由、职责边界和通用工作流规则；项目不再生成 `.pi/skills/<slug>/SKILL.md`，项目 `.pi/role-models.json` 的 `roleModels` 映射成为启用角色和模型选择的唯一项目级来源。
+- 原因：避免每个项目复制一份职责规则并与 package 版本漂移，同时允许项目通过动态角色 ID 配置模型，而不引入运行时角色注册表。
+- 约束：公共 Skill 不写入具体 provider、model 或 thinkingLevel；新增角色需要在 `roleModels` 中配置角色 ID并在公共 Skill package 中提供对应 `roles/<role-id>.md`。旧版顶层角色字段继续自动读取，只有显式 `/pi-init save` 才迁移到 `schemaVersion: 2`；旧项目 Skill 和用户自定义 Skill 不自动删除。
+- 替代：替代 2026-08-04“保留 pi-init 项目级 Skill 作为默认产物”的当前实现决定；历史背景保留，但新脚手架和 package 发布规则以本条为准。
+
 ### 2026-08-30：职责边界遇到跨类工作时自动切换
 
 - 决定：开发测试工程师只负责代码、测试和验证，不写文档；文档与收尾工程师只负责文档、版本和交付收尾，不写代码。两者遇到疑问、困惑不解或需求分析时切换到架构师；开发测试工程师遇到文档修改切换到文档与收尾工程师，文档与收尾工程师遇到代码修改切换到开发测试工程师。

@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -73,10 +72,6 @@ import {
   getRunTimingDuration,
   isExternalRunSource,
 } from "../src/run-timing.js";
-
-function normalizeNewlines(value) {
-  return value.replaceAll("\r\n", "\n");
-}
 
 async function withTempDirectory(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-"));
@@ -228,15 +223,6 @@ async function runExternalAgent(harness, source) {
   await emitExtensionEvent(harness, "agent_settled");
 }
 
-function assertSkillMatchesRoleConfig(skill, config) {
-  for (const role of ["architect", "developer-test", "docs-commit"]) {
-    const { provider, model, thinkingLevel } = config[role];
-    assert.match(skill, new RegExp("`" + provider + "/" + model + "`"));
-    assert.match(skill, new RegExp("`" + thinkingLevel + "`"));
-  }
-}
-
-
 export {
   mkdtemp,
   mkdir,
@@ -305,10 +291,8 @@ export {
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-  normalizeNewlines,
   withTempDirectory,
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
-  assertSkillMatchesRoleConfig,
 };

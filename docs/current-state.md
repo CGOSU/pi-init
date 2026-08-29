@@ -3,33 +3,33 @@
 ## 项目
 
 - 名称：`pi-init`
-- 定位：用于 Pi 的项目初始化扩展，生成 `AGENTS.md`、项目记忆文档，以及支持智能职责路由和自动模型切换的项目级 Skill。
+- 定位：用于 Pi 的项目初始化扩展，生成 `AGENTS.md`、项目记忆文档和 `.pi/role-models.json`，并随 package 发布公共职责路由 Skill。
 
 ## 当前目标
 
-- 生成可按任务阶段自动切换具体模型与 Pi 推理强度的中英文项目 Skill。
+- 维护随 package 发布的公共职责路由 Skill，并让项目 `roleModels` 映射成为启用角色和模型选择的唯一来源。
 
 ## 已知状态
 
 - 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。控制中心和脚手架运行时已改为扩展实例内 Promise 缓存的按需加载，工作流恢复从 session branch 末尾直接查找最新状态。
 - `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。schema v3 使用稳定 entry key（Pi id 或 legacy 哈希）跨 fork 文件去重 usage、speed、activity 和 session；schema 不一致时事务化清理并全量重建所有派生表与 checkpoint。
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
-- 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档及 `.pi/skills/<slug>/SKILL.md`；`AGENTS.md` 要求任务开始前先读取 Clean Code 规则。
-- 生成的中英文项目 Skill 均包含精确字符串替换规则：读取最新内容、要求唯一匹配、使用最小上下文、支持同一编辑中的多个非重叠替换，并在修改后检查 diff。
-- Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；开发测试工程师不写文档，文档与收尾工程师不写代码，遇到疑问、困惑不解或需求分析统一切换到架构师。
+- 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
+- package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 维护角色语义、路由、职责边界和通用工作流规则，不嵌入具体模型值。
+- 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；开发测试工程师不写文档，文档与收尾工程师不写代码，遇到疑问、困惑不解或需求分析统一切换到架构师。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。成功后注入隐藏续跑消息，失败仅提示并保留已切换角色。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，由当前架构角色直接顺序执行，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。任务和最终工作流报告均保留摘要、时间、耗时和验证，开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - 活动工作流支持普通自然语言方向变更：同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并到一个 `pendingRevision`/`revisionId`，同步更新 revision 审计记录；当前任务完成后进入 `replanning`，由架构师依据完整指令通过 `task_workflow(action="replan")` 仅重规划未完成后续任务。新计划应用前 local 和 `subtask` 均不会启动旧后续任务，运行中的 subtask fork 不由 pi-init 自动终止或重派，立即停止仍使用既有 cancel 流程。
 - 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
 - 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
-- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可覆盖；`.pi/role-models.json` 保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。
+- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可通过 `.pi/role-models.json` 的 `roleModels` 映射覆盖或启用其他合法角色；保存配置使用 `schemaVersion: 2`，并保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。旧版顶层角色字段仅自动读取兼容，显式 `/pi-init save` 时才规范化；旧项目生成的角色 Skill 需人工确认后删除。
 - 模型安全来自角色和工作流配置中的明确引用而非 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧字段被忽略）：角色模型和 `subtask` 工作流配置使用完整 `provider/model` 并要求精确存在；原生 Agent 子代理由 Pi 宿主决定模型，pi-init 不注入、不校验、不拦截其 `model` 参数。原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截（见 `docs/decisions.md`）。`/pi-init config` 候选列表展示全部已注册模型，跨 Provider 选择随时可暂存。
 - `workflowExecutor` 支持 `local`（默认）和 `subtask`：后者由主会话调用 `subtask` 工具把当前就绪任务顺序委派到独立的对话 fork，结果经 `subtask-result` custom 消息回到会话后自动推进；主扩展唯一写入工作流状态，严格校验 `pi-init/task-result@1`，缺少工具或无效结果安全阻塞，reload 不自动重新派发非终态任务。旧配置值 `subagents`（已停止接入的 `@tintinweb/pi-subagents` RPC）自动映射为 `subtask`。
 - 初始化不再生成 `.pi/agents/*.md` 代理脚手架（pi-subagents 专用，随 RPC 执行器一并移除）；subtask fork 复用主会话角色与工具，不需要额外代理定义。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。生成规则同时约束 `read`/`edit` 参数和精确替换失败后的重读流程。
-- 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令、Skill 名称和职责模型；TUI 中按 Esc 会返回上一个填写属性并保留已填写内容，最终确认返回角色模型步骤。高级初始化首项从控制中心返回控制中心，直接 `/pi-init advanced` 返回调用方；Ctrl+C、显式“取消”和快速/非 TUI 路径仍保持取消或原有行为。
+- 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令和职责模型，不再询问 Skill 名称或 slug；TUI 中按 Esc 会返回上一个填写属性并保留已填写内容，最终确认返回角色模型步骤。高级初始化首项从控制中心返回控制中心，直接 `/pi-init advanced` 返回调用方；Ctrl+C、显式“取消”和快速/非 TUI 路径仍保持取消或原有行为。
 - 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，按“初始化/变更/工作流”分组菜单；工作流策略已从“角色与模型”中移到顶层变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，TUI 菜单和初始化文本输入中按 Esc 返回上一级而非触发取消，初始化通知默认只显示文件数量和冲突摘要。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。

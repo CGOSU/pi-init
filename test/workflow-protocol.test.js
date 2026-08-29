@@ -69,12 +69,10 @@ const {
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-  normalizeNewlines,
   withTempDirectory,
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
-  assertSkillMatchesRoleConfig,
 } = helpers;
 
 test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {

@@ -7,8 +7,9 @@ This file defines the long-term AI coding rules for this project. Before startin
 3. `docs/decisions.md` for confirmed design decisions;
 4. the latest relevant entries in `docs/session-log.md`;
 5. relevant historical issues in `docs/pitfalls.md`;
-6. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then commit in Chinese and run `git push`;
-7. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
+6. the package-published `pi-init-role-routing` Skill and the relevant `roles/*.md` profile: read role semantics and routing only from the shared Skill; use the project's `.pi/role-models.json` only to enable roles and configure models through `roleModels`, and do not generate or maintain a project-level role Skill;
+7. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then commit in Chinese and run `git push`;
+8. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
 
 ## Project Purpose
 

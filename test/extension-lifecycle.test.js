@@ -69,12 +69,10 @@ const {
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-  normalizeNewlines,
   withTempDirectory,
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
-  assertSkillMatchesRoleConfig,
 } = helpers;
 
 test("角色配置先写会话，显式保存才落盘", async () => {
@@ -99,6 +97,152 @@ test("角色配置先写会话，显式保存才落盘", async () => {
     assert.equal(saved.workflowMode, "on");
     assert.equal(saved.workflowExecutor, "local");
     assert.match(harness.notifications.at(-1)?.message ?? "", /已保存角色配置/);
+  });
+});
+
+test("旧版顶层角色配置在显式保存时迁移到 roleModels", async () => {
+  await withTempDirectory(async (directory) => {
+    const configPath = path.join(directory, ".pi", "role-models.json");
+    const legacy = {
+      mode: "auto",
+      workflowMode: "auto",
+      workflowExecutor: "local",
+      ...DEFAULT_ROLE_MODELS,
+    };
+    const original = `${JSON.stringify(legacy, null, 2)}\n`;
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, original, "utf8");
+
+    const harness = createExtensionHarness([], { cwd: directory, trusted: true });
+    const command = harness.commands.get("pi-init");
+
+    await command.handler("save", harness.context);
+
+    const migrated = JSON.parse(await readFile(configPath, "utf8"));
+    assert.equal(migrated.schemaVersion, 2);
+    assert.deepEqual(migrated.roleModels, DEFAULT_ROLE_MODELS);
+    assert.equal(migrated.architect, undefined);
+    assert.equal(migrated["developer-test"], undefined);
+  });
+});
+
+test("动态 roleModels 支持切换、暂存保存且不为缺失角色回退", async () => {
+  await withTempDirectory(async (directory) => {
+    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
+    const reviewer = { provider: "openai-codex", id: "gpt-reviewer" };
+    const reviewerNext = { provider: "openai-codex", id: "gpt-reviewer-next" };
+    const writer = { provider: "openai-codex", id: "gpt-writer" };
+    const writerNext = { provider: "openai-codex", id: "gpt-writer-next" };
+    const config = {
+      schemaVersion: 2,
+      mode: "auto",
+      workflowMode: "on",
+      workflowExecutor: "local",
+      roleModels: {
+        architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
+        reviewer: { provider: reviewer.provider, model: reviewer.id, thinkingLevel: "high" },
+        writer: { provider: writer.provider, model: writer.id, thinkingLevel: "medium" },
+      },
+    };
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      trusted: true,
+      model: architect,
+      availableModels: [architect, reviewer, reviewerNext, writer, writerNext],
+      input: async () => "",
+      select: async (title, items) => title.startsWith("选择 reviewer 模型")
+        ? items.find((item) => item.includes(reviewerNext.id))
+        : title.startsWith("选择 writer 模型")
+          ? items.find((item) => item.includes(writerNext.id))
+          : items[0],
+    });
+    await emitExtensionEvent(harness, "session_start");
+    assert.ok(harness.commands.get("pi-init").getArgumentCompletions("role reviewer").some((item) => item.value === "reviewer"));
+
+    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
+    await switchRole.execute("reviewer", { role: "reviewer" }, undefined, undefined, harness.context);
+    assert.equal(harness.context.model.id, reviewer.id);
+    await assert.rejects(
+      switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context),
+      /未配置模型/,
+    );
+    assert.equal(harness.context.model.id, reviewer.id);
+
+    await harness.commands.get("pi-init").handler("config reviewer", harness.context);
+    await harness.commands.get("pi-init").handler("config writer", harness.context);
+    const beforeSave = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.equal(beforeSave.roleModels.reviewer.model, reviewer.id);
+    assert.equal(beforeSave.roleModels.writer.model, writer.id);
+    assert.equal(harness.context.model.id, writerNext.id);
+    await harness.commands.get("pi-init").handler("save", harness.context);
+    const saved = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.equal(saved.roleModels.reviewer.model, reviewerNext.id);
+    assert.equal(saved.roleModels.writer.model, writerNext.id);
+    assert.deepEqual(saved.roleModels.architect, config.roleModels.architect);
+    assert.equal(saved.roleModels["developer-test"], undefined);
+  });
+});
+
+test("工作流计划和重规划只接受项目已配置的角色", async () => {
+  await withTempDirectory(async (directory) => {
+    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
+    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const reviewer = { provider: "openai-codex", id: "gpt-reviewer" };
+    const configPath = path.join(directory, ".pi", "role-models.json");
+    const config = {
+      schemaVersion: 2,
+      workflowMode: "on",
+      roleModels: {
+        architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
+        "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
+      },
+    };
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      trusted: true,
+      model: architect,
+      availableModels: [architect, developer, reviewer],
+    });
+    await emitExtensionEvent(harness, "session_start");
+    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
+    await switchRole.execute("architect", { role: "architect" }, undefined, undefined, harness.context);
+    const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+    const planParams = {
+      action: "plan",
+      summary: "验证角色边界",
+      tasks: [{ id: "implementation", task: "实现功能", files: ["src/feature.js"], acceptanceCriteria: ["测试通过"] }],
+    };
+    const planned = await workflow.execute("plan", planParams, undefined, undefined, harness.context);
+    assert.equal(planned.details.tasks[0].role, "developer-test");
+
+    const inputHandler = harness.handlers.get("input")[0];
+    await inputHandler({ source: "interactive", text: "改为 reviewer 角色" }, harness.context);
+    const revisionId = harness.entries.at(-1).data.pendingRevision.revisionId;
+    await assert.rejects(
+      workflow.execute("replan", {
+        action: "replan",
+        revisionId,
+        summary: "改用 reviewer",
+        tasks: [{ id: "review", role: "reviewer", task: "执行评审", files: ["src/review.js"], acceptanceCriteria: ["评审完成"] }],
+      }, undefined, undefined, harness.context),
+      /未配置模型/,
+    );
+
+    config.roleModels.reviewer = { provider: reviewer.provider, model: reviewer.id, thinkingLevel: "high" };
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const applied = await workflow.execute("replan", {
+      action: "replan",
+      revisionId,
+      summary: "改用 reviewer",
+      tasks: [{ id: "review", role: "reviewer", task: "执行评审", files: ["src/review.js"], acceptanceCriteria: ["评审完成"] }],
+    }, undefined, undefined, harness.context);
+    assert.equal(applied.details.tasks[0].role, "reviewer");
   });
 });
 
@@ -184,11 +328,11 @@ test("init_project 首次使用按需加载脚手架并支持 dryRun", async () 
     const harness = createExtensionHarness([], { cwd: directory, hasUI: false });
     const initProject = harness.tools.find((tool) => tool.name === "init_project");
     assert.ok(initProject);
+    assert.equal(initProject.parameters.properties.slug, undefined);
 
     const params = {
       targetDir: ".",
       projectName: "Lazy Project",
-      slug: "lazy-project",
       description: "验证按需加载",
       language: "zh-CN",
       testCommand: "npm test",

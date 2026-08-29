@@ -71,12 +71,10 @@ const {
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-  normalizeNewlines,
   withTempDirectory,
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
-  assertSkillMatchesRoleConfig,
 } = helpers;
 
 test("TUI 菜单按 Esc 返回上一级而不是取消", async () => {
@@ -137,7 +135,7 @@ test("高级初始化按 Esc 返回上一个属性并保留页面内容", async 
   await withTempDirectory(async (directory) => {
     const esc = "\u001b";
     const down = String.fromCharCode(27) + "[B";
-    const actions = [["Project", "\n"], ["\n"], ["Description", "\n"], [esc], ["\n"], ["npm test", "\n"], ["\n"], ["\n"], [esc], [down, down, "\n"]];
+    const actions = [["Project", "\n"], ["\n"], ["Description", "\n"], [esc], ["\n"], ["npm test", "\n"], ["\n"], [esc], [down, down, "\n"]];
     const screens = [];
     const harness = createExtensionHarness([], { cwd: directory, mode: "tui", custom: async (call) => {
       screens.push(call.component.render(120).join("\n"));
@@ -147,7 +145,7 @@ test("高级初始化按 Esc 返回上一个属性并保留页面内容", async 
     await advancedInit(".", harness.context);
 
     assert.equal(screens.length, actions.length);
-    ["项目名称", "模板语言", "项目定位", "测试命令", "项目定位", "测试命令", "Skill 名称", "角色模型", "确认初始化项目", "角色模型"]
+    ["项目名称", "模板语言", "项目定位", "测试命令", "项目定位", "测试命令", "角色模型", "确认初始化项目", "角色模型"]
       .forEach((title, index) => assert.match(screens[index], new RegExp(title)));
     assert.match(screens[4], /Description/);
     assert.match(harness.notifications.at(-1)?.message ?? "", /已取消项目初始化/);
@@ -242,7 +240,7 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
     assert.match(piInitStatus?.text ?? "", /手动/);
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    assert.deepEqual(persisted["developer-test"], {
+    assert.deepEqual(persisted.roleModels["developer-test"], {
       provider: "openrouter",
       model: "anthropic/claude-haiku-4.5",
       thinkingLevel: "max",

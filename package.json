@@ -11,6 +11,7 @@
     "extensions",
     "src",
     "templates",
+    "skills",
     "scripts",
     "README.md"
   ],
@@ -24,6 +25,9 @@
   "pi": {
     "extensions": [
       "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "peerDependencies": {

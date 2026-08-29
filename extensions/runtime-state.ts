@@ -24,6 +24,7 @@ export type ExtensionRuntimeState = {
   activeRole?: ActiveRole;
   sessionModeOverride?: string;
   sessionRoleConfigOverrides: Record<string, unknown>;
+  configuredRoleNames: string[];
   controlCenterGuideShown: boolean;
   roleModeStatus: string;
   workflowModeStatus: string;
@@ -42,6 +43,7 @@ export type WorkflowState = ReturnType<typeof createWorkflowState>;
 export function createExtensionRuntimeState(): ExtensionRuntimeState {
   return {
     sessionRoleConfigOverrides: {},
+    configuredRoleNames: [],
     controlCenterGuideShown: false,
     roleModeStatus: "auto",
     workflowModeStatus: "auto",
