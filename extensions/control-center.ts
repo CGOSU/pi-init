@@ -25,7 +25,7 @@ export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
   roleRuntime: RoleRuntime;
   quickInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
-  advancedInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
+  advancedInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void | typeof MENU_BACK>;
   getThinkingLevel: () => string;
   workflowCommand: (
     action: string | undefined,
@@ -281,7 +281,11 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       ], { summary, selectedValue: selectedAction });
       if (!action || isMenuBack(action) || action === "exit") return;
       if (action === "quick") return deps.quickInit(".", ctx);
-      if (action === "advanced") return deps.advancedInit(".", ctx);
+      if (action === "advanced") {
+        const result = await deps.advancedInit(".", ctx);
+        if (isMenuBack(result)) continue;
+        return;
+      }
       selectedAction = action;
       if (action === "config") {
         await configureRoleCenter(ctx);

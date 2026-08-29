@@ -5,8 +5,10 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { ROLE_NAMES } from "../src/roles.js";
 import { createScaffold } from "../src/scaffold.js";
-import { collectRoleModels, input, isMenuBack, MENU_BACK, showMenu } from "./ui.ts";
+import type { RoleModelConfig } from "./contracts.ts";
+import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
 
 function normalizeTargetDir(value: string) {
   const target = value.trim();
@@ -98,13 +100,62 @@ function formatCompactResult(result: ScaffoldOutcome) {
 }
 
 type ScaffoldResult = Awaited<ReturnType<typeof createScaffold>>;
-export type ScaffoldOutcome = ScaffoldResult & { cancelled?: boolean };
+export type ScaffoldOutcome = ScaffoldResult & { cancelled?: boolean; backedOut?: boolean };
+
+type AdvancedOptions = {
+  projectName: string;
+  language: string;
+  description?: string;
+  testCommand?: string;
+  slug?: string;
+  roleConfiguration: "default" | "custom";
+  roleModels?: Record<string, RoleModelConfig>;
+};
+
+async function collectRoleModelsForInit(
+  ctx: ExtensionCommandContext,
+  initialRoleModels: Record<string, RoleModelConfig> = {},
+) {
+  const roleModels = { ...initialRoleModels };
+  let roleIndex = 0;
+  while (roleIndex < ROLE_NAMES.length) {
+    const role = ROLE_NAMES[roleIndex];
+    const selection = await selectRoleModel(ctx, role, roleModels[role]);
+    if (isMenuBack(selection)) {
+      if (roleIndex === 0) return MENU_BACK;
+      roleIndex -= 1;
+      continue;
+    }
+    if (!selection) return undefined;
+    roleModels[role] = selection;
+    roleIndex += 1;
+  }
+  return roleModels;
+}
+
+async function confirmScaffold(
+  ctx: ExtensionCommandContext,
+  message: string,
+  allowBack: boolean,
+) {
+  if (!allowBack || ctx.mode !== "tui") {
+    return (await ctx.ui.confirm("确认初始化项目？", message)) ? "confirm" as const : "cancel" as const;
+  }
+
+  const result = await showMenu(ctx, "确认初始化项目？", [
+    { value: "confirm", label: "确认生成" },
+    { value: "cancel", label: "取消初始化" },
+  ], { summary: message.split("\n") });
+  if (isMenuBack(result)) return MENU_BACK;
+  return result === "confirm" ? "confirm" as const : "cancel" as const;
+}
 
 export async function runScaffold(
   ctx: ExtensionContext,
   targetDir: string,
   options: Record<string, unknown>,
   confirmation: "always" | "conflicts" | "never",
+  allowBack = false,
 ): Promise<ScaffoldOutcome> {
   const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
 
@@ -133,7 +184,11 @@ export async function runScaffold(
           ? [`已有文件将被覆盖：${preview.conflicts.join(", ")}`]
           : ["无文件冲突"]),
       ].join("\n");
-      if (!(await ctx.ui.confirm("确认初始化项目？", message))) {
+      const decision = await confirmScaffold(ctx, message, allowBack);
+      if (decision === MENU_BACK) {
+        return { ...preview, backedOut: true };
+      }
+      if (decision !== "confirm") {
         return { ...preview, cancelled: true };
       }
     }
@@ -142,54 +197,126 @@ export async function runScaffold(
   });
 }
 
-async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
+async function collectOptions(
+  ctx: ExtensionCommandContext,
+  targetDir: string,
+  initial?: AdvancedOptions,
+  initialStep = 0,
+) {
   const metadata = await readProjectMetadata(ctx, targetDir);
-  const projectName = await input(ctx, "项目名称", metadata.projectName);
-  if (isMenuBack(projectName)) return MENU_BACK;
-  if (projectName === undefined) return undefined;
+  let projectName = initial?.projectName;
+  let language = initial?.language;
+  let description = initial?.description;
+  let testCommand = initial?.testCommand;
+  let slug = initial?.slug;
+  let roleConfiguration: AdvancedOptions["roleConfiguration"] | undefined = initial?.roleConfiguration;
+  let roleModels = initial?.roleModels;
+  let step = initialStep;
 
-  const language = await showMenu(ctx, "模板语言", [
-    { value: "zh-CN", label: "简体中文", description: "生成中文协作文档" },
-    { value: "en", label: "English", description: "Generate English collaboration docs" },
-    { value: "cancel", label: "取消" },
-  ]);
-  if (!language || isMenuBack(language) || language === "cancel") return undefined;
+  while (step <= 5) {
+    if (step === 0) {
+      const value = await input(ctx, "项目名称", metadata.projectName, projectName);
+      if (isMenuBack(value)) return MENU_BACK;
+      if (value === undefined) return undefined;
+      projectName = value;
+      step = 1;
+      continue;
+    }
 
-  const description = await input(
-    ctx,
-    "项目定位（可留空）",
-    metadata.description ?? "例如：客户账户管理门户",
-  );
-  if (isMenuBack(description)) return MENU_BACK;
-  if (description === undefined) return undefined;
+    if (step === 1) {
+      const value = await showMenu(ctx, "模板语言", [
+        { value: "zh-CN", label: "简体中文", description: "生成中文协作文档" },
+        { value: "en", label: "English", description: "Generate English collaboration docs" },
+        { value: "cancel", label: "取消" },
+      ], { selectedValue: language });
+      if (isMenuBack(value)) {
+        step = 0;
+        continue;
+      }
+      if (!value || value === "cancel") return undefined;
+      language = value;
+      step = 2;
+      continue;
+    }
 
-  const testCommand = await input(ctx, "测试命令（可留空）", metadata.testCommand ?? "例如：npm test");
-  if (isMenuBack(testCommand)) return MENU_BACK;
-  if (testCommand === undefined) return undefined;
+    if (step === 2) {
+      const value = await input(
+        ctx,
+        "项目定位（可留空）",
+        metadata.description ?? "例如：客户账户管理门户",
+        description,
+      );
+      if (isMenuBack(value)) {
+        step = 1;
+        continue;
+      }
+      if (value === undefined) return undefined;
+      description = value;
+      step = 3;
+      continue;
+    }
 
-  const slug = await input(ctx, "Skill 名称（可留空自动生成）", metadata.projectName);
-  if (isMenuBack(slug)) return MENU_BACK;
-  if (slug === undefined) return undefined;
+    if (step === 3) {
+      const value = await input(ctx, "测试命令（可留空）", metadata.testCommand ?? "例如：npm test", testCommand);
+      if (isMenuBack(value)) {
+        step = 2;
+        continue;
+      }
+      if (value === undefined) return undefined;
+      testCommand = value;
+      step = 4;
+      continue;
+    }
 
-  const roleConfiguration = await showMenu(ctx, "角色模型", [
-    { value: "default", label: "使用默认配置", description: "推荐，后续可在 /pi-init config 中修改" },
-    { value: "custom", label: "逐个配置", description: "为三个角色选择模型和推理强度" },
-    { value: "cancel", label: "取消" },
-  ]);
-  if (!roleConfiguration || isMenuBack(roleConfiguration) || roleConfiguration === "cancel") return undefined;
-  const roleModels = roleConfiguration === "custom"
-    ? await collectRoleModels(ctx)
-    : undefined;
-  if (roleConfiguration === "custom" && !roleModels) return undefined;
+    if (step === 4) {
+      const value = await input(ctx, "Skill 名称（可留空自动生成）", metadata.projectName, slug);
+      if (isMenuBack(value)) {
+        step = 3;
+        continue;
+      }
+      if (value === undefined) return undefined;
+      slug = value;
+      step = 5;
+      continue;
+    }
+
+    const value = await showMenu(ctx, "角色模型", [
+      { value: "default", label: "使用默认配置", description: "推荐，后续可在 /pi-init config 中修改" },
+      { value: "custom", label: "逐个配置", description: "为三个角色选择模型和推理强度" },
+      { value: "cancel", label: "取消" },
+    ], { selectedValue: roleConfiguration });
+    if (isMenuBack(value)) {
+      step = 4;
+      continue;
+    }
+    if (!value || value === "cancel") return undefined;
+    if (value !== "default" && value !== "custom") return undefined;
+    roleConfiguration = value;
+    if (roleConfiguration === "custom") {
+      const selectedModels = await collectRoleModelsForInit(ctx, roleModels);
+      if (isMenuBack(selectedModels)) continue;
+      if (!selectedModels) return undefined;
+      roleModels = selectedModels;
+    } else {
+      roleModels = undefined;
+    }
+    break;
+  }
 
   return {
     projectName: projectName || metadata.projectName,
-    language,
+    language: language ?? "zh-CN",
     description: description || undefined,
     testCommand: testCommand || undefined,
     slug: slug || undefined,
+    roleConfiguration: roleConfiguration === "custom" ? "custom" : "default",
     ...(roleModels ? { roleModels } : {}),
-  };
+  } satisfies AdvancedOptions;
+}
+
+function scaffoldOptions(options: AdvancedOptions) {
+  const { roleConfiguration: _roleConfiguration, ...result } = options;
+  return result;
 }
 
 function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
@@ -220,12 +347,28 @@ export async function advancedInit(targetDir: string, ctx: ExtensionCommandConte
   if (!ctx.hasUI) {
     throw new Error("高级初始化需要交互式 UI；无 UI 环境请使用 /pi-init init <目录>");
   }
-  const options = await collectOptions(ctx, targetDir);
-  if (isMenuBack(options)) return;
-  if (!options) {
-    ctx.ui.notify("已取消项目初始化。", "warning");
+
+  let draft: AdvancedOptions | undefined;
+  while (true) {
+    const options = await collectOptions(ctx, targetDir, draft, draft ? 5 : 0);
+    if (isMenuBack(options)) return MENU_BACK;
+    if (!options) {
+      ctx.ui.notify("已取消项目初始化。", "warning");
+      return;
+    }
+
+    const result = await runScaffold(
+      ctx,
+      targetDir,
+      scaffoldOptions(options),
+      "always",
+      true,
+    );
+    if (result.backedOut) {
+      draft = options;
+      continue;
+    }
+    await finishScaffold(ctx, result);
     return;
   }
-  const result = await runScaffold(ctx, targetDir, options, "always");
-  await finishScaffold(ctx, result);
 }

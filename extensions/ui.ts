@@ -118,7 +118,12 @@ export function getAvailableRoleModels(ctx: ExtensionContext) {
  * The role picker lists the full host registry. Role configuration uses exact
  * fully qualified provider/model references instead of an allowlist.
  */
-async function selectModelWithSearch(ctx: ExtensionContext, role: string, models: any[]) {
+async function selectModelWithSearch(
+  ctx: ExtensionContext,
+  role: string,
+  models: any[],
+  selectedModel?: any,
+) {
   if (ctx.mode !== "tui") {
     const query = await ctx.ui.input(
       `搜索 ${roleLabel(role)} 的模型（可留空显示全部）`,
@@ -142,6 +147,9 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
     let filteredModels = models;
     let list: SelectList;
     const search = new Input();
+    const selectedValue = selectedModel
+      ? `${selectedModel.provider}/${selectedModel.id}`
+      : undefined;
 
     const createList = (items: any[]) => {
       const next = new SelectList(
@@ -159,6 +167,10 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
           noMatch: (text) => theme.fg("warning", text),
         },
       );
+      const selectedIndex = selectedValue === undefined
+        ? -1
+        : items.findIndex((model) => `${model.provider}/${model.id}` === selectedValue);
+      if (selectedIndex >= 0) next.setSelectedIndex(selectedIndex);
       next.onSelect = (item) => done(item.value);
       next.onCancel = () => done(null);
       return next;
@@ -219,54 +231,82 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
   return models.find((model) => `${model.provider}/${model.id}` === result);
 }
 
-export async function selectRoleModel(ctx: ExtensionContext, role: string) {
+export async function selectRoleModel(
+  ctx: ExtensionContext,
+  role: string,
+  initialConfig?: RoleModelConfig,
+) {
   const models = getAvailableRoleModels(ctx);
   if (models.length === 0) {
     throw new Error("当前没有可用模型；请先配置模型凭据或调整模型范围");
   }
 
-  const model = await selectModelWithSearch(ctx, role, models);
-  if (isMenuBack(model)) return MENU_BACK;
-  if (!model) return undefined;
-  const selectedModelLabel = `${model.provider}/${model.id}`;
-  const supportedLevels = availableThinkingLevels(model);
-  if (supportedLevels.length === 0) {
-    throw new Error(`模型 ${selectedModelLabel} 不支持任何可用的 Pi 推理强度`);
-  }
+  let selectedModel = initialConfig
+    ? models.find((model) => model.provider === initialConfig.provider && model.id === initialConfig.model)
+    : undefined;
+  while (true) {
+    const model = await selectModelWithSearch(ctx, role, models, selectedModel);
+    if (isMenuBack(model)) return MENU_BACK;
+    if (!model) return undefined;
+    const selectedModelLabel = `${model.provider}/${model.id}`;
+    const supportedLevels = availableThinkingLevels(model);
+    if (supportedLevels.length === 0) {
+      throw new Error(`模型 ${selectedModelLabel} 不支持任何可用的 Pi 推理强度`);
+    }
 
-  const thinkingLevel = await showMenu(
-    ctx,
-    `推理强度 · ${shortModelName(model.id)}`,
-    supportedLevels.map((level) => ({
-      value: level,
-      label: level,
-      description: level === "max" ? "最高推理强度，耗时和成本也最高" : undefined,
-    })),
-  );
-  if (isMenuBack(thinkingLevel)) return MENU_BACK;
-  if (thinkingLevel === undefined) return undefined;
-  if (!supportedLevels.includes(thinkingLevel as (typeof supportedLevels)[number])) {
-    throw new Error(`模型 ${selectedModelLabel} 不支持推理强度：${thinkingLevel}`);
-  }
+    const thinkingLevel = await showMenu(
+      ctx,
+      `推理强度 · ${shortModelName(model.id)}`,
+      supportedLevels.map((level) => ({
+        value: level,
+        label: level,
+        description: level === "max" ? "最高推理强度，耗时和成本也最高" : undefined,
+      })),
+      {
+        selectedValue: selectedModel === model ? initialConfig?.thinkingLevel : undefined,
+      },
+    );
+    if (isMenuBack(thinkingLevel)) {
+      selectedModel = model;
+      continue;
+    }
+    if (thinkingLevel === undefined) return undefined;
+    if (!supportedLevels.includes(thinkingLevel as (typeof supportedLevels)[number])) {
+      throw new Error(`模型 ${selectedModelLabel} 不支持推理强度：${thinkingLevel}`);
+    }
 
-  return {
-    provider: model.provider,
-    model: model.id,
-    thinkingLevel,
-  } satisfies RoleModelConfig;
+    return {
+      provider: model.provider,
+      model: model.id,
+      thinkingLevel,
+    } satisfies RoleModelConfig;
+  }
 }
 
 export async function collectRoleModels(ctx: ExtensionContext) {
   const roleModels: Record<string, RoleModelConfig> = {};
-  for (const role of ROLE_NAMES) {
-    const selection = await selectRoleModel(ctx, role);
-    if (!selection || isMenuBack(selection)) return undefined;
+  let roleIndex = 0;
+  while (roleIndex < ROLE_NAMES.length) {
+    const role = ROLE_NAMES[roleIndex];
+    const selection = await selectRoleModel(ctx, role, roleModels[role]);
+    if (isMenuBack(selection)) {
+      if (roleIndex === 0) return MENU_BACK;
+      roleIndex -= 1;
+      continue;
+    }
+    if (!selection) return undefined;
     roleModels[role] = selection;
+    roleIndex += 1;
   }
   return roleModels;
 }
 
-export async function input(ctx: ExtensionCommandContext, title: string, placeholder: string) {
+export async function input(
+  ctx: ExtensionCommandContext,
+  title: string,
+  placeholder: string,
+  initialValue?: string,
+) {
   if (ctx.mode !== "tui") {
     const value = await ctx.ui.input(title, placeholder);
     return value === undefined ? undefined : value.trim();
@@ -274,6 +314,10 @@ export async function input(ctx: ExtensionCommandContext, title: string, placeho
 
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
     const field = new Input();
+    if (initialValue !== undefined) {
+      field.setValue(initialValue);
+      field.handleInput(String.fromCharCode(5));
+    }
     let focused = false;
     const container = new Container();
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));

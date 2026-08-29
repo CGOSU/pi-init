@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
-import { input, MENU_BACK, showMenu } from "../extensions/ui.ts";
+import { advancedInit, runScaffold } from "../extensions/scaffold-runtime.ts";
+import { collectRoleModels, input, MENU_BACK, showMenu } from "../extensions/ui.ts";
 
 const {
   mkdtemp,
@@ -91,15 +92,93 @@ test("TUI 菜单按 Esc 返回上一级而不是取消", async () => {
   assert.equal(result, MENU_BACK);
 });
 
-test("TUI 文本输入按 Esc 返回上一级而不是取消", async () => {
+test("TUI 文本输入按 Esc 返回且恢复内容可继续追加", async () => {
+  const backHarness = createExtensionHarness([], { mode: "tui", custom: async (call) => call.component.handleInput("\u001b") });
+  assert.equal(await input(backHarness.context, "测试输入", "占位文本"), MENU_BACK);
+
+  const harness = createExtensionHarness([], { mode: "tui", custom: async (call) => {
+    call.component.handleInput("X");
+    call.component.handleInput("\n");
+  } });
+  assert.equal(await input(harness.context, "测试输入", "占位文本", "Description"), "DescriptionX");
+});
+
+test("角色模型选择按 Esc 逐级返回并保留已选角色", async () => {
+  const first = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const second = { provider: "openrouter", id: "anthropic/claude-sonnet-4" };
   const harness = createExtensionHarness([], {
     mode: "tui",
-    custom: async (call) => call.component.handleInput("\u001b"),
+    availableModels: [first, second],
+    custom: async (call) => {
+      const index = harness.customCalls.length;
+      if (index === 1) {
+        call.component.handleInput(String.fromCharCode(27) + "[B");
+        call.component.handleInput("\n");
+      } else if (index === 2 || index === 5) {
+        call.component.handleInput("\u001b");
+      } else {
+        call.component.handleInput("\n");
+      }
+    },
   });
 
-  const result = await input(harness.context, "测试输入", "占位文本");
+  const result = await collectRoleModels(harness.context);
 
-  assert.equal(result, MENU_BACK);
+  assert.equal(result.architect.model, second.id);
+  assert.deepEqual(Object.keys(result), ["architect", "developer-test", "docs-commit"]);
+  assert.equal(harness.customCalls.length, 11);
+  const backHarness = createExtensionHarness([], { mode: "tui", custom: async (call) => call.component.handleInput("\u001b") });
+  assert.equal(await collectRoleModels(backHarness.context), MENU_BACK);
+  const cancelHarness = createExtensionHarness([], { mode: "tui", custom: async (call) => call.component.handleInput("\u0003") });
+  assert.equal(await collectRoleModels(cancelHarness.context), undefined);
+});
+
+test("高级初始化按 Esc 返回上一个属性并保留页面内容", async () => {
+  await withTempDirectory(async (directory) => {
+    const esc = "\u001b";
+    const down = String.fromCharCode(27) + "[B";
+    const actions = [["Project", "\n"], ["\n"], ["Description", "\n"], [esc], ["\n"], ["npm test", "\n"], ["\n"], ["\n"], [esc], [down, down, "\n"]];
+    const screens = [];
+    const harness = createExtensionHarness([], { cwd: directory, mode: "tui", custom: async (call) => {
+      screens.push(call.component.render(120).join("\n"));
+      for (const data of actions[screens.length - 1] ?? []) call.component.handleInput(data);
+    } });
+
+    await advancedInit(".", harness.context);
+
+    assert.equal(screens.length, actions.length);
+    ["项目名称", "模板语言", "项目定位", "测试命令", "项目定位", "测试命令", "Skill 名称", "角色模型", "确认初始化项目", "角色模型"]
+      .forEach((title, index) => assert.match(screens[index], new RegExp(title)));
+    assert.match(screens[4], /Description/);
+    assert.match(harness.notifications.at(-1)?.message ?? "", /已取消项目初始化/);
+  });
+});
+
+test("高级初始化首项 Esc 在控制中心和直接命令中返回上级", async () => {
+  const screens = [];
+  const harness = createExtensionHarness([], { mode: "tui", trusted: true, custom: async (call) => {
+    screens.push(call.component.render(120).join("\n"));
+    const index = screens.length;
+    for (const data of index === 1 ? [String.fromCharCode(27) + "[B", "\n"] : index === 2 || index === 3 ? ["\u001b"] : []) {
+      call.component.handleInput(data);
+    }
+  } });
+  await harness.commands.get("pi-init").handler("", harness.context);
+  assert.deepEqual(screens.map((screen) => /Pi Init 控制中心/.test(screen) ? "center" : "project"), ["center", "project", "center"]);
+
+  const direct = createExtensionHarness([], { mode: "tui", custom: async (call) => call.component.handleInput("\u001b") });
+  assert.equal(await advancedInit(".", direct.context), MENU_BACK);
+});
+
+test("高级初始化确认菜单支持显式取消", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory, mode: "tui", custom: async (call) => {
+      call.component.handleInput(String.fromCharCode(27) + "[B");
+      call.component.handleInput("\n");
+    } });
+    const result = await runScaffold(harness.context, ".", { projectName: "p", language: "zh-CN" }, "always", true);
+    assert.equal(result.cancelled, true);
+  });
 });
 
 test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async () => {
