@@ -80,13 +80,24 @@ test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {
     protocol: SUBTASK_RESULT_PROTOCOL,
     outcome: "complete",
     completionSummary: "实现完成",
+    implementationRationale: "复用现有边界以降低改动风险",
     verification: ["npm test：通过", "npm test：通过"],
   }));
   assert.deepEqual(complete, {
     outcome: "complete",
     completionSummary: "实现完成",
+    implementationRationale: "复用现有边界以降低改动风险",
     verification: ["npm test：通过"],
   });
+  assert.throws(
+    () => parseSubtaskResult(JSON.stringify({
+      protocol: SUBTASK_RESULT_PROTOCOL,
+      outcome: "complete",
+      completionSummary: "完成",
+      verification: ["通过"],
+    })),
+    /缺少字段：implementationRationale/,
+  );
   assert.deepEqual(parseSubtaskResult(JSON.stringify({
     protocol: SUBTASK_RESULT_PROTOCOL,
     outcome: "blocked",
@@ -97,6 +108,7 @@ test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {
       protocol: SUBTASK_RESULT_PROTOCOL,
       outcome: "complete",
       completionSummary: "完成",
+      implementationRationale: "保持验证要求明确",
       verification: [],
     })),
     /verification 必须是非空数组/,
@@ -106,6 +118,7 @@ test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {
       protocol: SUBTASK_RESULT_PROTOCOL,
       outcome: "complete",
       completionSummary: "完成",
+      implementationRationale: "保持协议字段受控",
       verification: ["通过"],
       extra: true,
     })),

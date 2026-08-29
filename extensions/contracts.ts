@@ -130,6 +130,7 @@ export const taskWorkflowParameters = Type.Object({
   })),
   taskId: Type.Optional(Type.String({ description: "当前任务或要重试的任务 ID" })),
   completionSummary: Type.Optional(Type.String({ description: "完成任务的实现摘要" })),
+  implementationRationale: Type.Optional(Type.String({ description: "为什么采用该实现；必须说明关键取舍或约束" })),
   verification: Type.Optional(Type.Array(Type.String(), { description: "实际执行过的验证命令和结果" })),
   reason: Type.Optional(Type.String({ description: "阻塞原因（block 必填）" })),
 });

@@ -33,7 +33,7 @@ export function createWorkflowMessages(
       note ? `调度提示：${note}` : "",
       "如果用户在本工作流期间提出会改变后续方向或新增后续工作的普通描述，不要自行派发旧计划的下一任务；扩展会先记录重规划请求，当前任务完成后交给架构师重规划。若必须立即停止当前任务，使用现有 cancel 流程。",
       "除非遇到真正阻塞的需求、权限、凭据、破坏性操作或必须由用户决定的产品取舍，不要询问用户；做合理假设并记录。",
-      `完成并实际验证后，必须调用 task_workflow(action="complete", taskId="${task.id}", completionSummary=..., verification=[...])。verification 只能填写实际执行过的命令和结果。若无法继续，调用 task_workflow(action="block", taskId="${task.id}", reason=...)，不要伪造完成。`,
+      `完成并实际验证后，必须调用 task_workflow(action="complete", taskId="${task.id}", completionSummary=..., implementationRationale=..., verification=[...])。implementationRationale 说明为什么采用该实现及关键取舍，不要重复 completionSummary；verification 只能填写实际执行过的命令和结果。若无法继续，调用 task_workflow(action="block", taskId="${task.id}", reason=...)，不要伪造完成。`,
     ].filter(Boolean).join("\n\n");
   }
 
@@ -124,7 +124,7 @@ export function createWorkflowMessages(
       "Work in the current shared checkout. Do not create worktrees, merge branches, commit, or push.",
       "Do not call pi-init task_workflow tools. The parent session owns workflow state.",
       "If the user describes a changed direction or new follow-up work, do not dispatch or assume any old next task; the parent session records the request and waits for the Architect at the task boundary.",
-      `When finished, output only one JSON object using protocol ${SUBTASK_RESULT_PROTOCOL}. For success use {"protocol":"${SUBTASK_RESULT_PROTOCOL}","outcome":"complete","completionSummary":"...","verification":["actual command and result"]}. If genuinely blocked use {"protocol":"${SUBTASK_RESULT_PROTOCOL}","outcome":"blocked","reason":"..."}. Do not wrap it in Markdown fences or add other text.`,
+      `When finished, output only one JSON object using protocol ${SUBTASK_RESULT_PROTOCOL}. For success use {"protocol":"${SUBTASK_RESULT_PROTOCOL}","outcome":"complete","completionSummary":"...","implementationRationale":"why this implementation was chosen and its key trade-offs","verification":["actual command and result"]}. If genuinely blocked use {"protocol":"${SUBTASK_RESULT_PROTOCOL}","outcome":"blocked","reason":"..."}. Do not wrap it in Markdown fences or add other text.`,
     ].filter(Boolean).join("\n\n");
   }
 

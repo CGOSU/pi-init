@@ -158,12 +158,13 @@ export function createWorkflowDispatch(
       const next = completeWorkflowTask(state.workflowState, {
         taskId,
         completionSummary: result.completionSummary,
+        implementationRationale: result.implementationRationale,
         verification: result.verification,
       });
       const completedTask = getWorkflowTask(next, taskId);
       const taskCompletionReport = deps.report.formatWorkflowTaskCompletion(completedTask);
       const completionReport = next.status === "completed"
-        ? deps.report.formatWorkflowCompletion(next)
+        ? deps.report.formatWorkflowCompletion(next, completedTask)
         : taskCompletionReport;
       deps.report.persistWorkflowState(next, ctx);
       state.workflowDispatchInFlight = false;

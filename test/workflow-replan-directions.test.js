@@ -57,7 +57,7 @@ test("连续方向输入合并到同一待处理 revision，重规划前不启�
 
   const finished = completeWorkflowTask(
     appendedTwice,
-    { taskId: "current", completionSummary: "当前任务完成", verification: ["npm test：通过"] },
+    { taskId: "current", completionSummary: "当前任务完成", implementationRationale: "先完成当前任务再应用新的方向", verification: ["npm test：通过"] },
     340,
   );
   assert.equal(finished.status, "replanning");

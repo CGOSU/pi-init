@@ -8,6 +8,7 @@ const RESULT_FIELDS = new Set([
   "protocol",
   "outcome",
   "completionSummary",
+  "implementationRationale",
   "verification",
   "reason",
 ]);
@@ -78,7 +79,7 @@ export function parseSubtaskResult(raw) {
     throw new Error(`subtask 结果协议无效：${value.protocol ?? "（缺失）"}`);
   }
   if (value.outcome === "complete") {
-    assertExactFields(value, ["protocol", "outcome", "completionSummary", "verification"], "complete 结果");
+    assertExactFields(value, ["protocol", "outcome", "completionSummary", "implementationRationale", "verification"], "complete 结果");
     if (!Array.isArray(value.verification) || value.verification.length === 0) {
       throw new Error("complete 结果的 verification 必须是非空数组");
     }
@@ -91,6 +92,7 @@ export function parseSubtaskResult(raw) {
     return {
       outcome: "complete",
       completionSummary: requireText(value.completionSummary, "completionSummary"),
+      implementationRationale: requireText(value.implementationRationale, "implementationRationale"),
       verification: [...new Set(verification)],
     };
   }

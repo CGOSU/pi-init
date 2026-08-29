@@ -97,13 +97,18 @@ export function getWorkflowTaskDuration(task) {
   return task.completedAt - task.startedAt;
 }
 
-export function completeWorkflowTask(state, { taskId, completionSummary, verification }, now = Date.now()) {
+export function completeWorkflowTask(
+  state,
+  { taskId, completionSummary, implementationRationale, verification },
+  now = Date.now(),
+) {
   if (!state || state.status !== "running") throw new Error("工作流当前不在执行中");
   if (state.currentTaskId !== taskId) {
     throw new Error(`只能完成当前任务 ${state.currentTaskId ?? "（无）"}`);
   }
 
   const summary = requireText(completionSummary, "任务完成摘要");
+  const rationale = requireText(implementationRationale, "实现原因");
   const checks = normalizeTextList(verification, "任务验证结果", { required: true });
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
@@ -113,6 +118,7 @@ export function completeWorkflowTask(state, { taskId, completionSummary, verific
   }
   task.status = "completed";
   task.completionSummary = summary;
+  task.implementationRationale = rationale;
   task.verification = checks;
   task.completedAt = now;
   result.currentTaskId = undefined;
@@ -161,6 +167,7 @@ export function retryWorkflowTask(state, taskId, now = Date.now()) {
   task.status = "pending";
   delete task.blockReason;
   delete task.completionSummary;
+  delete task.implementationRationale;
   delete task.verification;
   delete task.startedAt;
   delete task.executionStartedAt;

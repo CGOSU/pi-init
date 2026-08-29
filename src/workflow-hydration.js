@@ -113,6 +113,9 @@ function normalizeHydratedTask(task, index, { allowSuperseded = false } = {}) {
   }
   const startedAt = normalizeTimestamp(task.startedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 startedAt`);
   const completedAt = normalizeTimestamp(task.completedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 completedAt`);
+  const implementationRationale = task.implementationRationale === undefined
+    ? undefined
+    : requireText(task.implementationRationale, `已保存的工作流任务 ${task.id ?? index + 1} 的 implementationRationale`);
   const supersededAt = normalizeTimestamp(task.supersededAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 supersededAt`);
   if (startedAt !== undefined && completedAt !== undefined && completedAt < startedAt) {
     throw new Error(`已保存的工作流任务 ${task.id ?? index + 1} 的 completedAt 早于 startedAt`);
@@ -131,6 +134,7 @@ function normalizeHydratedTask(task, index, { allowSuperseded = false } = {}) {
     status,
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(implementationRationale !== undefined ? { implementationRationale } : {}),
     ...(supersededAt !== undefined ? { supersededAt } : {}),
     ...(task.supersededBy !== undefined
       ? { supersededBy: normalizeRevisionId(task.supersededBy, `已保存的工作流任务 ${task.id} 的 supersededBy`) }

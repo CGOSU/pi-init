@@ -193,16 +193,17 @@ export function createWorkflowActions(
         const next = completeWorkflowTask(state.workflowState, {
           taskId,
           completionSummary: params.completionSummary,
+          implementationRationale: params.implementationRationale,
           verification: params.verification,
         });
         const completedTask = next.tasks.find((item) => item.id === task.id);
         const taskCompletionReport = deps.report.formatWorkflowTaskCompletion(completedTask);
         const completionReport = next.status === "completed"
-          ? deps.report.formatWorkflowCompletion(next)
+          ? deps.report.formatWorkflowCompletion(next, completedTask)
           : taskCompletionReport;
         deps.report.persistWorkflowState(next, ctx);
         return {
-          content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : next.status === "replanning" ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。" : `任务 ${task.id} 已完成，下一任务将自动开始。`}\n${deps.report.formatWorkflowState(next)}` }],
+          content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : next.status === "replanning" ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。" : "下一任务将自动开始。"}` }],
           details: next,
           terminate: true,
         };

@@ -1,5 +1,13 @@
 # 会话记录
 
+### 2026-08-30：精简任务流报告并增加实现原因
+
+- 完成内容：中间任务报告只保留任务、摘要、实现原因、耗时和验证；最终工作流报告只保留目标、进度、最终任务结果、整体时间和最终验证，不再重复前序任务或完整状态。验证改为单行，完成报告移除灰色 bullet 辅助输出。
+- 完成内容：`task_workflow.complete` 增加必填 `implementationRationale`，local 和 subtask 完成路径均持久化并展示该字段；旧工作流状态缺少该字段时仍可读取，重试会清理旧原因。
+- 文档：同步 `README.md`、`docs/current-state.md` 和 `docs/decisions.md`，解释报告取舍和实现原因的用途；未修改 `docs/pitfalls.md`，本次没有新增可复发陷阱。
+- 验证：`node --test test/workflow-core.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/extension-roles.test.js`，26 项全部通过；`npm test`，70 项全部通过；相关 JS/TS `node --check` 全部通过；`git diff --check` 通过，仅有 Windows 下预期的 LF/CRLF 转换提示。
+- 遗留问题：未提交或推送。
+
 ### 2026-08-30：迁移到 package 公共角色 Skill 和动态 roleModels
 
 - 完成内容：新增随 package 发布的 `skills/pi-init-role-routing/` 公共 Skill 及三个角色说明；脚手架和高级初始化不再生成或询问项目级角色 Skill/slug，项目已有 Skill 不自动删除。README、当前状态和设计决策补充了 `schemaVersion: 2`、`roleModels` 动态启用、添加新角色的两步流程，以及旧配置和旧项目 Skill 的迁移边界。

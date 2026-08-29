@@ -272,6 +272,7 @@ export function createWorkflowReport(
       if (line.startsWith("总耗时：") || line.startsWith("整体总耗时：")) return theme.fg("warning", theme.bold(line));
       if (
         line.startsWith("摘要：") ||
+        line.startsWith("实现原因：") ||
         line.startsWith("目标：") ||
         line.startsWith("进度：") ||
         line.startsWith("任务摘要：") ||
@@ -287,23 +288,19 @@ export function createWorkflowReport(
         line.startsWith("实际开始时间：")
       ) return theme.fg("accent", line);
       if (line.startsWith("计时口径：")) return theme.fg("dim", line);
-      if (line.startsWith("- ")) return theme.fg("muted", line);
       return theme.fg("text", line);
     }).join("\n");
   }
 
   function formatWorkflowTaskCompletion(task: ReturnType<typeof getWorkflowTask>) {
     if (!task) throw new Error("无法生成不存在的工作流任务完成报告");
-    const verification = task.verification?.map((item) => `- ${item}`).join("\n") ?? "- 无";
     return [
       "任务完成报告",
       `任务：${task.id} · ${task.task}`,
-      `角色：${roleLabel(task.role)}`,
-      `开始时间：${formatWorkflowTimestamp(task.startedAt, "不可用（历史任务未记录开始时间）")}`,
-      `结束时间：${formatWorkflowTimestamp(task.completedAt, "不可用（任务未记录结束时间）")}`,
-      `总耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
       `摘要：${task.completionSummary ?? "无"}`,
-      `验证：\n${verification}`,
+      `实现原因：${task.implementationRationale ?? "无"}`,
+      `耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
+      `验证：${task.verification?.join("；") ?? "无"}`,
     ].join("\n");
   }
 
@@ -314,27 +311,30 @@ export function createWorkflowReport(
       : formatWorkflowDuration(duration);
   }
 
-  function formatWorkflowCompletion(workflowState: WorkflowState) {
+  function formatWorkflowCompletion(
+    workflowState: WorkflowState,
+    finalTask?: ReturnType<typeof getWorkflowTask>,
+  ) {
     const progress = workflowProgress(workflowState);
     const bounds = getWorkflowExecutionBounds(workflowState);
-    const taskSummaries = workflowState.tasks
-      .map((task) => `- ${task.id}：${task.completionSummary ?? "无"}`)
-      .join("\n") || "- 无";
-    const verification = workflowState.tasks
-      .flatMap((task) => (task.verification ?? []).map((item) => `- ${task.id}：${item}`))
-      .join("\n") || "- 无";
+    const completedTask = finalTask ?? [...workflowState.tasks].reverse().find((task) => task.status === "completed");
+    const taskLines = completedTask
+      ? [
+          `最终任务：${completedTask.id} · ${completedTask.task}`,
+          `摘要：${completedTask.completionSummary ?? "无"}`,
+          `实现原因：${completedTask.implementationRationale ?? "无"}`,
+          `验证：${completedTask.verification?.join("；") ?? "无"}`,
+        ]
+      : ["最终任务：无"];
 
     return [
       "工作流完成报告",
       `目标：${workflowState.plan.summary}`,
       `进度：${progress.completed}/${progress.total}`,
-      "任务摘要：",
-      taskSummaries,
+      ...taskLines,
       `开始时间：${formatWorkflowTimestamp(bounds.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
       `结束时间：${formatWorkflowTimestamp(bounds.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
       `总耗时：${formatWorkflowExecutionDuration(workflowState)}`,
-      "验证：",
-      verification,
     ].join("\n");
   }
 
