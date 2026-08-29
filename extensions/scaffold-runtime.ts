@@ -6,7 +6,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createScaffold } from "../src/scaffold.js";
-import { collectRoleModels, input, showMenu } from "./ui.ts";
+import { collectRoleModels, input, isMenuBack, showMenu } from "./ui.ts";
 
 function normalizeTargetDir(value: string) {
   const target = value.trim();
@@ -152,7 +152,7 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
     { value: "en", label: "English", description: "Generate English collaboration docs" },
     { value: "cancel", label: "取消" },
   ]);
-  if (!language || language === "cancel") return undefined;
+  if (!language || isMenuBack(language) || language === "cancel") return undefined;
 
   const description = await input(
     ctx,
@@ -172,7 +172,7 @@ async function collectOptions(ctx: ExtensionCommandContext, targetDir: string) {
     { value: "custom", label: "逐个配置", description: "为三个角色选择模型和推理强度" },
     { value: "cancel", label: "取消" },
   ]);
-  if (!roleConfiguration || roleConfiguration === "cancel") return undefined;
+  if (!roleConfiguration || isMenuBack(roleConfiguration) || roleConfiguration === "cancel") return undefined;
   const roleModels = roleConfiguration === "custom"
     ? await collectRoleModels(ctx)
     : undefined;

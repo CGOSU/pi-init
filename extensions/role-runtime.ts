@@ -21,7 +21,7 @@ import {
 } from "../src/workflow.js";
 import type { ResolvedRoleConfig } from "./contracts.ts";
 import { activeRoleMatches, textOf, type ExtensionRuntimeState, type WorkflowState } from "./runtime-state.ts";
-import { shortModelName, showMenu } from "./ui.ts";
+import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 
 const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
   "这是自动角色切换触发的上下文压缩。",
@@ -398,7 +398,7 @@ export function createRoleRuntime(
         "手动选择角色",
         ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
       );
-      if (!selected) throw new Error("已取消手动角色选择");
+      if (!selected || isMenuBack(selected)) throw new Error("已取消手动角色选择");
       return {
         mode: "manual",
         requestedRole: role,

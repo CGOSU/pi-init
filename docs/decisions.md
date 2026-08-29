@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-08-30：TUI 菜单中的 Esc 用于返回上一级
+
+- 决定：通用 TUI 菜单和角色模型搜索将 Esc 解析为内部返回结果，调用方回到上一级菜单；Ctrl+C 仍保持取消语义，显式选择“取消”也不变。
+- 原因：Esc 是层级导航的常用按键，不应在嵌套配置菜单中显示“已取消”或误进入取消分支；显式取消仍保留给需要放弃当前流程的场景。
+- 约束：只改变 TUI 菜单导航和调用方分支，不修改配置或工作流数据；RPC 模式没有键盘输入，工作流状态弹窗仍使用 Esc 关闭。
+
 ### 2026-08-26：pi-usage 按稳定 entry 身份去重 fork 历史
 
 - 决定：usage、speed 和 activity 事件使用 Pi entry id 作为跨 session 文件稳定 key；无 id 的旧 entry 使用包含行号和完整 JSON 的 SHA-256 legacy key。报表读取按 key 选择唯一事件，session 按去重后 usage 的 canonical source_file 计数。

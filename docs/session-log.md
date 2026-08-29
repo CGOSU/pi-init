@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-30：TUI 菜单按 Esc 返回上一级
+
+- 完成内容：通用 TUI 菜单和角色模型搜索使用独立返回结果；Esc 返回父级菜单，Ctrl+C 和显式“取消”继续保持取消语义。角色、工作流配置和高级初始化调用方均安全处理返回结果。
+- 文档：同步当前状态和设计决策。
+- 验证：`node --test --test-name-pattern='TUI 菜单按 Esc 返回上一级而不是取消' test/extension-roles.test.js`，1 项通过；四个修改后的扩展文件 `node --check` 通过；`npm test`，59 项全部通过；`git diff --check` 通过。
+- 遗留问题：尚未在真实交互式 Pi TUI 中进行视觉验收；尚未提交或推送。
+
 ### 2026-08-26：修复 pi-usage fork 历史重复统计
 
 - 完成内容：为 usage、speed、activity 事件改用跨 session 文件稳定 entry key；schema 升级到 v3，首次升级事务化清理并重建 DuckDB 派生事件、duration summary 和 session checkpoint，session JSONL 保持只读。

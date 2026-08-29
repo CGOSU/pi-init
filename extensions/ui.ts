@@ -13,6 +13,12 @@ import {
 } from "../src/roles.js";
 import type { MenuItem, MenuOptions, RoleModelConfig } from "./contracts.ts";
 
+export const MENU_BACK = "__pi_init_back__" as const;
+
+export function isMenuBack(value: unknown): value is typeof MENU_BACK {
+  return value === MENU_BACK;
+}
+
 export function formatRoleModel(config: RoleModelConfig) {
   return `${config.provider}/${config.model} · ${config.thinkingLevel}`;
 }
@@ -81,7 +87,11 @@ export async function showMenu(
       render: (width: number) => container.render(width),
       invalidate: () => container.invalidate(),
       handleInput: (data: string) => {
-        list.handleInput(data);
+        if (matchesKey(data, Key.escape)) {
+          done(MENU_BACK);
+        } else {
+          list.handleInput(data);
+        }
         tui.requestRender();
       },
     };
@@ -159,7 +169,7 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
       const selected = list.getSelectedItem();
       done(selected?.value ?? null);
     };
-    search.onEscape = () => done(null);
+    search.onEscape = () => done(MENU_BACK);
 
     const render = (width: number) => {
       const innerWidth = Math.max(1, width - 2);
@@ -190,7 +200,9 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
       handleInput: (data: string) => {
         if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
           list.handleInput(data);
-        } else if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+        } else if (matchesKey(data, Key.escape)) {
+          done(MENU_BACK);
+        } else if (matchesKey(data, Key.ctrl("c"))) {
           done(null);
         } else {
           search.handleInput(data);
@@ -203,6 +215,7 @@ async function selectModelWithSearch(ctx: ExtensionContext, role: string, models
   });
 
   if (!result) return undefined;
+  if (isMenuBack(result)) return MENU_BACK;
   return models.find((model) => `${model.provider}/${model.id}` === result);
 }
 
@@ -213,6 +226,7 @@ export async function selectRoleModel(ctx: ExtensionContext, role: string) {
   }
 
   const model = await selectModelWithSearch(ctx, role, models);
+  if (isMenuBack(model)) return MENU_BACK;
   if (!model) return undefined;
   const selectedModelLabel = `${model.provider}/${model.id}`;
   const supportedLevels = availableThinkingLevels(model);
@@ -229,6 +243,7 @@ export async function selectRoleModel(ctx: ExtensionContext, role: string) {
       description: level === "max" ? "最高推理强度，耗时和成本也最高" : undefined,
     })),
   );
+  if (isMenuBack(thinkingLevel)) return MENU_BACK;
   if (thinkingLevel === undefined) return undefined;
   if (!supportedLevels.includes(thinkingLevel as (typeof supportedLevels)[number])) {
     throw new Error(`模型 ${selectedModelLabel} 不支持推理强度：${thinkingLevel}`);
@@ -245,7 +260,7 @@ export async function collectRoleModels(ctx: ExtensionContext) {
   const roleModels: Record<string, RoleModelConfig> = {};
   for (const role of ROLE_NAMES) {
     const selection = await selectRoleModel(ctx, role);
-    if (!selection) return undefined;
+    if (!selection || isMenuBack(selection)) return undefined;
     roleModels[role] = selection;
   }
   return roleModels;

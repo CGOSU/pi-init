@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
+import { MENU_BACK, showMenu } from "../extensions/ui.ts";
 
 const {
   mkdtemp,
@@ -76,6 +77,19 @@ const {
   runExternalAgent,
   assertSkillMatchesRoleConfig,
 } = helpers;
+
+test("TUI 菜单按 Esc 返回上一级而不是取消", async () => {
+  const harness = createExtensionHarness([], {
+    mode: "tui",
+    custom: async (call) => call.component.handleInput("\u001b"),
+  });
+
+  const result = await showMenu(harness.context, "测试菜单", [
+    { value: "item", label: "菜单项" },
+  ]);
+
+  assert.equal(result, MENU_BACK);
+});
 
 test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async () => {
   const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };

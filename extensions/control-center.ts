@@ -12,7 +12,14 @@ import {
   workflowModeLabel,
   type RoleRuntime,
 } from "./role-runtime.ts";
-import { formatRoleModel, selectRoleModel, shortModelName, showMenu } from "./ui.ts";
+import {
+  formatRoleModel,
+  isMenuBack,
+  MENU_BACK,
+  selectRoleModel,
+  shortModelName,
+  showMenu,
+} from "./ui.ts";
 
 export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
@@ -44,7 +51,7 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string, hasPendingChang
       label: hasPendingChanges ? "◆ 保存角色配置（有未保存变更）" : "◆ 保存角色配置",
       description: hasPendingChanges ? "将本次会话的暂存配置写入项目文件" : "当前没有待保存的配置变更",
     },
-    { value: "back", label: "← 返回上一级", description: "不修改其他设置" },
+    { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
   ];
 }
 
@@ -64,7 +71,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
           : undefined,
       })),
     );
-    if (!mode) return undefined;
+    if (!mode || isMenuBack(mode)) return undefined;
     if (!ROLE_MODES.includes(mode)) {
       ctx.ui.notify(`未知角色模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
       return undefined;
@@ -81,7 +88,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       "切换角色",
       ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
     );
-    if (!role) return;
+    if (!role || isMenuBack(role)) return;
     if (!ROLE_NAMES.includes(role)) {
       ctx.ui.notify(`未知角色：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
       return;
@@ -124,9 +131,9 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         label: config.workflowMode === "auto" ? "保持自动策略" : "自动策略",
         description: "不超过 2 个任务时跳过编排，更多任务使用工作流",
       },
-      { value: "back", label: "← 返回上一级" },
+      { value: MENU_BACK, label: "← 返回上一级" },
     ], { selectedValue: config.workflowMode });
-    if (!choice || choice === "back") return;
+    if (!choice || isMenuBack(choice)) return;
 
     const executor = await showMenu(ctx, "工作流执行器", [
       {
@@ -139,9 +146,9 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         label: config.workflowExecutor === "subtask" ? "保持 pi-subtask 对话 fork" : "pi-subtask 对话 fork",
         description: "需要已安装并启用 gary149/pi-subtask；主会话调用 subtask 工具顺序委派，结果消息回到会话后自动推进",
       },
-      { value: "back", label: "← 返回上一级" },
+      { value: MENU_BACK, label: "← 返回上一级" },
     ], { selectedValue: config.workflowExecutor });
-    if (!executor || executor === "back") return;
+    if (!executor || isMenuBack(executor)) return;
 
     if (choice !== config.workflowMode || executor !== config.workflowExecutor) {
       roleRuntime.stageRoleConfig({ workflowMode: choice, workflowExecutor: executor });
@@ -174,7 +181,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       "配置角色模型",
       ROLE_NAMES.map((value) => ({ value, label: roleLabel(value) })),
     );
-    if (!role) return;
+    if (!role || isMenuBack(role)) return;
     if (!ROLE_NAMES.includes(role)) {
       ctx.ui.notify(`未知角色：${role}；可用值：${ROLE_NAMES.join(", ")}`, "error");
       return;
@@ -186,6 +193,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
 
     try {
       const selection = await selectRoleModel(ctx, role);
+      if (isMenuBack(selection)) return;
       if (!selection) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
@@ -211,7 +219,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     while (true) {
       const mode = state.sessionModeOverride ?? config.mode;
       const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode, roleRuntime.hasPendingRoleConfigChanges()));
-      if (!action || action === "back") return;
+      if (!action || isMenuBack(action)) return;
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
         continue;
@@ -271,7 +279,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
       ], { summary, selectedValue: selectedAction });
-      if (!action || action === "exit") return;
+      if (!action || isMenuBack(action) || action === "exit") return;
       if (action === "quick") return deps.quickInit(".", ctx);
       if (action === "advanced") return deps.advancedInit(".", ctx);
       selectedAction = action;
