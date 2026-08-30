@@ -19,7 +19,7 @@
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；开发测试工程师不写文档，文档与收尾工程师不写代码，遇到疑问、困惑不解或需求分析统一切换到架构师。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。成功后注入隐藏续跑消息，失败仅提示并保留已切换角色。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
-- 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，由当前架构角色直接顺序执行，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和验证；最终报告只显示最终任务结果与整体进度/耗时，不重复前序任务。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
+- 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，由当前架构角色直接顺序执行，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - 活动工作流支持普通自然语言方向变更：同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并到一个 `pendingRevision`/`revisionId`，同步更新 revision 审计记录；当前任务完成后进入 `replanning`，由架构师依据完整指令通过 `task_workflow(action="replan")` 仅重规划未完成后续任务。新计划应用前 local 和 `subtask` 均不会启动旧后续任务，运行中的 subtask fork 不由 pi-init 自动终止或重派，立即停止仍使用既有 cancel 流程。
 - 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
 - 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
@@ -43,6 +43,7 @@
 
 ## 最近一次更新
 
+- 2026-08-30：完成报告中的验证仅显示明确失败项，成功项省略且完整 verification 仍持久化；`npm test` 通过 70 项。
 - 2026-08-30：完善高级初始化 TUI 的逐级 Esc 返回、恢复值光标、角色模型草稿和最终确认；控制中心首项返回控制中心，直接高级命令返回调用方；`npm test` 通过 64 项。
 - 2026-08-26：修复 Pi fork/branch 复制历史 entry 导致的重复统计；schema v3 按稳定 entry key 去重 usage、speed、activity、session 和 duration，首次升级事务化重建 DuckDB 派生缓存；`npm test` 通过 58 项。
 - 2026-08-25：`pi-usage` 新增 `yesterday`、`Nd`、`YYYY-MM`、单日和双日期闭区间查询；跨日汇总按源文件去重 session，`npm test` 通过 56 项。

@@ -18,6 +18,18 @@ import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
 import { workflowExecutorLabel } from "./role-runtime.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 
+const VERIFICATION_FAILURE_PATTERN = /(?:失败|未通过|不通过|报错|异常|[✗✕❌]|\b(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|timed?\s*out|timeout|non[-\s]?zero|(?:exit(?:ed)?|退出)[^\d\n]{0,20}(?:[1-9]\d*|non[-\s]?zero))/iu;
+const VERIFICATION_NO_FAILURE_PATTERN = /(?:\b0\s+(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|\bno\s+(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|(?:未(?:发生|发现|出现)?|没有|无)(?:任何)?(?:错误|失败))/iu;
+
+function isVerificationFailure(value: string) {
+  return VERIFICATION_FAILURE_PATTERN.test(value) && !VERIFICATION_NO_FAILURE_PATTERN.test(value);
+}
+
+function formatVerification(verification: string[] | undefined) {
+  const failures = verification?.filter(isVerificationFailure) ?? [];
+  return failures.length > 0 ? `验证：${failures.join("；")}` : undefined;
+}
+
 export type WorkflowReportDependencies = {
   pi: ExtensionAPI;
   roleRuntime: RoleRuntime;
@@ -275,9 +287,13 @@ export function createWorkflowReport(
         line.startsWith("实现原因：") ||
         line.startsWith("目标：") ||
         line.startsWith("进度：") ||
-        line.startsWith("任务摘要：") ||
-        line.startsWith("验证：")
+        line.startsWith("任务摘要：")
       ) return theme.fg("success", theme.bold(line));
+      if (line.startsWith("验证：")) {
+        return isVerificationFailure(line)
+          ? theme.fg("error", theme.bold(line))
+          : theme.fg("success", theme.bold(line));
+      }
       if (line.startsWith("验证结果：") || line.startsWith("汇总验证：")) {
         return theme.fg("success", theme.bold(line));
       }
@@ -294,13 +310,14 @@ export function createWorkflowReport(
 
   function formatWorkflowTaskCompletion(task: ReturnType<typeof getWorkflowTask>) {
     if (!task) throw new Error("无法生成不存在的工作流任务完成报告");
+    const verification = formatVerification(task.verification);
     return [
       "任务完成报告",
       `任务：${task.id} · ${task.task}`,
       `摘要：${task.completionSummary ?? "无"}`,
       `实现原因：${task.implementationRationale ?? "无"}`,
       `耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
-      `验证：${task.verification?.join("；") ?? "无"}`,
+      ...(verification ? [verification] : []),
     ].join("\n");
   }
 
@@ -318,12 +335,13 @@ export function createWorkflowReport(
     const progress = workflowProgress(workflowState);
     const bounds = getWorkflowExecutionBounds(workflowState);
     const completedTask = finalTask ?? [...workflowState.tasks].reverse().find((task) => task.status === "completed");
+    const verification = completedTask ? formatVerification(completedTask.verification) : undefined;
     const taskLines = completedTask
       ? [
           `最终任务：${completedTask.id} · ${completedTask.task}`,
           `摘要：${completedTask.completionSummary ?? "无"}`,
           `实现原因：${completedTask.implementationRationale ?? "无"}`,
-          `验证：${completedTask.verification?.join("；") ?? "无"}`,
+          ...(verification ? [verification] : []),
         ]
       : ["最终任务：无"];
 

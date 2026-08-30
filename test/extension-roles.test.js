@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
 import { advancedInit, runScaffold } from "../extensions/scaffold-runtime.ts";
+import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { collectRoleModels, input, MENU_BACK, showMenu } from "../extensions/ui.ts";
 
 const {
@@ -431,24 +432,18 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
   const firstStarted = markWorkflowTaskStarted(startWorkflowTask(planned, "schema", 110), "schema", 115);
   const intermediate = completeWorkflowTask(
     firstStarted,
-    { taskId: "schema", completionSummary: "结构完成", implementationRationale: "先固定结构以保持后续改动可控", verification: ["npm test：通过"] },
+    { taskId: "schema", completionSummary: "结构完成", implementationRationale: "先固定结构以保持后续改动可控", verification: ["npm test：通过", "node --check：失败：类型错误"] },
     125,
   );
   const finalStarted = markWorkflowTaskStarted(startWorkflowTask(intermediate, "docs", 150), "docs", 155);
   const completed = completeWorkflowTask(
     finalStarted,
-    { taskId: "docs", completionSummary: "文档完成", implementationRationale: "让最终说明与已验证行为一致", verification: ["git diff --check：通过"] },
+    { taskId: "docs", completionSummary: "文档完成", implementationRationale: "让最终说明与已验证行为一致", verification: ["git diff --check：通过", "npm test：失败：1 个测试失败"] },
     175,
   );
 
-  const taskReport = [
-    "任务完成报告",
-    "任务：schema · 更新结构",
-    "摘要：结构完成",
-    "实现原因：先固定结构以保持后续改动可控",
-    "耗时：10 毫秒",
-    "验证：npm test：通过",
-  ].join("\n");
+  const report = createWorkflowReport({}, { pi: {}, roleRuntime: {} });
+  const taskReport = report.formatWorkflowTaskCompletion(intermediate.tasks[0]);
   const taskRendered = workflowTool.renderResult(
     { isError: false, content: [{ type: "text", text: taskReport }], details: intermediate },
     { expanded: false },
@@ -456,23 +451,13 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
   ).render(240).join("\n");
   assert.match(taskRendered, /<accent><bold>◆ 任务完成报告<\/bold><\/accent>/);
   assert.match(taskRendered, /<success><bold>实现原因：先固定结构以保持后续改动可控<\/bold><\/success>/);
-  assert.match(taskRendered, /验证：npm test：通过/);
+  assert.match(taskRendered, /<error><bold>验证：node --check：失败：类型错误<\/bold><\/error>/);
+  assert.doesNotMatch(taskRendered, /npm test：通过/);
   assert.doesNotMatch(taskRendered, /工作流完成报告/);
   assert.doesNotMatch(taskRendered, /整体总耗时/);
   assert.doesNotMatch(taskRendered, /<muted>|<dim>/);
 
-  const workflowReport = [
-    "工作流完成报告",
-    "目标：冻结认证改造",
-    "进度：2/2",
-    "最终任务：docs · 更新文档",
-    "摘要：文档完成",
-    "实现原因：让最终说明与已验证行为一致",
-    "验证：git diff --check：通过",
-    "开始时间：1970-01-01 00:00:00+00:00",
-    "结束时间：1970-01-01 00:00:00+00:00",
-    "总耗时：60 毫秒",
-  ].join("\n");
+  const workflowReport = report.formatWorkflowCompletion(completed, completed.tasks[1]);
   const workflowRendered = workflowTool.renderResult(
     { isError: false, content: [{ type: "text", text: workflowReport }], details: completed },
     { expanded: false },
@@ -482,12 +467,19 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
   assert.match(workflowRendered, /<success><bold>目标：冻结认证改造<\/bold><\/success>/);
   assert.match(workflowRendered, /<success><bold>进度：2\/2<\/bold><\/success>/);
   assert.match(workflowRendered, /<success><bold>实现原因：让最终说明与已验证行为一致<\/bold><\/success>/);
-  assert.match(workflowRendered, /验证：git diff --check：通过/);
+  assert.match(workflowRendered, /<error><bold>验证：npm test：失败：1 个测试失败<\/bold><\/error>/);
+  assert.doesNotMatch(workflowRendered, /git diff --check：通过/);
   assert.match(workflowRendered, /<warning><bold>总耗时：60 毫秒<\/bold><\/warning>/);
-  assert.match(workflowRendered, /开始时间：1970-01-01 00:00:00\+00:00/);
-  assert.match(workflowRendered, /结束时间：1970-01-01 00:00:00\+00:00/);
+  assert.match(workflowRendered, /开始时间：1970-01-01 \d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}/);
+  assert.match(workflowRendered, /结束时间：1970-01-01 \d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}/);
   assert.doesNotMatch(workflowRendered, /schema：结构完成/);
   assert.doesNotMatch(workflowRendered, /schema：npm test：通过/);
   assert.doesNotMatch(workflowRendered, /<muted>|<dim>/);
+
+  const passedOnlyReport = report.formatWorkflowTaskCompletion({
+    ...intermediate.tasks[0],
+    verification: ["npm test：通过"],
+  });
+  assert.doesNotMatch(passedOnlyReport, /^验证：/m);
 });
 

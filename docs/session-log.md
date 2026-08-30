@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-30：完成报告仅显示失败验证
+
+- 完成内容：工作流中间任务和最终完成报告过滤验证结果，仅显示带明确失败语义的条目；全部成功时省略验证行，工作流状态仍保留完整 verification 数组。local 与 subtask 继续共用报告格式化逻辑。
+- 文档：同步 `README.md`、`docs/current-state.md` 和 `docs/decisions.md`；未修改 `docs/pitfalls.md`，本次没有新增可复发陷阱。
+- 验证：`node --test --test-name-pattern='task_workflow 区分中间任务和最终工作流报告并保留样式' test/extension-roles.test.js`，1 项通过；`node --check extensions/workflow-report.ts` 通过；`node scripts/check-line-count.js` 通过；`npm test`，70 项全部通过。
+- 遗留问题：未提交或推送。
+
 ### 2026-08-30：大版本更新至 2.0.0
 
 - 完成内容：将 `package.json`、`package-lock.json` 和当前状态文档中的包版本更新为 `2.0.0`，标记角色配置与工作流报告协议的破坏性升级。
