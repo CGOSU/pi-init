@@ -25,7 +25,7 @@ import { activeRoleMatches, textOf, type ExtensionRuntimeState, type WorkflowSta
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 
 const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
-  "这是自动角色切换触发的上下文压缩。",
+  "这是自动角色切换或工作流任务边界触发的上下文压缩。",
   "请保留后续角色继续工作所需的完整信息：用户目标与约束、关键决策及原因、已完成/进行中/阻塞事项、读取和修改的文件、实际执行的验证命令与结果、下一步。",
   "不要把未完成事项写成已完成；保持项目路径、错误信息和待处理问题的准确性。",
 ].join("\n");
@@ -285,7 +285,7 @@ export function createRoleRuntime(
     const transition = state.pendingRoleCompaction;
     state.pendingRoleCompaction = undefined;
     state.roleCompactionInFlight = true;
-    ctx.ui.setStatus("pi-init-compaction", "● 角色切换 · 正在压缩上下文");
+    ctx.ui.setStatus("pi-init-compaction", "● 正在压缩上下文");
 
     const continueAfterTransition = (warning?: string) => {
       if (warning) ctx.ui.notify(warning, "warning");
@@ -344,7 +344,7 @@ export function createRoleRuntime(
       onError: (error) => {
         state.roleCompactionInFlight = false;
         ctx.ui.setStatus("pi-init-compaction", undefined);
-        continueAfterTransition(`角色切换后的上下文压缩失败，仍将继续当前任务：${error.message}`);
+        continueAfterTransition(`上下文压缩失败，仍将继续当前任务：${error.message}`);
       },
     });
   }

@@ -105,6 +105,14 @@ export function shouldCompactOnRoleSwitch({ mode, previousRole, nextRole, contex
   );
 }
 
+export function shouldCompactAfterWorkflowTask({ mode, contextUsage }) {
+  return (
+    mode === "auto" &&
+    contextUsage?.percent != null &&
+    contextUsage.percent >= ROLE_SWITCH_COMPACTION_THRESHOLD
+  );
+}
+
 export function findMatchingRole(config, model, thinkingLevel) {
   if (!model) return undefined;
 

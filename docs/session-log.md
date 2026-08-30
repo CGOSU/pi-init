@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-30：长工作流任务边界增加上下文压缩检查
+
+- 完成内容：活动工作流的非最终任务在完成后，于 `agent_settled` 检查上下文使用率；自动模式达到 50% 时复用既有压缩和续跑链路，覆盖 local、subtask、同角色任务和最终任务不重复压缩。
+- 文档：同步 `README.md`、`docs/current-state.md`、`docs/decisions.md` 和 `docs/pitfalls.md`。
+- 验证：`node --test test/workflow-compaction.test.js`，3 项通过；`node --check` 覆盖修改的 JS/TS 文件；`node scripts/check-line-count.js` 通过；`npm test`，73 项全部通过。
+- 遗留问题：尚未提交或推送。
+
 ### 2026-08-30：完成报告仅显示失败验证
 
 - 完成内容：工作流中间任务和最终完成报告过滤验证结果，仅显示带明确失败语义的条目；全部成功时省略验证行，工作流状态仍保留完整 verification 数组。local 与 subtask 继续共用报告格式化逻辑。

@@ -33,6 +33,7 @@ import {
   resolveRoleModel,
   shouldOrchestrateWorkflow,
   shouldCompactOnRoleSwitch,
+  shouldCompactAfterWorkflowTask,
 } from "../src/roles.js";
 import {
   WORKFLOW_MAX_NUDGES,
@@ -259,6 +260,7 @@ export {
   resolveRoleModel,
   shouldOrchestrateWorkflow,
   shouldCompactOnRoleSwitch,
+  shouldCompactAfterWorkflowTask,
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,

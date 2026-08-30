@@ -12,7 +12,8 @@ import {
   startWorkflowTask,
 } from "../src/workflow.js";
 import { parseSubtaskResult } from "../src/subtask.js";
-import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { shouldCompactAfterWorkflowTask } from "../src/roles.js";
+import { textOf, type ExtensionRuntimeState, type RoleCompactionContinuation } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowMessages } from "./workflow-messages.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
@@ -33,6 +34,15 @@ export function createWorkflowDispatch(
     return `pi-init-${taskId}-${Date.now()}`;
   }
 
+  function startTaskBoundaryCompaction(ctx: ExtensionContext, continuation: RoleCompactionContinuation) {
+    if (!shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) return false;
+    const role = state.activeRole?.role ?? "workflow";
+    state.pendingRoleCompaction ??= { fromRole: role, toRole: role };
+    state.pendingRoleCompaction.continuation = continuation;
+    deps.roleRuntime.startPendingRoleCompaction(ctx);
+    return true;
+  }
+
   async function scheduleWorkflowReplan(ctx: ExtensionContext) {
     if (
       state.workflowDispatchInFlight ||
@@ -43,6 +53,8 @@ export function createWorkflowDispatch(
       !state.workflowState.pendingRevision
     ) return;
 
+    const taskCompletionPending = state.workflowTaskCompactionPending;
+    state.workflowTaskCompactionPending = false;
     state.workflowDispatchInFlight = true;
     try {
       const selection = await deps.roleRuntime.automaticRole("architect", ctx);
@@ -59,6 +71,7 @@ export function createWorkflowDispatch(
         deps.roleRuntime.startPendingRoleCompaction(ctx);
         return;
       }
+      if (taskCompletionPending && startTaskBoundaryCompaction(ctx, { kind: "workflow-replan" })) return;
       deps.messages.sendWorkflowReplanMessage(ctx);
     } catch (error) {
       state.workflowDispatchInFlight = false;
@@ -167,6 +180,7 @@ export function createWorkflowDispatch(
         ? deps.report.formatWorkflowCompletion(next, completedTask)
         : taskCompletionReport;
       deps.report.persistWorkflowState(next, ctx);
+      state.workflowTaskCompactionPending = next.status !== "completed";
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(completionReport, "info");
     } catch (error) {
@@ -221,9 +235,17 @@ export function createWorkflowDispatch(
     }
 
     const next = getNextWorkflowTask(state.workflowState);
-    if (!next) return;
+    if (!next) {
+      state.workflowTaskCompactionPending = false;
+      return;
+    }
 
+    const taskCompletionPending = state.workflowTaskCompactionPending;
+    state.workflowTaskCompactionPending = false;
     state.workflowDispatchInFlight = true;
+    if (state.workflowState.executor === "subtask" && taskCompletionPending
+      && startTaskBoundaryCompaction(ctx, { kind: "workflow-schedule" })) return;
+
     const started = startWorkflowTask(state.workflowState, next.id);
     deps.report.persistWorkflowState(started, ctx);
     if (started.executor === "subtask") {
@@ -249,6 +271,7 @@ export function createWorkflowDispatch(
         deps.roleRuntime.startPendingRoleCompaction(ctx);
         return;
       }
+      if (taskCompletionPending && startTaskBoundaryCompaction(ctx, { kind: "workflow-task", taskId: next.id })) return;
       deps.messages.sendWorkflowTaskMessage(ctx, next.id);
     } catch (error) {
       const paused = blockWorkflowTask(state.workflowState, {

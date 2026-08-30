@@ -202,6 +202,7 @@ export function createWorkflowActions(
           ? deps.report.formatWorkflowCompletion(next, completedTask)
           : taskCompletionReport;
         deps.report.persistWorkflowState(next, ctx);
+        state.workflowTaskCompactionPending = next.status !== "completed";
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : next.status === "replanning" ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。" : "下一任务将自动开始。"}` }],
           details: next,
