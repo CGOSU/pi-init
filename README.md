@@ -5,7 +5,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 ## 功能
 
 - 生成项目级 `AGENTS.md`、记忆文档和 `.pi/role-models.json`。
-- 随 package 发布公共 `pi-init-role-routing` Skill，提供角色职责、路由和工作流规则；新项目不再生成项目级角色 Skill。
+- 随 package 发布公共 `pi-init-role-routing` Skill，集中维护角色职责、路由、交接、证据门控和工作流规则；新项目不再生成项目级角色 Skill。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
 - 根据任务在公共 Skill 定义的职责之间切换模型，项目通过 `roleModels` 映射启用角色。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
@@ -113,7 +113,16 @@ pi-usage
 
 ## 公共角色 Skill 与动态配置
 
-`skills/pi-init-role-routing/SKILL.md` 随 pi-init package 发布，并包含 `roles/architect.md`、`roles/developer-test.md` 和 `roles/docs-commit.md`。它是职责语义和路由的唯一公共来源，不会复制到 `~/.pi/agent/skills`，脚手架也不会生成 `.pi/skills/<slug>/SKILL.md`。
+### 公共 Skill 的职责
+
+`skills/pi-init-role-routing/` 随 pi-init package 一起发布，是所有项目共用的职责路由来源：
+
+- `SKILL.md` 维护任务执行流程、证据门控、工具调用、角色边界、交接、真实验证和 `task_workflow` 规则。
+- `roles/*.md` 按需提供架构师、开发测试工程师、文档与收尾工程师的职责说明；不需要的角色不会额外加载。
+- Skill 只描述职责和流程，不保存具体 provider、model 或 thinkingLevel，也不会自行切换模型；`switch_role` 和扩展运行时负责按项目配置应用模型。
+- 它由 Pi 从已安装的 package 加载，不复制到 `~/.pi/agent/skills`；脚手架只生成对它的引用，不生成或覆盖 `.pi/skills/<slug>/SKILL.md`。
+
+因此，公共 Skill 负责“谁在什么边界做什么”，项目 `.pi/role-models.json` 负责“启用哪些角色以及使用什么模型”。既有项目的旧项目级 Skill 不会自动删除，确认内容后可手动迁移或删除。
 
 项目角色和模型的唯一项目级来源是 `.pi/role-models.json` 的 `roleModels` 映射；映射中的键即启用的角色，值必须包含精确的 `provider`、`model` 和 `thinkingLevel`。保存结构使用 `schemaVersion: 2`，例如：
 

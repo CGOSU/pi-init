@@ -1,5 +1,10 @@
 # 会话记录
 
+### 2026-08-31：补充公共 Skill 说明并发布 2.0.1
+
+- 完成内容：更新 README，明确公共 `pi-init-role-routing` Skill 的发布位置、按需加载的角色说明、职责边界，以及 Skill、扩展和项目 `roleModels` 配置之间的分工；同步将 package 版本更新为 `2.0.1`。
+- 文档：同步 `docs/current-state.md`；本次没有新增设计决策或可复发陷阱。
+
 ### 2026-08-31：将通用执行规则集中到公共 Skill
 
 - 完成内容：公共 `pi-init-role-routing` Skill 新增完整的证据与工具调用规则；中英文生成模板和项目根 `AGENTS.md` 删除重复的任务执行流程、证据规则和工作流细节，改为引用公共 Skill，仅保留项目特有规则。
