@@ -216,6 +216,18 @@ test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async (
   assert.match(status?.text ?? "", /claude-haiku-4\.5/);
 });
 
+test("状态栏空闲时灰色、Agent 运行时高亮指示点", async () => {
+  let idle = true;
+  const harness = createExtensionHarness();
+  harness.context.isIdle = () => idle;
+  harness.context.ui.theme.fg = (color, text) => `<${color}>${text}</${color}>`;
+  for (const [event, color] of [["session_start", "muted"], ["agent_start", "accent"], ["agent_settled", "muted"]]) {
+    idle = color === "muted";
+    await emitExtensionEvent(harness, event);
+    assert.match(harness.statusCalls.at(-1)?.text ?? "", new RegExp(`<${color}>●</${color}>`));
+  }
+});
+
 test("手动模式原生模型切换写回配置且不重复写入", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });

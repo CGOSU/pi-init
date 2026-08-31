@@ -161,7 +161,15 @@ function createExtensionHarness(branch = [], options = {}) {
     getContextUsage() {
       return { percent: 0 };
     },
+    isIdle() {
+      return options.isIdle ?? true;
+    },
     ui: {
+      theme: {
+        fg(_color, text) {
+          return text;
+        },
+      },
       notify(message, level) {
         notifications.push({ message, level });
       },

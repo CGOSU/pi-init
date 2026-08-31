@@ -268,9 +268,10 @@ export function createRoleRuntime(
     const model = ctx.model
       ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
       : "未选择模型";
+    const indicator = ctx.ui.theme?.fg(ctx.isIdle() ? "muted" : "accent", "●") ?? "●";
     ctx.ui.setStatus(
       "pi-init",
-      `● ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStatusLabel()}`,
+      `${indicator} ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStatusLabel()}`,
     );
   }
 

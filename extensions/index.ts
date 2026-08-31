@@ -210,6 +210,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("agent_start", (_event, ctx) => {
     runtimeState.currentContext = ctx;
+    roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     runtimeState.internalContinuationPending = false;
     const source = acceptedExternalRunSource;
     acceptedExternalRunSource = undefined;
@@ -233,6 +234,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("agent_settled", async (_event, ctx) => {
     runtimeState.currentContext = ctx;
+    roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     settleExternalRunTiming();
     roleRuntime.startPendingRoleCompaction(ctx);
     await workflowDispatch.scheduleWorkflow(ctx);
