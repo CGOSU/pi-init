@@ -127,7 +127,7 @@ export function createWorkflowActions(
           return {
             content: [{
               type: "text",
-              text: `当前工作流策略为 auto，规划包含 ${plan.tasks.length} 个任务（不超过 2 个），已跳过工作流编排；请由当前架构角色按顺序直接执行这些任务。`,
+              text: `当前工作流策略为 auto，规划包含 ${plan.tasks.length} 个任务（不超过 2 个），已跳过工作流编排；请按各任务指定的角色切换后顺序执行这些任务，架构角色只负责规划，不直接实现。`,
             }],
             details: { workflowMode: config.workflowMode, taskCount: plan.tasks.length, orchestrated: false },
           };

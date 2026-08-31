@@ -108,16 +108,13 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
     assert.match(agents, /docs\/clean-code\.md/);
     assert.match(agents, /pi-init-role-routing/);
-    assert.match(agents, /task_workflow/);
-    assert.match(agents, /自动推进/);
-    assert.match(agents, /workflowExecutor/);
-    assert.match(agents, /pi-init\/task-result@1/);
-    assert.match(agents, /共享工作区/);
-    assert.match(agents, /revisionId/);
-    assert.match(agents, /task_workflow\(action="replan"\)/);
-    assert.match(agents, /workflow cancel/);
-    assert.match(agents, /subtask/);
-    assert.doesNotMatch(agents, /pi-subagents/);
+    assert.match(agents, /通用任务执行流程、证据门控、工具调用和角色交接规则/);
+    assert.match(agents, /不要在本文件复制其内容/);
+    assert.doesNotMatch(agents, /## 任务执行流程/);
+    assert.doesNotMatch(agents, /## 证据与工具调用规则/);
+    assert.doesNotMatch(agents, /已有新鲜且精确证据为 0 轮/);
+    assert.doesNotMatch(agents, /workflowExecutor/);
+    assert.doesNotMatch(agents, /task_workflow/);
     assert.doesNotMatch(agents, /\.pi\/agents\//);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
@@ -302,6 +299,108 @@ test("恢复会话角色要求模型和推理强度唯一匹配", () => {
 });
 
 
+test("auto 小计划绕过提示按任务角色顺序执行", async () => {
+  await withTempDirectory(async (directory) => {
+    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
+    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const configPath = path.join(directory, ".pi", "role-models.json");
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, `${JSON.stringify({
+      schemaVersion: 2,
+      workflowMode: "auto",
+      workflowExecutor: "local",
+      roleModels: {
+        architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
+        "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
+      },
+    }, null, 2)}\n`);
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      trusted: true,
+      model: architect,
+      availableModels: [architect, developer],
+    });
+    await emitExtensionEvent(harness, "session_start");
+    const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+    const result = await workflow.execute("plan", {
+      action: "plan",
+      summary: "验证 auto fast path",
+      tasks: [
+        { id: "implementation", task: "实现功能", files: ["src/feature.js"], acceptanceCriteria: ["测试通过"] },
+        { id: "verification", task: "验证功能", files: ["test/feature.test.js"], acceptanceCriteria: ["验证通过"] },
+      ],
+    }, undefined, undefined, harness.context);
+
+    assert.equal(result.details.orchestrated, false);
+    assert.match(result.content[0].text, /按各任务指定的角色切换后顺序执行/);
+    assert.match(result.content[0].text, /架构角色只负责规划，不直接实现/);
+    assert.equal(harness.sentMessages.length, 0);
+  });
+});
+
+test("重规划提示复用新鲜证据并限制定向读取", async () => {
+  await withTempDirectory(async (directory) => {
+    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
+    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const state = requestWorkflowReplan(
+      createWorkflowState({
+        summary: "重规划读取策略",
+        tasks: [{ id: "current", role: "developer-test", task: "完成当前任务", files: ["src/current.js"], acceptanceCriteria: ["通过"] }],
+      },
+      100),
+      { revisionId: "revision-read", direction: "新增后续方向" },
+      110,
+    );
+    const harness = createExtensionHarness([
+      { type: "custom", customType: "pi-init-workflow", data: state },
+    ], {
+      cwd: directory,
+      trusted: true,
+      model: architect,
+      availableModels: [architect, developer],
+    });
+
+    await emitExtensionEvent(harness, "session_start");
+
+    const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
+    assert.ok(message);
+    assert.match(message.message.content, /不为确认已知事实重复读取/);
+    assert.match(message.message.content, /已知证据 0 轮/);
+    assert.match(message.message.content, /安全、认证、公共 API/);
+    assert.doesNotMatch(message.message.content, /请重新检查仓库和当前事实/);
+  });
+});
+
+test("subtask 隐藏提示复用新鲜证据并保留高风险检查", async () => {
+  await withTempDirectory(async (directory) => {
+    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
+    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const state = createWorkflowState({
+      summary: "subtask 读取策略",
+      executor: "subtask",
+      tasks: [{ id: "current", role: "developer-test", task: "完成当前任务", files: ["src/current.js"], acceptanceCriteria: ["通过"] }],
+    }, 100);
+    const harness = createExtensionHarness([
+      { type: "custom", customType: "pi-init-workflow", data: state },
+    ], {
+      cwd: directory,
+      trusted: true,
+      model: developer,
+      availableModels: [architect, developer],
+      activeTools: ["subtask"],
+    });
+
+    await emitExtensionEvent(harness, "session_start");
+
+    const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-subtask-dispatch");
+    assert.ok(message);
+    assert.match(message.message.content, /do not reread merely to confirm known facts/);
+    assert.match(message.message.content, /0 rounds for sufficient evidence/);
+    assert.match(message.message.content, /latest implementation, callers, and tests/);
+    assert.match(message.message.content, /exact unique oldText/);
+  });
+});
+
 test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "商城");
@@ -325,16 +424,14 @@ test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async (
     assert.match(agents, /- Test: `npm test`/);
     assert.match(agents, /docs\/clean-code\.md/);
     assert.match(agents, /pi-init-role-routing/);
-    assert.match(agents, /Task Execution Workflow/);
-    assert.match(agents, /task_workflow/);
-    assert.match(agents, /workflowExecutor/);
-    assert.match(agents, /pi-init\/task-result@1/);
-    assert.match(agents, /shared checkout/);
-    assert.match(agents, /revisionId/);
-    assert.match(agents, /task_workflow\(action="replan"\)/);
-    assert.match(agents, /workflow cancel/);
-    assert.match(agents, /subtask/);
-    assert.doesNotMatch(agents, /pi-subagents/);
+    assert.match(agents, /single source for the general task workflow, evidence gating, `read`\/`edit` invocation/);
+    assert.match(agents, /load that Skill and the relevant role profile on demand/);
+    assert.doesNotMatch(agents, /## Task Execution Workflow/);
+    assert.doesNotMatch(agents, /## Evidence and Tool Invocation Rules/);
+    assert.doesNotMatch(agents, /0 rounds when fresh/);
+    assert.doesNotMatch(agents, /## Task Execution Workflow/);
+    assert.doesNotMatch(agents, /workflowExecutor/);
+    assert.doesNotMatch(agents, /task_workflow/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);
@@ -363,6 +460,8 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /roleModels/);
   assert.match(sharedSkill, /switch_role/);
   assert.match(sharedSkill, /task_workflow/);
+  assert.match(sharedSkill, /## 证据与工具调用/);
+  assert.match(sharedSkill, /`read` 只使用 `path`、`offset` 和 `limit`/);
   assert.match(sharedSkill, /roles\/architect\.md/);
   assert.match(sharedSkill, /roles\/developer-test\.md/);
   assert.match(sharedSkill, /roles\/docs-commit\.md/);

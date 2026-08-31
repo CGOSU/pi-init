@@ -308,6 +308,10 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
   assert.ok(workflowTool);
   assert.equal(typeof workflowTool.renderResult, "function");
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("fresh evidence")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("0 exploration rounds")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("at most two role/dependency tasks")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("latest implementation, callers, and tests")));
   const status = await workflowTool.execute("status", { action: "status" }, undefined, undefined, harness.context);
   assert.match(status.content[0].text, /当前没有活动工作流/);
 
@@ -321,6 +325,10 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   await emitExtensionEvent(activeHarness, "session_start");
   assert.equal(activeHarness.sentMessages[0].message.customType, "pi-init-workflow-task");
   assert.match(activeHarness.sentMessages[0].message.content, /验证注册/);
+  assert.match(activeHarness.sentMessages[0].message.content, /不为确认已知事实重复读取/);
+  assert.match(activeHarness.sentMessages[0].message.content, /已知证据 0 轮/);
+  assert.match(activeHarness.sentMessages[0].message.content, /安全、认证、公共 API/);
+  assert.match(activeHarness.sentMessages[0].message.content, /精确唯一 oldText/);
 });
 
 test("init_project 首次使用按需加载脚手架并支持 dryRun", async () => {

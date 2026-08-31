@@ -1,40 +1,19 @@
 # {{PROJECT_NAME}} AI 协作指南
 
-本文件定义本项目长期有效的 AI Coding 协作规则。开始任务前先阅读本文件，并按顺序读取：
+本文件定义本项目长期有效的 AI Coding 协作规则。通用任务执行流程、证据门控、工具调用和角色交接规则由随 package 发布的 `pi-init-role-routing` Skill 统一维护；执行相关任务时按需读取该 Skill 及对应的 `roles/*.md`，不要在本文件复制其内容。
 
-1. `docs/clean-code.md`：代码、测试、重构、审查和文档修改的 Clean Code 规则；
-2. `docs/current-state.md`：当前目标、已知状态和未完成事项；
-3. `docs/decisions.md`：已经确认的设计决策；
-4. `docs/session-log.md` 中最近的相关记录；
-5. `docs/pitfalls.md` 中与当前任务相关的历史问题；
-6. 随 `pi-init` package 发布的 `pi-init-role-routing` Skill 及其中当前职责对应的 `roles/*.md`：角色职责和路由只从公共 Skill 读取；项目 `.pi/role-models.json` 仅通过 `roleModels` 映射启用角色和配置模型，不生成或维护项目级 Skill；
-7. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
-8. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+1. 先确认与任务直接相关的项目规则（包括需要时的 `docs/clean-code.md`）、项目记忆或代码；项目记忆优先按关键词定位相关段落，而非全量读取；
+2. 项目 `.pi/role-models.json` 仅通过 `roleModels` 映射启用角色和配置模型，不生成或维护项目级 Skill；
+3. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
+4. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
 
 ## 项目定位
 
 {{PROJECT_DESCRIPTION}}
 
-## 任务执行流程
+## 公共协作规则
 
-- 默认按“架构分析 → 任务拆分 → 开发测试逐项执行 → 文档与收尾”的流水线工作；除非用户一开始明确要求先审阅架构，否则架构师完成规划后不得停下来询问下一步选择。
-- 项目任务工作流策略由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `plan`，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行，超过 2 个任务才进入自动工作流。可通过 `/pi-init config workflow` 在当前会话暂存，执行 `/pi-init save` 后才持久化，或直接修改该配置字段。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；关闭时不要调用 `plan`。
-- 运行时角色切换和 `/pi-init config` 变更只存在于当前会话，不得直接写入 `.pi/role-models.json`；只有用户明确执行 `/pi-init save`（保存角色配置）时才持久化。
-- 模型引用必须明确：角色模型和 `subtask` 工作流配置使用完整 `provider/model`，并要求引用精确存在；原生 Agent 子代理由 Pi 宿主决定模型，pi-init 不注入、不校验、不拦截其 `model` 参数。更换角色 Provider 直接修改角色模型（`/pi-init config` 任意已注册模型可选，`/pi-init save` 持久化，或直接编辑 `.pi/role-models.json`）。
-- 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；完成时输出精简任务报告，包含任务、角色、开始/结束时间、总耗时、摘要和验证结果。最终工作流报告同样保持精简；报告时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。没有待处理 revision 时，工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务；有 revision 时先交给架构师重规划。
-- 工作流执行器由 `.pi/role-models.json` 顶层 `workflowExecutor` 配置，默认是 `local`；`subtask` 通过主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话，缺少工具或异常回复都必须安全阻塞任务。
-- 活动工作流中用户继续使用普通自然语言描述方向变更或新增后续工作；同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并为一个带 `revisionId` 的待处理 revision，不创建多个 revision。扩展在当前任务完成后的边界暂停旧计划；架构师根据完整合并指令只规划未完成任务，并通过 `task_workflow(action="replan")` 提交新计划。在新计划应用前不得启动旧后续任务；已完成任务、摘要和验证记录不可修改。若必须立即停止当前任务，使用既有 `/pi-init workflow cancel` 流程。
-- 使用 `subtask` 时，主会话是 `task_workflow` 状态的唯一写入者；fork 只执行当前任务，不调用 `task_workflow`，并且必须返回严格的 `pi-init/task-result@1` JSON 结果，只有合法 `complete` 才能完成任务。方向变更不会由 pi-init 自动终止或重新派发 fork，也不会启动旧计划的下一个任务；运行中的 fork 需要人工确认或停止。
-- fork 在共享工作区执行；不得创建 worktree、合并分支、自动提交或推送。reload 后非终态的已派发任务不会自动重新派发，应先查看工作流状态再人工恢复（`/pi-init workflow retry <taskId>` 或 cancel 后重新规划）。
-- 不要因为偏好、风格或可选方案向用户提问。只有用户明确要求架构审阅，或遇到缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息时才暂停；把合理假设记录在任务结果中。
-- 用户明确要求先看架构时，且工作流已启用，架构师将 `reviewRequired` 设为 `true`，保存规划后暂停；用户审阅后执行 `/pi-init workflow resume`。阻塞任务使用 `block`，处理完原因后使用 `/pi-init workflow retry <taskId>`。
-
-## 工具调用规则
-
-- `read` 只使用 `path`、`offset`、`limit` 参数；`edit` 只使用 `path` 和 `edits`，其中每项必须包含 `oldText` 与 `newText`。
-- 调用 `edit` 前必须先读取文件最新内容，直接复制实际文本作为 `oldText`；不要手动改写单双引号、缩进、空格或换行。
-- `oldText` 匹配失败后必须重新读取并检查实际内容，不要重复提交相同的替换文本；不要用模糊匹配绕过精确编辑保护。
-
+通用的任务执行流程、证据门控、`read`/`edit` 工具调用、角色边界和真实验证要求由随 package 发布的 `pi-init-role-routing` Skill 统一维护。执行代码、测试、文档或工作流任务时，按需读取该 Skill 及对应角色说明；本文件只保留项目定位、环境、命令、知识库和 Git 等项目特有规则。
 ## 运行环境与命令约定
 
 {{ENVIRONMENT_CONTEXT}}

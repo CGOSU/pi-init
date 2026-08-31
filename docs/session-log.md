@@ -1,5 +1,21 @@
 # 会话记录
 
+### 2026-08-31：将通用执行规则集中到公共 Skill
+
+- 完成内容：公共 `pi-init-role-routing` Skill 新增完整的证据与工具调用规则；中英文生成模板和项目根 `AGENTS.md` 删除重复的任务执行流程、证据规则和工作流细节，改为引用公共 Skill，仅保留项目特有规则。
+- 完成内容：README、当前状态和设计决策同步说明集中维护策略、Skill 按需加载限制，以及既有项目需要重新初始化或手动迁移的边界；`docs/pitfalls.md` 未修改，本次没有新的可复发陷阱。
+- 验证：`node --test test/scaffold.test.js`，14 项全部通过；最终文档修改后的全量 `npm test`，76 项全部通过；`git diff --check` 通过，仅有 Windows 下预期的 LF/CRLF 转换警告。
+- 遗留问题：既有项目的 `AGENTS.md` 不会自动迁移；真实 Pi 模型连续工作流、subtask fork 生命周期和 reload 后人工恢复仍未端到端演练；Linux/macOS CI 尚未在本地执行；本次未提交或推送。
+
+### 2026-08-30：采用有限探索并同步运行时提示
+
+- 历史基线：抽样分析历史 30 次 `task_workflow(plan)`，规划耗时中位数 183.5 秒、工具轮次中位数 7.5、工具结果约 98 KB、输出约 6,446 tokens；该基线用于评估重复确认读取的规划开销。
+- 完成内容：将规划、任务执行、重规划和 `subtask` 的读取规则统一为新鲜证据门控；充分证据使用 0 轮，局部缺口使用 1 轮，未知位置通常最多 2 轮。高风险改动继续检查最新实现、调用方和测试，精确编辑失败后才定向重读。
+- 完成内容：`auto` 模式下不超过 2 个任务继续跳过持久工作流，但绕过提示改为按任务指定角色切换后顺序执行，架构角色不直接实现；README、项目状态、设计决策、角色 Skill、双语模板与运行时提示保持一致。未新增 lazy-read 配置、Context Packet 状态结构、哈希缓存或运行时依赖。
+- 文档：未修改 `docs/pitfalls.md`，本次没有发现新的可复发陷阱。
+- 验证：`node --test test/extension-lifecycle.test.js test/scaffold.test.js`，25 项全部通过；`node --check` 覆盖 3 个运行时 TypeScript 文件和 2 个回归测试文件，全部通过；`node scripts/check-line-count.js`（由 `npm test` 执行）通过；`npm test`，76 项全部通过；`git diff --check` 通过，仅有 Windows 下预期的 LF/CRLF 转换警告。
+- 遗留问题：真实 Pi 模型连续多任务、subtask fork 生命周期和 reload 后人工恢复仍未端到端演练；Linux/macOS CI 尚未在本地执行；本次未提交或推送。
+
 ### 2026-08-30：长工作流任务边界增加上下文压缩检查
 
 - 完成内容：活动工作流的非最终任务在完成后，于 `agent_settled` 检查上下文使用率；自动模式达到 50% 时复用既有压缩和续跑链路，覆盖 local、subtask、同角色任务和最终任务不重复压缩。

@@ -1,34 +1,19 @@
 # pi-init AI 协作指南
 
-本文件定义本项目长期有效的 AI Coding 协作规则。开始任务前先阅读本文件，并按顺序读取：
+本文件定义本项目长期有效的 AI Coding 协作规则。通用任务执行流程、证据门控、工具调用和角色交接规则由随 package 发布的 `pi-init-role-routing` Skill 统一维护；执行相关任务时按需读取该 Skill 及对应的 `roles/*.md`，不要在本文件复制其内容。
 
-1. `docs/clean-code.md`：代码、测试、重构、审查和文档修改的 Clean Code 规则；
-2. `docs/current-state.md`：当前目标、已知状态和未完成事项；
-3. `docs/decisions.md`：已经确认的设计决策；
-4. `docs/session-log.md` 中最近的相关记录；
-5. `docs/pitfalls.md` 中与当前任务相关的历史问题；
-6. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
-7. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+1. 先读取与任务直接相关的项目规则、项目记忆或代码；项目记忆优先按关键词定位相关段落，而非全量读取；
+2. 需要规则、事实、历史或风险时，按需读取 `docs/clean-code.md`、`docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md` 和 `docs/pitfalls.md`；
+3. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
+4. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
 
 ## 项目定位
 
-用于 Pi 的项目初始化扩展，生成 AGENTS.md、项目记忆文档，以及支持智能职责路由和自动模型切换的项目级 Skill。
+用于 Pi 的项目初始化扩展，生成 AGENTS.md 和项目记忆文档，并通过公共 Skill 支持智能职责路由和自动模型切换。
 
-## 任务执行流程
+## 公共协作规则
 
-- 默认按“架构分析 → 任务拆分 → 开发测试逐项执行 → 文档与收尾”的流水线工作；除非用户一开始明确要求先审阅架构，否则架构师完成规划后不得停下来询问下一步选择。
-- 项目任务工作流策略由 `.pi/role-models.json` 顶层 `workflowMode` 控制，默认是 `auto`：`off` 拒绝新的 `plan`，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排并由当前架构角色直接顺序执行，超过 2 个任务才进入自动工作流。可通过 `/pi-init config workflow` 在当前会话暂存，执行 `/pi-init save` 后才持久化，或直接修改该配置字段。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 兼容映射为 `on/off`；关闭时不要调用 `plan`。
-- 运行时角色切换和 `/pi-init config` 变更只存在于当前会话，不得直接写入 `.pi/role-models.json`；只有用户明确执行 `/pi-init save`（保存角色配置）时才持久化。唯一例外是 `mode: "manual"`：扩展会把用户原生 `/model` 选择的活动角色模型直接写回配置，AI 不得代替用户触发该路径。
-- 工作流启用并创建任务后，每个任务完成时，开发测试工程师必须实际执行验证，并调用 `task_workflow` 的 `complete` 动作提交摘要和真实结果；工作流会自动推进、自动切换到任务指定角色并开始下一个可执行任务。
-- 不要因为偏好、风格或可选方案向用户提问。只有用户明确要求架构审阅，或遇到缺少产品决策、权限/凭据、破坏性操作确认、不可恢复失败或真正阻塞的信息时才暂停；把合理假设记录在任务结果中。
-- 用户明确要求先看架构时，且工作流已启用，架构师将 `reviewRequired` 设为 `true`，保存规划后暂停；用户审阅后执行 `/pi-init workflow resume`。阻塞任务使用 `block`，处理完原因后使用 `/pi-init workflow retry <taskId>`。
-
-## 工具调用规则
-
-- `read` 只使用 `path`、`offset`、`limit` 参数；`edit` 只使用 `path` 和 `edits`，其中每项必须包含 `oldText` 与 `newText`。
-- 调用 `edit` 前必须先读取文件最新内容，直接复制实际文本作为 `oldText`；不要手动改写单双引号、缩进、空格或换行。
-- `oldText` 匹配失败后必须重新读取并检查实际内容，不要重复提交相同的替换文本；不要用模糊匹配绕过精确编辑保护。
-
+通用的任务执行流程、证据门控、`read`/`edit` 工具调用、角色边界和真实验证要求由随 package 发布的 `pi-init-role-routing` Skill 统一维护。执行代码、测试、文档或工作流任务时，按需读取该 Skill 及对应角色说明；本文件只保留项目特有规则。
 ## 运行环境与命令约定
 
 - 初始化时检测到的宿主系统：Windows (`win32`)，CPU 架构：`x64`。
