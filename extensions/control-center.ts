@@ -47,8 +47,10 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string, hasPendingChang
     })),
     {
       value: "save",
-      label: hasPendingChanges ? "◆ 保存角色配置（有未保存变更）" : "◆ 保存角色配置",
-      description: hasPendingChanges ? "将本次会话的暂存配置写入项目文件" : "当前没有待保存的配置变更",
+      label: hasPendingChanges ? "◆ 保存角色配置（已修改，尚未保存）" : "◆ 保存角色配置",
+      description: hasPendingChanges
+        ? "角色配置已修改，尚未保存；保存后写入项目文件"
+        : "角色配置已保存",
     },
     { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
   ];
@@ -208,7 +210,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
       const result = await roleRuntime.applyRole(role, ctx);
       ctx.ui.notify(
-        `已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
+        `角色配置已修改，尚未保存。已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
         "info",
       );
     } catch (error) {
@@ -282,7 +284,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
-        { value: "save", label: roleRuntime.hasPendingRoleConfigChanges() ? "◆ 保存 · 保存角色配置（有未保存变更）" : "◆ 保存 · 保存角色配置", description: roleRuntime.hasPendingRoleConfigChanges() ? "将暂存配置写入 .pi/role-models.json" : "当前没有待保存的配置变更" },
+        { value: "save", label: roleRuntime.hasPendingRoleConfigChanges() ? "◆ 保存 · 保存角色配置（已修改，尚未保存）" : "◆ 保存 · 保存角色配置", description: roleRuntime.hasPendingRoleConfigChanges() ? "角色配置已修改，尚未保存；保存后写入 .pi/role-models.json" : "角色配置已保存" },
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
       ], { summary, selectedValue: selectedAction });

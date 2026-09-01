@@ -220,7 +220,7 @@ export function createRoleRuntime(
         return { resolved, changed: true };
       });
       if (!outcome.changed) {
-        ctx.ui.notify("当前没有未保存的角色配置变更。", "info");
+        ctx.ui.notify("角色配置已保存。", "info");
         return;
       }
       state.sessionRoleConfigOverrides = {};
@@ -230,8 +230,8 @@ export function createRoleRuntime(
       refreshRoleStatus(ctx, state.sessionModeOverride ?? outcome.resolved.mode);
       ctx.ui.notify(
         hasPendingChanges
-          ? "已保存角色配置到 .pi/role-models.json。"
-          : "已将旧版角色配置迁移为 roleModels 结构。",
+          ? "角色配置已保存。"
+          : "角色配置已保存（旧版配置已迁移为 roleModels 结构）。",
         "info",
       );
     } catch (error) {

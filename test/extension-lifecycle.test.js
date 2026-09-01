@@ -96,7 +96,7 @@ test("角色配置先写会话，显式保存才落盘", async () => {
     const saved = JSON.parse(await readFile(configPath, "utf8"));
     assert.equal(saved.workflowMode, "on");
     assert.equal(saved.workflowExecutor, "local");
-    assert.match(harness.notifications.at(-1)?.message ?? "", /已保存角色配置/);
+    assert.equal(harness.notifications.at(-1)?.message, "角色配置已保存。");
   });
 });
 
