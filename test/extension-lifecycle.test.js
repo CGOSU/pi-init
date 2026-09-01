@@ -297,7 +297,7 @@ test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async (
 test("扩展注册工作流工具、命令和生命周期处理器", async () => {
   const harness = createExtensionHarness();
   const toolNames = harness.tools.map((tool) => tool.name).sort();
-  assert.deepEqual(toolNames, ["init_project", "switch_role", "task_workflow"]);
+  assert.deepEqual(toolNames, ["edit", "init_project", "switch_role", "task_workflow"]);
   assert.ok(harness.commands.has("pi-init"));
   assert.ok(harness.handlers.has("session_start"));
   assert.ok(harness.handlers.has("input"));
@@ -328,7 +328,8 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   assert.match(activeHarness.sentMessages[0].message.content, /不为确认已知事实重复读取/);
   assert.match(activeHarness.sentMessages[0].message.content, /已知证据 0 轮/);
   assert.match(activeHarness.sentMessages[0].message.content, /安全、认证、公共 API/);
-  assert.match(activeHarness.sentMessages[0].message.content, /精确唯一 oldText/);
+  assert.match(activeHarness.sentMessages[0].message.content, /预检每个 oldText 的精确出现次数.*恰好为 1.*不得调用 edit/);
+  assert.match(activeHarness.sentMessages[0].message.content, /edit payload 只含 path 和 edits.*不传 offset 或 limit.*各 edits 互不重叠/);
   assert.match(activeHarness.sentMessages[0].message.content, /(?=.*一次 edit 成功后.*逻辑快照)(?=.*oldText 零匹配.*最多 retry 一次)(?=.*不生成缓存文件或持久状态)(?=.*不得模糊匹配、正则替换)/);
 });
 

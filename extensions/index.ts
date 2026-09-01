@@ -26,6 +26,7 @@ import { createWorkflowActions } from "./workflow-actions.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
+import { createEditGuardTool } from "./edit-guard.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -41,6 +42,7 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
+  pi.registerTool(createEditGuardTool());
   let pendingExternalRunSource: string | undefined;
   let acceptedExternalRunSource: string | undefined;
   let externalRunTiming: ReturnType<typeof createRunTiming>;

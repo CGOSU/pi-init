@@ -397,7 +397,8 @@ test("subtask 隐藏提示复用新鲜证据并保留高风险检查", async () 
     assert.match(message.message.content, /do not reread merely to confirm known facts/);
     assert.match(message.message.content, /0 rounds for sufficient evidence/);
     assert.match(message.message.content, /latest implementation, callers, and tests/);
-    assert.match(message.message.content, /exact unique oldText/);
+    assert.match(message.message.content, /preflight the exact occurrence count of every oldText.*each matches exactly once.*do not call edit/);
+    assert.match(message.message.content, /payload contains only path and edits.*never offset or limit.*regions do not overlap/);
     assert.match(message.message.content, /(?=.*successful edit.*logical snapshot)(?=.*oldText has zero matches.*retry at most once)(?=.*do not create cache files or persistent state)(?=.*Never use fuzzy or regex matching)/);
   });
 });
@@ -464,7 +465,11 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /## 证据与工具调用/);
   assert.match(sharedSkill, /`read` 只使用 `path`、`offset` 和 `limit`/);
   assert.match(sharedSkill, /会话内逻辑快照/);
+  assert.match(sharedSkill, /调用 `edit` 前.*每个 `oldText`.*恰好匹配 1 次/);
+  assert.match(sharedSkill, /edit.*payload.*只允许包含 `path` 和 `edits`.*不得传入 `offset` 或 `limit`/);
+  assert.match(sharedSkill, /调用前检查同一文件的 edits 区域互不重叠/);
   assert.match(sharedSkill, /`oldText` 为零匹配.*最多重试一次/);
+  assert.match(roleProfiles[1], /逐项预检.*`oldText` 精确匹配 1 次/);
   assert.match(roleProfiles[1], /逻辑快照不落盘/);
   assert.match(roleProfiles[1], /oldText 零匹配执行最小重读.*最多重试一次/);
   assert.match(sharedSkill, /roles\/architect\.md/);
