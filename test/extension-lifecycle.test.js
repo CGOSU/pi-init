@@ -254,9 +254,7 @@ test("角色切换压缩等待 agent 完全结束而不是回合结束", async (
     availableModels: [architectModel, developerModel],
   });
   let compactCalls = 0;
-  harness.context.compact = () => {
-    compactCalls++;
-  };
+  harness.context.compact = (options) => { compactCalls++; harness.completeCompaction(options); };
 
   const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
   assert.ok(switchRole);
@@ -268,29 +266,31 @@ test("角色切换压缩等待 agent 完全结束而不是回合结束", async (
   assert.equal(compactCalls, 0);
   await emitExtensionEvent(harness, "agent_settled");
   assert.equal(compactCalls, 1);
+  assert.equal(harness.entries.length, 0);
 });
 
 test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async () => {
   const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
   const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
-  const harness = createExtensionHarness([{ type: "compaction" }], {
+  const harness = createExtensionHarness([], {
     model: architectModel,
     availableModels: [architectModel, developerModel],
   });
   let compactCalls = 0;
-  harness.context.compact = () => {
-    compactCalls++;
-  };
+  harness.context.compact = () => { compactCalls++; };
   const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
   assert.ok(switchRole);
 
   await switchRole.execute("architect", { role: "architect" }, undefined, undefined, harness.context);
   harness.context.getContextUsage = () => ({ percent: 60 });
   await switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
+  await harness.completeCompaction({ reason: "threshold" });
   await emitExtensionEvent(harness, "agent_settled");
 
   assert.equal(compactCalls, 0);
   assert.equal(harness.context.model.id, developerModel.id);
+  assert.equal(harness.branch.at(-1).type, "custom");
+  assert.equal(harness.entries.at(-1).data.status, "acknowledged");
   assert.equal(harness.notifications.some(({ message }) => message.includes("Already compacted")), false);
 });
 

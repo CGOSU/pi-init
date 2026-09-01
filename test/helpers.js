@@ -100,6 +100,51 @@ function createExtensionHarness(branch = [], options = {}) {
   const availableModels = options.availableModels ?? [defaultModel];
   const activeTools = options.activeTools ?? [];
   let context;
+
+  async function completeCompaction(options = {}) {
+    try {
+      let extensionCompaction;
+      const reason = options.reason ?? "manual";
+      const beforeEvent = {
+        type: "session_before_compact",
+        preparation: {},
+        branchEntries: branch,
+        customInstructions: options.customInstructions,
+        reason,
+        willRetry: options.willRetry ?? false,
+        signal: undefined,
+      };
+      for (const handler of handlers.get("session_before_compact") ?? []) {
+        const result = handler(beforeEvent, context);
+        const resolved = result && typeof result.then === "function" ? await result : result;
+        if (resolved?.compaction) extensionCompaction = resolved.compaction;
+      }
+      const compactionEntry = {
+        type: "compaction",
+        id: `test-compaction-${branch.length}`,
+        summary: extensionCompaction?.summary ?? "测试压缩摘要",
+        firstKeptEntryId: extensionCompaction?.firstKeptEntryId ?? "test-kept-entry",
+        tokensBefore: extensionCompaction?.tokensBefore ?? 100,
+      };
+      branch.push(compactionEntry);
+      const compactEvent = {
+        type: "session_compact",
+        compactionEntry,
+        fromExtension: Boolean(extensionCompaction),
+        reason,
+        willRetry: options.willRetry ?? false,
+      };
+      for (const handler of handlers.get("session_compact") ?? []) {
+        const result = handler(compactEvent, context);
+        if (result && typeof result.then === "function") await result;
+      }
+      options.onComplete?.(compactionEntry);
+      return compactionEntry;
+    } catch (error) {
+      options.onError?.(error instanceof Error ? error : new Error(String(error)));
+      return undefined;
+    }
+  }
   const pi = {
     on(name, handler) {
       const registered = handlers.get(name) ?? [];
@@ -113,6 +158,7 @@ function createExtensionHarness(branch = [], options = {}) {
       emit() {},
     },
     appendEntry(type, data) {
+      branch.push({ type: "custom", customType: type, data });
       entries.push({ type, data });
     },
     registerCommand(name, command) {
@@ -215,8 +261,26 @@ function createExtensionHarness(branch = [], options = {}) {
         return branch;
       },
     },
+    compact(options) {
+      completeCompaction(options);
+    },
   };
-  return { handlers, commands, entries, notifications, selectCalls, customCalls, statusCalls, renderers, tools, aborts, context, sentMessages };
+  return {
+    handlers,
+    commands,
+    entries,
+    branch,
+    notifications,
+    selectCalls,
+    customCalls,
+    statusCalls,
+    renderers,
+    tools,
+    aborts,
+    context,
+    sentMessages,
+    completeCompaction,
+  };
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {

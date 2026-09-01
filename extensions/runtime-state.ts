@@ -29,6 +29,7 @@ export type ExtensionRuntimeState = {
   roleModeStatus: string;
   workflowModeStatus: string;
   workflowExecutorStatus: string;
+  roleRecoveryPending: boolean;
   pendingRoleCompaction?: PendingRoleCompaction;
   workflowTaskCompactionPending: boolean;
   roleCompactionInFlight: boolean;
@@ -49,6 +50,7 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     roleModeStatus: "auto",
     workflowModeStatus: "auto",
     workflowExecutorStatus: "local",
+    roleRecoveryPending: false,
     workflowTaskCompactionPending: false,
     roleCompactionInFlight: false,
     workflowDispatchInFlight: false,

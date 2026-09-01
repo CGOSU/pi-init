@@ -49,6 +49,7 @@ metadata:
 - 修改后检查实际 diff，确认没有意外改动，再运行相关验证；执行可能写入目标文件的命令或工具后，视为逻辑快照失效并重新读取。
 - edit 的提示层预检用于降低错误率；扩展运行时守卫在 schema 校验前拒绝 read-shaped/malformed 参数，并将已知重复匹配/重叠错误转为短的可恢复诊断，保证无效或歧义调用不写文件。未知错误保持原错误；不能保证模型永不产生非法工具调用。
 - 合法 edit 继续委托 Pi 内置 definition，保留其 schema、description、prompt metadata、renderer、精确匹配、重叠检测和 per-file mutation queue；正常成功路径不新增 schema、模型调用或提示文本。
+- 职责恢复门在 `session_compact` 后默认持久化 pending，并在每次 `context` 事件注入恢复提示；只放行读取、`task_workflow(action="status")` 和 `switch_role`。阻断结果不终止 Agent，使其可在下一轮自行恢复；失败、取消、模型不匹配或凭据失败都保持 pending。
 
 ## 路由和角色切换
 
@@ -56,9 +57,10 @@ metadata:
 2. 低风险、局部且可归并为不超过两个角色/依赖任务的普通工作，在 `workflowMode: auto` 下默认不调用 `task_workflow(plan)`，而是直接按角色顺序执行；用户明确要求规划、跨模块或高风险任务仍使用完整流程。
 3. 开发测试工程师不写项目文档；文档与收尾工程师不写代码。遇到疑问、需求分析或跨职责冲突时交回架构师。
 4. 每个职责开始前都调用 `switch_role`，每次职责边界也再次调用；切换模型不能只改变回答口吻。
-5. 只请求当前 `roleModels` 中已配置的角色。切换失败、模型不存在、凭据不可用或角色缺失时停止并报告，不猜测继续。
-6. `mode: auto` 立即按映射切换；`confirm` 在自动切换前请求确认；`manual` 不自动换角，需用户执行 `/pi-init role <role-id>`。运行时配置先暂存，只有用户明确执行 `/pi-init save` 才持久化。
-7. 不因偏好或可选方案暂停询问。只有用户明确要求审阅架构，或缺少产品决策、权限/凭据、破坏性操作确认、不可恢复信息或真实阻塞时才暂停。
+5. 普通上下文压缩、reload 或会话恢复后，不得仅凭摘要沿用上一个角色；先确认当前任务边界，必要时调用 `task_workflow(action="status")`，再成功调用 `switch_role`，之后才能实现、测试、写文档或执行 shell。reload、resume、fork 以及 startup 加载已有上下文同样重新上锁；new 或空会话不额外上锁。若 pi-init 已明确完成目标角色交接并在续跑前记录 acknowledged，运行时直接继续，不要求重复调用 `switch_role`。
+6. 只请求当前 `roleModels` 中已配置的角色。切换失败、模型不存在、凭据不可用或角色缺失时停止并报告，不猜测继续。
+7. `mode: auto` 立即按映射切换；`confirm` 在自动切换前请求确认；`manual` 不自动换角，需用户执行 `/pi-init role <role-id>`。运行时配置先暂存，只有用户明确执行 `/pi-init save` 才持久化。
+8. 不因偏好或可选方案暂停询问。只有用户明确要求审阅架构，或缺少产品决策、权限/凭据、破坏性操作确认、不可恢复信息或真实阻塞时才暂停。
 
 ## 顺序工作流
 

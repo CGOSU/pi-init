@@ -460,7 +460,7 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.deepEqual(manifest.pi.skills, ["./skills"]);
   assert.match(sharedSkill, /^---\nname: pi-init-role-routing\n/);
   assert.match(sharedSkill, /roleModels/);
-  assert.match(sharedSkill, /switch_role/);
+  assert.match(sharedSkill, /上下文压缩、reload 或会话恢复后.*switch_role/);
   assert.match(sharedSkill, /task_workflow/);
   assert.match(sharedSkill, /## 证据与工具调用/);
   assert.match(sharedSkill, /`read` 只使用 `path`、`offset` 和 `limit`/);

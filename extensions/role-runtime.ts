@@ -38,6 +38,7 @@ export type RoleRuntimeDependencies = {
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string) => void;
   scheduleWorkflow: (ctx: ExtensionContext) => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext) => void;
+  acknowledgeRoleRecovery: (role: string) => void;
 };
 
 export function workflowModeLabel(mode: string) {
@@ -279,7 +280,13 @@ export function createRoleRuntime(
     state.roleModeStatus = mode;
     refreshRoleStatus(ctx, mode);
   }
-
+  function branchHasOnlyCustomEntriesAfterCompaction(ctx: ExtensionContext) {
+    const branch = ctx.sessionManager.getBranch();
+    for (let index = branch.length - 1; index >= 0; index -= 1) {
+      if (branch[index].type !== "custom") return branch[index].type === "compaction";
+    }
+    return false;
+  }
   function startPendingRoleCompaction(ctx: ExtensionContext) {
     if (!state.pendingRoleCompaction || state.roleCompactionInFlight) return;
 
@@ -289,6 +296,7 @@ export function createRoleRuntime(
     ctx.ui.setStatus("pi-init-compaction", "● 正在压缩上下文");
 
     const continueAfterTransition = (warning?: string) => {
+      if (!warning) deps.acknowledgeRoleRecovery(transition.toRole);
       if (warning) ctx.ui.notify(warning, "warning");
       if (transition.continuation?.kind === "workflow-task") {
         deps.sendWorkflowTaskMessage(ctx, transition.continuation.taskId, warning);
@@ -326,9 +334,8 @@ export function createRoleRuntime(
       }
     };
 
-    // Pi may have auto-compacted immediately before agent_settled. Calling the
-    // manual API again in that state only produces "Already compacted".
-    if (ctx.sessionManager.getBranch().at(-1)?.type === "compaction") {
+    // Ignore non-context recovery entries after Pi's automatic compaction.
+    if (branchHasOnlyCustomEntriesAfterCompaction(ctx)) {
       state.roleCompactionInFlight = false;
       ctx.ui.setStatus("pi-init-compaction", undefined);
       continueAfterTransition();
@@ -378,6 +385,7 @@ export function createRoleRuntime(
     };
     state.activeRole = result;
     setRoleStatus(ctx, state.sessionModeOverride ?? config.mode);
+    deps.acknowledgeRoleRecovery(result.role);
     return result;
   }
 
@@ -401,6 +409,7 @@ export function createRoleRuntime(
     ) {
       throw new Error(`当前为手动模式，请先执行 /pi-init role ${normalizedRole}`);
     }
+    deps.acknowledgeRoleRecovery(result.role);
     return result;
   }
 
@@ -427,7 +436,8 @@ export function createRoleRuntime(
       return { mode, requestedRole: normalizedRole, result, transition };
     }
     if (mode === "manual") {
-      return { mode, requestedRole: normalizedRole, result: currentRole(normalizedRole, ctx) };
+      const result = currentRole(normalizedRole, ctx);
+      return { mode, requestedRole: normalizedRole, result };
     }
 
     if (state.activeRole?.role === normalizedRole) {

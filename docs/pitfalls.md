@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-02：上下文压缩后不能只恢复任务内容
+
+- 日期：2026-09-02；
+- 现象：上下文压缩后模型恢复了任务内容，却沿用压缩前的文档收尾角色直接修改代码，漏掉 `switch_role(developer-test)`。
+- 根因：压缩摘要不等于职责状态；仅靠 Skill 提醒无法保证模型在恢复后重新确认职责边界。
+- 修复：所有 `session_compact` 统一持久化职责恢复 pending，不判断 `fromExtension`，也不使用 `session_before_compact` 返回值追加指令；每次 `context` 事件注入恢复提示。普通压缩和 reload/resume/fork/已有上下文 startup 重新上锁，明确交接续跑前由运行时记录 acknowledged；new/空会话不额外上锁。
+- 验证：`node --test test/role-recovery.test.js test/extension-roles.test.js test/extension-lifecycle.test.js test/workflow-compaction.test.js` 37 项通过；`node scripts/check-line-count.js` 和 `git diff --check` 通过；`npm test` 96/97，唯一失败是 Windows DuckDB 临时数据库文件锁定。
+
 ### 2026-08-26：Pi fork 复制历史 entry 会跨文件重复累计
 
 - 日期：2026-08-26；

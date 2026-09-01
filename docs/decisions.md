@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-02：上下文压缩后强制恢复职责边界
+
+- 决定：所有 `session_compact` 都持久化 `pi-init-role-recovery` pending，不根据 `fromExtension` 分类来源，也不通过 `session_before_compact` 返回值追加恢复指令；恢复提示由每次 `context` 事件注入。`tool_call` 门禁只放行读取、`task_workflow(action="status")` 和 `switch_role`，阻断结果不终止 Agent。
+- 原因：上下文压缩可能恢复任务内容却丢失模型对当前职责边界的显式确认；仅在 Skill 中提醒依赖模型记忆，无法阻止错误职责直接修改代码。所有来源统一上锁后，职责恢复只依赖明确交接结果，不依赖宿主来源标志。
+- 约束：pi-init 已明确完成目标角色或任务交接时，续跑前追加 acknowledged 并直接继续，不要求重复切换；普通压缩和 reload/resume/fork/startup 加载已有上下文后重新 pending，new 或空会话不额外上锁。恢复门不猜测目标角色，失败、取消、模型不匹配或凭据失败都保持 pending；session_tree 只按目标 branch 的最新 recovery entry 恢复。
+
 ### 2026-09-01：edit 守卫只在错误路径增加诊断
 
 - 决定：提示层只提供简短的唯一匹配、参数边界和非重叠预检；运行时包装 Pi 内置 `edit` definition，在校验前拒绝 read-shaped/malformed 参数，并将已知重复匹配/重叠错误转为可恢复诊断，保证无效或歧义调用不写文件。未知错误原样透传，不能保证模型永不产生非法调用。

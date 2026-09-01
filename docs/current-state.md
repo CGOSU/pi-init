@@ -17,8 +17,8 @@
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
 - package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 维护角色语义、路由、职责边界和通用工作流规则，不嵌入具体模型值。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；开发测试工程师不写文档，文档与收尾工程师不写代码，遇到疑问、困惑不解或需求分析统一切换到架构师。
-- `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。
-- 自动模式在真实跨角色，或活动工作流的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。任务边界压缩不改变角色，成功或失败后继续下一任务/重规划；最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不触发。会话启动、resume 或 reload 时，会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
+- `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
+- 自动模式在真实跨角色，或活动工作流的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。任务边界压缩不改变角色，成功或失败后继续下一任务/重规划；最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不触发。会话启动、resume 或 reload 时会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，并要求各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - 活动工作流支持普通自然语言方向变更：同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并到一个 `pendingRevision`/`revisionId`，同步更新 revision 审计记录；当前任务完成后进入 `replanning`，由架构师依据完整指令通过 `task_workflow(action="replan")` 仅重规划未完成后续任务。新计划应用前 local 和 `subtask` 均不会启动旧后续任务，运行中的 subtask fork 不由 pi-init 自动终止或重派，立即停止仍使用既有 cancel 流程。
 - 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
@@ -45,6 +45,7 @@
 
 ## 最近一次更新
 
+- 2026-09-02：完成上下文压缩与会话恢复后的职责恢复门：所有 `session_compact` 默认 pending，普通压缩和 reload/resume/fork/已有上下文 startup 需重新确认，明确交接续跑前由运行时 acknowledged；定向恢复测试 37 项通过，行数检查和 diff 检查通过。全量 `npm test` 为 96/97，剩余失败是 Windows DuckDB 临时数据库文件锁定。
 - 2026-09-01：统一角色配置保存状态提示：已保存时显示“角色配置已保存”，有会话草稿时显示“角色配置已修改，尚未保存”；`npm test` 通过 78 项。
 - 2026-08-31：`pi-usage` TTY 刷新摘要中的重算日期取 session 文件最新修改时间并显示为 `YYYY-MM-DD HH:mm`，另列受影响日期；`npm test` 通过 78 项。
 - 2026-08-31：通用任务执行、证据门控、工具调用和角色交接规则集中到公共 Skill；生成的中英文 `AGENTS.md` 仅保留项目特有规则，`npm test` 通过 76 项。

@@ -27,6 +27,7 @@ import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispat
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
+import { createRoleRecovery } from "./role-recovery.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -42,6 +43,7 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
+  const roleRecovery = createRoleRecovery(pi, runtimeState);
   pi.registerTool(createEditGuardTool());
   let pendingExternalRunSource: string | undefined;
   let acceptedExternalRunSource: string | undefined;
@@ -65,6 +67,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowTaskMessage: (ctx, taskId, note) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note),
     scheduleWorkflow: (ctx) => workflowDispatch.scheduleWorkflow(ctx),
     sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
+    acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
   const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
@@ -198,17 +201,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.internalContinuationPending = false;
       pendingExternalRunSource = undefined;
       acceptedExternalRunSource = undefined;
-      return;
+    } else if (pendingExternalRunSource) {
+      if (externalRunTiming || (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState))) {
+        pendingExternalRunSource = undefined;
+        acceptedExternalRunSource = undefined;
+      } else {
+        acceptedExternalRunSource = pendingExternalRunSource;
+        pendingExternalRunSource = undefined;
+      }
     }
-    if (!pendingExternalRunSource) return;
-    if (externalRunTiming || (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState))) {
-      pendingExternalRunSource = undefined;
-      acceptedExternalRunSource = undefined;
-      return;
-    }
-    acceptedExternalRunSource = pendingExternalRunSource;
-    pendingExternalRunSource = undefined;
   });
+
+  pi.on("context", (event) => roleRecovery.context(event));
 
   pi.on("agent_start", (_event, ctx) => {
     runtimeState.currentContext = ctx;
@@ -248,15 +252,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     acceptedExternalRunSource = undefined;
     externalRunTiming = undefined;
     runtimeState.internalContinuationPending = false;
+    roleRecovery.reset();
     runtimeState.configuredRoleNames = [];
     runtimeState.currentContext = undefined;
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     try {
       runtimeState.runtimeDisposed = false;
       runtimeState.sessionRoleConfigOverrides = {};
       runtimeState.configuredRoleNames = [];
+      runtimeState.activeRole = undefined;
+      roleRecovery.restore(ctx, event.reason);
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       runtimeState.currentContext = ctx;
       runtimeState.workflowModeStatus = config.workflowMode;
@@ -280,6 +287,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_tree", async (_event, ctx) => {
     workflowDispatch.restoreWorkflowState(ctx);
+    roleRecovery.restore(ctx);
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
   });
 
@@ -442,6 +450,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptSnippet: "Switch model and reasoning level for a configured project role",
     promptGuidelines: [
       "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
+      "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before implementation, tests, docs, or shell work.",
       "Use the role ID required by the current task; architect remains the planning role, while other configured role IDs may execute their assigned work.",
       "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
     ],
