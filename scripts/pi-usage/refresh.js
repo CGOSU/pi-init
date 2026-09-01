@@ -78,8 +78,10 @@ async function rebuildSessionFiles(connection, sessionsDirectory, options = {}) 
     bytesRead: 0,
     events: 0,
   };
+  let latestUpdatedMs = 0;
   for (const file of files) {
     const parsed = await scanSessionFile(file);
+    latestUpdatedMs = Math.max(latestUpdatedMs, parsed.metadata.modifiedMs);
     parsedFiles.push(parsed);
     for (const event of [...parsed.events, ...parsed.activityEvents, ...parsed.speedEvents]) {
       affectedDates.add(event.eventDate);
@@ -104,7 +106,11 @@ async function rebuildSessionFiles(connection, sessionsDirectory, options = {}) 
   files.forEach((file, index) => {
     emitRefreshProgress(options, { type: "file", file, mode: "rebuilt", index: index + 1, total: files.length });
   });
-  return { affectedDates, stats };
+  return {
+    affectedDates,
+    stats,
+    latestUpdatedAt: latestUpdatedMs ? new Date(latestUpdatedMs) : undefined,
+  };
 }
 
 async function refreshSessionFiles(connection, sessionsDirectory, options = {}) {
@@ -140,6 +146,7 @@ async function refreshSessionFiles(connection, sessionsDirectory, options = {}) 
   const files = listSessionFiles(sessionsDirectory);
   const seen = new Set(files);
   const affectedDates = new Set();
+  let latestUpdatedMs = 0;
   const stats = {
     filesSeen: files.length,
     filesSkipped: 0,
@@ -152,6 +159,7 @@ async function refreshSessionFiles(connection, sessionsDirectory, options = {}) 
   };
   for (const file of files) {
     const metadata = statSync(file);
+    latestUpdatedMs = Math.max(latestUpdatedMs, metadata.mtimeMs);
     const previous = stored.get(file);
     const unchanged = previous && previous.fileSize === metadata.size && previous.modifiedMs === metadata.mtimeMs;
     if (unchanged && previous.importedOffset === undefined) {
@@ -225,7 +233,11 @@ async function refreshSessionFiles(connection, sessionsDirectory, options = {}) 
     stats.filesRemoved += 1;
     emitRefreshProgress(options, { type: "file", file: sourceFile, mode: "removed", total: files.length });
   }
-  return { affectedDates, stats };
+  return {
+    affectedDates,
+    stats,
+    latestUpdatedAt: latestUpdatedMs ? new Date(latestUpdatedMs) : undefined,
+  };
 }
 
 async function refreshDurationSummary(connection, range, duration) {
@@ -421,19 +433,29 @@ async function refreshUsage(connection, sessionsDirectory, range, options = {}) 
   const schemaVersion = await readUsageSchemaVersion(connection);
   const schemaMigrated = schemaVersion !== USAGE_SCHEMA_VERSION;
   if (schemaMigrated) {
-    const { affectedDates, stats } = await rebuildSessionFiles(connection, sessionsDirectory, options);
+    const { affectedDates, stats, latestUpdatedAt } = await rebuildSessionFiles(connection, sessionsDirectory, options);
     const dates = [...affectedDates].sort();
-    const result = { ...stats, durationDates: dates, schemaMigrated };
+    const result = {
+      ...stats,
+      durationDates: dates,
+      schemaMigrated,
+      latestUpdatedAt: latestUpdatedAt?.toISOString(),
+    };
     emitRefreshProgress(options, { type: "complete", date: range.date, stats: result });
     return result;
   }
-  const { affectedDates, stats } = await refreshSessionFiles(connection, sessionsDirectory, options);
+  const { affectedDates, stats, latestUpdatedAt } = await refreshSessionFiles(connection, sessionsDirectory, options);
   const dates = [...affectedDates].sort();
   for (const date of dates) {
     await refreshDerivedSummaries(connection, dateRange(date));
   }
   await markUsageChecked(connection);
-  const result = { ...stats, durationDates: dates, schemaMigrated };
+  const result = {
+    ...stats,
+    durationDates: dates,
+    schemaMigrated,
+    latestUpdatedAt: latestUpdatedAt?.toISOString(),
+  };
   emitRefreshProgress(options, { type: "complete", date: range.date, stats: result });
   return result;
 }

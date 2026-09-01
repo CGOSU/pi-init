@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-08-31：pi-usage 重算日期精确到分钟
+
+- 完成内容：TTY 刷新摘要将“重算日期”改为 session 文件最新修改时间 `YYYY-MM-DD HH:mm`，并保留受影响自然日；不再把扫描完成时间误作数据更新时间。
+- 完成内容：新增分钟格式化和刷新时间回归测试。
+- 验证：`node --check scripts/pi-usage/refresh.js`、`scripts/pi-usage/report.js`、`scripts/pi-usage/cli.js` 通过；`node --test test/pi-usage.test.js test/pi-usage-range.test.js`，17 项通过；`npm test`，78 项通过；`git diff --check` 通过（仅有 Windows 下预期的 LF/CRLF 转换警告）。
+- 遗留问题：尚未提交或推送。
+
 ### 2026-08-31：状态栏运行时指示点高亮
 
 - 完成内容：`pi-init` 状态栏指示点使用主题 `muted`/`accent` 颜色，在 Agent 空闲/运行状态间切换；新增生命周期和颜色回归测试，并补齐测试桩的 `isIdle()` 与主题接口。

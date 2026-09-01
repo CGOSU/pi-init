@@ -5,6 +5,7 @@ import * as helpers from "./helpers.js";
 const {
   PI_USAGE_VERSION,
   dateRange,
+  formatDateMinute,
   formatReport,
   queryUsage,
   shouldRefreshUsage,
@@ -124,6 +125,11 @@ test("pi-usage 默认日期范围从本地午夜开始", () => {
   assert.equal(range.start.getSeconds(), 0);
   assert.equal(range.start.getMilliseconds(), 0);
   assert.equal(range.end.getTime() - range.start.getTime(), 24 * 60 * 60 * 1000);
+});
+
+test("pi-usage 最新更新日期显示到分钟", () => {
+  assert.equal(formatDateMinute(new Date(2026, 7, 31, 15, 29, 47)), "2026-08-31 15:29");
+  assert.equal(formatDateMinute("not-a-date"), "未知");
 });
 
 test("pi-usage 仅在超过一小时或跨自然日时自动检查", () => {
@@ -311,6 +317,7 @@ test("pi-usage 流式 checkpoint 处理不完整尾部和同尺寸改写", async
     assert.ok(completedRefresh);
     assert.equal(completedRefresh.stats.filesSkipped, 1);
     assert.deepEqual(completedRefresh.stats.durationDates, []);
+    assert.match(completedRefresh.stats.latestUpdatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 });
 

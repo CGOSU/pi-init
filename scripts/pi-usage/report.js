@@ -18,6 +18,14 @@ export function formatNumber(value) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+export function formatDateMinute(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "未知";
+  const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+    .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")));
+  return `${parts.join("-")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function formatCost(value) {
   return `$${value.toFixed(4)}`;
 }

@@ -13,7 +13,7 @@
 
 - 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。控制中心和脚手架运行时已改为扩展实例内 Promise 缓存的按需加载，工作流恢复从 session branch 末尾直接查找最新状态。
 - `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。schema v3 使用稳定 entry key（Pi id 或 legacy 哈希）跨 fork 文件去重 usage、speed、activity 和 session；schema 不一致时事务化清理并全量重建所有派生表与 checkpoint。
-- TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
+- TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计，重算日期取 session 文件最新修改时间并精确到分钟，另列受影响日期；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
 - package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 维护角色语义、路由、职责边界和通用工作流规则，不嵌入具体模型值。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；开发测试工程师不写文档，文档与收尾工程师不写代码，遇到疑问、困惑不解或需求分析统一切换到架构师。
@@ -34,7 +34,7 @@
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
 - 测试命令为 `npm test`；该命令先执行 `scripts/check-line-count.js`，递归保证受检 JavaScript/TypeScript 文件不超过 500 个物理行，再运行 Node 原生测试。包版本为 `2.0.1`，扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
-- 提供跨平台 `scripts/pi-usage.*` 用量统计命令；Windows PowerShell 安装器会把所需文件复制到 Pi 所在的 npm 可执行目录，POSIX 安装器优先使用 Pi 可执行目录、无写权限时回退到用户 bin 目录。`pi-usage` 普通查询在首次查询、距离上次检查超过 1 小时或跨自然日时自动执行增量检查，其余时间直接读取 DuckDB；`--update` 始终强制检查。日期参数支持 `yesterday`、`Nd`、`YYYY-MM`、单日和两个 `YYYY-MM-DD` 组成的闭区间，跨日统计按日期范围聚合并对 session 去重。报告标题会显示与 `pi-init` 共用的 package 版本号，启动器安装时从 `package.json` 嵌入该版本。`postinstall` 查找 Pi 时会跳过当前 npm 包 `node_modules/.bin` 中的本地 `pi` shim，避免 `pi update --extensions` 把启动器复制到随后会被清理的依赖目录。角色模型和工作流配置变更默认只存在当前会话，执行 `/pi-init save` 才写入 `.pi/role-models.json`。Models 表还可导入 `pi-token-speed` 扩展写入的有效生成时长，按模型展示加权平均 TPS；扩展在 `message_end` 生命周期记录样本，避免等待 `agent_end` 或重复记录。
+- 提供跨平台 `scripts/pi-usage.*` 用量统计命令；Windows PowerShell 安装器会把所需文件复制到 Pi 所在的 npm 可执行目录，POSIX 安装器优先使用 Pi 可执行目录、无写权限时回退到用户 bin 目录。`pi-usage` 普通查询在首次查询、距离上次检查超过 1 小时或跨自然日时自动执行增量检查，其余时间直接读取 DuckDB；`--update` 始终强制检查。日期参数支持 `yesterday`、`Nd`、`YYYY-MM`、单日和两个 `YYYY-MM-DD` 组成的闭区间，跨日统计按日期范围聚合并对 session 去重；TTY 刷新摘要中的重算日期取 session 文件最新修改时间并精确到分钟，同时显示受影响日期。报告标题会显示与 `pi-init` 共用的 package 版本号，启动器安装时从 `package.json` 嵌入该版本。`postinstall` 查找 Pi 时会跳过当前 npm 包 `node_modules/.bin` 中的本地 `pi` shim，避免 `pi update --extensions` 把启动器复制到随后会被清理的依赖目录。角色模型和工作流配置变更默认只存在当前会话，执行 `/pi-init save` 才写入 `.pi/role-models.json`。Models 表还可导入 `pi-token-speed` 扩展写入的有效生成时长，按模型展示加权平均 TPS；扩展在 `message_end` 生命周期记录样本，避免等待 `agent_end` 或重复记录。
 
 ## 待处理
 
@@ -43,6 +43,7 @@
 
 ## 最近一次更新
 
+- 2026-08-31：`pi-usage` TTY 刷新摘要中的重算日期取 session 文件最新修改时间并显示为 `YYYY-MM-DD HH:mm`，另列受影响日期；`npm test` 通过 78 项。
 - 2026-08-31：通用任务执行、证据门控、工具调用和角色交接规则集中到公共 Skill；生成的中英文 `AGENTS.md` 仅保留项目特有规则，`npm test` 通过 76 项。
 - 2026-08-30：采用新鲜证据门控的有限探索和简单任务 fast path；运行时提示、双语模板与角色规则已同步，`npm test` 通过 76 项。
 - 2026-08-30：完成报告中的验证仅显示明确失败项，成功项省略且完整 verification 仍持久化；`npm test` 通过 70 项。

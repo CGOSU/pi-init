@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { queryUsage, summarizeUsage } from "./refresh.js";
-import { formatNumber, formatReport, supportsColor } from "./report.js";
+import { formatDateMinute, formatNumber, formatReport, supportsColor } from "./report.js";
 
 function parseArguments(args, agentDir) {
   const rangeArguments = [];
@@ -34,11 +34,12 @@ function createRefreshProgressReporter() {
     if (event.type !== "complete") return;
     const stats = event.stats;
     const dates = stats.durationDates.length ? stats.durationDates.join(", ") : "无";
+    const latestUpdatedAt = stats.latestUpdatedAt ? formatDateMinute(stats.latestUpdatedAt) : "无";
     console.error(
       `刷新完成：扫描 ${formatNumber(stats.filesSeen)} 个文件，跳过 ${formatNumber(stats.filesSkipped)} 个，` +
         `追加 ${formatNumber(stats.filesAppended)} 个，重建 ${formatNumber(stats.filesRebuilt)} 个，` +
         `移除 ${formatNumber(stats.filesRemoved)} 个，读取 ${formatNumber(stats.bytesRead)} 字节，` +
-        `重算日期：${dates}。`,
+        `重算日期：${latestUpdatedAt}，受影响日期：${dates}。`,
     );
   };
 }

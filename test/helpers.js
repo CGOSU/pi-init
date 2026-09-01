@@ -7,6 +7,7 @@ import initProjectExtension from "../extensions/index.ts";
 import { installLaunchers } from "../scripts/install-launchers.js";
 import {
   dateRange,
+  formatDateMinute,
   formatReport,
   PI_USAGE_VERSION,
   queryUsage,
@@ -243,6 +244,7 @@ export {
   initProjectExtension,
   installLaunchers,
   dateRange,
+  formatDateMinute,
   formatReport,
   PI_USAGE_VERSION,
   queryUsage,
