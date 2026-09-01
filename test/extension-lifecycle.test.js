@@ -329,6 +329,7 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   assert.match(activeHarness.sentMessages[0].message.content, /已知证据 0 轮/);
   assert.match(activeHarness.sentMessages[0].message.content, /安全、认证、公共 API/);
   assert.match(activeHarness.sentMessages[0].message.content, /精确唯一 oldText/);
+  assert.match(activeHarness.sentMessages[0].message.content, /(?=.*一次 edit 成功后.*逻辑快照)(?=.*oldText 零匹配.*最多 retry 一次)(?=.*不生成缓存文件或持久状态)(?=.*不得模糊匹配、正则替换)/);
 });
 
 test("init_project 首次使用按需加载脚手架并支持 dryRun", async () => {

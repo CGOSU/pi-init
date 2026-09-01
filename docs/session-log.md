@@ -1,5 +1,13 @@
 # 会话记录
 
+### 2026-08-31：增加精确编辑的会话内逻辑快照规则
+
+- 完成内容：公共职责路由 Skill、developer-test 角色说明以及 local/subtask 工作流提示新增逻辑快照规则；成功 `edit` 后在无其他写入来源时复用确定结果，快照失效后重新读取；`oldText` 零匹配仅允许定向重读并最多安全重试一次，不使用模糊匹配或持久缓存。
+- 完成内容：新增公共 Skill、角色说明和运行时提示的回归断言；未修改 Pi 内置 `read`/`edit` 协议，也未生成缓存文件或持久状态。
+- 文档：同步 `README.md`、`docs/current-state.md` 和 `docs/decisions.md`；未修改 `docs/pitfalls.md`，本次没有发现新的可复发陷阱。
+- 验证：`node --test test/extension-lifecycle.test.js test/scaffold.test.js`，25 项通过；`npm test`，78 项通过；`git diff --check` 通过（仅有 Windows 下预期的 LF/CRLF 转换警告）。
+- 遗留问题：尚未提交或推送。
+
 ### 2026-08-31：pi-usage 重算日期精确到分钟
 
 - 完成内容：TTY 刷新摘要将“重算日期”改为 session 文件最新修改时间 `YYYY-MM-DD HH:mm`，并保留受影响自然日；不再把扫描完成时间误作数据更新时间。
