@@ -23,20 +23,7 @@ The package-published `pi-init-role-routing` Skill is the single source for the 
 
 - Test: `{{TEST_COMMAND}}`
 
-If a command has not been provided, inspect the existing scripts and toolchain instead of guessing.
 
-## Working Agreements
-
-- Inspect the worktree and relevant implementation before editing. Do not overwrite changes from other collaborators.
-- Prefer small, local, verifiable changes. Do not add compatibility layers for uncertain requirements.
-- Follow the project's existing code style, directory structure, and toolchain.
-- Do not record tokens, passwords, private keys, or other secrets in code, documentation, logs, or commits.
-
-## Verification
-
-- Add focused tests when adding or fixing behavior.
-- Run at least the tests, type checks, or build commands directly relevant to the change.
-- Record only checks that were actually run and their real results.
 
 ## Session Wrap-up
 
