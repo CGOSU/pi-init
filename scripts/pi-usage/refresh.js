@@ -418,12 +418,16 @@ async function readSummary(connection, range) {
     modelWaitSeconds: numberValue(durationRow?.model_wait_seconds),
     sessionSpanSeconds: numberValue(durationRow?.session_span_seconds),
   };
+  const usageState = await readUsageState(connection);
   return {
     date: range.date,
     sessions: numberValue(sessionsReader.getRowObjects()[0]?.sessions),
     rows,
     speed: { ...speed, avgTps: averageTps(speed) },
     duration,
+    updatedAt: Number.isFinite(usageState?.checkedMs)
+      ? new Date(usageState.checkedMs).toISOString()
+      : undefined,
   };
 }
 

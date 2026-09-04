@@ -132,6 +132,15 @@ test("pi-usage 最新更新日期显示到分钟", () => {
   assert.equal(formatDateMinute("not-a-date"), "未知");
 });
 
+test("pi-usage 报告显示缓存更新时间", () => {
+  const report = formatReport({
+    date: "2026-08-31",
+    rows: [],
+    updatedAt: new Date(2026, 7, 31, 15, 29, 47).toISOString(),
+  });
+  assert.match(report, /Cache updated: 2026-08-31 15:29/);
+});
+
 test("pi-usage 仅在超过一小时或跨自然日时自动检查", () => {
   const now = new Date(2026, 7, 9, 12, 0, 0, 0);
   const sameDay = now.toLocaleDateString("sv-SE");
@@ -203,7 +212,9 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     const summary = await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
     const report = formatReport(summary);
     assert.equal(summary.sessions, 2);
+    assert.ok(Number.isFinite(Date.parse(summary.updatedAt)));
     assert.match(report, new RegExp(`Pi usage · ${date}`));
+    assert.match(report, /Cache updated: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
     assert.match(report, /provider\/response-model/);
     assert.match(report, /Tools\/summaries/);
     assert.match(report, /Total/);
@@ -239,6 +250,7 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     );
     const cachedAfterChange = await queryUsage(date, path.join(directory, "usage.duckdb"), undefined, sessions);
     assert.equal(cachedAfterChange.rows.find((row) => row.model === "provider/response-model").input, 10);
+    assert.equal(cachedAfterChange.updatedAt, summary.updatedAt);
     await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
     const refreshed = await queryUsage(date, path.join(directory, "usage.duckdb"));
     assert.equal(refreshed.rows.find((row) => row.model === "provider/response-model").input, 110);

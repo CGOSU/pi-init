@@ -194,6 +194,7 @@ export function formatReport(summary, options = {}) {
   };
   return [
     paint(`Pi usage · ${summary.date} · v${PI_USAGE_VERSION}`, "36;1", color),
+    paint(`Cache updated: ${formatDateMinute(summary.updatedAt)}`, "90", color),
     "",
     paint("Overview", "33;1", color),
     formatOverviewTable(summary, total, color),

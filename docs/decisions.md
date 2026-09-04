@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-09-04：pi-usage 报表显示缓存更新时间
+
+- 决定：查询汇总从 `usage_state.checked_ms` 暴露缓存最近刷新时间，并在报表标题下显示为本地 `YYYY-MM-DD HH:mm`；没有缓存状态时显示“未知”。
+- 原因：普通查询可能直接读取未过期的 DuckDB 缓存，用户需要区分数据更新时间和本次命令执行时间。
+- 约束：时间取缓存刷新完成时写入的 `checked_ms`，不使用 session 文件最新修改时间；不改变缓存过期判断和统计结果。
+
+
 ### 2026-09-02：上下文压缩后强制恢复职责边界
 
 - 决定：所有 `session_compact` 都持久化 `pi-init-role-recovery` pending，不根据 `fromExtension` 分类来源，也不通过 `session_before_compact` 返回值追加恢复指令；恢复提示由每次 `context` 事件注入。`tool_call` 门禁只放行读取、`task_workflow(action="status")` 和 `switch_role`，阻断结果不终止 Agent。

@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-09-04：显示 pi-usage 缓存更新时间
+
+- 完成内容：`pi-usage` 汇总读取 DuckDB `usage_state.checked_ms` 并返回 `updatedAt`；报表显示 `Cache updated: YYYY-MM-DD HH:mm`，无缓存状态时显示“未知”。新增缓存查询与报表回归测试。
+- 验证：`node --test test/pi-usage.test.js test/pi-usage-range.test.js`，18 项通过；`npm test`，98 项通过；`git diff --check` 通过（仅有 Windows 下预期的 LF/CRLF 转换警告）。
+- 遗留问题：尚未提交或推送。
+
+
 ### 2026-09-02：实现上下文压缩后的职责恢复门
 
 - 完成内容：新增 `extensions/role-recovery.ts`。所有 `session_compact` 都持久化 `pi-init-role-recovery` pending，不依赖 `fromExtension`；恢复提示改由每次 `context` 事件注入，移除 `session_before_compact` 返回值用法。普通压缩和 reload/resume/fork/已有上下文 startup 后重新上锁，new/空会话不额外上锁；pi-init 明确完成角色/任务交接时在续跑前记录 acknowledged。
