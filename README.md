@@ -211,6 +211,12 @@ flowchart LR
 /pi-init mode <auto|confirm|manual>
 ```
 
+### 架构前置证据与职责边界
+
+需要仓库或外部事实时，先由 `docs-commit` 负责搜索、浏览、读取、定位、调用链/依赖追踪，以及查找相关测试和文档，并交接结构化证据包：已确认事实及来源、相关文件/符号、调用关系、测试入口、工作区状态、风险、冲突和未确认项。`architect` 只消费该证据包，负责根因分析、逻辑关系、关键决策、方案和执行计划，不执行探索工具或修改文件；证据不足时必须交回 `docs-commit` 补充。`developer-test` 为实现和验证读取直接相关代码的能力不受此限制。
+
+当公共 Skill 或扩展更新后，已安装的 package 和当前 Pi 进程不会自动获得新规则；请执行 `pi update --extensions`，然后 `/reload` 或重启 Pi。新守卫只在扩展重新加载后生效。
+
 任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 在当前会话暂存 `off`、`on` 或 `auto`，执行 `/pi-init save` 后才写入项目配置；也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，并要求按各任务指定角色切换后直接顺序执行，架构角色不直接实现；超过 2 个任务才进入编排。已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
 `workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subtask`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。

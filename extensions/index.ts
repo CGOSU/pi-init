@@ -22,6 +22,7 @@ import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/
 import { Text } from "@earendil-works/pi-tui";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { createCacheStatus } from "./cache-status.ts";
+import { createArchitectBoundary } from "./architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
@@ -71,6 +72,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
+  createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
@@ -403,8 +405,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for an explicit planning request, cross-module or high-risk work, or a plan that cannot be safely handled as a small local change; in workflowMode=auto, do not create a plan merely to confirm known facts or for ordinary low-risk work that fits at most two role/dependency tasks.",
-      "Before planning, reuse fresh evidence already injected or read in this session. Read only to resolve location, implementation, impact, or freshness uncertainty: use 0 exploration rounds for sufficient evidence, 1 for a local gap, and usually at most 2 for an unknown location or new symbol/configuration/call chain; parallelize reads within a round.",
-      "High-risk changes (security, authentication, public APIs, data migrations, concurrency, deletion, or a worktree another collaborator may change) always require checking the latest implementation, callers, and tests; after verification fails, inspect the error location and only the necessary direct caller chain.",
+      "Before planning, reuse fresh evidence from a structured evidence packet from docs-commit; architect must not use exploration tools. If evidence is missing, call switch_role to docs-commit first. docs-commit uses 0 exploration rounds for sufficient evidence, 1 for a local gap, and usually at most 2 for an unknown location or new symbol/configuration/call chain; parallelize reads within a round.",
+      "High-risk changes (security, authentication, public APIs, data migrations, concurrency, deletion, or a worktree another collaborator may change) require docs-commit to check the latest implementation, callers, and tests; architect only consumes that evidence packet and does not inspect the error location directly.",
       "The project workflowMode defaults to auto: a valid low-risk plan with one or two tasks returns a bypass notice without creating state or scheduling; switch to each assigned role and continue those tasks directly in order. Use on when orchestration is required for a small plan.",
       "Set reviewRequired=true only when the user's initial request explicitly asks to inspect the architecture before implementation; otherwise leave it false so the workflow advances automatically without asking for choices.",
       "Use task_workflow action=complete only after the current task is actually implemented and verified; include real commands and results in verification.",

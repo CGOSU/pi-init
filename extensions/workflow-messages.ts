@@ -4,6 +4,24 @@ import { SUBTASK_RESULT_PROTOCOL } from "../src/subtask.js";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { textOf } from "./runtime-state.ts";
 
+const GENERIC_TASK_TOOL_GUIDANCE = "读取与编辑规则：遵循公共 pi-init-role-routing Skill，不为确认已知事实重复读取；预检每个 oldText 的精确出现次数，恰好为 1 后才能调用 edit；出现 0 次或多次不得调用 edit；edit payload 只含 path 和 edits，不传 offset 或 limit，各 edits 互不重叠。一次 edit 成功后可复用会话内逻辑快照；oldText 零匹配时最多 retry 一次；不生成缓存文件或持久状态，不得模糊匹配、正则替换。提示预检只降低错误率；运行时守卫保证无效或歧义调用不写文件并返回可恢复诊断，但不能保证模型永不产生非法调用。充分证据按已知证据 0 轮处理；安全、认证、公共 API、数据迁移、并发、删除或协作者可能修改的工作区检查最新实现、调用方和测试。";
+
+function taskRoleGuidance(role: string) {
+  if (role === "architect") {
+    return "架构师任务边界：只消费文档与提交工程师交接的结构化证据包，负责分析、根因判断、关键决策和计划；不得调用探索工具或修改代码/文档。证据不足时先调用 switch_role(role=\"docs-commit\")。";
+  }
+  if (role === "docs-commit") {
+    return "文档与提交工程师任务边界：负责搜索、浏览、读取、定位、调用链追踪及测试/文档查找，并交接已确认事实、来源、关系、测试、风险和未确认项；不替架构师做关键决策，也不修改代码。";
+  }
+  return "";
+}
+
+function taskToolGuidance(role: string) {
+  return role === "architect"
+    ? "架构师不得执行 read、grep、find、ls、bash、powershell、browser、MCP、edit、write 或其他探索/修改工具；只消费 docs-commit 证据包，并通过 switch_role 或 task_workflow 完成职责与计划编排。"
+    : GENERIC_TASK_TOOL_GUIDANCE;
+}
+
 export type WorkflowMessageDependencies = {
   pi: ExtensionAPI;
   setInternalContinuationPending: (value: boolean) => void;
@@ -30,8 +48,9 @@ export function createWorkflowMessages(
       `当前任务（${task.id}，角色 ${task.role}）：${task.task}`,
       `允许涉及的文件或目录：${task.files.join(", ")}`,
       `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
+      taskRoleGuidance(task.role),
       note ? `调度提示：${note}` : "",
-      "读取与编辑规则：遵循公共 pi-init-role-routing Skill，不为确认已知事实重复读取；预检每个 oldText 的精确出现次数，恰好为 1 后才能调用 edit；出现 0 次或多次不得调用 edit；edit payload 只含 path 和 edits，不传 offset 或 limit，各 edits 互不重叠。一次 edit 成功后可复用会话内逻辑快照；oldText 零匹配时最多 retry 一次；不生成缓存文件或持久状态，不得模糊匹配、正则替换。提示预检只降低错误率；运行时守卫保证无效或歧义调用不写文件并返回可恢复诊断，但不能保证模型永不产生非法调用。充分证据按已知证据 0 轮处理；安全、认证、公共 API、数据迁移、并发、删除或协作者可能修改的工作区检查最新实现、调用方和测试。",
+      taskToolGuidance(task.role),
 
       "如果用户在本工作流期间提出会改变后续方向或新增后续工作的普通描述，不要自行派发旧计划的下一任务；扩展会先记录重规划请求，当前任务完成后交给架构师重规划。若必须立即停止当前任务，使用现有 cancel 流程。",
       "除非遇到真正阻塞的需求、权限、凭据、破坏性操作或必须由用户决定的产品取舍，不要询问用户；做合理假设并记录。",
@@ -78,7 +97,7 @@ export function createWorkflowMessages(
       workflowState.plan.constraints.length > 0 ? `原架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `已完成任务（不可修改）：\n${completed.join("\n")}` : "",
       pending.length > 0 ? `旧计划中尚未开始的任务：\n${pending.join("\n")}` : "无旧的未开始任务",
-      "规划读取策略：遵循公共 pi-init-role-routing Skill，不为确认已知事实重复读取；充分证据按已知证据 0 轮，复用新鲜证据，仅为解决位置、实现、影响或新鲜度不确定性读取最小范围；安全、认证、公共 API、数据迁移、并发、删除或可能被其他协作者修改的工作区检查最新实现、调用方和测试。",
+      "规划读取策略：本次由 architect 执行重规划，只消费 docs-commit 交接的结构化 fresh evidence；architect 不自行读取或探索，不为确认已知事实重复读取；若证据不足，先通过 switch_role 交给 docs-commit 补充；充分证据按已知证据 0 轮，复用新鲜证据，仅为解决位置、实现、影响或新鲜度不确定性读取最小范围；安全、认证、公共 API、数据迁移、并发、删除或可能被其他协作者修改的工作区由 docs-commit 检查最新实现、调用方和测试。",
       "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。",
       "若只是新增后续工作，把仍有效的旧任务 ID 放入 retainTaskIds；新增 tasks 必须使用从未出现过的新 ID。若替换旧任务，不要把被替换任务 ID 放进新 tasks，也不要让新任务依赖被替换任务。",
       `规划完成后，必须调用 task_workflow(action="replan", revisionId="${request.revisionId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,

@@ -365,6 +365,8 @@ test("重规划提示复用新鲜证据并限制定向读取", async () => {
     const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
     assert.ok(message);
     assert.match(message.message.content, /不为确认已知事实重复读取/);
+    assert.match(message.message.content, /architect.*docs-commit.*结构化 fresh evidence/);
+    assert.match(message.message.content, /architect.*不自行读取或探索/);
     assert.match(message.message.content, /已知证据 0 轮/);
     assert.match(message.message.content, /安全、认证、公共 API/);
     assert.doesNotMatch(message.message.content, /请重新检查仓库和当前事实/);

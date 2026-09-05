@@ -1,5 +1,13 @@
 # 会话记录
 
+### 2026-09-05：分离架构前置证据收集与架构分析
+
+- 完成内容：公共 `pi-init-role-routing` Skill 明确架构任务先由 `docs-commit` 收集并交接结构化证据包，`architect` 仅负责根因分析、逻辑关系、关键决策、方案和计划；`docs-commit` 可读取和追踪代码/配置/测试但不修改代码，`developer-test` 的实现与验证读取能力不受 architect 守卫影响。
+- 完成内容：新增 architect 工具 allowlist 守卫，仅放行 `switch_role` 和 `task_workflow`；更新工作流规划/重规划提示及 README、当前状态说明。现有已安装 package 和当前 Pi 进程需执行 `pi update --extensions` 后 `/reload` 或重启，才会使用新 Skill/守卫。
+- 验证：`node --test test/architect-boundary.test.js test/extension-lifecycle.test.js test/scaffold.test.js`，28 项通过；`npm test`，110 项全部通过；`git diff --check` 通过（仅有 Windows 下预期的 LF/CRLF 转换警告）。
+- 遗留问题：尚未进行真实模型驱动的 docs-commit → architect 证据交接和真实交互式 TUI/端到端演练；本次未提交或推送。
+
+
 ### 2026-09-04：增加实时缓存状态栏高亮
 
 - 完成内容：新增 `extensions/cache-status.ts` 并接入扩展生命周期；状态栏通过独立 `pi-cache` 状态项显示请求阶段和缓存结果，`accent` 加粗表示 `↑Input`/`↓Output` 当前阶段，`success` 表示 Provider 明确报告的 Cache Read/Write；最终 `message_end` usage 覆盖流式暂态，错误、中止、缺少结束事件和新会话不会遗留活动高亮。
