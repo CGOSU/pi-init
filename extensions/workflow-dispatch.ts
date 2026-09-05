@@ -34,6 +34,11 @@ export function createWorkflowDispatch(
     return `pi-init-${taskId}-${Date.now()}`;
   }
 
+  function formatBlockedWorkflowMessage(message: string, workflowState: NonNullable<ExtensionRuntimeState["workflowState"]>) {
+    const guidance = deps.report.formatWorkflowBlockNotice(workflowState);
+    return guidance ? `${message}\n${guidance}` : message;
+  }
+
   function startTaskBoundaryCompaction(ctx: ExtensionContext, continuation: RoleCompactionContinuation) {
     if (!shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) return false;
     const role = state.activeRole?.role ?? "workflow";
@@ -103,7 +108,10 @@ export function createWorkflowDispatch(
       const blocked = blockWorkflowTask(state.workflowState, { taskId, reason });
       deps.report.persistWorkflowState(blocked, ctx);
       state.workflowDispatchInFlight = false;
-      ctx.ui.notify(`工作流已暂停：委派任务 ${taskId}：${reason}`, "warning");
+      ctx.ui.notify(
+        formatBlockedWorkflowMessage(`工作流已暂停：委派任务 ${taskId}：${reason}`, blocked),
+        "warning",
+      );
     } catch (error) {
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`无法记录委派任务 ${taskId} 的失败：${textOf(error)}`, "error");
@@ -224,7 +232,10 @@ export function createWorkflowDispatch(
         deps.report.persistWorkflowState(nudged, ctx);
         if (nudged.status === "paused") {
           ctx.ui.notify(
-            "工作流已暂停：任务未提交 complete/block。请检查当前任务后使用 /pi-init workflow retry 或重新规划。",
+            formatBlockedWorkflowMessage(
+              "工作流已暂停：任务未提交 complete/block。",
+              nudged,
+            ),
             "warning",
           );
           return;
@@ -262,7 +273,10 @@ export function createWorkflowDispatch(
         });
         deps.report.persistWorkflowState(paused, ctx);
         state.workflowDispatchInFlight = false;
-        ctx.ui.notify(`任务 ${next.id} 已暂停：未能应用要求的角色 ${next.role}。`, "warning");
+        ctx.ui.notify(
+          formatBlockedWorkflowMessage(`任务 ${next.id} 已暂停：未能应用要求的角色 ${next.role}。`, paused),
+          "warning",
+        );
         return;
       }
 
@@ -280,7 +294,10 @@ export function createWorkflowDispatch(
       });
       deps.report.persistWorkflowState(paused, ctx);
       state.workflowDispatchInFlight = false;
-      ctx.ui.notify(`工作流已暂停：${textOf(error)}`, "error");
+      ctx.ui.notify(
+        formatBlockedWorkflowMessage(`工作流已暂停：${textOf(error)}`, paused),
+        "error",
+      );
     }
   }
 

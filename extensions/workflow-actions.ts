@@ -215,7 +215,11 @@ export function createWorkflowActions(
         const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
-        ctx.ui.notify(`工作流已暂停：任务 ${taskId} 被标记为阻塞。`, "warning");
+        const blockNotice = deps.report.formatWorkflowBlockNotice(next);
+        ctx.ui.notify(
+          [`工作流已暂停：任务 ${taskId} 被标记为阻塞。`, blockNotice].filter(Boolean).join("\n"),
+          "warning",
+        );
         return { content: [{ type: "text", text: deps.report.formatWorkflowState(next) }], details: next, terminate: true };
       }
       case "resume": {

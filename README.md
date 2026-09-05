@@ -263,6 +263,8 @@ fork 返回的结果必须携带符合 `pi-init/task-result@1` 的严格 JSON；
 
 reload 不会自动重新派发非终态的已委派任务，以避免共享工作区并发写入。持久化的 delegation 只用于状态展示和人工恢复；旧配置值 `subagents`（pi-subagents RPC）自动映射到 `subtask`，但不会把工作流切换到已停止接入的 RPC 执行器。
 
+工作流进入阻塞状态时，状态报告、TUI 弹窗、工具结果和暂停通知都会同时显示具体阻塞原因及建议解决方法。解决原因后执行 `/pi-init workflow retry <taskId>`；如果需求或方案已改变，由架构师通过 `task_workflow(action="replan")` 重规划。
+
 ### 工作流运行时版本不一致
 
 如果创建工作流时看到 `(0, _roles.shouldOrchestrateWorkflow) is not a function`，说明正在运行的扩展和 `src/roles.js` 不是同一版本，通常是 Pi 仍加载旧的 Git package 或 reload 前的模块缓存。执行：

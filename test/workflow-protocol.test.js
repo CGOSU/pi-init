@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
+import { createWorkflowReport } from "../extensions/workflow-report.ts";
 
 const {
   mkdtemp,
@@ -136,6 +137,26 @@ test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {
     () => parseSubtaskResult("不是 JSON"),
     /JSON/,
   );
+});
+
+test("阻塞工作流状态显示原因和建议解决方法", () => {
+  const planned = createWorkflowState({
+    summary: "阻塞提示测试",
+    tasks: [{ id: "implementation", task: "执行实现", files: ["src/feature.js"], acceptanceCriteria: ["测试通过"] }],
+  }, 100);
+  const blocked = blockWorkflowTask(
+    startWorkflowTask(planned, "implementation", 110),
+    { taskId: "implementation", reason: "缺少产品决策" },
+    120,
+  );
+  const report = createWorkflowReport({}, { pi: {}, roleRuntime: {} });
+  const stateText = report.formatWorkflowState(blocked);
+  const notice = report.formatWorkflowBlockNotice(blocked);
+
+  assert.match(stateText, /阻塞原因：任务 implementation · 缺少产品决策/);
+  assert.match(stateText, /建议解决方法：.*retry implementation/);
+  assert.match(stateText, /task_workflow\(action="replan"\)/);
+  assert.equal(notice, stateText.split("\n").slice(-3, -1).join("\n"));
 });
 
 test("架构工作流只有明确审阅要求时才暂停，并支持阻塞重试", () => {

@@ -410,7 +410,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "The project workflowMode defaults to auto: a valid low-risk plan with one or two tasks returns a bypass notice without creating state or scheduling; switch to each assigned role and continue those tasks directly in order. Use on when orchestration is required for a small plan.",
       "Set reviewRequired=true only when the user's initial request explicitly asks to inspect the architecture before implementation; otherwise leave it false so the workflow advances automatically without asking for choices.",
       "Use task_workflow action=complete only after the current task is actually implemented and verified; include real commands and results in verification.",
-      "Use task_workflow action=block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures; do not mark an uncertain task complete.",
+      "Use task_workflow action=block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures; do not mark an uncertain task complete. A blocked workflow result includes the reason and a suggested retry or replan action.",
       "When a task completes, the workflow automatically switches to its assigned role and starts the next ready task unless a pending revision exists; with a pending revision, wait for the Architect to call action=replan before any old or new future task starts.",
       "Only the Architect may call action=replan. Use the exact revisionId from the hidden replan prompt, keep valid unfinished tasks with retainTaskIds, and use new IDs for added tasks.",
     ],
@@ -435,7 +435,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const progress = workflowProgress(details);
       const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";
       let text = theme.fg("success", "✓ ") + theme.fg("accent", `工作流 ${progress.completed}/${progress.total}`) + theme.fg("muted", current);
-      if (details.status === "paused") text += theme.fg("warning", " · 已暂停");
+      if (details.status === "paused") {
+        text += theme.fg("warning", " · 已暂停");
+        const blockNotice = workflowReport.formatWorkflowBlockNotice(details);
+        if (blockNotice) {
+          text += `\n${blockNotice.split("\n").map((line) => theme.fg("warning", line)).join("\n")}`;
+        }
+      }
       if (details.status === "replanning") text += theme.fg("warning", " · 等待架构师重规划");
       if (expanded) text += `\n${details.tasks.map((task) => `  [${task.status}] ${task.id} · ${task.task}`).join("\n")}`;
       return new Text(text, 0, 0);

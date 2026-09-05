@@ -25,6 +25,23 @@ function isVerificationFailure(value: string) {
   return VERIFICATION_FAILURE_PATTERN.test(value) && !VERIFICATION_NO_FAILURE_PATTERN.test(value);
 }
 
+function getWorkflowBlockDetails(workflowState: WorkflowState) {
+  return workflowState.tasks
+    .filter((task) => task.status === "blocked")
+    .map((task) => ({
+      taskId: task.id,
+      reason: task.blockReason ?? "未记录（历史状态未保存阻塞原因）",
+      suggestion: `先解决该原因，然后执行 /pi-init workflow retry ${task.id}；如果需求或方案已改变，请让架构师通过 task_workflow(action="replan") 重规划。`,
+    }));
+}
+
+function formatWorkflowBlockLines(workflowState: WorkflowState) {
+  return getWorkflowBlockDetails(workflowState).flatMap(({ taskId, reason, suggestion }) => [
+    `阻塞原因：任务 ${taskId} · ${reason}`,
+    `建议解决方法：${suggestion}`,
+  ]);
+}
+
 function formatVerification(verification: string[] | undefined) {
   const failures = verification?.filter(isVerificationFailure) ?? [];
   return failures.length > 0 ? `验证：${failures.join("；")}` : undefined;
@@ -66,6 +83,7 @@ export function createWorkflowReport(
     if (workflowState.pauseReason) {
       lines.push(`暂停原因：${workflowState.pauseReason}${workflowState.taskPauseReason ? ` · ${workflowState.taskPauseReason}` : ""}`);
     }
+    lines.push(...formatWorkflowBlockLines(workflowState));
     if (workflowState.pendingRevision) {
       lines.push(`待处理 revision：${workflowState.pendingRevision.revisionId}`);
       lines.push(`用户方向：${workflowState.pendingRevision.direction}`);
@@ -151,6 +169,10 @@ export function createWorkflowReport(
             `规划  ${workflowState.plan.summary}`,
             ...(workflowState.currentTaskId ? [`当前任务  ${workflowState.currentTaskId}`] : []),
             ...(workflowState.pauseReason ? [`暂停原因  ${workflowState.pauseReason}${workflowState.taskPauseReason ? ` · ${workflowState.taskPauseReason}` : ""}`] : []),
+            ...getWorkflowBlockDetails(workflowState).flatMap(({ taskId, reason, suggestion }) => [
+              `阻塞原因  任务 ${taskId} · ${reason}`,
+              `建议解决方法  ${suggestion}`,
+            ]),
             ...(workflowState.pendingRevision ? [
               `待处理 revision  ${workflowState.pendingRevision.revisionId}`,
               `用户方向  ${workflowState.pendingRevision.direction}`,
@@ -360,6 +382,10 @@ export function createWorkflowReport(
     updateWorkflowStatus,
     persistWorkflowState,
     formatWorkflowState,
+    formatWorkflowBlockNotice: (workflowState: WorkflowState) => {
+      const lines = formatWorkflowBlockLines(workflowState);
+      return lines.length > 0 ? lines.join("\n") : undefined;
+    },
     showWorkflowProgress,
     formatWorkflowTimestamp,
     formatWorkflowDuration,
