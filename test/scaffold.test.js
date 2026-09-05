@@ -464,6 +464,14 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /roleModels/);
   assert.match(sharedSkill, /上下文压缩、reload 或会话恢复后.*switch_role/);
   assert.match(sharedSkill, /task_workflow/);
+  assert.match(sharedSkill, /用户明确的优先级、截止要求和硬依赖/);
+  assert.match(sharedSkill, /关键未知项，并将其拆成可验收、限时的最小验证/);
+  assert.match(sharedSkill, /业务关键路径/);
+  assert.match(sharedSkill, /先易后难排序。该排序是软约束/);
+  assert.match(sharedSkill, /不要求 `difficulty`\/`risk` 字段/);
+  assert.match(sharedSkill, /不自动改写用户提供的 `task_workflow` 输入顺序/);
+  assert.match(roleProfiles[0], /用户明确的优先级、截止要求和硬依赖/);
+  assert.match(roleProfiles[0], /只有在同层且风险、价值相近时才先易后难/);
   assert.match(sharedSkill, /## 证据与工具调用/);
   assert.match(sharedSkill, /`read` 只使用 `path`、`offset` 和 `limit`/);
   assert.match(sharedSkill, /会话内逻辑快照/);

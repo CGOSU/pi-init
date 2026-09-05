@@ -1,5 +1,14 @@
 # 会话记录
 
+### 2026-09-06：任务规划采用依赖与风险优先、同层先易后难的软排序
+
+- 完成内容：在 `docs/decisions.md` 记录用户确认的排序决策，并同步公共 `pi-init-role-routing` Skill、`architect` 角色说明和 README、当前状态说明。
+- 完成内容：规划现在优先遵守用户明确的优先级、截止要求和硬依赖，再处理可能推翻方案的关键未知项的限时最小验证和业务关键路径；只有同层且风险、价值相近时才先易后难。未新增任务字段或改变 `task_workflow` 输入顺序。
+- 验证：`node --test test/scaffold.test.js`，14 项通过；`npm test`，111 项全部通过；`git diff --check` 通过，仅有 Windows 工作区的 LF/CRLF 转换提示。
+- 未执行项与遗留问题：尚未进行真实 Pi 模型驱动规划和长工作流效果评估；本次未提交、未推送、未发布。当前已安装 package 和运行中的 Pi 进程需执行 `pi update --extensions` 后 `/reload` 或重启，才会加载更新后的公共 Skill。
+
+
+
 ### 2026-09-05：补充工作流阻塞原因和解决建议
 
 - 完成内容：工作流阻塞状态在状态报告、TUI 弹窗、`task_workflow` 工具结果和暂停通知中统一显示真实阻塞原因，并提示解决后 retry 或由架构师 replan。
