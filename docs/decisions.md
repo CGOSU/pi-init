@@ -8,6 +8,15 @@
 
 ## 已确认决策
 
+### 2026-09-04：通过独立状态项高亮实时缓存阶段
+
+- 决定：保留 Pi 默认 Footer 的累计 `↑Input`、`↓Output`、`R`、`W`、`CH`、费用、上下文和模型信息，不调用 `ctx.ui.setFooter()`；新增独立 `pi-cache` 状态项展示当前模型请求的缓存阶段和本轮已确认结果。
+- 原因：默认 Footer 负责累计用量，独立状态项可以在不复制或破坏宿主 Footer 逻辑的前提下表达实时阶段，并允许只高亮当前可观测动作。
+- 显示语义：当前请求阶段使用主题 `accent` 加粗；Provider 已明确报告的 `cacheRead`/`cacheWrite` 正数使用主题 `success`；请求已发送但缓存 usage 尚未到达时显示“缓存判定中”。
+- 约束：`message_end` 的最终 assistant usage 是本轮缓存结果的权威来源；只要最终值明确给出正数，才确认缓存读取、写入或读写。零值、普通 input token、缓存相关请求参数和 Provider 未报告的字段都不得推断为命中、写入或未命中；错误、中止、新会话和 reload 不得遗留活动高亮。
+- 约束：监听 `before_provider_request`、`message_update`、`message_end` 和 `agent_settled` 生命周期；`message_update` 只在语义状态改变时刷新，避免逐 token 重绘；不轮询 DuckDB，不修改 `pi-usage`、数据库 schema、session usage 事实源或增加持久 custom entry。
+
+
 ### 2026-09-04：pi-usage 报表显示缓存更新时间
 
 - 决定：查询汇总从 `usage_state.checked_ms` 暴露缓存最近刷新时间，并在报表标题下显示为本地 `YYYY-MM-DD HH:mm`；没有缓存状态时显示“未知”。

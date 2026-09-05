@@ -12,6 +12,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排，由各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 工作流执行器默认是 `local`；可选择 `subtask`，由主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话并自动推进，主会话仍拥有唯一的工作流状态。
 - 未进入 `task_workflow` 的普通外部 Agent 执行会在 TUI 中显示开始时间、结束时间和总耗时报告，并与工作流任务完成报告分开。
+- TUI 状态栏另有独立的 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认 `R缓存读`、`W缓存写` 或两者。请求已发送但 usage 尚未到达时显示“缓存判定中”，零值或未报告不会被推断为命中、写入或未命中；`message_end` 的最终 usage 为权威结果。不同 Provider 可能只在流式结束附近报告缓存数据，因此 R/W 不能保证从请求开始就实时可见。该状态不替换默认 Footer，也不写入 session 或 DuckDB。
 - 自动模式在真实跨角色，或编排中的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
 - 记录项目宿主环境和平台相关命令约定。
 

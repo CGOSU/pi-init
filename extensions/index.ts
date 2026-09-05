@@ -21,6 +21,7 @@ import {
 import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/run-timing.js";
 import { Text } from "@earendil-works/pi-tui";
 import { createRoleRuntime } from "./role-runtime.ts";
+import { createCacheStatus } from "./cache-status.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
@@ -43,6 +44,7 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
+  createCacheStatus(pi);
   const roleRecovery = createRoleRecovery(pi, runtimeState);
   pi.registerTool(createEditGuardTool());
   let pendingExternalRunSource: string | undefined;

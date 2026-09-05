@@ -1,5 +1,14 @@
 # 会话记录
 
+### 2026-09-04：增加实时缓存状态栏高亮
+
+- 完成内容：新增 `extensions/cache-status.ts` 并接入扩展生命周期；状态栏通过独立 `pi-cache` 状态项显示请求阶段和缓存结果，`accent` 加粗表示 `↑Input`/`↓Output` 当前阶段，`success` 表示 Provider 明确报告的 Cache Read/Write；最终 `message_end` usage 覆盖流式暂态，错误、中止、缺少结束事件和新会话不会遗留活动高亮。
+- 完成内容：新增缓存状态回归测试，覆盖缓存判定延迟、读、写、读写、零值不推断、最终值覆盖、重复 update 去重、错误/中止清理及与 `pi-init` 状态共存；未替换默认 Footer，未写入 session 或 DuckDB。
+- 文档：同步 `README.md`、`docs/current-state.md` 和 `docs/decisions.md`；本次没有发现需要新增到 `docs/pitfalls.md` 的隐蔽可复发问题。
+- 验证：`node --check extensions/cache-status.ts`、`node --check extensions/index.ts`、`node --check test/cache-status.test.js`、`node scripts/check-line-count.js` 通过；`node --test test/cache-status.test.js test/extension-lifecycle.test.js test/extension-roles.test.js`，35 项通过；`npm test`，107 项全部通过；`git diff --check` 通过（仅有 Windows 下预期的 LF/CRLF 转换警告）。
+- 遗留问题：尚未在真实交互式 Pi TUI 中进行视觉验收；尚未提交或推送。
+
+
 ### 2026-09-04：显示 pi-usage 缓存更新时间
 
 - 完成内容：`pi-usage` 汇总读取 DuckDB `usage_state.checked_ms` 并返回 `updatedAt`；报表显示 `Cache updated: YYYY-MM-DD HH:mm`，无缓存状态时显示“未知”。新增缓存查询与报表回归测试。

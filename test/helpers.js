@@ -216,6 +216,9 @@ function createExtensionHarness(branch = [], options = {}) {
         fg(_color, text) {
           return text;
         },
+        bold(text) {
+          return text;
+        },
       },
       notify(message, level) {
         notifications.push({ message, level });
