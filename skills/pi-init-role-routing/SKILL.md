@@ -2,7 +2,7 @@
 name: pi-init-role-routing
 description: >
   处理使用 pi-init 初始化项目、执行代码和测试、维护项目文档或完成交付收尾时使用；
-  根据项目 roleModels 映射选择已启用角色，在角色边界调用 switch_role，并按需使用 task_workflow 顺序推进工作。
+  根据项目 roleModels 映射选择已启用角色，在角色边界调用 switch_role，并按需使用 task_workflow 顺序推进工作流。
 metadata:
   primary-category: workflow
   related-categories: coding, documentation, project-management
@@ -10,73 +10,41 @@ metadata:
 
 # pi-init 公共职责路由
 
-这是随 `pi-init` package 发布的公共 Skill。它维护角色职责、路由、交接和通用工作流规则；项目不应复制或生成角色 Skill。
+这是随 `pi-init` package 发布的公共 Skill，集中维护角色路由、职责边界和工作流硬约束；项目不应复制或生成该 Skill 的副本。
 
-## 使用边界
+## 路由
 
-1. 先确认仓库根目录 `AGENTS.md` 是否已在当前上下文中且仍然新鲜；已注入或本会话已读取、期间未发生相关修改的内容视为已读，不为确认事实重复读取。
-2. 架构任务的仓库、外部事实和调用链证据由 `docs-commit` 负责收集；它将不确定性分为位置、实现、影响和新鲜度，仅为解决当前阻塞读取最小范围：已知证据为 0 轮，局部实现缺失为 1 轮，未知位置或新符号通常最多 2 轮。`architect` 只消费结构化证据包，不自行读取或探索。
-3. 根据交付物选择最少职责；只有跨模块架构、技术选型、数据模型、安全、性能或不可逆迁移才先交给架构师。
-4. 本 Skill 的角色说明按需读取：
-   - [`roles/architect.md`](roles/architect.md)
-   - [`roles/developer-test.md`](roles/developer-test.md)
-   - [`roles/docs-commit.md`](roles/docs-commit.md)
-5. 不在项目中生成 `.pi/skills/<slug>/SKILL.md`，也不要维护该 Skill 的副本。项目 `AGENTS.md` 只需引用本 Skill。
+1. 明确对应实现/测试的指令直接交给 `developer-test`；明确对应文档、版本或 Git 收尾的指令直接交给 `docs-commit`。
+2. 不明确、含糊、需要需求判断或跨职责的指令从 `architect` 开始，由架构师澄清目标、边界、非目标和后续职责。
+3. 架构判断需要仓库、调用链或外部事实时，先由 `docs-commit` 收集最小结构化证据，再交回 `architect`；架构师只消费证据，不自行探索。
+4. 代码完成并真实验证后，再由 `docs-commit` 负责文档、diff 和经授权的提交/推送。
 
-## 项目角色来源
+角色说明按需读取：
+- [`roles/architect.md`](roles/architect.md)
+- [`roles/developer-test.md`](roles/developer-test.md)
+- [`roles/docs-commit.md`](roles/docs-commit.md)
 
-- 项目角色和模型的唯一启用来源是 `.pi/role-models.json` 的 `roleModels` 映射；保存版本为 `schemaVersion: 2`。
-- 映射中的每个键都是角色 ID，值包含该角色的 `provider`、`model` 和 `thinkingLevel`。只有映射中存在的角色才启用。
-- 合法但未配置的角色不得借用其他角色的模型或自动 fallback；需要该角色时先执行 `/pi-init config <role-id>`，然后再重试。
-- 角色 ID 使用小写字母、数字和单个连字符。内置角色 ID 为 `architect`、`developer-test` 和 `docs-commit`；项目也可以配置其他合法 ID。
-- 旧版顶层角色字段只用于读取兼容；只有用户明确执行 `/pi-init save` 时才迁移为 `roleModels`，不要主动改写项目配置。
-- Skill 不嵌入任何具体 provider、model 或 thinkingLevel 值；这些值始终从当前项目映射读取。
+## 角色和模型来源
 
-## 证据与工具调用
+- `.pi/role-models.json` 的 `roleModels` 是唯一启用角色和模型的项目级来源；只有其中已配置的角色才能被请求。
+- 内置角色 ID 为 `architect`、`developer-test`、`docs-commit`；角色值必须包含 `provider`、`model` 和 `thinkingLevel`。不为缺失角色借用模型或自动 fallback。
+- `schemaVersion: 2` 和旧版顶层角色字段按现有兼容规则读取；只有用户明确执行 `/pi-init save` 才持久化迁移。Skill 不写入具体 provider、model 或 thinkingLevel。
 
-- `docs-commit` 负责架构前置的搜索、浏览、读取、定位、调用链/依赖追踪及测试和文档查找；复用已注入或本会话已读取且仍新鲜的证据，不为确认已知事实重复读取。只为解决位置、实现、影响或新鲜度不确定性读取最小范围：充分证据 0 轮，局部缺口 1 轮，未知位置或新符号/配置/调用链通常最多 2 轮。
-- `docs-commit` 负责为架构师补充验证失败位置及必要的一层直接调用方；安全、认证、公共 API、数据迁移、并发、删除或工作区可能被其他协作者修改时，不受普通轮次预算限制，必须检查最新实现、调用方和测试。`developer-test` 仍可为实现和验证直接读取相关代码。
+## 共享硬约束
 
-## 精确文件修改
+- 每个职责开始和边界切换前调用 `switch_role`；普通压缩、reload、resume、fork 或已有上下文恢复后，先确认任务边界并重新切换。`manual` 模式要求用户执行 `/pi-init role <role>`，`confirm` 按确认流程执行。
+- `docs-commit` 的证据包至少区分事实、来源、相关符号、调用/依赖、测试、工作区状态、风险和未确认项；充分证据不重复读取，局部缺口通常 1 轮，未知位置/符号通常最多 2 轮；高风险改动（安全、认证、公共 API、迁移、并发、删除或共享工作区）必须核对最新实现、直接调用方和测试。
+- `read` 只接收 `path`、`offset`、`limit`；`edit` 只接收 `path`、`edits`。每个 `oldText` 调用前必须精确匹配一次，区域不得重叠；零匹配只允许定向重读并最多重试一次，禁止模糊/正则替换和持久缓存。运行时守卫对无效或歧义写入 fail-closed。
+- 不伪造成功、验证、权限或真实依赖；不泄露或写入密钥、凭据和敏感数据。行为变化前先更新用户确认的需求/决策载体。
+- 上下文恢复门只放行读取、`task_workflow(action="status")` 和 `switch_role`，直到角色或任务交接成功。
 
-- `read` 只使用 `path`、`offset` 和 `limit`；`edit` 的 payload 只允许包含 `path` 和 `edits`，不得传入 `offset` 或 `limit`；调用前检查参数结构，每项必须包含精确的 `oldText` 和 `newText`。
-- 首次缺少新鲜内容时先读取目标文件；一次 `edit` 成功后，在期间没有其他可能写入该文件的命令、工具、Git 操作或外部协作者修改时，可依据已确定的 `oldText` → `newText` 结果维护会话内逻辑快照，后续 edit 不强制重复读取。逻辑快照只存在于当前上下文，不生成缓存文件、备份文件或其他持久状态；高风险改动仍必须读取最新实现、调用方和测试。
-- 使用精确的 `oldText` → `newText` 替换，不使用模糊匹配、正则或仅凭行号定位。
-- 调用 `edit` 前，必须在最新文件内容中预检每个 `oldText` 的精确出现次数；每项必须恰好匹配 1 次。匹配为 0 次或多次时不得调用 `edit`，先定向读取并重新生成唯一上下文，不猜测修改。
-- `oldText` 为零匹配导致 exact-text 失败时，才最小范围重读目标附近内容，重新确认修改意图并生成唯一、精确的 `oldText`，最多重试一次；其他错误、歧义匹配、重叠替换、文件删除/重命名、编码问题或第二次失败都必须停止。
-- `oldText` 只包含足以唯一定位的最小上下文；保留未改文本，避免整文件重写。
-- 调用前检查同一文件的 edits 区域互不重叠；相邻或重叠的改动必须先合并为一个替换，多个不相邻改动才可在一次编辑中提交为多个互不重叠的替换；每个替换都以原始文件为基准匹配。
-- 修改后检查实际 diff，确认没有意外改动，再运行相关验证；执行可能写入目标文件的命令或工具后，视为逻辑快照失效并重新读取。
-- edit 的提示层预检用于降低错误率；扩展运行时守卫在 schema 校验前拒绝 read-shaped/malformed 参数，并将已知重复匹配/重叠错误转为短的可恢复诊断，保证无效或歧义调用不写文件。未知错误保持原错误；不能保证模型永不产生非法工具调用。
-- 合法 edit 继续委托 Pi 内置 definition，保留其 schema、description、prompt metadata、renderer、精确匹配、重叠检测和 per-file mutation queue；正常成功路径不新增 schema、模型调用或提示文本。
-- 职责恢复门在 `session_compact` 后默认持久化 pending，并在每次 `context` 事件注入恢复提示；只放行读取、`task_workflow(action="status")` 和 `switch_role`。阻断结果不终止 Agent，使其可在下一轮自行恢复；失败、取消、模型不匹配或凭据失败都保持 pending。
+## 工作流
 
-## 路由和角色切换
+- 只有明确规划请求、跨模块/高风险工作或无法安全归并为小局部任务时才使用 `task_workflow(action="plan")`；`architect` 是唯一可执行 `plan` 和 `replan` 的角色。
+- `workflowMode: off` 拒绝新规划，`on` 始终编排，`auto` 对不超过两个低风险任务走直接角色顺序；`reviewRequired` 只有用户一开始明确要求架构审阅时才为 `true`。
+- 当前任务必须由实际执行角色完成并真实验证后调用 `complete`；缺少需求、权限、凭据、破坏性操作确认或无法恢复时调用 `block`，不得用默认值或空结果掩盖失败。
+- 活动工作流的普通方向变更在当前任务边界合并为一个 revision；应用新计划前不得启动旧后续任务。`subtask` 下 fork 不写工作流状态、不建 worktree、不合并、提交或推送，并返回严格的 `pi-init/task-result@1` 结果。
 
-1. 能够明确对应某个职责的指令直接从对应角色开始；无法明确归类、需求含糊或涉及跨职责的指令默认从 `architect` 开始，由架构师澄清目标、判断边界并决定后续职责。对于代码位置、实现、调用链或证据不清的架构任务，仍先由 `docs-commit` 收集并交接结构化证据，再由架构师负责跨边界分析、根因判断、逻辑关系、关键决策、方案和任务拆分；实现型改动交给开发测试工程师；代码完成并验证后再交给文档与收尾工程师。已有充分新鲜证据时不重复调研。
-2. 低风险、局部且可归并为不超过两个角色/依赖任务的普通工作，在 `workflowMode: auto` 下默认不调用 `task_workflow(plan)`，而是直接按角色顺序执行；用户明确要求规划、跨模块或高风险任务仍使用完整流程。
-3. 开发测试工程师不写项目文档；文档与收尾工程师不写代码。遇到疑问、需求分析或跨职责冲突时交回架构师。
-4. 每个职责开始前都调用 `switch_role`，每次职责边界也再次调用；切换模型不能只改变回答口吻。
-5. 普通上下文压缩、reload 或会话恢复后，不得仅凭摘要沿用上一个角色；先确认当前任务边界，必要时调用 `task_workflow(action="status")`，再成功调用 `switch_role`，之后才能实现、测试、写文档或执行 shell。reload、resume、fork 以及 startup 加载已有上下文同样重新上锁；new 或空会话不额外上锁。若 pi-init 已明确完成目标角色交接并在续跑前记录 acknowledged，运行时直接继续，不要求重复调用 `switch_role`。
-6. 只请求当前 `roleModels` 中已配置的角色。切换失败、模型不存在、凭据不可用或角色缺失时停止并报告，不猜测继续。
-7. `mode: auto` 立即按映射切换；`confirm` 在自动切换前请求确认；`manual` 不自动换角，需用户执行 `/pi-init role <role-id>`。运行时配置先暂存，只有用户明确执行 `/pi-init save` 才持久化。
-8. 不因偏好或可选方案暂停询问。只有用户明确要求审阅架构，或缺少产品决策、权限/凭据、破坏性操作确认、不可恢复信息或真实阻塞时才暂停。
+## 交付
 
-## 顺序工作流
-
-- 规划任务顺序时，先遵守用户明确的优先级、截止要求和硬依赖；然后优先安排可能推翻方案的关键未知项，并将其拆成可验收、限时的最小验证；再考虑业务关键路径；只有在同层且风险、价值相近时，才按先易后难排序。该排序是软约束，不覆盖用户明确顺序，不要求 `difficulty`/`risk` 字段，也不自动改写用户提供的 `task_workflow` 输入顺序。
-
-- 对需要完整规划的任务，先由 `docs-commit` 交接结构化证据包；架构师仅基于证据使用 `task_workflow(action="plan")` 提交摘要、不可改变的约束、任务、文件范围、依赖和验收标准。证据不足或冲突时，架构师先交回 `docs-commit` 补充或请求用户决策，不自行探索。任务最多 12 个，角色必须是当前项目已配置的合法角色；省略角色时默认 `developer-test`。
-- `architect` 是唯一可以执行 `plan` 和 `replan` 的角色；其他已配置角色可以执行分配给自己的任务。
-- `workflowMode` 为 `off` 时不要创建新工作流；`on` 始终编排；`auto` 对不超过两个角色/依赖任务的低风险小计划可直接顺序执行，复杂计划才进入持久化工作流。只有初始请求明确要求架构审阅时才设置 `reviewRequired: true`。
-- 开发测试工程师每次只执行当前任务。完成前必须实际验证，并调用 `task_workflow(action="complete")`，在 `verification` 中只填写真实执行过的命令和结果；未创建持久工作流的 fast path 也必须遵守同样的验证和报告规则。遇到真正阻塞使用 `block`，不要伪造完成。
-- 活动工作流中的普通方向变更合并到当前任务的单一 `revisionId`；当前任务到达边界后暂停旧计划。只有架构师可用 `task_workflow(action="replan")` 应用新计划；新计划应用前不得启动旧后续任务。
-- `subtask` 执行器下主会话是状态唯一写入者。fork 不调用 `task_workflow`，不创建 worktree，不合并、提交或推送，并必须返回严格的 `pi-init/task-result@1` 结果；无效结果安全阻塞。
-- Ctrl+C、显式取消和 `/pi-init workflow cancel` 取消流程或工作流；普通错误不能被写成成功。
-
-## 交接和交付
-
-- 架构交付应包含决定、原因、约束、风险和可验证验收标准。
-- 代码交付应包含修改文件、实现摘要、实际验证命令和结果；除非用户明确授权，不提交或推送。
-- 文档交付应包含文档/版本变化、最终 diff 摘要、收尾检查及授权的 Git 结果。
-- 报告只陈述已验证事实；不要在代码、文档、日志或提交中记录令牌、密码、私钥等敏感信息。
+架构交付包含决定、原因、约束、风险和验收标准；代码交付包含修改文件、实现摘要和真实验证；文档收尾只记录新事实并说明 diff、遗留问题及经授权的 Git 结果。遇到需求边界、架构方案或不可恢复问题时交回 `architect`；不要因可选偏好暂停流程。

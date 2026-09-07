@@ -307,11 +307,11 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
   assert.ok(workflowTool);
   assert.equal(typeof workflowTool.renderResult, "function");
-  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("fresh evidence")));
-  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("0 exploration rounds")));
-  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("at most two role/dependency tasks")));
-  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("latest implementation, callers, and tests")));
-  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("structured evidence packet from docs-commit"))); assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("architect must not use exploration tools"))); assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("if the instruction is unclear, ambiguous, or crosses responsibilities, start with architect")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("fresh structured evidence from docs-commit")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("latest implementation, direct callers, and tests")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("unclear, ambiguous, or cross-responsibility instructions start with architect")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("workflowMode=auto")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("real implementation and verification")));
   const status = await workflowTool.execute("status", { action: "status" }, undefined, undefined, harness.context);
   assert.match(status.content[0].text, /当前没有活动工作流/);
 
@@ -325,12 +325,9 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   await emitExtensionEvent(activeHarness, "session_start");
   assert.equal(activeHarness.sentMessages[0].message.customType, "pi-init-workflow-task");
   assert.match(activeHarness.sentMessages[0].message.content, /验证注册/);
-  assert.match(activeHarness.sentMessages[0].message.content, /不为确认已知事实重复读取/);
-  assert.match(activeHarness.sentMessages[0].message.content, /已知证据 0 轮/);
-  assert.match(activeHarness.sentMessages[0].message.content, /安全、认证、公共 API/);
-  assert.match(activeHarness.sentMessages[0].message.content, /预检每个 oldText 的精确出现次数.*恰好为 1.*不得调用 edit/);
-  assert.match(activeHarness.sentMessages[0].message.content, /edit payload 只含 path 和 edits.*不传 offset 或 limit.*各 edits 互不重叠/);
-  assert.match(activeHarness.sentMessages[0].message.content, /(?=.*一次 edit 成功后.*逻辑快照)(?=.*oldText 零匹配.*最多 retry 一次)(?=.*不生成缓存文件或持久状态)(?=.*不得模糊匹配、正则替换)/);
+  assert.match(activeHarness.sentMessages[0].message.content, /遵循公共 pi-init-role-routing Skill 的读写与安全边界/);
+  assert.match(activeHarness.sentMessages[0].message.content, /只修改当前任务允许范围/);
+  assert.match(activeHarness.sentMessages[0].message.content, /完成并实际验证后，必须调用 task_workflow/);
 });
 
 test("init_project 首次使用按需加载脚手架并支持 dryRun", async () => {

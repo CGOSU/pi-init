@@ -4,21 +4,21 @@ import { SUBTASK_RESULT_PROTOCOL } from "../src/subtask.js";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { textOf } from "./runtime-state.ts";
 
-const GENERIC_TASK_TOOL_GUIDANCE = "读取与编辑规则：遵循公共 pi-init-role-routing Skill，不为确认已知事实重复读取；预检每个 oldText 的精确出现次数，恰好为 1 后才能调用 edit；出现 0 次或多次不得调用 edit；edit payload 只含 path 和 edits，不传 offset 或 limit，各 edits 互不重叠。一次 edit 成功后可复用会话内逻辑快照；oldText 零匹配时最多 retry 一次；不生成缓存文件或持久状态，不得模糊匹配、正则替换。提示预检只降低错误率；运行时守卫保证无效或歧义调用不写文件并返回可恢复诊断，但不能保证模型永不产生非法调用。充分证据按已知证据 0 轮处理；安全、认证、公共 API、数据迁移、并发、删除或协作者可能修改的工作区检查最新实现、调用方和测试。";
+const GENERIC_TASK_TOOL_GUIDANCE = "遵循公共 pi-init-role-routing Skill 的读写与安全边界；只修改当前任务允许范围，遇到需求或架构疑问交回 architect，实际验证并报告真实结果。";
 
 function taskRoleGuidance(role: string) {
   if (role === "architect") {
-    return "架构师任务边界：只消费文档与提交工程师交接的结构化证据包，负责分析、根因判断、关键决策和计划；不得调用探索工具或修改代码/文档。证据不足时先调用 switch_role(role=\"docs-commit\")。";
+    return "架构师只消费 docs-commit 的证据，负责分析和计划；不得探索或修改文件，证据不足时先调用 switch_role(role=\"docs-commit\")。";
   }
   if (role === "docs-commit") {
-    return "文档与提交工程师任务边界：负责搜索、浏览、读取、定位、调用链追踪及测试/文档查找，并交接已确认事实、来源、关系、测试、风险和未确认项；不替架构师做关键决策，也不修改代码。";
+    return "docs-commit 负责取证和文档/Git 收尾；交接事实与风险，不替 architect 做关键决策，也不修改代码。";
   }
   return "";
 }
 
 function taskToolGuidance(role: string) {
   return role === "architect"
-    ? "架构师不得执行 read、grep、find、ls、bash、powershell、browser、MCP、edit、write 或其他探索/修改工具；只消费 docs-commit 证据包，并通过 switch_role 或 task_workflow 完成职责与计划编排。"
+    ? "架构师只使用 switch_role 和 task_workflow；不得调用探索或修改工具。"
     : GENERIC_TASK_TOOL_GUIDANCE;
 }
 
@@ -97,7 +97,7 @@ export function createWorkflowMessages(
       workflowState.plan.constraints.length > 0 ? `原架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `已完成任务（不可修改）：\n${completed.join("\n")}` : "",
       pending.length > 0 ? `旧计划中尚未开始的任务：\n${pending.join("\n")}` : "无旧的未开始任务",
-      "规划读取策略：本次由 architect 执行重规划，只消费 docs-commit 交接的结构化 fresh evidence；architect 不自行读取或探索，不为确认已知事实重复读取；若证据不足，先通过 switch_role 交给 docs-commit 补充；充分证据按已知证据 0 轮，复用新鲜证据，仅为解决位置、实现、影响或新鲜度不确定性读取最小范围；安全、认证、公共 API、数据迁移、并发、删除或可能被其他协作者修改的工作区由 docs-commit 检查最新实现、调用方和测试。",
+      "规划读取：architect 只消费 docs-commit 的 fresh evidence，不自行探索；证据不足先 switch_role 到 docs-commit，高风险工作核对最新实现、直接调用方和测试。",
       "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。",
       "若只是新增后续工作，把仍有效的旧任务 ID 放入 retainTaskIds；新增 tasks 必须使用从未出现过的新 ID。若替换旧任务，不要把被替换任务 ID 放进新 tasks，也不要让新任务依赖被替换任务。",
       `规划完成后，必须调用 task_workflow(action="replan", revisionId="${request.revisionId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,
@@ -143,7 +143,7 @@ export function createWorkflowMessages(
       `Current task (${task.id}, role ${task.role}): ${task.task}`,
       `Allowed files or directories: ${task.files.join(", ")}`,
       `Acceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
-      "Read and exact-edit rules: follow the public pi-init-role-routing Skill; do not reread merely to confirm known facts; use 0 rounds for sufficient evidence and check the latest implementation, callers, and tests for high-risk work. preflight the exact occurrence count of every oldText; call edit only when each matches exactly once; otherwise do not call edit; the payload contains only path and edits, never offset or limit, and regions do not overlap. After a successful edit reuse a logical snapshot; a successful edit has no persistent cache. If oldText has zero matches, retry at most once; do not create cache files or persistent state; Never use fuzzy or regex matching. Prompt checks reduce errors; the runtime guard prevents invalid or ambiguous writes and returns recoverable diagnostics, but cannot guarantee the model never emits an invalid call.",
+      "Follow the public pi-init-role-routing Skill; stay within the allowed scope, use the shared checkout, do not commit or push, and report only real verification.",
 
       "Work in the current shared checkout. Do not create worktrees, merge branches, commit, or push.",
       "Do not call pi-init task_workflow tools. The parent session owns workflow state.",

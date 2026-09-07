@@ -1,5 +1,18 @@
 # 会话记录
 
+### 2026-09-07：版本更新至 2.0.2
+
+- 完成内容：将 `package.json`、`package-lock.json` 和当前状态中的 package 版本从 `2.0.1` 更新为 `2.0.2`，作为本次兼容性保持的规则精简变更的 patch 版本。
+- 验证：`npm test`，111 项全部通过；`git diff --check` 通过（仅有 Windows 工作区的 LF/CRLF 转换提示）。
+- 未执行项与遗留问题：提交和推送待本次授权收尾步骤执行。
+
+### 2026-09-07：精简角色与编排规则
+
+- 完成内容：将公共 `pi-init-role-routing` Skill 作为唯一的路由语义入口；三个角色说明改为只保留职责、边界和交接，运行时提示只保留当前任务硬约束，并同步 README 的角色路由与读取策略说明。
+- 完成内容：保留三角色、roleModels、证据门控、精确编辑安全边界、恢复门、architect 工具守卫、真实验证、complete/block、重规划和 subtask 协议；未修改工作流 API、schema、状态机或执行器。
+- 验证：`node --test test/extension-lifecycle.test.js test/scaffold.test.js`，25 项全部通过；`npm test`，111 项全部通过；`git diff --check` 通过（仅有 Windows 工作区的 LF/CRLF 转换提示）。
+- 未执行项与遗留问题：尚未进行真实 Pi 模型驱动的路由、长工作流和 subtask 端到端演练；本次未提交、未推送、未发布。更新已安装 package 后需执行 `pi update --extensions`，再 `/reload` 或重启 Pi。
+
 ### 2026-09-07：不明确编排指令默认从架构师开始
 
 - 完成内容：记录用户确认的路由决策；公共 `pi-init-role-routing` Skill 和 `task_workflow` 运行时提示明确“明确对应角色直接路由，不明确、含糊或跨职责从 `architect` 开始”，并保留代码位置、实现或调用链证据不清时先切换 `docs-commit` 的约束。
