@@ -1,5 +1,12 @@
 # 会话记录
 
+### 2026-09-07：不明确编排指令默认从架构师开始
+
+- 完成内容：记录用户确认的路由决策；公共 `pi-init-role-routing` Skill 和 `task_workflow` 运行时提示明确“明确对应角色直接路由，不明确、含糊或跨职责从 `architect` 开始”，并保留代码位置、实现或调用链证据不清时先切换 `docs-commit` 的约束。
+- 完成内容：新增扩展注册提示的回归断言；未修改角色职责边界、工作流状态机或任务 schema。
+- 验证：`git diff --check` 通过（仅有 Windows 工作区的 LF/CRLF 转换提示）；`npm test`，111 项全部通过。
+- 未执行项与遗留问题：尚未进行真实 Pi 模型驱动路由和长工作流端到端演练；本次未提交、未推送、未发布。当前已安装 package 和运行中的 Pi 进程需执行 `pi update --extensions` 后 `/reload` 或重启 Pi，才会加载更新后的 Skill/提示。
+
 ### 2026-09-06：任务规划采用依赖与风险优先、同层先易后难的软排序
 
 - 完成内容：在 `docs/decisions.md` 记录用户确认的排序决策，并同步公共 `pi-init-role-routing` Skill、`architect` 角色说明和 README、当前状态说明。

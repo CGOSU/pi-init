@@ -311,7 +311,7 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("0 exploration rounds")));
   assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("at most two role/dependency tasks")));
   assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("latest implementation, callers, and tests")));
-  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("structured evidence packet from docs-commit"))); assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("architect must not use exploration tools")));
+  assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("structured evidence packet from docs-commit"))); assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("architect must not use exploration tools"))); assert.ok(workflowTool.promptGuidelines.some((item) => item.includes("if the instruction is unclear, ambiguous, or crosses responsibilities, start with architect")));
   const status = await workflowTool.execute("status", { action: "status" }, undefined, undefined, harness.context);
   assert.match(status.content[0].text, /当前没有活动工作流/);
 
