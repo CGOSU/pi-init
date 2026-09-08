@@ -25,33 +25,71 @@ function architectHarness() {
   });
 }
 
-test("architect 只允许职责切换和工作流编排工具", async () => {
+test("architect 可直接只读定位，但拒绝写入、执行和未知工具", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
 
-  for (const toolName of ["switch_role", "task_workflow"]) {
+  for (const toolName of ["switch_role", "task_workflow", "read", "grep", "find", "ls", "ffgrep", "fffind"]) {
     assert.equal(await callToolCall(harness, toolName), undefined, toolName);
   }
 
   for (const toolName of [
-    "read",
-    "grep",
-    "find",
-    "ls",
     "bash",
     "powershell",
-    "browser",
     "mcp",
+    "mcp__penpot_execute_code",
     "edit",
     "write",
     "init_project",
+    "subtask",
     "future-exploration-tool",
   ]) {
     const result = await callToolCall(harness, toolName);
     assert.equal(result?.block, true, toolName);
     assert.match(result?.reason ?? "", /architect-boundary/);
-    assert.match(result?.reason ?? "", /switch_role.*docs-commit/);
+    assert.match(result?.reason ?? "", /switch_role/);
   }
+});
+
+test("architect 只允许安全的 browser 观察命令", async () => {
+  const harness = architectHarness();
+  await emitExtensionEvent(harness, "session_start");
+
+  for (const command of [
+    "open https://example.com",
+    "snapshot -i",
+    "get text",
+    "get title @e1",
+    "get url",
+    "wait 100",
+    "wait @e1",
+    "scroll down 200",
+    "screenshot --full",
+  ]) {
+    assert.equal(await callToolCall(harness, "browser", { command }), undefined, command);
+  }
+
+  for (const command of [
+    "click @e1",
+    "fill @e1 password",
+    "type @e1 text",
+    "select @e1 value",
+    "press Enter",
+    "persist on work",
+    "close",
+    "eval document.title",
+    "open file:///secret.txt",
+    "open https://example.com && get text",
+    "snapshot -i; get text",
+    "open https://example.com\nget text",
+  ]) {
+    const result = await callToolCall(harness, "browser", { command });
+    assert.equal(result?.block, true, command);
+    assert.match(result?.reason ?? "", /browser/);
+  }
+
+  const malformed = await callToolCall(harness, "browser", { command: "get cookies" });
+  assert.equal(malformed?.block, true);
 });
 
 test("非 architect 角色和未知角色不触发 architect 守卫", async () => {

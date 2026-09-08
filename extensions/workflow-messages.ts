@@ -8,7 +8,7 @@ const GENERIC_TASK_TOOL_GUIDANCE = "遵循公共 pi-init-role-routing Skill 的�
 
 function taskRoleGuidance(role: string) {
   if (role === "architect") {
-    return "架构师只消费 docs-commit 的证据，负责分析和计划；不得探索或修改文件，证据不足时先调用 switch_role(role=\"docs-commit\")。";
+    return "架构师可对低风险事项使用受限只读工具；不得修改文件、执行命令或进行交互/外部写入。复杂高风险证据不足时先调用 switch_role(role=\"docs-commit\")。";
   }
   if (role === "docs-commit") {
     return "docs-commit 负责取证和文档/Git 收尾；交接事实与风险，不替 architect 做关键决策，也不修改代码。";
@@ -18,7 +18,7 @@ function taskRoleGuidance(role: string) {
 
 function taskToolGuidance(role: string) {
   return role === "architect"
-    ? "架构师只使用 switch_role 和 task_workflow；不得调用探索或修改工具。"
+    ? "架构师可使用 read、grep、find、ls、ffgrep、fffind；browser 仅使用 open、snapshot、get、wait、scroll、screenshot，且一次只执行一个观察命令。不得调用 edit、write、init_project、shell、MCP、脚本、交互或持久化工具。"
     : GENERIC_TASK_TOOL_GUIDANCE;
 }
 
@@ -97,7 +97,7 @@ export function createWorkflowMessages(
       workflowState.plan.constraints.length > 0 ? `原架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `已完成任务（不可修改）：\n${completed.join("\n")}` : "",
       pending.length > 0 ? `旧计划中尚未开始的任务：\n${pending.join("\n")}` : "无旧的未开始任务",
-      "规划读取：architect 只消费 docs-commit 的 fresh evidence，不自行探索；证据不足先 switch_role 到 docs-commit，高风险工作核对最新实现、直接调用方和测试。",
+      "规划读取：architect 可直接完成低风险只读定位；复杂或高风险工作仍先 switch_role 到 docs-commit，核对最新实现、直接调用方和测试后再规划。",
       "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。",
       "若只是新增后续工作，把仍有效的旧任务 ID 放入 retainTaskIds；新增 tasks 必须使用从未出现过的新 ID。若替换旧任务，不要把被替换任务 ID 放进新 tasks，也不要让新任务依赖被替换任务。",
       `规划完成后，必须调用 task_workflow(action="replan", revisionId="${request.revisionId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,

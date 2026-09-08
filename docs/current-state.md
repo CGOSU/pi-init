@@ -15,12 +15,12 @@
 - `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。schema v3 使用稳定 entry key（Pi id 或 legacy 哈希）跨 fork 文件去重 usage、speed、activity 和 session；schema 不一致时事务化清理并全量重建所有派生表与 checkpoint。
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计，重算日期取 session 文件最新修改时间并精确到分钟，另列受影响日期；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
-- package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 集中维护路由语义和共享硬约束，角色说明只保留各自职责/边界/交接，运行时提示只保留当前任务硬约束，不嵌入具体模型值。
-- 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；架构任务需要事实时先由 `docs-commit` 收集并交接包含事实、来源、文件/符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包，`architect` 只负责根因分析、逻辑关系、关键决策、方案和计划；`developer-test` 为实现/验证进行的直接读取不受 architect 守卫影响。开发测试工程师不写文档，文档与收尾工程师不写代码，遇到疑问、困惑不解或需求分析统一切换到架构师。
+- package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 集中维护风险分级路由、自主决策边界和共享硬约束，角色说明只保留各自职责/边界/交接，运行时提示只保留当前任务硬约束，不嵌入具体模型值。目标明确的低风险任务不因普通技术选择或恢复既定行为的 bug 强制询问、工作流或 docs-commit 交接；复杂/高风险任务仍要求新鲜结构化证据、角色边界、真实验证和授权。
+- 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；低风险判断可由 architect 直接做受限只读定位，复杂/高风险架构任务才先由 `docs-commit` 收集并交接包含事实、来源、文件/符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包；`architect` 始终不修改文件。开发测试工程师负责自主实现/验证且不写项目 Markdown，文档与收尾工程师不写代码；仅遇到业务/契约冲突、权限/凭据、不可逆或外部状态、已有改动无法安全合并或真实验证阻塞时才暂停。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
 - 自动模式在真实跨角色，或活动工作流的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。任务边界压缩不改变角色，成功或失败后继续下一任务/重规划；最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不触发。会话启动、resume 或 reload 时会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，并要求各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
-- 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写用户提供的 task_workflow 输入顺序。
+- 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写用户提供的 task_workflow 输入顺序。低风险局部工作仍可在 `workflowMode: auto` 下绕过持久工作流，不改变既有任务数量阈值、配置或状态机。
 - 活动工作流支持普通自然语言方向变更：同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并到一个 `pendingRevision`/`revisionId`，同步更新 revision 审计记录；当前任务完成后进入 `replanning`，由架构师依据完整指令通过 `task_workflow(action="replan")` 仅重规划未完成后续任务。新计划应用前 local 和 `subtask` 均不会启动旧后续任务，运行中的 subtask fork 不由 pi-init 自动终止或重派，立即停止仍使用既有 cancel 流程。工作流阻塞时，状态报告、TUI、工具结果和暂停通知会显示阻塞原因及建议解决方法；解决后可 retry，方向变化则由架构师 replan。
 - 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
 - 已移除自研的 `parallel_develop` 工具及其隔离 worktree/Pi worker 实现；不配置第三方替代品。架构规划后的开发测试任务继续通过顺序 `task_workflow` 执行。
@@ -37,7 +37,7 @@
 - TUI 状态栏新增独立 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认缓存读取/写入。usage 尚未到达时显示“缓存判定中”，零值或未报告不推断缓存命中、写入或未命中；`message_end` 最终 assistant usage 覆盖流式暂态。不同 Provider 的 usage 到达时机不同，R/W 不保证从请求开始实时可见；状态不替换默认 Footer，不写入 session 或 DuckDB。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
-- 测试命令为 `npm test`；该命令先执行 `scripts/check-line-count.js`，递归保证受检 JavaScript/TypeScript 文件不超过 500 个物理行，再运行 Node 原生测试。包版本为 `2.0.2`，扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
+- 测试命令为 `npm test`；该命令先执行 `scripts/check-line-count.js`，递归保证受检 JavaScript/TypeScript 文件不超过 500 个物理行，再运行 Node 原生测试。包版本为 `2.0.3`，扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
 - 提供跨平台 `scripts/pi-usage.*` 用量统计命令；Windows PowerShell 安装器会把所需文件复制到 Pi 所在的 npm 可执行目录，POSIX 安装器优先使用 Pi 可执行目录、无写权限时回退到用户 bin 目录。`pi-usage` 普通查询在首次查询、距离上次检查超过 1 小时或跨自然日时自动执行增量检查，其余时间直接读取 DuckDB；`--update` 始终强制检查。日期参数支持 `yesterday`、`Nd`、`YYYY-MM`、单日和两个 `YYYY-MM-DD` 组成的闭区间，跨日统计按日期范围聚合并对 session 去重；TTY 刷新摘要中的重算日期取 session 文件最新修改时间并精确到分钟，同时显示受影响日期。报告标题会显示与 `pi-init` 共用的 package 版本号，启动器安装时从 `package.json` 嵌入该版本；报表还显示 DuckDB 缓存最近更新时间（`YYYY-MM-DD HH:mm`）。`postinstall` 查找 Pi 时会跳过当前 npm 包 `node_modules/.bin` 中的本地 `pi` shim，避免 `pi update --extensions` 把启动器复制到随后会被清理的依赖目录。角色模型和工作流配置变更默认只存在当前会话，执行 `/pi-init save` 才写入 `.pi/role-models.json`。Models 表还可导入 `pi-token-speed` 扩展写入的有效生成时长，按模型展示加权平均 TPS；扩展在 `message_end` 生命周期记录样本，避免等待 `agent_end` 或重复记录。
 
 ## 待处理
@@ -46,6 +46,8 @@
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
+
+- 2026-09-09：按风险分级放宽自主执行：低风险只读咨询和日常实现不再强制一般技术选择、重复角色交接或正式工作流；architect 运行时允许受限只读工具及单条 browser 观察命令，拒绝写入、shell、MCP、脚本、交互、持久化、命令串联和未知工具。已同步公共 Skill、角色说明、运行时提示、AGENTS 模板和全局宿主 AGENTS；`npm test` 112 项通过。未修改模型映射、workflow API/schema/状态机、恢复门、精确编辑保护或全局 settings；未进行真实模型效率对照，未更新已安装 package。
 
 - 2026-09-07：精简角色与编排规则：公共 Skill 作为路由入口，角色说明和运行时提示按职责分层保留最小必要内容；README、回归断言和共享 Skill 已同步，`npm test` 111 项全部通过。未改变角色、工作流协议、恢复门或运行时守卫。
 

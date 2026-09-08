@@ -1,5 +1,19 @@
 # 会话记录
 
+### 2026-09-09：版本更新至 2.0.3
+
+- 完成内容：将 `package.json`、`package-lock.json` 和当前状态中的 package 版本从 `2.0.2` 更新为 `2.0.3`。按现有版本策略采用 patch 版本：本次没有修改 API、配置 schema 或工作流状态机。
+- 验证：版本更新后的 `npm test`、`npm pack --dry-run --json` 和 `git diff --check` 均已执行并通过；包清单显示 `pi-init@2.0.3`。
+- 提交/推送：按用户明确授权提交并推送到 `origin/master`。
+
+### 2026-09-09：按风险分级放宽自主执行与 architect 只读边界
+
+- 完成内容：记录用户确认的风险分级自主执行决策；同步公共 `pi-init-role-routing` Skill、`architect`/`developer-test`/`docs-commit` 角色说明、项目 `AGENTS.md`、中英文模板和当前用户全局 `C:\Users\gorou\.pi\agent\AGENTS.md`。低风险只读咨询和目标明确的日常开发不再因普通技术选择、排查顺序或恢复既定行为的 bug 强制询问、工作流或正式 docs-commit 交接；复杂/高风险证据、授权、真实验证和角色边界继续保留。
+- 完成内容：architect 工具守卫现在只放行 `read`、`grep`、`find`、`ls`、`ffgrep`、`fffind`，以及 browser 的单条 `open`、`snapshot`、`get`、`wait`、`scroll`、`screenshot` 观察命令；拒绝 `edit`/`write`/初始化写入、shell、MCP、脚本、browser 交互/持久化/关闭/命令串联和未知工具。同步扩展注册提示与工作流重规划提示，新增放行/拒绝回归。
+- 约束与取舍：未修改模型映射、全局 `settings.json`、workflow API/schema/状态机、`workflowMode` 阈值、manual/confirm 行为、恢复门或精确编辑保护；browser 放行不是 shell/MCP 沙箱，且仍未允许任意 browser 命令。
+- 验证：`node --test test/architect-boundary.test.js test/role-recovery.test.js test/scaffold.test.js`，26 项全部通过；`npm test`，112 项全部通过；`git diff --check` 通过，仅有 Windows 工作区预期的 LF/CRLF 转换提示；规则/文档 9 个文件 UTF-8 fatal 解码通过；包内容检查待本次收尾执行。
+- 未执行项与遗留问题：尚未进行真实 Pi 模型驱动的路由、效率对照、长工作流和 subtask 端到端演练；未执行 package 安装/更新、`/reload`、提交、推送或发布。当前运行中的 Pi 进程和已安装 Git package 需在后续更新并 reload/重启后才获得新规则。
+
 ### 2026-09-07：版本更新至 2.0.2
 
 - 完成内容：将 `package.json`、`package-lock.json` 和当前状态中的 package 版本从 `2.0.1` 更新为 `2.0.2`，作为本次兼容性保持的规则精简变更的 patch 版本。

@@ -364,10 +364,11 @@ test("重规划提示复用新鲜证据并限制定向读取", async () => {
 
     const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
     assert.ok(message);
-    assert.match(message.message.content, /architect.*docs-commit.*fresh evidence/);
-    assert.match(message.message.content, /architect.*不自行探索/);
-    assert.match(message.message.content, /证据不足先 switch_role 到 docs-commit/);
-    assert.match(message.message.content, /高风险工作核对最新实现、直接调用方和测试/);
+    assert.match(message.message.content, /architect.*docs-commit/);
+    assert.match(message.message.content, /architect.*低风险只读定位/);
+    assert.match(message.message.content, /复杂或高风险工作仍先 switch_role 到 docs-commit/);
+    assert.match(message.message.content, /核对最新实现、直接调用方和测试后再规划/);
+    assert.doesNotMatch(message.message.content, /architect.*不自行探索/);
     assert.doesNotMatch(message.message.content, /请重新检查仓库和当前事实/);
   });
 });
@@ -471,7 +472,7 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /每个 `oldText` 调用前必须精确匹配一次/);
   assert.match(sharedSkill, /运行时守卫对无效或歧义写入 fail-closed/);
   assert.match(sharedSkill, /充分证据不重复读取/);
-  assert.match(roleProfiles[0], /只消费 `docs-commit` 交接的结构化证据/);
+  assert.match(roleProfiles[0], /低风险判断可直接使用受限只读探索/);
   assert.match(roleProfiles[1], /用真实命令验证结果/);
   assert.match(roleProfiles[2], /交接结构化证据包/);
   assert.doesNotMatch([...roleProfiles, sharedSkill].join("\n"), /## 精确文件修改|逐项预检.*oldText.*逻辑快照/);

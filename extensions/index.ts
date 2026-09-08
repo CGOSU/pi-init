@@ -405,7 +405,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect.",
-      "Before planning, architect must consume fresh structured evidence from docs-commit and must not explore. Missing evidence or high-risk work requires docs-commit to check the latest implementation, direct callers, and tests.",
+      "Before planning complex or high-risk work, architect must consume fresh structured evidence from docs-commit; low-risk planning may use bounded read-only inspection directly. Missing evidence or high-risk work requires docs-commit to check the latest implementation, direct callers, and tests.",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures.",
       "After completion, continue only to the next ready task; with a pending revision, wait for architect to replan. Only architect may call replan with the exact revisionId and valid retained task IDs.",
@@ -455,8 +455,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "Switch the active Pi model and reasoning level for a configured responsibility. Reads the project roleModels mapping and current-session overrides; switching never writes .pi/role-models.json. Modes: auto applies immediately, confirm asks before automatic changes, manual requires /pi-init role. Use /pi-init save to explicitly persist staged role configuration.",
     promptSnippet: "Switch model and reasoning level for a configured project role",
     promptGuidelines: [
-      "Call switch_role before starting a responsibility selected by the project's role-routing Skill and again at every role boundary.",
-      "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before implementation, tests, docs, or shell work.",
+      "Call switch_role when entering a responsibility selected by the project's role-routing Skill or crossing a role boundary; do not repeat it within the same responsibility.",
+      "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before resuming implementation, tests, docs, or shell work when the role is not already re-established.",
       "Use the role ID required by the current task; architect remains the planning role, while other configured role IDs may execute their assigned work.",
       "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
     ],

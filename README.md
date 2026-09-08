@@ -6,6 +6,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 
 - 生成项目级 `AGENTS.md`、记忆文档和 `.pi/role-models.json`。
 - 随 package 发布公共 `pi-init-role-routing` Skill，集中维护角色职责、路由、交接、证据门控和工作流规则；新项目不再生成项目级角色 Skill。
+- 按风险分级执行：只读咨询和目标明确的低风险开发直接自主推进，不为一般技术选择、排查顺序或恢复既定行为的 bug 反复询问或交接；复杂/高风险任务仍保留结构化证据、角色边界、真实验证和授权。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
 - 根据任务在公共 Skill 定义的职责之间切换模型，项目通过 `roleModels` 映射启用角色。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
@@ -170,7 +171,9 @@ pi-usage
 
 ### 读取与探索策略
 
-完整的读取、精确编辑、证据门控和验证规则统一遵循随 package 发布的公共 `pi-init-role-routing` Skill；README 不重复维护细节。提示层只用于降低错误率，运行时守卫仍对无效或歧义写入 fail-closed，正常合法调用不新增工具 schema 或模型调用。
+完整的读取、精确编辑、证据门控和验证规则统一遵循随 package 发布的公共 `pi-init-role-routing` Skill；README 不重复维护细节。目标明确的低风险任务由当前适合角色直接调查、实现和验证，不因普通实现选择建立工作流；恢复既定行为的 bug 不重新确认需求。只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问。
+
+architect 的运行时守卫允许受限只读定位（`read`、`grep`、`find`、`ls`、`ffgrep`、`fffind`），以及 browser 的单条 `open`、`snapshot`、`get`、`wait`、`scroll`、`screenshot` 观察命令；仍拒绝 `edit`、`write`、初始化写入、shell、MCP、脚本、浏览器交互/持久化/关闭/命令串联和未知工具。能力放行不是 shell/MCP 沙箱，工具自身仍须遵循安全和授权边界。提示层只用于降低错误率，运行时守卫仍对无效或歧义写入 fail-closed，正常合法调用不新增工具 schema 或模型调用。
 
 角色、模型和模式的关系：
 
@@ -210,9 +213,9 @@ flowchart LR
 
 ### 架构前置证据与职责边界
 
-角色路由遵循公共 Skill 的单一层级：明确实现/测试直接交给 `developer-test`，明确文档、版本或 Git 收尾直接交给 `docs-commit`，不明确、含糊或跨职责的指令从 `architect` 开始。架构判断需要仓库或外部事实时，由 `docs-commit` 先交接结构化证据，`architect` 只消费证据并负责决策与计划；实现完成并验证后再由 `docs-commit` 收尾。
+角色路由遵循公共 Skill 的单一层级：明确实现/测试直接交给 `developer-test`，明确文档、版本或 Git 收尾直接交给 `docs-commit`，不明确、含糊或跨职责的指令从 `architect` 开始。低风险判断可由 architect 直接进行受限只读定位；复杂或高风险架构判断仍由 `docs-commit` 先交接包含事实、来源、调用关系、测试、风险和未确认项的结构化证据，architect 负责决策与计划；实现完成并验证后，只有产生文档、版本或 Git 收尾时才交给 `docs-commit`。
 
-当公共 Skill 或扩展更新后，已安装的 package 和当前 Pi 进程不会自动获得新规则；请执行 `pi update --extensions`，然后 `/reload` 或重启 Pi。新守卫只在扩展重新加载后生效。
+当公共 Skill 或扩展更新后，已安装的 package 和当前 Pi 进程不会自动获得新规则；请执行 `pi update --extensions`，然后 `/reload` 或重启 Pi。新守卫只在扩展重新加载后生效。当前仓库源码的修改不会自动覆盖已安装 Git package；本次未执行安装、更新、reload、提交或推送。
 
 任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 在当前会话暂存 `off`、`on` 或 `auto`，执行 `/pi-init save` 后才写入项目配置；也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，并要求按各任务指定角色切换后直接顺序执行，架构角色不直接实现；超过 2 个任务才进入编排。已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
