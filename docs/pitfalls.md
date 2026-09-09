@@ -1,6 +1,6 @@
 # 开发踩坑记录
 
-本文件记录容易复发且不直观的问题。一次性报错、普通开发流水和未经验证的猜测不写入此处。
+本文件按日期倒序记录容易复发且不直观的问题；新增条目插入对应日期位置，最新条目在前。一次性报错、普通开发流水和未经验证的猜测不写入此处。
 
 ## 记录格式
 
@@ -70,6 +70,19 @@
 - 修复：只记录 revision，等待当前 fork 返回并在任务边界进入 `replanning`；不自动终止、不重新派发运行中的 fork，也不启动旧计划的下一个任务。需要停止时由用户人工处理 fork 或使用既有 cancel 流程。
 - 验证：`npm test` 覆盖方向变更后的 subtask 结果边界、无旧任务重派和 reload 恢复路径。
 
+### 2026-08-19：subtask 执行器已派发任务不会在 reload 后自动重新派发
+
+- 现象：reload 或 session replacement 后，工作流状态仍显示已委派给 fork 的非终态任务，但 pi-init 不会再次调用 `subtask` 工具派发它。
+- 根因：自动重新派发会在共享工作区产生并发写入；fork 的存活状态由独立的 `gary149/pi-subtask` 扩展管理，主扩展无法安全猜测其结果是否已回传。
+- 修复：持久化 delegation（requestId、类型、status）；`scheduleWorkflow` 只在 `workflowState.currentTaskId` 且存在 delegation 时尝试消费回传的 `subtask-result`，找不到匹配结果就保持等待，绝不自动重新派发。需要继续时由用户确认 fork 状态后 `/pi-init workflow retry <taskId>` 或 cancel 重新规划。
+- 验证：`npm test` 覆盖派发、结果消费、取消和协议；真实 reload 后人工恢复尚未演练。
+
+### 2026-08-19：pi-subtask 是可选的外部扩展而不是 pi-init 依赖
+
+- 现象：将 `workflowExecutor` 设为 `subtask`，但同一 Pi 环境没有启用 `gary149/pi-subtask` 时，`pi.getActiveTools()` 不含 `subtask` 工具，任务无法派发。
+- 根因：pi-subtask 没有扩展 RPC 接口（不订阅 `pi.events`），pi-init 不能导入或复制其实现，只能依赖模型侧 `subtask` 工具存在。
+- 修复：派发前用 `pi.getActiveTools()` 探测 `subtask` 工具，缺失时安全阻塞任务并提示安装启用扩展；默认保持 `workflowExecutor: "local"`；README 和生成规则要求单独安装 `pi install npm:pi-subtask`，主扩展对缺少工具和无效结果安全阻塞任务。
+
 ### 2026-08-15：角色切换压缩与 Pi 自动压缩重复
 
 - 日期：2026-08-15；
@@ -101,19 +114,6 @@
 - 根因：JSONL 的最后一行没有换行时，字节流无法仅凭 EOF 判断它是完整记录还是仍在写入；checkpoint 若越过解析失败的尾部，下一次无法可靠恢复。
 - 修复：只有 JSON.parse 成功的行或以换行结束的完整坏行推进 offset；未完成尾部保留 `has_incomplete_tail`，补写后从原 offset 和原行号继续，并用前缀尾部 SHA-256 校验检测回退。
 - 验证：`node --test --test-name-pattern='流式 checkpoint'` 通过，覆盖不完整尾部、补全后单次导入、同尺寸改写和无变化跳过路径。
-
-### 2026-08-19：subtask 执行器已派发任务不会在 reload 后自动重新派发
-
-- 现象：reload 或 session replacement 后，工作流状态仍显示已委派给 fork 的非终态任务，但 pi-init 不会再次调用 `subtask` 工具派发它。
-- 根因：自动重新派发会在共享工作区产生并发写入；fork 的存活状态由独立的 `gary149/pi-subtask` 扩展管理，主扩展无法安全猜测其结果是否已回传。
-- 修复：持久化 delegation（requestId、类型、status）；`scheduleWorkflow` 只在 `workflowState.currentTaskId` 且存在 delegation 时尝试消费回传的 `subtask-result`，找不到匹配结果就保持等待，绝不自动重新派发。需要继续时由用户确认 fork 状态后 `/pi-init workflow retry <taskId>` 或 cancel 重新规划。
-- 验证：`npm test` 覆盖派发、结果消费、取消和协议；真实 reload 后人工恢复尚未演练。
-
-### 2026-08-19：pi-subtask 是可选的外部扩展而不是 pi-init 依赖
-
-- 现象：将 `workflowExecutor` 设为 `subtask`，但同一 Pi 环境没有启用 `gary149/pi-subtask` 时，`pi.getActiveTools()` 不含 `subtask` 工具，任务无法派发。
-- 根因：pi-subtask 没有扩展 RPC 接口（不订阅 `pi.events`），pi-init 不能导入或复制其实现，只能依赖模型侧 `subtask` 工具存在。
-- 修复：派发前用 `pi.getActiveTools()` 探测 `subtask` 工具，缺失时安全阻塞任务并提示安装启用扩展；默认保持 `workflowExecutor: "local"`；README 和生成规则要求单独安装 `pi install npm:pi-subtask`，主扩展对缺少工具和无效结果安全阻塞任务。
 
 ### 2026-08-15：npm lifecycle 的本地 Pi shim 会遮蔽实际 CLI
 
@@ -177,6 +177,12 @@
 - 修复：在 `session_start` 根据当前 provider/model 和推理强度唯一匹配角色；重复配置或无法匹配时保持未知。
 - 验证：角色恢复单元测试通过，完整测试 22 项通过。
 
+### 2026-08-06：Windows 下 CLI 查找成功但直接启动仍可能失败
+
+- 现象：`where.exe agent-browser` 能找到全局安装的 CLI，但依赖 Linux `which`、直接启动无扩展名 shim 或假设 POSIX 路径的工具仍提示未安装或无法执行。
+- 根因：Windows npm 全局 CLI 同时可能存在 POSIX shell 脚本和 `.cmd` shim；Pi 扩展的 `pi.exec` 是直接启动进程，不会替工具经过 Bash 解析。
+- 修复：生成的 `AGENTS.md` 和全局宿主规则要求先用 `where.exe`/`command -v` 复核，并提醒扩展按 Windows 入口启动；第三方工具本身仍需采用平台兼容的检测和执行逻辑。
+- 验证：`where.exe agent-browser` 返回两个入口，`cmd.exe` 启动 `agent-browser --version` 成功；当前 browser 工具仍返回未安装，待其上游修复 Windows 检测/启动链。
 ### 2026-08-04：中英文模板策略容易漂移
 
 - 现象：中文 `AGENTS.md` 包含团队知识库和 Git 身份规则，英文模板缺失相同规则。
@@ -197,10 +203,3 @@
 - 根因：Pi Skill 是按需加载的工作流说明；运行时模型切换属于 Extension API。
 - 修复：由 Skill 在职责边界调用 `switch_role`，Extension 从受信任项目的 `.pi/role-models.json` 读取映射并执行 `pi.setModel()` 与 `pi.setThinkingLevel()`。
 - 验证：RPC 中依次执行 `/role architect`、`/role developer-test`、`/role docs-commit`，读取会话状态确认三个模型与推理强度均正确生效。
-
-### 2026-08-06：Windows 下 CLI 查找成功但直接启动仍可能失败
-
-- 现象：`where.exe agent-browser` 能找到全局安装的 CLI，但依赖 Linux `which`、直接启动无扩展名 shim 或假设 POSIX 路径的工具仍提示未安装或无法执行。
-- 根因：Windows npm 全局 CLI 同时可能存在 POSIX shell 脚本和 `.cmd` shim；Pi 扩展的 `pi.exec` 是直接启动进程，不会替工具经过 Bash 解析。
-- 修复：生成的 `AGENTS.md` 和全局宿主规则要求先用 `where.exe`/`command -v` 复核，并提醒扩展按 Windows 入口启动；第三方工具本身仍需采用平台兼容的检测和执行逻辑。
-- 验证：`where.exe agent-browser` 返回两个入口，`cmd.exe` 启动 `agent-browser --version` 成功；当前 browser 工具仍返回未安装，待其上游修复 Windows 检测/启动链。

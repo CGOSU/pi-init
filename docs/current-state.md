@@ -1,5 +1,7 @@
 # 当前状态
 
+“最近一次更新”列表按日期倒序排列，当前状态正文只描述现状，不按时间排列。
+
 ## 项目
 
 - 名称：`pi-init`
@@ -47,6 +49,7 @@
 
 ## 最近一次更新
 
+- 2026-09-09：项目记忆文档的日期记录统一按倒序排列，最新条目在前；已同步 `session-log.md`、`decisions.md`、`pitfalls.md`、`current-state.md`、中英文模板、协作规则和 `docs-commit` 角色说明。静态规则文档不纳入时间排序，其他既有项目不会通过脚手架或包更新自动重排本地历史记录。
 - 2026-09-09：按风险分级放宽自主执行：低风险只读咨询和日常实现不再强制一般技术选择、重复角色交接或正式工作流；architect 运行时允许受限只读工具及单条 browser 观察命令，拒绝写入、shell、MCP、脚本、交互、持久化、命令串联和未知工具。已同步公共 Skill、角色说明、运行时提示、AGENTS 模板和全局宿主 AGENTS；`npm test` 112 项通过。未修改模型映射、workflow API/schema/状态机、恢复门、精确编辑保护或全局 settings；未进行真实模型效率对照，未更新已安装 package。
 
 - 2026-09-07：精简角色与编排规则：公共 Skill 作为路由入口，角色说明和运行时提示按职责分层保留最小必要内容；README、回归断言和共享 Skill 已同步，`npm test` 111 项全部通过。未改变角色、工作流协议、恢复门或运行时守卫。
@@ -86,9 +89,9 @@
 
 - 2026-08-14：`pi-usage` 增加 package `postinstall` 自动安装逻辑；执行 `pi update --extensions` 后会重新复制对应平台的启动器，找不到 `pi` 或禁用 npm lifecycle scripts 时安全跳过并提示手动安装。
 - 2026-08-14：修复 `pi-usage` 模型 token 柱状图的离散化问题；柱状图使用 Unicode 八分之一分数块，接近但不同的 token 数不再被统一显示为相同长度。
-- 2026-08-10：`pi-usage` 基于 DuckDB 扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用和近似使用时长；报告移除 Git changes，增加按模型总 token 缩放的柱状图，并在 Overview 显示缓存占比；缺少 DuckDB 时自动安装用户目录运行时；普通查询增加 1 小时缓存和跨自然日自动检查。
-- 2026-08-13：`pi-usage` 增量导入 `pi-token-speed` 的自定义 session 采样，按 provider/model 计算 `输出 token / 有效生成秒数` 的加权平均 TPS；旧数据库升级时只回填 `speed_events`，不再重建既有用量和活动数据。
 - 2026-08-14：移除自研 `parallel_develop` 及其测试、模板和文档说明，保留 `task_workflow`、`switch_role`、角色配置和脚手架能力。
 - 2026-08-14：任务工作流升级为默认 `workflowMode: "auto"` 的 off/on/auto 策略；`auto` 对不超过 2 个任务跳过编排，配置入口为 `/pi-init config workflow`，并兼容旧 `workflowEnabled`。
 - 2026-08-14：任务完成报告增加任务 ID、任务内容、角色、涉及文件、开始/结束时间、总耗时、完成摘要和验证结果；耗时从任务实际派发执行到完成计算，历史状态缺少开始时间时显示不可用。
 - 2026-08-14：新增默认 `local`/可选 `subagents` 执行器、严格结果协议、持久化任务—代理绑定及受限的 pi-subagents 专用代理脚手架；README 记录安装前提和 reload/孤儿代理边界。
+- 2026-08-13：`pi-usage` 增量导入 `pi-token-speed` 的自定义 session 采样，按 provider/model 计算 `输出 token / 有效生成秒数` 的加权平均 TPS；旧数据库升级时只回填 `speed_events`，不再重建既有用量和活动数据。
+- 2026-08-10：`pi-usage` 基于 DuckDB 扫描 Pi JSONL session，按模型汇总调用次数、输入/输出/cache token、费用和近似使用时长；报告移除 Git changes，增加按模型总 token 缩放的柱状图，并在 Overview 显示缓存占比；缺少 DuckDB 时自动安装用户目录运行时；普通查询增加 1 小时缓存和跨自然日自动检查。

@@ -1,6 +1,12 @@
 # 会话记录
 
-### 2026-09-09：版本更新至 2.0.3
+本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
+
+### 2026-09-09：统一项目记忆文档的时间记录顺序
+
+- 完成内容：确认并记录项目记忆文档的倒序约定；同步项目文档、中文/英文生成模板、协作规则和 `docs-commit` 角色说明。`session-log.md`、`decisions.md`、`pitfalls.md` 的日期条目以及 `current-state.md` 的“最近一次更新”列表均以最新条目在前，静态规则文档不纳入时间排序。
+- 验证：`git diff --check` 通过。
+- 遗留问题：其他既有项目不会通过脚手架或包更新自动重排其本地历史记录。
 
 - 完成内容：将 `package.json`、`package-lock.json` 和当前状态中的 package 版本从 `2.0.2` 更新为 `2.0.3`。按现有版本策略采用 patch 版本：本次没有修改 API、配置 schema 或工作流状态机。
 - 验证：版本更新后的 `npm test`、`npm pack --dry-run --json` 和 `git diff --check` 均已执行并通过；包清单显示 `pi-init@2.0.3`。
@@ -455,12 +461,6 @@
 - 验证：`npm test`，24 项通过；`node --check src/roles.js`、`node --check src/workflow.js`、`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、`git diff --check` 通过；RPC 扩展加载和命令发现成功。
 - 遗留问题：尚未在真实交互式 TUI 中截图验收；当前项目配置 `.pi/role-models.json` 的 `workflowMode` 仍为用户手动改成的 `off`，未覆盖。
 
-### 2026-08-12：移除 pi-fast 和 pi-update
-
-- 完成内容：删除 `pi-fast`、`pi-update` 的 Windows/POSIX 脚本，移除安装器复制逻辑，并清理 README、当前状态和测试引用。
-- 验证：`bash -n scripts/*.sh`、`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`git diff --check` 通过；`npm test` 26/27 通过，现有 Windows Pi CLI 启动测试偶发失败。
-- 遗留问题：无。
-
 ### 2026-08-14：提高 pi-usage 柱状图对接近数值的辨识度
 
 - 完成内容：模型 token 柱状图从整格四舍五入改为支持 Unicode 八分之一分数块；接近但不同的 token 数会显示不同的柱长，保留数字标签和最大值满格行为。
@@ -474,8 +474,6 @@
 - 完成内容：找不到 `pi` 或 npm 禁用 lifecycle scripts 时不阻断 package 更新；补充 README 和安装回归测试。
 - 验证：`node --check scripts/install-launchers.js`、`node --check scripts/pi-usage.js`、`git diff --check` 和 `npm test`（26 项通过）通过。
 - 遗留问题：尚未提交或推送。
-
-本文件按时间追加每次工作的完成内容、实际验证和遗留问题，不记录敏感信息或未经验证的结果。
 
 ### 2026-08-14：增加 task_workflow 全局开关
 
@@ -529,6 +527,12 @@
 - 验证：`pi-init` 执行 `node --check scripts/pi-usage.js`、`node --test --test-concurrency=1`，28 项通过；并运行 `git diff --check`。
 - 遗留问题：`pi-init` 默认并发 `npm test` 的 Windows CLI 启动测试仍有环境相关偶发失败；串行测试通过。未提交或推送。
 
+### 2026-08-12：移除 pi-fast 和 pi-update
+
+- 完成内容：删除 `pi-fast`、`pi-update` 的 Windows/POSIX 脚本，移除安装器复制逻辑，并清理 README、当前状态和测试引用。
+- 验证：`bash -n scripts/*.sh`、`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`git diff --check` 通过；`npm test` 26/27 通过，现有 Windows Pi CLI 启动测试偶发失败。
+- 遗留问题：无。
+
 ### 2026-08-10：优化 pi-usage 模型用量展示
 
 - 完成内容：移除 Git changes 的扫描、数据库汇总和报告展示；增加按模型总 token 缩放的 Unicode 柱状图。
@@ -536,6 +540,87 @@
 - 验证：`node --test test/scaffold.test.js`，27 项测试全部通过；`node --check scripts/pi-usage.js` 和 `git diff --check` 通过。完整测试在 `npm test` 下偶发 Windows Pi CLI 启动测试失败（26/27），单独重跑该测试通过；`node --test --test-concurrency=1` 全部通过。
 - 遗留问题：`npm test` 的 Windows Pi CLI 启动测试仍有环境相关偶发失败；尚未提交或推送。
 
+### 2026-08-09：增加 pi-usage 日用量统计命令
+
+- 完成内容：新增跨平台 `pi-usage` 启动器和 Node.js 汇总脚本，支持默认当天或指定 `YYYY-MM-DD`，按模型统计调用次数、input/output/cache token、总 token 和费用；摘要调用单列为 `Tools/summaries`。
+- 完成内容：更新 Windows/POSIX 安装器、README 和相关测试。
+- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`bash -n scripts/*.sh`、`git diff --check` 和 `npm pack --dry-run` 通过；脚本实际读取当前 session JSONL 并输出汇总。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-09：将 pi-usage 改为 DuckDB 统计并加入 Git 变化
+
+- 完成内容：引入 `@duckdb/node-api`，将 JSONL usage 导入 `~/.pi/agent/pi-usage.duckdb`；缺少依赖时自动安装用户目录运行时。
+- 完成内容：按 session `cwd` 关联 Git 仓库，增加当天 commit 变化和当前已跟踪未提交变化统计；README、安装说明和测试同步更新。
+- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`bash -n scripts/*.sh`、`git diff --check` 通过；实际运行 DuckDB 汇总、临时目录自动安装 DuckDB fallback 均通过。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-09：优化 pi-usage 终端输出
+
+- 完成内容：重排标题、模型统计和 Git 变化分区，改为左对齐名称、右对齐数值，缩短表头和仓库路径，去除重复列和行尾空格。
+- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`git diff --check` 通过。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-09：增加颜色和使用时长统计
+
+- 完成内容：交互终端增加 ANSI 标题/分区颜色，支持 `NO_COLOR=1`；新增活跃时长、模型等待时长和 session 跨度，并写入 DuckDB 的 `duration_summaries`。
+- 完成内容：命令执行期间在交互终端显示扫描、DuckDB 和 Git 统计进度；补充等待原因说明和颜色/时长测试。
+- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、ANSI 输出检查和 `git diff --check` 通过。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-09：改为数据库查询并支持 session 增量更新
+
+- 完成内容：默认 `pi-usage` 只查询 DuckDB，新增 `--update` 扫描 JSONL；通过 `session_files` 的大小和修改时间跳过未变化文件，变化或删除的 session 会同步更新/清理 usage 和 activity 数据。
+- 完成内容：新增 `activity_events` 持久化，为增量更新后的时长计算提供完整事件来源；无数据时提示执行 `pi-usage --update`。
+- 验证：`npm test`，24 项测试全部通过；覆盖数据库缓存查询、颜色、时长、增量导入、`node --check scripts/pi-usage.js` 和 `git diff --check`。
+- 遗留问题：尚未提交或推送。
+
+### 2026-08-09：修复角色切换与上下文压缩的生命周期竞争
+
+- 完成内容：定位 `turn_end` 中调用 `ctx.compact()` 会 abort 仍处于活动状态的 agent run，导致会话先记录 `This operation was aborted`；将待处理角色压缩改为在 `agent_settled` 事件启动。
+- 完成内容：补充回归测试，确保角色切换压缩监听 `agent_settled` 而不是 `turn_end`；同步更新踩坑、当前状态和设计决策文档。
+- 验证：`npm test`，25 项测试全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：真实模型端到端角色切换压缩续跑尚未演练；本次改动尚未提交或推送。
+
+### 2026-08-09：统一 pi-usage 表格和颜色输出
+
+- 完成内容：将 Overview、Models、Time 和 Git changes 的数据统一为对齐表格；交互终端为表头、分隔线和 Total 行增加 ANSI 颜色，非 TTY 与 `NO_COLOR=1` 保持纯文本。
+- 完成内容：补充表格布局和颜色回归断言，并修正 README 中角色压缩触发时机的过期描述。
+- 验证：`npm test`，25 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送。
+
+### 2026-08-09：初始化模板内置 Clean Code 规则
+
+- 完成内容：新增 `templates/docs/clean-code.md` 和英文模板副本，生成项目时输出 `docs/clean-code.md`；中英文 `AGENTS.md` 均要求任务开始时优先读取该规则文件。
+- 完成内容：保留来源 URL、版权和 MIT 许可说明，并补充初始化产物、测试和设计决策文档。
+- 验证：`npm test`，25 项测试全部通过；`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送。
+
+### 2026-08-09：补充 pi-usage 表格边框
+
+- 完成内容：为 Overview、Models、Time 和 Git changes 四个数据表增加完整的 Unicode 外框、列分隔线和表头/表尾分隔线，颜色继续只在 TTY 中启用。
+- 验证：`npm test`，25 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送。
+
+### 2026-08-09：同步当前项目配置到新版 pi-init 模板
+
+- 完成内容：根据当前 `.pi/role-models.json` 重新生成项目级 `AGENTS.md` 和 `.pi/skills/pi-init/SKILL.md`，补入宿主环境、Clean Code 入口、精确替换规则，并同步架构师 `medium` 推理强度。
+- 完成内容：补入当前项目缺失的 `docs/clean-code.md`；同步模板 Skill 中的 `agent_settled` 压缩生命周期描述。
+- 验证：`npm test`，25 项测试全部通过；配置解析、`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送。
+
+### 2026-08-09：按 Clean Code 规则清理 pi-usage
+
+- 完成内容：修复默认日期范围从当前时刻开始的问题，改为本地当天 `00:00`；删除数据库增量导入后已无调用方的旧 JSONL 扫描函数。
+- 完成内容：为默认日期边界补充回归测试，避免 Git 当日统计漏掉午夜至当前时刻之间的提交。
+- 验证：`npm test`，26 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送；大型模块拆分暂不执行，待有明确边界或维护痛点时再处理。
+
+### 2026-08-09：为 pi-usage 增加一小时自动检查
+
+- 完成内容：普通查询首次、距上次检查超过一小时或跨自然日时自动执行增量检查；未过期时直接读取 DuckDB，`--update` 仍然强制检查。
+- 完成内容：新增 `usage_state` 检查状态，并让文件变化影响的历史日期一并刷新派生汇总。
+- 验证：`npm test`，27 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
+- 遗留问题：本次改动尚未提交或推送。
 ### 2026-08-06：为生成的 Skill 增加精确字符串替换说明
 
 - 完成内容：中英文 Skill 模板增加类似 Claude Code Edit 的精确 `oldText` → `newText` 替换规则，覆盖唯一匹配、最小上下文、多个非重叠替换和修改后 diff 检查。
@@ -613,24 +698,6 @@
 - 验证：`npm test`，14 项测试全部通过；`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
 - 验证：`printf '{"id":"commands","type":"get_commands"}\\n' | pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc`，扩展加载和命令发现成功。
 - 验证：Windows 下 `where.exe agent-browser` 能找到 npm 全局 CLI 及 `.cmd` shim；`cmd.exe` 方式可执行 `agent-browser --version`。当前 `agent-browser` 工具仍提示未安装，说明其检测/执行链与当前 Windows CLI 环境不一致，未在本仓库伪造修复第三方工具。
-
-### 2026-08-04
-
-- 完成内容：修正中文模板中的知识库与 Git 身份表述；统一中英文策略；压缩项目级 Skill；补全本项目上下文；增强双语关键规则测试和工具调用指引。
-- 验证：`npm test`，3 项测试全部通过。
-- 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
-- 验证：`npm pack --dry-run` 成功，发布包预览包含 16 个预期文件。
-- 遗留问题：暂无。
-
-### 2026-08-04：智能职责路由与全自动模型切换
-
-- 完成内容：在中英文项目 Skill 中增加架构师、开发测试工程师、文档与提交工程师三类职责；新增 `.pi/role-models.json`、`switch_role` 工具和 `/role` 命令，在职责边界自动切换具体模型与 Pi 推理强度。
-- 验证：`npm test`，4 项测试全部通过，覆盖中英文职责、默认映射、项目覆盖和无效配置。
-- 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
-- 验证：RPC 依次切换 `architect`、`developer-test`、`docs-commit`，会话状态分别为 `gpt-5.6-sol/max`、`gpt-5.6-terra/high`、`gpt-5.6-luna/medium`。
-- 验证：生成临时项目后通过 `pi --no-session --no-extensions --no-skills --skill <path> --mode rpc` 发现 `skill:role-demo`。
-- 验证：`npm pack --dry-run` 成功，发布包预览包含 17 个预期文件。
-- 遗留问题：暂无。
 
 ### 2026-08-06：调整开发测试模型
 
@@ -714,84 +781,20 @@
 - 验证：RPC 命令发现仍包含 `role-config`，扩展加载成功。
 - 遗留问题：尚未进行真实 LLM 子代理端到端演练。
 
-### 2026-08-09：增加 pi-usage 日用量统计命令
+### 2026-08-04
 
-- 完成内容：新增跨平台 `pi-usage` 启动器和 Node.js 汇总脚本，支持默认当天或指定 `YYYY-MM-DD`，按模型统计调用次数、input/output/cache token、总 token 和费用；摘要调用单列为 `Tools/summaries`。
-- 完成内容：更新 Windows/POSIX 安装器、README 和相关测试。
-- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js`、`bash -n scripts/*.sh`、`git diff --check` 和 `npm pack --dry-run` 通过；脚本实际读取当前 session JSONL 并输出汇总。
-- 遗留问题：尚未提交或推送。
+- 完成内容：修正中文模板中的知识库与 Git 身份表述；统一中英文策略；压缩项目级 Skill；补全本项目上下文；增强双语关键规则测试和工具调用指引。
+- 验证：`npm test`，3 项测试全部通过。
+- 验证：`pi --no-session --no-extensions -e ./extensions/init-project.ts --mode rpc` 的命令发现检查通过。
+- 验证：`npm pack --dry-run` 成功，发布包预览包含 16 个预期文件。
+- 遗留问题：暂无。
 
-### 2026-08-09：将 pi-usage 改为 DuckDB 统计并加入 Git 变化
+### 2026-08-04：智能职责路由与全自动模型切换
 
-- 完成内容：引入 `@duckdb/node-api`，将 JSONL usage 导入 `~/.pi/agent/pi-usage.duckdb`；缺少依赖时自动安装用户目录运行时。
-- 完成内容：按 session `cwd` 关联 Git 仓库，增加当天 commit 变化和当前已跟踪未提交变化统计；README、安装说明和测试同步更新。
-- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`bash -n scripts/*.sh`、`git diff --check` 通过；实际运行 DuckDB 汇总、临时目录自动安装 DuckDB fallback 均通过。
-- 遗留问题：尚未提交或推送。
-
-### 2026-08-09：优化 pi-usage 终端输出
-
-- 完成内容：重排标题、模型统计和 Git 变化分区，改为左对齐名称、右对齐数值，缩短表头和仓库路径，去除重复列和行尾空格。
-- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、`git diff --check` 通过。
-- 遗留问题：尚未提交或推送。
-
-### 2026-08-09：增加颜色和使用时长统计
-
-- 完成内容：交互终端增加 ANSI 标题/分区颜色，支持 `NO_COLOR=1`；新增活跃时长、模型等待时长和 session 跨度，并写入 DuckDB 的 `duration_summaries`。
-- 完成内容：命令执行期间在交互终端显示扫描、DuckDB 和 Git 统计进度；补充等待原因说明和颜色/时长测试。
-- 验证：`npm test`，24 项测试全部通过；`node --check scripts/pi-usage.js`、ANSI 输出检查和 `git diff --check` 通过。
-- 遗留问题：尚未提交或推送。
-
-### 2026-08-09：改为数据库查询并支持 session 增量更新
-
-- 完成内容：默认 `pi-usage` 只查询 DuckDB，新增 `--update` 扫描 JSONL；通过 `session_files` 的大小和修改时间跳过未变化文件，变化或删除的 session 会同步更新/清理 usage 和 activity 数据。
-- 完成内容：新增 `activity_events` 持久化，为增量更新后的时长计算提供完整事件来源；无数据时提示执行 `pi-usage --update`。
-- 验证：`npm test`，24 项测试全部通过；覆盖数据库缓存查询、颜色、时长、增量导入、`node --check scripts/pi-usage.js` 和 `git diff --check`。
-- 遗留问题：尚未提交或推送。
-
-### 2026-08-09：修复角色切换与上下文压缩的生命周期竞争
-
-- 完成内容：定位 `turn_end` 中调用 `ctx.compact()` 会 abort 仍处于活动状态的 agent run，导致会话先记录 `This operation was aborted`；将待处理角色压缩改为在 `agent_settled` 事件启动。
-- 完成内容：补充回归测试，确保角色切换压缩监听 `agent_settled` 而不是 `turn_end`；同步更新踩坑、当前状态和设计决策文档。
-- 验证：`npm test`，25 项测试全部通过；`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：真实模型端到端角色切换压缩续跑尚未演练；本次改动尚未提交或推送。
-
-### 2026-08-09：统一 pi-usage 表格和颜色输出
-
-- 完成内容：将 Overview、Models、Time 和 Git changes 的数据统一为对齐表格；交互终端为表头、分隔线和 Total 行增加 ANSI 颜色，非 TTY 与 `NO_COLOR=1` 保持纯文本。
-- 完成内容：补充表格布局和颜色回归断言，并修正 README 中角色压缩触发时机的过期描述。
-- 验证：`npm test`，25 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：本次改动尚未提交或推送。
-
-### 2026-08-09：初始化模板内置 Clean Code 规则
-
-- 完成内容：新增 `templates/docs/clean-code.md` 和英文模板副本，生成项目时输出 `docs/clean-code.md`；中英文 `AGENTS.md` 均要求任务开始时优先读取该规则文件。
-- 完成内容：保留来源 URL、版权和 MIT 许可说明，并补充初始化产物、测试和设计决策文档。
-- 验证：`npm test`，25 项测试全部通过；`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：本次改动尚未提交或推送。
-
-### 2026-08-09：补充 pi-usage 表格边框
-
-- 完成内容：为 Overview、Models、Time 和 Git changes 四个数据表增加完整的 Unicode 外框、列分隔线和表头/表尾分隔线，颜色继续只在 TTY 中启用。
-- 验证：`npm test`，25 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：本次改动尚未提交或推送。
-
-### 2026-08-09：同步当前项目配置到新版 pi-init 模板
-
-- 完成内容：根据当前 `.pi/role-models.json` 重新生成项目级 `AGENTS.md` 和 `.pi/skills/pi-init/SKILL.md`，补入宿主环境、Clean Code 入口、精确替换规则，并同步架构师 `medium` 推理强度。
-- 完成内容：补入当前项目缺失的 `docs/clean-code.md`；同步模板 Skill 中的 `agent_settled` 压缩生命周期描述。
-- 验证：`npm test`，25 项测试全部通过；配置解析、`node --check src/scaffold.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：本次改动尚未提交或推送。
-
-### 2026-08-09：按 Clean Code 规则清理 pi-usage
-
-- 完成内容：修复默认日期范围从当前时刻开始的问题，改为本地当天 `00:00`；删除数据库增量导入后已无调用方的旧 JSONL 扫描函数。
-- 完成内容：为默认日期边界补充回归测试，避免 Git 当日统计漏掉午夜至当前时刻之间的提交。
-- 验证：`npm test`，26 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：本次改动尚未提交或推送；大型模块拆分暂不执行，待有明确边界或维护痛点时再处理。
-
-### 2026-08-09：为 pi-usage 增加一小时自动检查
-
-- 完成内容：普通查询首次、距上次检查超过一小时或跨自然日时自动执行增量检查；未过期时直接读取 DuckDB，`--update` 仍然强制检查。
-- 完成内容：新增 `usage_state` 检查状态，并让文件变化影响的历史日期一并刷新派生汇总。
-- 验证：`npm test`，27 项测试全部通过；`node --check scripts/pi-usage.js`、`node --check test/scaffold.test.js` 和 `git diff --check` 通过。
-- 遗留问题：本次改动尚未提交或推送。
+- 完成内容：在中英文项目 Skill 中增加架构师、开发测试工程师、文档与提交工程师三类职责；新增 `.pi/role-models.json`、`switch_role` 工具和 `/role` 命令，在职责边界自动切换具体模型与 Pi 推理强度。
+- 验证：`npm test`，4 项测试全部通过，覆盖中英文职责、默认映射、项目覆盖和无效配置。
+- 验证：TypeScript 5.9.3 以 `strict`、`noEmit` 检查 extension 通过。
+- 验证：RPC 依次切换 `architect`、`developer-test`、`docs-commit`，会话状态分别为 `gpt-5.6-sol/max`、`gpt-5.6-terra/high`、`gpt-5.6-luna/medium`。
+- 验证：生成临时项目后通过 `pi --no-session --no-extensions --no-skills --skill <path> --mode rpc` 发现 `skill:role-demo`。
+- 验证：`npm pack --dry-run` 成功，发布包预览包含 17 个预期文件。
+- 遗留问题：暂无。

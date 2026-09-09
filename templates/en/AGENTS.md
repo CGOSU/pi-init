@@ -31,9 +31,9 @@ For a clear, low-risk goal, make ordinary implementation choices and proceed wit
 
 After completing a task:
 
-1. Update `docs/current-state.md`, retaining only current facts and unfinished work;
-2. append consequential implementation choices to `docs/decisions.md`;
-3. record completed work, verification commands, and remaining issues in `docs/session-log.md`;
-4. add newly discovered, non-obvious, recurring issues to `docs/pitfalls.md`.
+1. Update `docs/current-state.md`, retaining only current facts and unfinished work; keep its “Last Updated” list in reverse chronological order;
+2. record consequential implementation choices in `docs/decisions.md`, inserting entries in reverse chronological order with the newest first;
+3. add completed work, verification commands, and remaining issues to `docs/session-log.md`, inserting entries in reverse chronological order with the newest first;
+4. add newly discovered, non-obvious, recurring issues to `docs/pitfalls.md`, inserting entries in reverse chronological order with the newest first.
 
 Update a file only when there is a new fact to record; do not make no-op documentation edits. Maintain each fact in one file only. Elsewhere, use a short summary and a relative link to its canonical source.

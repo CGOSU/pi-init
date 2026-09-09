@@ -1,6 +1,6 @@
 # Development Pitfalls
 
-This file records non-obvious issues that are likely to recur. Do not include one-off errors, routine development logs, or unverified guesses.
+Record non-obvious issues that are likely to recur in reverse chronological order, with the newest entry first. Insert new entries at the corresponding date position. Do not include one-off errors, routine development logs, or unverified guesses.
 
 ## Entry Format
 

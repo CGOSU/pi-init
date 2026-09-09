@@ -1,5 +1,7 @@
 # Current State
 
+Keep the “Last Updated” list in reverse chronological order. The current-state sections describe the present situation and are not a timeline.
+
 ## Project
 
 - Name: `{{PROJECT_NAME}}`
