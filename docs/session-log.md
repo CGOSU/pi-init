@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-11：修复并行 worker 卡住和诊断不足
+
+- 完成内容：移除 worker 的 `--offline`，避免 Pi 关闭 model network；追加结构化结果 system prompt；兼容 `agent_end` 最终消息；保留同批次已成功 worker；在批次摘要显示阻塞原因；worker stderr 诊断限制长度并脱敏。新增对应回归测试。
+- 验证：在 `D:\\Code\\Javascript\\pi-init` 执行 `npm test`，134 项全部通过；执行 `git diff --check` 通过（仅有 Windows 工作区预期的 LF/CRLF 转换提示）。
+- 遗留：尚未执行真实双 worker + gmc + 远程模型 E2E；未执行 Git commit 或 push。
+
 ### 2026-09-10：修复 parallel_batch 空状态显示
 
 - 完成内容：修复 `parallel_batch(action="status")` 在当前会话没有批次时把空对象交给结果渲染器，导致显示“批次 undefined · undefined”的问题；现在返回未定义详情并显示“当前没有并行批次”。

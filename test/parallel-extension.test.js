@@ -154,6 +154,49 @@ test("parallel_batch 接入 Pi、gmc 和独立 integration worktree，且不完�
   });
 });
 
+test("parallel_batch 保留成功 worker 并显示失败原因", async () => {
+  await withTempDirectory(async (fixture) => {
+    const base = worktree("repo", fixture);
+    const worktrees = [base];
+    const exec = async (command, args) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: `${baseCommit}\n`, stderr: "" };
+      if (command === "gmc.exe" && args.includes("version")) return { code: 0, stdout: "gmc version 0.10.1\n", stderr: "" };
+      if (command === "gmc.exe" && args.includes("hook")) return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gmc.exe" && args.includes("share")) return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gmc.exe" && args.includes("add")) {
+        const name = args[args.indexOf("add") + 1];
+        const item = worktree(name, path.join(path.dirname(fixture), `${path.basename(fixture)}--${name}-worktree`));
+        worktrees.push(item);
+        return { code: 0, stdout: "created", stderr: "" };
+      }
+      if (command === "gmc.exe" && args.includes("list")) return { code: 0, stdout: JSON.stringify(worktrees), stderr: "" };
+      if (args.includes("--mode") && args.includes("json") && args.includes("-p")) {
+        const prompt = args.at(-1);
+        if (prompt.includes("任务：api")) return { code: 1, stdout: "", stderr: "provider token=secret" };
+        return { code: 0, stdout: workerOutput(prompt), stderr: "" };
+      }
+      throw new Error(`unexpected ${command} ${args.join(" ")}`);
+    };
+    const { harness } = await makeHarness(fixture, exec);
+    const tool = harness.tools.find((item) => item.name === "parallel_batch");
+    assert.ok(tool);
+
+    const started = await tool.execute("parallel-start", {
+      action: "start",
+      batchId: "batch-failure-diagnostic",
+      baseRef: "HEAD",
+      tasks: [
+        { id: "api", task: "API", files: ["src/api"], acceptanceCriteria: ["完成"] },
+        { id: "ui", task: "UI", files: ["src/ui"], acceptanceCriteria: ["完成"] },
+      ],
+    }, undefined, undefined, harness.context);
+    assert.equal(started.details.status, "blocked");
+    assert.equal(started.details.tasks.find((task) => task.id === "ui").status, "completed");
+    assert.match(started.content[0].text, /worker api 失败/);
+    assert.match(tool.renderResult(started, {}, harness.context.ui.theme).render(240).join("\\n"), /worker api 失败/);
+  });
+});
+
 test("parallel_batch 在不受信任项目或错误角色下拒绝启动", async () => {
   const untrusted = createExtensionHarness([], { trusted: false });
   const untrustedTool = untrusted.tools.find((item) => item.name === "parallel_batch");

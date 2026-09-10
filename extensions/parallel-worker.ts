@@ -22,6 +22,12 @@ type ExecResult = { code: number | null; stdout?: string; stderr?: string; kille
 const PARALLEL_WORKER_TIMEOUT_MS = 5 * 60 * 1000;
 type Exec = (command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) => Promise<ExecResult>;
 
+function diagnosticText(value: string | undefined) {
+  if (!value?.trim()) return "";
+  const redacted = value.trim().replace(/(authorization|api[-_]?key|token|password)\s*[:=]\s*\S+/gi, "$1=[redacted]");
+  return redacted.length > 2048 ? `…${redacted.slice(-2048)}` : redacted;
+}
+
 function requiredText(value: unknown, label: string, max = 4096) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label}不能为空`);
   const result = value.trim();
@@ -65,7 +71,11 @@ function finalAssistantText(stdout: string) {
     if (!line.trim()) continue;
     try {
       const event = JSON.parse(line);
-      if (event.type === "message_end" && event.message?.role === "assistant") messages.push(event.message);
+      if (event.type === "message_end" && event.message?.role === "assistant") {
+        messages.push(event.message);
+      } else if (event.type === "agent_end" && Array.isArray(event.messages)) {
+        messages.push(...event.messages.filter((message: { role?: string }) => message?.role === "assistant"));
+      }
     } catch {
       // Non-JSON diagnostics are ignored; the final structured result is still required.
     }
@@ -94,10 +104,11 @@ export async function runParallelWorker(
     "-p",
     "--no-session",
     "--no-extensions",
-    "--offline",
     "--approve",
     "--model", value.model,
     "--exclude-tools", "parallel_batch,task_workflow,switch_role",
+    "--append-system-prompt",
+    "最终回复必须只包含一个符合用户任务中 protocol 要求的 JSON 对象；不要输出 Markdown、解释文字或额外字段。",
   ];
   if (value.thinkingLevel) args.push("--thinking", value.thinkingLevel);
   args.push(buildParallelWorkerPrompt(value));
@@ -114,14 +125,16 @@ export async function runParallelWorker(
   try {
     output = finalAssistantText(result.stdout ?? "");
   } catch (error) {
+    const suffix = error instanceof Error ? `：${error.message}` : "";
+    const diagnostic = diagnosticText(result.stderr);
     if (result.killed || result.code !== 0) {
-      const suffix = error instanceof Error ? `：${error.message}` : "";
-      throw new Error(`Pi worker退出失败（code=${result.code ?? "unknown"}）${suffix}`);
+      throw new Error(`Pi worker退出失败（code=${result.code ?? "unknown"}）${suffix}${diagnostic ? `；stderr：${diagnostic}` : ""}`);
     }
-    throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${diagnostic ? `；stderr：${diagnostic}` : ""}`);
   }
   if (result.killed || result.code !== 0) {
-    throw new Error(`Pi worker退出失败（code=${result.code ?? "unknown"}）`);
+    const diagnostic = diagnosticText(result.stderr);
+    throw new Error(`Pi worker退出失败（code=${result.code ?? "unknown"}）${diagnostic ? `；stderr：${diagnostic}` : ""}`);
   }
   return parseParallelWorkerResult(output, {
     batchId: value.batchId,
@@ -158,7 +171,6 @@ export async function runParallelWorkers(
     const settled = await Promise.allSettled(workers);
     const failure = settled.find((item) => item.status === "rejected");
     if (failure) {
-      controller.abort();
       throw failure.reason;
     }
     return results;

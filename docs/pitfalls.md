@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-11：parallel_batch worker 会因离线标志和结果回收策略表现为卡住
+
+- 日期：2026-09-11；
+- 现象：真实调用创建了 worker worktree 并产生了部分代码，但批次最终显示 `blocked · 0/2 完成`，用户看不到具体 worker 失败原因；一个 worker 失败时另一个独立 worker 也可能被取消。
+- 根因：worker CLI 参数包含 `--offline`；当前 Pi 会将它转换为 `PI_OFFLINE=1`，使 `ModelRuntime` 关闭 model network。除此之外，worker 只从 `message_end` 读取最终 assistant，且批次在任一 worker 失败时主动取消同批次其他 worker，导致合法终态或已完成候选被隐藏。
+- 修复：移除 `--offline`，通过 `--append-system-prompt` 强化结果协议；从 `message_end` 和 `agent_end` 回退读取最终 assistant；独立 worker 不再因同批次失败互相取消；批次按成功结果、blocked 结果、进程失败顺序回收，并在状态摘要显示 `blockReason`。退出诊断限制长度并脱敏。
+- 验证：`npm test`，134 项全部通过；`git diff --check` 通过。尚未执行真实双 worker + gmc + 远程模型 E2E。
+
 ### 2026-09-10：parallel_batch 空详情会被结果渲染器误认为有效状态
 
 - 日期：2026-09-10；

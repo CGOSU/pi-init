@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-11：独立 worker 需要保留模型网络和同批次结果
+
+- 决定：`parallel_batch` 启动 Pi worker 时不传 `--offline`，改用追加 system prompt 固定结构化结果协议；Pi JSON 输出同时从 `message_end` 和 `agent_end` 读取最终 assistant 消息。一个独立 worker 失败时不主动取消其他 worker，主会话收齐结果后保留成功候选并阻塞失败任务。
+- 原因：Pi 当前实现会把 `PI_OFFLINE` 传递为 `ModelRuntime.modelNetworkEnabled = false`，worker 仍需访问远程模型；原先一项失败会取消同批次其他 worktree，掩盖可用结果；只读取 `message_end` 也会丢失部分合法 `agent_end` 终态。
+- 约束：worker 仍必须返回严格的 `pi-init/parallel-task@1` JSON；失败不伪造完成，批次只有所有任务完成后才能集成；阻塞原因需在批次状态和工具结果中可见。真实双 worker + gmc E2E 仍需单独验证。
+
 ### 2026-09-10：简单任务采用最小验证策略
 
 - 决定：对用户明确的简单、局部、低风险任务，默认只执行“读取相关实现 → 修改 → 最小必要核对 → 简短交付”；不创建 `task_workflow`，不启动 `subtask` 或 `parallel_batch`，不默认运行 `npm test`、全量类型检查或构建。纯文档、注释、文案和样式修改可以只做差异/静态核对，不运行包管理器命令。

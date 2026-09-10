@@ -64,6 +64,22 @@ test("并行 worker 使用最多两个 Pi 进程并真实重叠等待", async ()
   assert.equal(maxActive, 2);
 });
 
+test("worker 失败不会取消仍在运行的独立 worker", async () => {
+  let uiCompleted = false;
+  const exec = async (_command, args, options) => {
+    const taskText = args.at(-1);
+    if (taskText.includes("实现 api")) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { code: 1, stdout: "", stderr: "api failed" };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    uiCompleted = !options.signal?.aborted;
+    return { code: 0, stdout: output(spec("ui")), stderr: "" };
+  };
+  await assert.rejects(() => runParallelWorkers(exec, [spec("api"), spec("ui")]), /退出失败/);
+  assert.equal(uiCompleted, true);
+});
+
 test("worker 使用固定模型、工作目录和安全参数，非零退出不回退", async () => {
   let invocation;
   const exec = async (command, args, options) => {
@@ -76,7 +92,26 @@ test("worker 使用固定模型、工作目录和安全参数，非零退出不�
   assert.ok(invocation.args.includes("--no-session"));
   assert.ok(invocation.args.includes("--approve"));
   assert.ok(invocation.args.includes("--exclude-tools"));
+  assert.ok(invocation.args.includes("--append-system-prompt"));
+  assert.ok(!invocation.args.includes("--offline"));
   assert.ok(!invocation.args.some((arg) => arg.includes("dangerously-bypass")));
+});
+
+test("worker 可从 agent_end 获取最终结果，并保留脱敏的退出诊断", async () => {
+  const agentEnd = async (_command, args) => {
+    const taskText = args.at(-1);
+    const task = taskText.includes("实现 ui") ? spec("ui") : spec("api");
+    const messageEnd = JSON.parse(output(task));
+    return {
+      code: 0,
+      stdout: JSON.stringify({ type: "agent_end", messages: [messageEnd.message] }),
+      stderr: "",
+    };
+  };
+  assert.equal((await runParallelWorker(agentEnd, spec("api"))).outcome, "complete");
+
+  const failing = async () => ({ code: 1, stdout: "", stderr: "provider token=secret" });
+  await assert.rejects(() => runParallelWorker(failing, spec("api")), /stderr：provider token=\[redacted\]/);
 });
 
 test("worker 缺少结构化最终结果或返回错误结果时明确失败", async () => {

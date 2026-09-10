@@ -39,7 +39,8 @@ type ToolUpdate = (result: { content: Array<{ type: "text"; text: string }>; det
 function stateText(state: ParallelBatchState) {
   const progress = parallelBatchProgress(state);
   const integration = state.integration ? ` · 集成 ${state.integration.path}` : "";
-  return `批次 ${state.batchId} · ${state.status} · ${progress.completed}/${progress.total} 完成 · ${progress.running} 运行中${integration}`;
+  const reason = state.status === "blocked" && state.blockReason ? ` · 原因 ${state.blockReason}` : "";
+  return `批次 ${state.batchId} · ${state.status} · ${progress.completed}/${progress.total} 完成 · ${progress.running} 运行中${integration}${reason}`;
 }
 
 function resultText(state: ParallelBatchState | undefined) {
@@ -179,10 +180,7 @@ export function createParallelBatchRuntime(
       (command, args, options) => pi.exec(command, args, options),
       spec,
       controller.signal,
-    ).catch((error) => {
-      if (!controller.signal.aborted) controller.abort();
-      throw error;
-    }));
+    ));
     try {
       const settled = await Promise.allSettled(workerPromises);
       if (state.runtimeDisposed) return next;
@@ -191,8 +189,15 @@ export function createParallelBatchRuntime(
         persist(next, state.currentContext!, true);
         return next;
       }
-      for (let index = 0; index < settled.length; index += 1) {
-        const item = settled[index];
+      const ordered = settled
+        .map((item, index) => ({ item, index }))
+        .sort((left, right) => {
+          const priority = (entry: typeof left) => entry.item.status === "rejected"
+            ? 2
+            : entry.item.value?.outcome === "complete" ? 0 : 1;
+          return priority(left) - priority(right);
+        });
+      for (const { item, index } of ordered) {
         const taskId = specs[index].taskId;
         if (item.status === "fulfilled") {
           if (next.status !== "running") continue;
