@@ -329,7 +329,7 @@ export function createParallelBatchRuntime(
       updateStatus(ctx);
       return {
         content: [{ type: "text", text: resultText(state.parallelBatchState) }],
-        details: state.parallelBatchState ?? {},
+        details: state.parallelBatchState,
       };
     }
     if (params.action === "start") {
@@ -422,7 +422,10 @@ export function createParallelBatchRuntime(
     renderResult(result, _options, theme) {
       if (result.isError) return new Text(theme.fg("error", "并行批次操作失败"), 0, 0);
       const data = result.details as ParallelBatchState | undefined;
-      return new Text(theme.fg("success", "✓ ") + theme.fg("accent", data ? stateText(data) : "并行批次已更新"), 0, 0);
+      const summary = data && typeof data === "object" && typeof data.batchId === "string" && typeof data.status === "string"
+        ? stateText(data)
+        : "当前没有并行批次。";
+      return new Text(theme.fg("success", "✓ ") + theme.fg("accent", summary), 0, 0);
     },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

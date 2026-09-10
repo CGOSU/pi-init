@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-10：parallel_batch 空详情会被结果渲染器误认为有效状态
+
+- 日期：2026-09-10；
+- 现象：调用 `parallel_batch(action="status")` 且当前会话没有批次时，工具结果显示“✓ 批次 undefined · undefined”。
+- 根因：status 分支在没有状态时返回了 truthy 的空对象 `{}`；结果渲染器据此调用状态格式化函数，读取不存在的 `batchId` 和 `status`。
+- 修复：无批次时返回 `undefined` 详情，并在结果渲染器中校验批次身份字段；无效或空状态统一显示“当前没有并行批次”。
+- 验证：`node --test test/parallel-extension.test.js`，4 项全部通过；`git diff --check` 通过。
+
 ### 2026-09-10：Windows 下不能把 pi.cmd 直接交给 shell=false 的 Node 子进程
 
 - 日期：2026-09-10；

@@ -13,6 +13,8 @@
 
 ## 已知状态
 
+- `parallel_batch` 在没有活动批次时的 status 结果现显示“当前没有并行批次”，不会再渲染 `undefined`；根因、修复和验证见 [`docs/pitfalls.md`](pitfalls.md) 与 [`docs/session-log.md`](session-log.md)。
+
 - 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。控制中心和脚手架运行时已改为扩展实例内 Promise 缓存的按需加载，工作流恢复从 session branch 末尾直接查找最新状态。
 - `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。schema v3 使用稳定 entry key（Pi id 或 legacy 哈希）跨 fork 文件去重 usage、speed、activity 和 session；schema 不一致时事务化清理并全量重建所有派生表与 checkpoint。
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计，重算日期取 session 文件最新修改时间并精确到分钟，另列受影响日期；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
@@ -50,6 +52,7 @@
 
 ## 最近一次更新
 
+- 2026-09-10：修复 `parallel_batch` 无活动批次时的空状态渲染问题，并补充回归测试；详见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-10：按用户确认增加简单任务的最小验证策略：不创建工作流或启动 worker，不默认运行全量测试、类型检查或构建；高风险边界和明确验证要求不受影响。已同步决策、公共 Skill、developer-test 角色和 README，尚未再次提交或推送。
 - 2026-09-10：复核 Pi worker 退出问题并修正诊断/提示；确认生产 `pi.exec` + Pi CLI 路径可完成最小 worker，`npm test` 130 项通过。此前临时 E2E 的 `execFile` 包装器把超时/子进程退出映射为 code=1，PowerShell 管道还会将中文任务转换为问号；双 worker + gmc 完整 E2E 仍待在稳定终端链路复测，详见 `docs/session-log.md`。
 - 2026-09-10：完成 gmc v0.10.1 Windows x64 外部契约取证；确认固定基线、独立 worktree、任务文件复制、JSON 列表、候选 promote 和非零错误退出行为。未执行本项目安装或源码实现；详见 `docs/session-log.md`。

@@ -89,6 +89,17 @@ async function makeHarness(directory, exec, model = { provider: "openai-codex", 
   return { harness, directory };
 }
 
+test("parallel_batch status 无批次时不会渲染 undefined", async () => {
+  const harness = createExtensionHarness([], { trusted: true });
+  const tool = harness.tools.find((item) => item.name === "parallel_batch");
+  assert.ok(tool);
+
+  const result = await tool.execute("parallel-status", { action: "status" }, undefined, undefined, harness.context);
+  assert.equal(result.details, undefined);
+  const rendered = tool.renderResult(result, {}, harness.context.ui.theme).render(240).join("\n").trimEnd();
+  assert.equal(rendered, "✓ 当前没有并行批次。");
+});
+
 test("parallel_batch 接入 Pi、gmc 和独立 integration worktree，且不完成 task_workflow", async () => {
   await withTempDirectory(async (fixture) => {
     const parent = fixture;
