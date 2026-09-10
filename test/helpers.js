@@ -185,6 +185,10 @@ function createExtensionHarness(branch = [], options = {}) {
     async sendMessage(message, options) {
       sentMessages.push({ message, options });
     },
+    async exec(command, args, execOptions) {
+      if (typeof options.exec === "function") return options.exec(command, args, execOptions);
+      throw new Error(`test harness exec 未配置：${command}`);
+    },
   };
   initProjectExtension(pi);
 

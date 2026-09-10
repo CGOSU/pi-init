@@ -2,6 +2,28 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-10：定位 Pi worker “退出”问题
+
+- 事实：此前全量临时 E2E 的 `code=1` 不是 gmc worktree 创建失败。测试脚本使用 `child_process.execFile` 包装 Pi，超时异常的 `error.code` 为字符串/null，被脚本映射为数字 1；首次脚本还没有显式关闭 stdin。另一次 PowerShell here-string 向 Node 传递中文任务时出现 `?`，Pi 因任务/验收不可解析返回 `blocked`。
+- 验证：读取 Pi 0.85.1 `dist/core/exec.js` 确认生产 `pi.exec` 使用 `spawn(..., stdio: ["ignore", "pipe", "pipe"])`；使用真实生产路径 `pi.exec`、`pi-coding-agent` CLI、`openai-codex/gpt-5.6-luna` 和最小只读任务的临时扩展测试返回 `outcome: complete`。此前直接 `execFile` 路径反复超时，不能作为生产 worker 结论。
+- 修复：worker prompt 明确列出允许的 JSON key，禁止 `status/state/success` 等额外字段；无最终文本时保留 Pi provider/stopReason 诊断，再区分普通退出和取消/终止。生产 worker 继续通过 `pi.exec`，并设置 5 分钟超时、取消同批次其他 worker。
+- 遗留问题：真实双 worker + gmc 完整 E2E 尚未重新执行；本次已证明单 worker 的生产 Pi 子进程路径可完成，但不把单 worker 结果扩写成双 worker 成功。未提交、未推送、未发布。
+
+### 2026-09-10：完成 parallel_batch 实现与交付文档同步
+
+- 完成内容：接入 `parallel_batch` 工具和独立状态展示；支持 start/status/cancel/retry/integrate/complete，使用 gmc v0.10.1 临时空配置创建 worker 与 integration worktree。最多两个 worker 并发启动，结果严格绑定 batch/task/attempt/base；候选改动按顺序进入独立 integration worktree，关联 local `task_workflow` 时不自动完成原任务。同步公共 Skill、README、当前状态和踩坑记录。
+- 安全与恢复：受信任项目和当前职责校验、范围不重叠、gmc hooks/shared resources 拒绝、固定基线、实际 integration git diff 校验、非零退出/坏结果显式阻塞；worker 不加载扩展、不调用 task_workflow、commit 或 push。session_start/session_tree 不自动重派，session_shutdown 会中止并记录未知状态阻塞。
+- 验证：`npm test`，130 项全部通过；`node --check` 新增/修改 JS/TS 文件通过；`node scripts/check-line-count.js` 通过；新增 gmc client、批次状态、worker、扩展集成测试通过。官方 gmc v0.10.1 Windows x64 二进制在临时 Git 仓库中完成真实 add/list/promote 隔离验证，主工作区保持未修改。`npm pack --dry-run --json` 显示 `pi-init@2.0.3` 包含 parallel_batch 扩展、worker、gmc client、批次核心和公共 Skill；README/Skill/项目记忆 UTF-8 检查与 `git diff --check` 通过。
+- 未完成项与遗留问题：真实 Pi worker 模型调用已用 auth ready 的 `openai-codex/gpt-5.6-luna` 做最小尝试，但 `pi.cmd --mode json -p --no-session --no-extensions --offline ...` 90 秒无输出超时；批次尝试随后以 worker code=1 结束，未将其写成成功。需在可用的模型网络/运行环境中重新做双 worker 端到端；gmc 未全局安装，未提交、未推送、未发布。
+
+### 2026-09-10：完成 gmc v0.10.1 并行隔离层外部契约取证
+
+- 完成内容：从 gmc v0.10.1 GitHub release 下载 Windows x86_64 官方 zip 到系统临时目录，使用 release `checksums.txt` 做 SHA-256 校验；未安装到全局，也未修改本项目或用户配置。读取了 Pi 0.85.1 的完整 `docs/extensions.md` 及官方 subagent 示例，确认可通过 `pi.exec()` 执行外部命令、通过 `pi.appendEntry()` 持久化扩展状态、通过 `session_start`/`session_shutdown` 恢复和清理，以及通过独立 `pi` 子进程实现并行 agent。
+- 事实：临时普通 Git 仓库的基线 commit 为 `deae3e6174d0100921db4817d6db3206c1ee6643`；`gmc --output json wt list` 返回路径、分支、commit、status；`gmc wt add agent-a -b main` 创建 sibling worktree 并保持相同基线；`gmc wt dup 2 -b main` 创建 `.dup-1`/`.dup-2` 和 `_dup/main/...` 临时分支；`--task TASK.md` 会复制任务文件；`wt promote --dry-run` 只预览，真实 promote 将候选未提交改动应用到父工作区但不提交；无效 remove 返回退出码 1。gmc v0.10.1 release 明确包含 Windows x86_64 构建。
+- 实现边界：v1 应只调用 `gmc wt add`/`wt dup`、`--output json wt list` 和经过用户授权的 promote/清理路径；不调用 `wt share`，不默认共享 `.env`、`node_modules`、数据库或构建输出；不启用 gmc 的自动准备/共享规则；worker 使用固定 `cwd` 的独立 Pi 进程并由主扩展唯一记录状态。Pi 的 `tool_result` 抛错才会标记工具失败，`ctx.signal` 可用于取消外部进程；`session_shutdown` 必须清理子进程，reload/resume 不能根据持久状态自动重派未终态 worker。
+- 风险与未确认项：gmc README 的 `wt promote <temp> <name>` 重命名描述与 v0.10.1 源码/实际行为不一致，实际行为应以“应用候选改动到父工作区”为准；gmc CLI 默认配置路径是 `$XDG_CONFIG_HOME/gmc/config.yaml`，本证据命令未调用共享或配置写入。尚未完成真实 Pi worker 模型调用、主项目并行批次端到端、并发取消和集成冲突验证。
+- 验证：下载脚本输出 `sha256_match=True`、`version=gmc version 0.10.1`；临时仓库执行 `gmc wt add`、`wt dup`、`--task`、`--output json wt list`、`wt promote --dry-run/real`，均获得上述真实结果；无效 `gmc wt remove missing-agent` 输出错误且 `invalid_remove_code=1`；本次文档修改后的 `git diff --check` 待本任务结束前执行。
+
 ### 2026-09-09：统一项目记忆文档的时间记录顺序
 
 - 完成内容：确认并记录项目记忆文档的倒序约定；同步项目文档、中文/英文生成模板、协作规则和 `docs-commit` 角色说明。`session-log.md`、`decisions.md`、`pitfalls.md` 的日期条目以及 `current-state.md` 的“最近一次更新”列表均以最新条目在前，静态规则文档不纳入时间排序。

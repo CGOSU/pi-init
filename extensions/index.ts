@@ -3,7 +3,6 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-
 import {
   ROLE_MODES,
   findMatchingRole,
@@ -30,6 +29,7 @@ import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
+import { createParallelBatchRuntime } from "./parallel-batch.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -87,6 +87,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
+  });
+  createParallelBatchRuntime(pi, runtimeState, {
+    roleRuntime,
+    getWorkflowState: () => runtimeState.workflowState,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;

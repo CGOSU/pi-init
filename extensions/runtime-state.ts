@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { createWorkflowState } from "../src/workflow.js";
+import type { createParallelBatch } from "../src/parallel-batch.js";
 
 export type ActiveRole = {
   role: string;
@@ -34,6 +35,7 @@ export type ExtensionRuntimeState = {
   workflowTaskCompactionPending: boolean;
   roleCompactionInFlight: boolean;
   workflowState?: WorkflowState;
+  parallelBatchState?: ParallelBatchState;
   workflowDispatchInFlight: boolean;
   internalContinuationPending: boolean;
   currentContext?: ExtensionContext;
@@ -41,6 +43,7 @@ export type ExtensionRuntimeState = {
 };
 
 export type WorkflowState = ReturnType<typeof createWorkflowState>;
+export type ParallelBatchState = ReturnType<typeof createParallelBatch>;
 
 export function createExtensionRuntimeState(): ExtensionRuntimeState {
   return {

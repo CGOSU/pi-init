@@ -297,13 +297,14 @@ test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async (
 test("扩展注册工作流工具、命令和生命周期处理器", async () => {
   const harness = createExtensionHarness();
   const toolNames = harness.tools.map((tool) => tool.name).sort();
-  assert.deepEqual(toolNames, ["edit", "init_project", "switch_role", "task_workflow"]);
+  assert.deepEqual(toolNames, ["edit", "init_project", "parallel_batch", "switch_role", "task_workflow"]);
   assert.ok(harness.commands.has("pi-init"));
   assert.ok(harness.handlers.has("session_start"));
   assert.ok(harness.handlers.has("input"));
   assert.ok(harness.handlers.has("agent_start"));
   assert.ok(harness.handlers.has("agent_settled")); assert.ok(harness.handlers.has("tool_call"));
   assert.ok(harness.renderers.has("pi-init-run-timing"));
+  assert.ok(harness.renderers.has("pi-init-parallel-batch"));
   const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
   assert.ok(workflowTool);
   assert.equal(typeof workflowTool.renderResult, "function");

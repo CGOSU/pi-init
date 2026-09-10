@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_EXECUTORS, WORKFLOW_MODES } from "../src/roles.js";
 import { WORKFLOW_MAX_TASKS } from "../src/workflow.js";
+import { PARALLEL_BATCH_MAX_WORKERS } from "../src/parallel-batch.js";
 
 export type RoleModelConfig = {
   provider: string;
@@ -110,6 +111,31 @@ export const workflowTaskSchema = Type.Object({
   }),
   role: Type.Optional(workflowTaskRoleSchema),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
+});
+
+export const parallelBatchTaskSchema = Type.Object({
+  id: Type.String({ description: "并行任务 ID，小写字母、数字、点、下划线或连字符" }),
+  task: Type.String({ description: "独立 worker 的任务目标" }),
+  files: Type.Array(Type.String(), { minItems: 1, description: "该 worker 允许修改的相对文件/目录范围" }),
+  acceptanceCriteria: Type.Array(Type.String(), { minItems: 1, description: "该 worker 的实际验收标准" }),
+});
+
+export const parallelBatchParameters = Type.Object({
+  action: StringEnum(["start", "status", "cancel", "integrate", "complete", "retry"] as const, {
+    description: "并行批次动作",
+  }),
+  batchId: Type.Optional(Type.String({ description: "批次 ID；start 时可省略自动生成" })),
+  baseRef: Type.Optional(Type.String({ description: "固定基线 Git ref，默认 HEAD；start 时使用" })),
+  workflowTaskId: Type.Optional(Type.String({ description: "关联当前 local task_workflow 任务" })),
+  tasks: Type.Optional(Type.Array(parallelBatchTaskSchema, {
+    minItems: 1,
+    maxItems: PARALLEL_BATCH_MAX_WORKERS,
+    description: `独立并行任务，最多 ${PARALLEL_BATCH_MAX_WORKERS} 个`,
+  })),
+  taskId: Type.Optional(Type.String({ description: "retry 时要重试的任务 ID" })),
+  verification: Type.Optional(Type.Array(Type.String(), { minItems: 1, description: "集成后实际执行的验证命令和结果" })),
+  changedFiles: Type.Optional(Type.Array(Type.String(), { description: "集成工作区实际变更文件" })),
+  reason: Type.Optional(Type.String({ description: "cancel 或集成阻塞原因" })),
 });
 
 export const taskWorkflowParameters = Type.Object({

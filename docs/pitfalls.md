@@ -14,6 +14,30 @@
 
 ## 已知问题
 
+### 2026-09-10：Windows 下不能把 pi.cmd 直接交给 shell=false 的 Node 子进程
+
+- 日期：2026-09-10；
+- 现象：使用 Node `child_process.execFile`/`spawn` 且 `shell: false` 直接启动 `pi.cmd` 会返回 `EINVAL`；并发 worker 可能被误报为退出失败或残留。
+- 根因：Windows `.cmd` 是命令脚本而不是可直接 CreateProcess 的 PE；Pi npm 安装通常通过该 shim 转发到 Node 和 cli.js。
+- 修复：worker 在 Pi 扩展运行时优先复用当前 `process.execPath + process.argv[1]` 的 CLI 路径；无法定位时使用 `cmd.exe /d /s /c pi.cmd`，并传递 AbortSignal/5 分钟超时；worker 失败时取消同批次其他进程。
+- 验证：`execFile("pi.cmd", ["--version"])` 实测返回 `EINVAL`；`execFile("cmd.exe", ["/d", "/s", "/c", "pi.cmd", "--version"])` 实测成功返回 Pi 版本；对应 worker 单元测试通过。真实模型请求仍受当前网络/Provider 响应限制。
+
+### 2026-09-10：不能用 execFile 包装器替代 Pi 的 pi.exec 做 worker E2E
+
+- 日期：2026-09-10；
+- 现象：临时 E2E 用 `child_process.execFile` 启动 Pi 时，worker 长时间无 stdout，超时异常被包装脚本误记为 `code=1`；同一任务通过 Pi 扩展内真实 `pi.exec`（其实现使用 `spawn` 和 `stdio: ["ignore", "pipe", "pipe"]`）可以完成。
+- 根因：测试包装器的 Windows 子进程/stdio 等待语义与 Pi 生产执行器不同，并把字符串/null 的超时 code 强制映射成数字 1；PowerShell here-string 还可能把中文参数编码成问号。
+- 修复：生产验证通过 Pi 扩展内 `pi.exec` 执行；外部诊断必须使用 `spawn`、显式关闭 stdin、保留真实 killed/timeout 信息，并避免通过非 UTF-8 管道传递任务文本。
+- 验证：临时扩展使用真实 `pi.exec`、Pi 0.85.1、`openai-codex/gpt-5.6-luna` 和只读任务返回 `outcome: complete`；此前 execFile 路径重复超时；双 worker + gmc 完整 E2E 仍未完成。
+
+### 2026-09-10：gmc promote 文档与实际行为不一致
+
+- 日期：2026-09-10；
+- 现象：README 的 Features 表仍将 `gmc wt promote <temp> <name>` 描述为重命名临时分支；v0.10.1 源码帮助和实际命令只接受一个候选参数，执行的是把候选未提交改动应用到父工作区，且不提交、不删除候选工作区；传入两个参数会报错。
+- 根因：README 与 CLI 源码行为未同步。
+- 修复：pi-init 集成以 v0.10.1 CLI 实际行为为准，将 promote 视为需显式授权的候选改动集成，不实现重命名假设；后续文档收尾需同步外部参数说明。
+- 验证：系统临时目录下载的 v0.10.1 Windows x86_64 二进制通过 release checksums 校验；临时 Git 仓库执行 `gmc wt promote .dup-1 --dry-run` 和真实 promote，分别只预览和应用候选改动；未执行真实项目集成。
+
 ### 2026-09-02：上下文压缩后不能只恢复任务内容
 
 - 日期：2026-09-02；

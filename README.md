@@ -13,6 +13,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排，由各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写 task_workflow 输入顺序。
 - 工作流执行器默认是 `local`；可选择 `subtask`，由主会话调用 `subtask` 工具把当前任务委派到独立的对话 fork，fork 完成后把结果消息带回会话并自动推进，主会话仍拥有唯一的工作流状态。
+- 提供独立的 `parallel_batch` 工具：由 Pi 主会话协调，使用 gmc v0.10.1 创建最多 2 个不重叠范围的 sibling worktree，启动独立 Pi worker，并在另一个 integration worktree 中串行集成；不会自动完成 `task_workflow`、commit 或 push。
 - 未进入 `task_workflow` 的普通外部 Agent 执行会在 TUI 中显示开始时间、结束时间和总耗时报告，并与工作流任务完成报告分开。
 - TUI 状态栏另有独立的 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认 `R缓存读`、`W缓存写` 或两者。请求已发送但 usage 尚未到达时显示“缓存判定中”，零值或未报告不会被推断为命中、写入或未命中；`message_end` 的最终 usage 为权威结果。不同 Provider 可能只在流式结束附近报告缓存数据，因此 R/W 不能保证从请求开始就实时可见。该状态不替换默认 Footer，也不写入 session 或 DuckDB。
 - 自动模式在真实跨角色，或编排中的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
@@ -51,6 +52,8 @@ pi install npm:pi-subtask
 ```
 
 未安装该扩展时请保持 `workflowExecutor: "local"`；`subtask` 模式会在缺少工具时安全阻塞当前任务。旧配置值 `subagents` 会自动映射到 `subtask`，不会切换到已停止接入的 `@tintinweb/pi-subagents` RPC 执行器。
+
+若要使用 `parallel_batch`，还需要在 PATH 中安装 **gmc v0.10.1**；Windows x64 可从 [v0.10.1 release](https://github.com/samzong/gmc/releases/tag/v0.10.1) 下载 `gmc_Windows_x86_64.zip`，不要使用未核验的其他版本。`parallel_batch` 会为每次 gmc 操作使用临时空配置，并在创建 worktree 前拒绝启用的 gmc hooks/shared resources；不会调用 `gmc wt share`，也不会自动共享 `.env`、`node_modules`、数据库或构建输出。缺少 gmc、版本不匹配、非零退出、坏 JSON、基线漂移或共享/Hook 预检失败都会显式失败，不会回退到自研 worktree。
 
 仅当前会话临时使用：
 
@@ -262,6 +265,24 @@ flowchart LR
 fork 返回的结果必须携带符合 `pi-init/task-result@1` 的严格 JSON；只有 `outcome: "complete"` 且包含实现原因和真实验证记录的结果才会完成任务。无效结果、非 done 状态或缺少 `subtask` 工具都会安全阻塞任务，而不会猜测性推进。运行中的 fork 由 pi-subtask 面板管理，可在其中停止或查看；pi-init 取消或阻塞工作流时不会伪造任务完成，必要时仍需人工确认 fork 状态。
 
 reload 不会自动重新派发非终态的已委派任务，以避免共享工作区并发写入。持久化的 delegation 只用于状态展示和人工恢复；旧配置值 `subagents`（pi-subagents RPC）自动映射到 `subtask`，但不会把工作流切换到已停止接入的 RPC 执行器。
+
+### parallel_batch 独立并行批次
+
+`parallel_batch` 与 `subtask` 是两条不同路径：`subtask` 在共享工作区顺序执行；`parallel_batch` 使用 gmc worktree 隔离两个独立开发任务。它不修改既有 `task_workflow` 的状态机；如果当前存在 `local` 工作流，会把批次记录为当前任务的协作批次，但 worker 成功不会自动调用 `task_workflow.complete`。
+
+典型调用顺序：
+
+```text
+parallel_batch(action="start", baseRef="HEAD", tasks=[最多 2 个独立任务])
+parallel_batch(action="status")
+parallel_batch(action="integrate")
+# 在返回的 integration worktree 中运行项目验证
+parallel_batch(action="complete", verification=["实际命令和结果"], changedFiles=["实际变更文件"])
+```
+
+`start` 固定 `baseRef` 解析出的 commit，校验相对文件范围不重叠，然后使用 `gmc wt add` 创建每个 worker worktree 和一个独立 integration worktree。worker 使用独立 Pi 进程、当前角色的完整 `provider/model` 和受控工具集；worker 不创建 worktree、调用 `task_workflow`、commit 或 push。Windows 下 Pi 子进程通过 `cmd.exe`/`pi.cmd` 或 Pi 运行时自身的 CLI 路径启动。
+
+`integrate` 只把候选 worktree 按任务顺序 promote 到 integration worktree，不写主工作区；发生冲突或验证失败时保留 integration 和候选产物并阻塞。`complete` 会读取 integration worktree 的真实 `git diff --name-only`，要求 `changedFiles` 与实际结果一致，并要求提供非空的实际 verification。批次取消、Pi 会话关闭、reload 或恢复不会自动重新派发；未终态批次必须显式 `retry`、`cancel` 或处理阻塞原因。除明确的 gmc worktree 创建和候选 promote 外，不会自动清理、删除、commit、push 或生成 PR。
 
 工作流进入阻塞状态时，状态报告、TUI 弹窗、工具结果和暂停通知都会同时显示具体阻塞原因及建议解决方法。解决原因后执行 `/pi-init workflow retry <taskId>`；如果需求或方案已改变，由架构师通过 `task_workflow(action="replan")` 重规划。
 

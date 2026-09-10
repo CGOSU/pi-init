@@ -47,6 +47,9 @@ metadata:
 - `workflowMode: off` 拒绝新规划，`on` 始终编排，`auto` 对不超过两个低风险任务走直接角色顺序；`reviewRequired` 只有用户一开始明确要求架构审阅时才为 `true`。
 - 当前任务必须由实际执行角色完成并真实验证后调用 `complete`；缺少需求、权限、凭据、破坏性操作确认或无法恢复时调用 `block`，不得用默认值或空结果掩盖失败。
 - 活动工作流的普通方向变更在当前任务边界合并为一个 revision；应用新计划前不得启动旧后续任务。`subtask` 下 fork 不写工作流状态、不建 worktree、不合并、提交或推送，并返回严格的 `pi-init/task-result@1` 结果。
+- `parallel_batch` 是独立于 `task_workflow` 的受控并行路径：仅在受信任项目和正确职责下使用 gmc v0.10.1，最多 2 个真正独立且文件范围不重叠的 worker；固定 commit、独立 worktree、attempt 和严格结果绑定。主扩展是唯一批次状态写入者，worker 不调用 `task_workflow`、创建 worktree、修改主工作区、commit 或 push。
+- `parallel_batch` 创建前必须使用临时空 gmc 配置并只读检查 hooks/shared resources；默认不调用 `gmc wt share`，不共享 `.env`、`node_modules`、数据库或构建输出。候选结果只能串行集成到独立 integration worktree；完成前必须读取真实 `git diff` 并提供实际验证，不能把 worker 成功自动转换为 `task_workflow.complete`。
+- `parallel_batch` 的状态持久化到当前 Pi session；reload、session replacement、shutdown、取消、过期或未知 worker 生命周期不得自动重新派发。gmc 缺失、版本/基线/路径校验失败、非零退出、坏结果、范围越界、冲突和验证失败都必须显式阻塞并保留可恢复产物。
 
 ## 交付
 
