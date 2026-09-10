@@ -473,7 +473,8 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /运行时守卫对无效或歧义写入 fail-closed/);
   assert.match(sharedSkill, /充分证据不重复读取/);
   assert.match(roleProfiles[0], /低风险判断可直接使用受限只读探索/);
-  assert.match(roleProfiles[1], /用真实命令验证结果/);
+  assert.match(roleProfiles[1], /按风险选择验证范围/);
+  assert.match(roleProfiles[1], /不默认运行全量测试、类型检查或构建/);
   assert.match(roleProfiles[2], /交接结构化证据包/);
   assert.doesNotMatch([...roleProfiles, sharedSkill].join("\n"), /## 精确文件修改|逐项预检.*oldText.*逻辑快照/);
   assert.match(sharedSkill, /roles\/architect\.md/);

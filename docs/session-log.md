@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-10：确认简单任务采用最小验证策略
+
+- 决定：用户确认简单、局部、低风险任务只做实现，不创建 `task_workflow`，不启动 `subtask`/`parallel_batch`，不默认运行全量测试、类型检查或构建；纯文档、文案、注释和样式修改只做必要的差异/静态核对。高风险边界、安全措施、输入校验、数据不丢失处理、无障碍基础和用户明确要求的验证继续保留。
+- 同步：已更新 `docs/decisions.md`、公共 `pi-init-role-routing` Skill、`developer-test` 角色说明、README 和当前状态；未修改工作流、subtask 或 parallel_batch 协议。
+- 验证与遗留：本次为规则/文档修改，未运行 npm 命令；后续简单任务须明确报告未执行的验证，不得将其描述为通过。当前修改尚未提交或推送。
+
 ### 2026-09-10：定位 Pi worker “退出”问题
 
 - 事实：此前全量临时 E2E 的 `code=1` 不是 gmc worktree 创建失败。测试脚本使用 `child_process.execFile` 包装 Pi，超时异常的 `error.code` 为字符串/null，被脚本映射为数字 1；首次脚本还没有显式关闭 stdin。另一次 PowerShell here-string 向 Node 传递中文任务时出现 `?`，Pi 因任务/验收不可解析返回 `blocked`。

@@ -50,6 +50,7 @@
 
 ## 最近一次更新
 
+- 2026-09-10：按用户确认增加简单任务的最小验证策略：不创建工作流或启动 worker，不默认运行全量测试、类型检查或构建；高风险边界和明确验证要求不受影响。已同步决策、公共 Skill、developer-test 角色和 README，尚未再次提交或推送。
 - 2026-09-10：复核 Pi worker 退出问题并修正诊断/提示；确认生产 `pi.exec` + Pi CLI 路径可完成最小 worker，`npm test` 130 项通过。此前临时 E2E 的 `execFile` 包装器把超时/子进程退出映射为 code=1，PowerShell 管道还会将中文任务转换为问号；双 worker + gmc 完整 E2E 仍待在稳定终端链路复测，详见 `docs/session-log.md`。
 - 2026-09-10：完成 gmc v0.10.1 Windows x64 外部契约取证；确认固定基线、独立 worktree、任务文件复制、JSON 列表、候选 promote 和非零错误退出行为。未执行本项目安装或源码实现；详见 `docs/session-log.md`。
 - 2026-09-09：项目记忆文档的日期记录统一按倒序排列，最新条目在前；已同步 `session-log.md`、`decisions.md`、`pitfalls.md`、`current-state.md`、中英文模板、协作规则和 `docs-commit` 角色说明。静态规则文档不纳入时间排序，其他既有项目不会通过脚手架或包更新自动重排本地历史记录。
