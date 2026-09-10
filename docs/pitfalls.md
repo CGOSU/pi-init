@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-11：parallel_batch retry 的 Working 不是可观察的后台等待
+
+- 日期：2026-09-11；
+- 现象：修复前，retry 已将失败任务恢复为 `running`，但主工具调用同步等待 Pi 子进程；模型正在工具调用或测试时，界面长时间显示 `Working`，用户无法在同一调用期间执行 status/cancel。
+- 根因：扩展在 `parallel_batch` 工具执行期间直接 await worker；此外，Pi 子进程被终止时 Windows 可能返回 `code=0`，最后一条 assistant 消息又可能只有 `stopReason=toolUse`，组合后会产生误导性错误。
+- 修复：start/retry 改为后台启动，状态持久化后由 status 查询，终态发送 follow-up 通知，cancel 通过活动 AbortController 中止；worker 先检查 `killed`/退出码，再解析最终 JSON，非 killed 的 `toolUse` 归类为缺少最终结果；运行结果校验生命周期、batch/attempt，session_tree 后旧 worker 不得覆盖当前分支。
+- 验证：`npm test`，138 项全部通过；真实双 worker + gmc + 远程模型 E2E 仍未执行。
+
 ### 2026-09-11：parallel_batch worker 会因离线标志和结果回收策略表现为卡住
 
 - 日期：2026-09-11；

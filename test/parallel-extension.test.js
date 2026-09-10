@@ -75,6 +75,15 @@ function workerOutput(prompt) {
   return `${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(result) }] } })}\n`;
 }
 
+async function waitForBatch(harness, predicate) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const data = harness.branch.at(-1)?.data;
+    if (data && predicate(data)) return data;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("并行批次后台状态未按预期完成");
+}
+
 async function makeHarness(directory, exec, model = { provider: "openai-codex", id: "gpt-5.6-luna" }) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify(roleConfig(), null, 2)}\n`, "utf8");
@@ -137,7 +146,12 @@ test("parallel_batch 接入 Pi、gmc 和独立 integration worktree，且不完�
         { id: "ui", task: "UI", files: ["src/ui"], acceptanceCriteria: ["完成"] },
       ],
     }, undefined, undefined, harness.context);
-    assert.equal(started.details.status, "awaiting-integration");
+    assert.ok(["running", "awaiting-integration"].includes(started.details.status));
+    const finished = await waitForBatch(harness, (data) => data.status === "awaiting-integration");
+    assert.equal(finished.tasks.filter((task) => task.status === "completed").length, 2);
+    const completionMessages = harness.sentMessages.filter((item) => item.message.customType === "pi-init-parallel-batch-result");
+    assert.equal(completionMessages.length, 1);
+    assert.match(completionMessages[0].message.content, /action="integrate"/);
     assert.equal(harness.branch.filter((entry) => entry.customType === "pi-init-workflow").length, 0);
     assert.equal(harness.branch.filter((entry) => entry.customType === "pi-init-parallel-batch").length > 0, true);
     assert.equal(calls.filter((call) => call.args.some((arg) => arg.includes("parallel_batch"))).length, 2);
@@ -190,10 +204,127 @@ test("parallel_batch 保留成功 worker 并显示失败原因", async () => {
         { id: "ui", task: "UI", files: ["src/ui"], acceptanceCriteria: ["完成"] },
       ],
     }, undefined, undefined, harness.context);
-    assert.equal(started.details.status, "blocked");
-    assert.equal(started.details.tasks.find((task) => task.id === "ui").status, "completed");
-    assert.match(started.content[0].text, /worker api 失败/);
-    assert.match(tool.renderResult(started, {}, harness.context.ui.theme).render(240).join("\\n"), /worker api 失败/);
+    assert.ok(["running", "blocked"].includes(started.details.status));
+    const blocked = await waitForBatch(harness, (data) => data.status === "blocked");
+    assert.equal(blocked.tasks.find((task) => task.id === "ui").status, "completed");
+    const status = await tool.execute("parallel-status", { action: "status" }, undefined, undefined, harness.context);
+    assert.match(status.content[0].text, /worker api 失败/);
+    assert.match(tool.renderResult(status, {}, harness.context.ui.theme).render(240).join("\\n"), /worker api 失败/);
+    const completionMessages = harness.sentMessages.filter((item) => item.message.customType === "pi-init-parallel-batch-result");
+    assert.equal(completionMessages.length, 1);
+    assert.match(completionMessages[0].message.content, /已阻塞/);
+  });
+});
+
+test("parallel_batch retry 在后台执行并支持等待期间取消", async () => {
+  await withTempDirectory(async (fixture) => {
+    const base = worktree("repo", fixture);
+    const worktrees = [base];
+    let apiAttempts = 0;
+    let retryPrompt;
+    let releaseRetry;
+    const retryPending = new Promise((resolve) => {
+      releaseRetry = resolve;
+    });
+    const exec = async (command, args) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: `${baseCommit}\n`, stderr: "" };
+      if (command === "gmc.exe" && args.includes("version")) return { code: 0, stdout: "gmc version 0.10.1\n", stderr: "" };
+      if (command === "gmc.exe" && args.includes("hook")) return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gmc.exe" && args.includes("share")) return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gmc.exe" && args.includes("add")) {
+        const name = args[args.indexOf("add") + 1];
+        const item = worktree(name, path.join(path.dirname(fixture), `${path.basename(fixture)}--${name}-worktree`));
+        worktrees.push(item);
+        return { code: 0, stdout: "created", stderr: "" };
+      }
+      if (command === "gmc.exe" && args.includes("list")) return { code: 0, stdout: JSON.stringify(worktrees), stderr: "" };
+      if (args.includes("--mode") && args.includes("json") && args.includes("-p")) {
+        const prompt = args.at(-1);
+        if (prompt.includes("任务：api")) {
+          apiAttempts += 1;
+          if (apiAttempts === 1) return { code: 1, stdout: "", stderr: "首次失败" };
+          retryPrompt = prompt;
+          return retryPending;
+        }
+        return { code: 0, stdout: workerOutput(prompt), stderr: "" };
+      }
+      throw new Error(`unexpected ${command} ${args.join(" ")}`);
+    };
+    const { harness } = await makeHarness(fixture, exec);
+    const tool = harness.tools.find((item) => item.name === "parallel_batch");
+    assert.ok(tool);
+
+    await tool.execute("parallel-start", {
+      action: "start",
+      batchId: "batch-retry-background",
+      baseRef: "HEAD",
+      tasks: [
+        { id: "api", task: "API", files: ["src/api"], acceptanceCriteria: ["完成"] },
+        { id: "ui", task: "UI", files: ["src/ui"], acceptanceCriteria: ["完成"] },
+      ],
+    }, undefined, undefined, harness.context);
+    await waitForBatch(harness, (data) => data.status === "blocked");
+
+    const retried = await tool.execute("parallel-retry", {
+      action: "retry",
+      batchId: "batch-retry-background",
+      taskId: "api",
+    }, undefined, undefined, harness.context);
+    assert.equal(retried.details.status, "running");
+    assert.match(retried.content[0].text, /后台运行/);
+    assert.match(retried.content[0].text, /单个最长 5 分钟/);
+    const cancelled = await tool.execute("parallel-cancel", {
+      action: "cancel",
+      batchId: "batch-retry-background",
+      reason: "测试取消",
+    }, undefined, undefined, harness.context);
+    assert.equal(cancelled.details.status, "cancelled");
+    assert.ok(retryPrompt);
+    releaseRetry({ code: 0, stdout: workerOutput(retryPrompt), stderr: "" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.branch.at(-1)?.data.status, "cancelled");
+  });
+});
+
+test("parallel_batch session_tree 后不会接收旧 worker 结果", async () => {
+  await withTempDirectory(async (fixture) => {
+    const base = worktree("repo", fixture);
+    const worktrees = [base];
+    let prompt;
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const exec = async (command, args) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: `${baseCommit}\n`, stderr: "" };
+      if (command === "gmc.exe" && args.includes("version")) return { code: 0, stdout: "gmc version 0.10.1\n", stderr: "" };
+      if (command === "gmc.exe" && args.includes("hook")) return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gmc.exe" && args.includes("share")) return { code: 0, stdout: "[]", stderr: "" };
+      if (command === "gmc.exe" && args.includes("add")) {
+        const name = args[args.indexOf("add") + 1];
+        const item = worktree(name, path.join(path.dirname(fixture), `${path.basename(fixture)}--${name}-worktree`));
+        worktrees.push(item);
+        return { code: 0, stdout: "created", stderr: "" };
+      }
+      if (command === "gmc.exe" && args.includes("list")) return { code: 0, stdout: JSON.stringify(worktrees), stderr: "" };
+      if (args.includes("--mode") && args.includes("json") && args.includes("-p")) {
+        prompt = args.at(-1);
+        return pending;
+      }
+      throw new Error(`unexpected ${command} ${args.join(" ")}`);
+    };
+    const { harness } = await makeHarness(fixture, exec);
+    const tool = harness.tools.find((item) => item.name === "parallel_batch");
+    await tool.execute("parallel-start-tree", {
+      action: "start",
+      batchId: "batch-tree-isolation",
+      tasks: [{ id: "api", task: "API", files: ["src/api"], acceptanceCriteria: ["完成"] }],
+    }, undefined, undefined, harness.context);
+    assert.ok(prompt);
+    harness.branch.splice(0);
+    await emitExtensionEvent(harness, "session_tree");
+    assert.equal((await tool.execute("parallel-status-tree", { action: "status" }, undefined, undefined, harness.context)).details, undefined);
+    release({ code: 0, stdout: workerOutput(prompt), stderr: "" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.branch.length, 0);
   });
 });
 

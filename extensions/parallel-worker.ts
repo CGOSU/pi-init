@@ -19,7 +19,7 @@ export type ParallelWorkerSpec = {
 };
 
 type ExecResult = { code: number | null; stdout?: string; stderr?: string; killed?: boolean };
-const PARALLEL_WORKER_TIMEOUT_MS = 5 * 60 * 1000;
+export const PARALLEL_WORKER_TIMEOUT_MS = 5 * 60 * 1000;
 type Exec = (command: string, args: string[], options: { cwd: string; signal?: AbortSignal; timeout?: number }) => Promise<ExecResult>;
 
 function diagnosticText(value: string | undefined) {
@@ -83,8 +83,9 @@ function finalAssistantText(stdout: string) {
   const message = messages.at(-1);
   const text = message?.content?.find((part) => part.type === "text")?.text;
   if (!text) {
-    const providerError = message?.errorMessage || (message?.stopReason && message.stopReason !== "pending" ? `stopReason=${message.stopReason}` : "");
-    throw new Error(providerError ? `Pi worker provider 失败：${providerError}` : "Pi worker未返回最终 assistant 结果");
+    if (message?.errorMessage) throw new Error(`Pi worker provider 失败：${message.errorMessage}`);
+    const stopReason = message?.stopReason && message.stopReason !== "pending" ? `（stopReason=${message.stopReason}）` : "";
+    throw new Error(`Pi worker未返回最终 assistant 结果${stopReason}`);
   }
   const trimmed = text.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
@@ -121,20 +122,18 @@ export async function runParallelWorker(
     timeout: PARALLEL_WORKER_TIMEOUT_MS,
   });
   if (signal?.aborted) throw new Error("并行 worker 已取消");
+  const diagnostic = diagnosticText(result.stderr);
+  if (result.killed || result.code !== 0) {
+    const reason = result.killed
+      ? `被终止（可能是超时或取消，code=${result.code ?? "unknown"}）`
+      : `退出失败（code=${result.code ?? "unknown"}）`;
+    throw new Error(`Pi worker${reason}${diagnostic ? `；stderr：${diagnostic}` : ""}`);
+  }
   let output;
   try {
     output = finalAssistantText(result.stdout ?? "");
   } catch (error) {
-    const suffix = error instanceof Error ? `：${error.message}` : "";
-    const diagnostic = diagnosticText(result.stderr);
-    if (result.killed || result.code !== 0) {
-      throw new Error(`Pi worker退出失败（code=${result.code ?? "unknown"}）${suffix}${diagnostic ? `；stderr：${diagnostic}` : ""}`);
-    }
     throw new Error(`${error instanceof Error ? error.message : String(error)}${diagnostic ? `；stderr：${diagnostic}` : ""}`);
-  }
-  if (result.killed || result.code !== 0) {
-    const diagnostic = diagnosticText(result.stderr);
-    throw new Error(`Pi worker退出失败（code=${result.code ?? "unknown"}）${diagnostic ? `；stderr：${diagnostic}` : ""}`);
   }
   return parseParallelWorkerResult(output, {
     batchId: value.batchId,

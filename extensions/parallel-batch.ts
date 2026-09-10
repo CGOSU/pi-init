@@ -23,24 +23,21 @@ import {
   startParallelWorker,
 } from "../src/parallel-batch.js";
 import { createGmcClient, getGmcCommand } from "../src/gmc-client.js";
-import { runParallelWorker, type ParallelWorkerSpec } from "./parallel-worker.ts";
+import { PARALLEL_WORKER_TIMEOUT_MS, runParallelWorker, type ParallelWorkerSpec } from "./parallel-worker.ts";
 import { textOf, type ExtensionRuntimeState, type ParallelBatchState, type WorkflowState } from "./runtime-state.ts";
-
 const PARALLEL_ENTRY_TYPE = "pi-init-parallel-batch";
 const ACTIVE_BATCH_STATUSES = new Set(["planned", "running", "awaiting-integration", "integrating"]);
-
 type ParallelBatchDependencies = {
   roleRuntime: RoleRuntime;
   getWorkflowState: () => WorkflowState | undefined;
 };
-
 type ToolUpdate = (result: { content: Array<{ type: "text"; text: string }>; details?: unknown }) => void;
-
 function stateText(state: ParallelBatchState) {
   const progress = parallelBatchProgress(state);
+  const waiting = state.status === "running" ? ` · 等待 worker（单个最长 ${PARALLEL_WORKER_TIMEOUT_MS / 60_000} 分钟）` : "";
   const integration = state.integration ? ` · 集成 ${state.integration.path}` : "";
   const reason = state.status === "blocked" && state.blockReason ? ` · 原因 ${state.blockReason}` : "";
-  return `批次 ${state.batchId} · ${state.status} · ${progress.completed}/${progress.total} 完成 · ${progress.running} 运行中${integration}${reason}`;
+  return `批次 ${state.batchId} · ${state.status} · ${progress.completed}/${progress.total} 完成 · ${progress.running} 运行中${waiting}${integration}${reason}`;
 }
 
 function resultText(state: ParallelBatchState | undefined) {
@@ -61,7 +58,18 @@ export function createParallelBatchRuntime(
   deps: ParallelBatchDependencies,
 ) {
   let activeController: AbortController | undefined;
-
+  let lifecycleGeneration = 0;
+  let nextRunId = 0;
+  let activeRunId = 0;
+  function invalidateActiveRun() {
+    lifecycleGeneration += 1;
+    activeRunId = 0;
+    activeController?.abort();
+    activeController = undefined;
+  }
+  function isLiveRun(generation: number, runId: number) {
+    return !state.runtimeDisposed && generation === lifecycleGeneration && runId === activeRunId;
+  }
   function updateStatus(ctx: ExtensionContext) {
     ctx.ui.setStatus("pi-init-parallel", state.parallelBatchState ? stateText(state.parallelBatchState) : undefined);
   }
@@ -72,11 +80,22 @@ export function createParallelBatchRuntime(
     if (showStatus && !state.runtimeDisposed) updateStatus(ctx);
     return next;
   }
-
+  function notifyWorkerSettled(batch: ParallelBatchState, ctx: ExtensionContext) {
+    if (!["awaiting-integration", "blocked"].includes(batch.status)) return;
+    const content = batch.status === "awaiting-integration"
+      ? `parallel_batch 批次 ${batch.batchId} 的 worker 已全部完成。请调用 parallel_batch(action="integrate")，然后在集成工作区执行验证。`
+      : `parallel_batch 批次 ${batch.batchId} 已阻塞。请调用 parallel_batch(action="status") 查看原因；确认可重试的任务后再调用 action="retry"。`;
+    state.internalContinuationPending = true;
+    try {
+      pi.sendMessage({ customType: "pi-init-parallel-batch-result", content, display: false, details: batch }, { deliverAs: "followUp", triggerTurn: true });
+    } catch (error) {
+      state.internalContinuationPending = false;
+      ctx.ui.notify(`无法自动通知 parallel_batch 终态：${textOf(error)}`, "warning");
+    }
+  }
   function assertTrusted(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) throw new Error("parallel_batch 仅允许在受信任项目中运行；请先信任当前项目");
   }
-
   function assertCurrentRole(ctx: ExtensionContext, batch?: ParallelBatchState) {
     const activeRole = deps.roleRuntime.activeRoleFor(ctx);
     if (!activeRole) throw new Error("parallel_batch 需要先通过 switch_role 确认当前角色");
@@ -99,7 +118,6 @@ export function createParallelBatchRuntime(
     }
     return activeRole;
   }
-
   function linkedWorkflowTask(ctx: ExtensionContext, requested: unknown) {
     const workflow = deps.getWorkflowState();
     const id = typeof requested === "string" && requested.trim()
@@ -112,7 +130,6 @@ export function createParallelBatchRuntime(
     assertCurrentRole(ctx);
     return id;
   }
-
   async function withGmc<T>(ctx: ExtensionContext, signal: AbortSignal | undefined, run: (client: ReturnType<typeof createGmcClient>) => Promise<T>) {
     const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-gmc-"));
     const configPath = path.join(directory, "config.yaml");
@@ -142,7 +159,6 @@ export function createParallelBatchRuntime(
   function newAttemptId() {
     return `attempt-${randomUUID()}`;
   }
-
   function workerSpecs(batch: ParallelBatchState, role: { provider: string; model: string; thinkingLevel: string }) {
     return batch.tasks.filter((task) => task.status === "running").map((task) => ({
       batchId: batch.batchId,
@@ -157,17 +173,17 @@ export function createParallelBatchRuntime(
       thinkingLevel: role.thinkingLevel,
     } satisfies ParallelWorkerSpec));
   }
-
-  async function runWorkers(batch: ParallelBatchState, role: { provider: string; model: string; thinkingLevel: string }, signal: AbortSignal | undefined, onUpdate?: ToolUpdate) {
+  async function runWorkers(batch: ParallelBatchState, role: { provider: string; model: string; thinkingLevel: string }, signal: AbortSignal | undefined, ctx: ExtensionContext, generation: number, runId: number) {
+    if (state.runtimeDisposed || generation !== lifecycleGeneration) return state.parallelBatchState ?? batch;
     let next = batch;
     const pending = next.tasks.filter((task) => task.status === "pending");
     if (pending.length === 0) return next;
+    activeRunId = runId;
     for (const task of pending) {
       next = startParallelWorker(next, { taskId: task.id, attemptId: newAttemptId() });
-      persist(next, state.currentContext!, true);
+      persist(next, ctx, true);
     }
     const specs = workerSpecs(next, role);
-    onUpdate?.({ content: [{ type: "text", text: `已启动 ${specs.length} 个隔离 Pi worker。` }], details: next });
 
     const controller = new AbortController();
     activeController = controller;
@@ -183,10 +199,17 @@ export function createParallelBatchRuntime(
     ));
     try {
       const settled = await Promise.allSettled(workerPromises);
-      if (state.runtimeDisposed) return next;
+      if (!isLiveRun(generation, runId)) return state.parallelBatchState ?? next;
+      const current = state.parallelBatchState;
+      if (!current || current.batchId !== batch.batchId) return current ?? next;
+      const sameRun = specs.every((spec) => {
+        const task = current.tasks.find((candidate) => candidate.id === spec.taskId);
+        return task?.status === "running" && task.attemptId === spec.attemptId;
+      });
+      if (!sameRun || current.status !== "running") return current;
       if (signal?.aborted) {
         next = cancelParallelBatch(next, "当前 Pi 回合被取消");
-        persist(next, state.currentContext!, true);
+        persist(next, ctx, true);
         return next;
       }
       const ordered = settled
@@ -203,7 +226,7 @@ export function createParallelBatchRuntime(
           if (next.status !== "running") continue;
           try {
             next = recordParallelWorkerResult(next, item.value);
-            persist(next, state.currentContext!, true);
+            persist(next, ctx, true);
           } catch (error) {
             if (next.status === "running") {
               next = recordParallelWorkerFailure(next, {
@@ -211,7 +234,7 @@ export function createParallelBatchRuntime(
                 attemptId: specs[index].attemptId,
                 reason: `worker 结果无效：${textOf(error)}`,
               });
-              persist(next, state.currentContext!, true);
+              persist(next, ctx, true);
             }
           }
         } else if (next.status === "running") {
@@ -222,20 +245,36 @@ export function createParallelBatchRuntime(
               attemptId: specs[index].attemptId,
               reason: textOf(item.reason),
             });
-            persist(next, state.currentContext!, true);
+            persist(next, ctx, true);
           }
         }
       }
       if (["running", "blocked"].includes(next.status) && next.tasks.some((task) => ["running", "cancel-requested"].includes(task.status))) {
         next = blockParallelBatchForRecovery(next, "并行 worker 结果未完整到达，已停止自动续跑");
-        persist(next, state.currentContext!, true);
+        persist(next, ctx, true);
       }
-      onUpdate?.({ content: [{ type: "text", text: resultText(next) }], details: next });
+      if (["awaiting-integration", "blocked"].includes(next.status)) notifyWorkerSettled(next, ctx);
       return next;
     } finally {
       if (signal) signal.removeEventListener("abort", relayAbort);
       if (activeController === controller) activeController = undefined;
+      if (activeRunId === runId) activeRunId = 0;
     }
+  }
+
+  function launchWorkers(batch: ParallelBatchState, role: { provider: string; model: string; thinkingLevel: string }, ctx: ExtensionContext, onUpdate?: ToolUpdate) {
+    const count = batch.tasks.filter((task) => task.status === "pending").length;
+    const generation = lifecycleGeneration;
+    const runId = ++nextRunId;
+    onUpdate?.({ content: [{ type: "text", text: `已在后台启动 ${count} 个隔离 Pi worker，可调用 status 查看进度。` }], details: batch });
+    void runWorkers(batch, role, undefined, ctx, generation, runId).catch((error) => {
+      if (!isLiveRun(generation, runId)) return;
+      const current = state.parallelBatchState;
+      if (!current || current.batchId !== batch.batchId || current.status !== "running") return;
+      const next = blockParallelBatchForRecovery(current, `并行 worker 运行失败：${textOf(error)}`);
+      persist(next, ctx, true);
+      notifyWorkerSettled(next, ctx);
+    });
   }
 
   async function startBatch(params: any, signal: AbortSignal | undefined, ctx: ExtensionContext, onUpdate?: ToolUpdate) {
@@ -277,7 +316,8 @@ export function createParallelBatchRuntime(
         persist(batch, ctx);
         throw error;
       }
-      return runWorkers(batch, role, signal, onUpdate);
+      launchWorkers(batch, role, ctx, onUpdate);
+      return state.parallelBatchState ?? batch;
     });
   }
 
@@ -357,8 +397,12 @@ export function createParallelBatchRuntime(
       const role = assertCurrentRole(ctx, batch);
       const retried = retryParallelWorker(batch, params.taskId);
       persist(retried, ctx);
-      const next = await runWorkers(retried, role, signal, onUpdate);
-      return { content: [{ type: "text", text: resultText(next) }], details: next };
+      launchWorkers(retried, role, ctx, onUpdate);
+      const next = state.parallelBatchState ?? retried;
+      const guidance = next.status === "running"
+        ? "\nworker 已在后台运行，可稍后调用 status；必要时可调用 cancel。"
+        : "";
+      return { content: [{ type: "text", text: `${resultText(next)}${guidance}` }], details: next };
     }
     if (params.action === "integrate") {
       const next = await integrateBatch(batch, signal, ctx);
@@ -372,6 +416,7 @@ export function createParallelBatchRuntime(
   }
 
   function restore(ctx: ExtensionContext) {
+    state.currentContext = ctx;
     const entry = ctx.sessionManager.getBranch().findLast(
       (item) => item.type === "custom" && item.customType === PARALLEL_ENTRY_TYPE,
     );
@@ -389,14 +434,13 @@ export function createParallelBatchRuntime(
   }
 
   function shutdown(ctx: ExtensionContext) {
+    invalidateActiveRun();
     state.runtimeDisposed = true;
-    activeController?.abort();
     if (isActive(state.parallelBatchState)) {
       const next = blockParallelBatchForRecovery(state.parallelBatchState, "Pi 会话关闭，worker 状态未知；未自动重派");
       persist(next, ctx, false);
     }
     ctx.ui.setStatus("pi-init-parallel", undefined);
-    activeController = undefined;
   }
 
   pi.registerEntryRenderer(PARALLEL_ENTRY_TYPE, (entry, { expanded }, theme) => {
@@ -439,10 +483,14 @@ export function createParallelBatchRuntime(
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    invalidateActiveRun();
     state.runtimeDisposed = false;
     restore(ctx);
   });
-  pi.on("session_tree", async (_event, ctx) => restore(ctx));
+  pi.on("session_tree", async (_event, ctx) => {
+    invalidateActiveRun();
+    restore(ctx);
+  });
   pi.on("session_shutdown", async (_event, ctx) => shutdown(ctx));
 
   return { restore, shutdown, statusText: () => resultText(state.parallelBatchState) };

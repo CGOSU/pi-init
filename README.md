@@ -268,7 +268,7 @@ reload 不会自动重新派发非终态的已委派任务，以避免共享工�
 
 ### parallel_batch 独立并行批次
 
-`parallel_batch` 与 `subtask` 是两条不同路径：`subtask` 在共享工作区顺序执行；`parallel_batch` 使用 gmc worktree 隔离两个独立开发任务。它不修改既有 `task_workflow` 的状态机；如果当前存在 `local` 工作流，会把批次记录为当前任务的协作批次，但 worker 成功不会自动调用 `task_workflow.complete`。
+`parallel_batch` 与 `subtask` 是两条不同路径：`subtask` 在共享工作区顺序执行；`parallel_batch` 使用 gmc worktree 隔离两个独立开发任务。它不修改既有 `task_workflow` 的状态机；如果当前存在 `local` 工作流，会把批次记录为当前任务的协作批次，但 worker 成功不会自动调用 `task_workflow.complete`。start/retry 会在后台运行 worker，返回 `running` 时使用 status 查看进度，必要时使用 cancel 中止。
 
 典型调用顺序：
 

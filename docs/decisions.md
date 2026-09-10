@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-11：并行批次 worker 在后台运行并保留显式恢复控制
+
+- 决定：`parallel_batch` 的 start/retry 只负责创建并启动 worker，立即返回 `running`；worker 完成后由后台任务持久化结果并发送 follow-up 消息，用户也可通过 status 查看状态、通过 cancel 中止。回收结果必须同时匹配生命周期、batchId 和活动 attemptId，旧批次、旧 attempt 或旧 session tree 不得覆盖当前状态。
+- 原因：同步等待独立 Pi 子进程会让主会话长期显示 `Working`，也无法在等待期间调用 status/cancel；取消或切换 session tree 后允许新运行继续时，迟到结果还可能产生状态覆盖；只报告 `toolUse` 为 provider 错误会掩盖真实的“未返回最终结果”。
+- 约束：worker 仍使用独立 worktree 和固定结果协议；会话关闭仍阻塞并保留未知状态；后台异常必须进入 blocked，不得伪造完成；后台化不等于消除单 worker 的 5 分钟超时或提供实时工具流。
+
 ### 2026-09-11：独立 worker 需要保留模型网络和同批次结果
 
 - 决定：`parallel_batch` 启动 Pi worker 时不传 `--offline`，改用追加 system prompt 固定结构化结果协议；Pi JSON 输出同时从 `message_end` 和 `agent_end` 读取最终 assistant 消息。一个独立 worker 失败时不主动取消其他 worker，主会话收齐结果后保留成功候选并阻塞失败任务。

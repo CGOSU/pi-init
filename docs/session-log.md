@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-11：并行批次 worker 改为后台执行并区分终止原因
+
+- 完成内容：`parallel_batch` 的 start/retry 不再同步等待 Pi worker，返回 `running` 后可通过 status 查看并通过 cancel 中止；终态通过 follow-up 消息通知主会话。后台结果按生命周期、batch/attempt 校验，session_tree、reload、shutdown 后旧 worker 不得写入当前分支。worker 被 timeout/取消时优先报告终止原因；未被终止但只有 `toolUse` 时归类为缺少最终 assistant 结果，不再误报 provider 失败。
+- 验证：`npm test`，138 项全部通过；`git diff --check` 通过（Windows 工作区存在预期的 LF/CRLF 转换提示）。
+- 遗留：尚未执行真实双 worker + gmc + 远程模型 E2E。
+
 ### 2026-09-11：修复并行 worker 卡住和诊断不足
 
 - 完成内容：移除 worker 的 `--offline`，避免 Pi 关闭 model network；追加结构化结果 system prompt；兼容 `agent_end` 最终消息；保留同批次已成功 worker；在批次摘要显示阻塞原因；worker stderr 诊断限制长度并脱敏。新增对应回归测试。

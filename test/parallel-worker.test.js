@@ -114,6 +114,26 @@ test("worker 可从 agent_end 获取最终结果，并保留脱敏的退出诊�
   await assert.rejects(() => runParallelWorker(failing, spec("api")), /stderr：provider token=\[redacted\]/);
 });
 
+test("worker 被终止时不把 code=0 的 toolUse 误报为 provider 失败", async () => {
+  const killed = async () => ({
+    code: 0,
+    killed: true,
+    stdout: `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } })}\n`,
+    stderr: "",
+  });
+  await assert.rejects(() => runParallelWorker(killed, spec("api")), /被终止.*code=0/);
+});
+
+test("worker 未被终止时将 toolUse 归类为缺少最终结果", async () => {
+  const toolUse = async () => ({
+    code: 0,
+    stdout: `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } })}\n`,
+    stderr: "",
+  });
+  await assert.rejects(() => runParallelWorker(toolUse, spec("api")), (error) =>
+    /最终 assistant 结果.*toolUse/.test(error.message) && !/provider/.test(error.message));
+});
+
 test("worker 缺少结构化最终结果或返回错误结果时明确失败", async () => {
   const noResult = async () => ({ code: 0, stdout: "{}\n", stderr: "" });
   await assert.rejects(() => runParallelWorker(noResult, spec("api")), /最终 assistant/);
