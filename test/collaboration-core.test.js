@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import {
   createExtensionHarness,
@@ -27,7 +28,12 @@ import {
 import { processInbox, readMessageLog, sendDirect } from "../extensions/collaboration-messages.ts";
 import { listRuns } from "../extensions/collaboration-runs.ts";
 import { formatSessionTail, lastAssistantText, readSessionTail } from "../extensions/collaboration-session-tail.ts";
-import { abortSubagent, startSubagentBatch } from "../extensions/collaboration-spawn.ts";
+import {
+  abortSubagent,
+  prepareCmdShimArgs,
+  resolveCliInvocation,
+  startSubagentBatch,
+} from "../extensions/collaboration-spawn.ts";
 
 async function withCollaborationDirectory(run) {
   return withTempDirectory(async (directory) => {
@@ -51,6 +57,98 @@ async function flush() {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 }
+
+test("Windows collaboration CLI invocation avoids direct cmd shim spawning", () => {
+  const args = ["--mode", "json"];
+  assert.deepEqual(
+    resolveCliInvocation(args, {
+      platform: "win32",
+      command: "",
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      argv1: "dist\\bundle\\cli.js",
+      parentCwd: "C:\\pi-coding-agent",
+      comSpec: "cmd.exe",
+    }),
+    { command: "C:\\Program Files\\nodejs\\node.exe", args: ["C:\\pi-coding-agent\\dist\\bundle\\cli.js", ...args] },
+  );
+  assert.deepEqual(
+    resolveCliInvocation(args, { platform: "win32", command: "", argv1: "runner.js", comSpec: "cmd.exe" }),
+    { command: "cmd.exe", args: ["/d", "/s", "/c", "pi.cmd", ...args] },
+  );
+  assert.deepEqual(
+    resolveCliInvocation(args, { platform: "win32", command: "", argv1: "", comSpec: "cmd.exe" }),
+    { command: "cmd.exe", args: ["/d", "/s", "/c", "pi.cmd", ...args] },
+  );
+  assert.deepEqual(
+    resolveCliInvocation(args, { platform: "win32", command: "pi.cmd", argv1: "C:\\pi\\cli.js", comSpec: "cmd.exe" }),
+    { command: "cmd.exe", args: ["/d", "/s", "/c", "pi.cmd", ...args] },
+  );
+  assert.deepEqual(
+    resolveCliInvocation(args, { platform: "win32", command: "C:\\Program Files\\Pi\\pi.cmd", comSpec: "cmd.exe" }),
+    { command: "cmd.exe", args: ["/d", "/s", "/c", "call", "C:\\Program Files\\Pi\\pi.cmd", ...args] },
+  );
+  assert.throws(
+    () => resolveCliInvocation(args, { platform: "win32", command: "C:\\Pi&evil\\pi.cmd", comSpec: "cmd.exe" }),
+    /无法安全执行/,
+  );
+});
+
+test("cmd shim stores multiline prompt arguments outside the command line", async () => {
+  await withTempDirectory(async (directory) => {
+    const systemPrompt = "system & %PATH%\n\"quoted\"";
+    const prompt = "task & %PATH%\nline two\n\"quoted\"";
+    const originalArgs = ["--append-system-prompt", "raw system", "-p", "raw prompt"];
+    const prepared = await prepareCmdShimArgs(originalArgs, directory, systemPrompt, prompt);
+    const systemPath = path.join(directory, prepared.args[1]);
+    const promptPath = path.join(directory, prepared.args.at(-1).slice(1));
+    try {
+      assert.equal(await readFile(systemPath, "utf8"), systemPrompt);
+      assert.equal(await readFile(promptPath, "utf8"), prompt);
+      assert.equal(prepared.args.at(-1).startsWith("@"), true);
+      assert.equal(prepared.args.some((value) => value.includes("%PATH%")), false);
+    } finally {
+      await prepared.cleanup();
+    }
+    await assert.rejects(readFile(systemPath, "utf8"), /ENOENT/);
+    await assert.rejects(readFile(promptPath, "utf8"), /ENOENT/);
+  });
+});
+
+test("Windows cmd shim delivers file-backed prompt arguments", { skip: process.platform !== "win32" }, async () => {
+  await withTempDirectory(async (directory) => {
+    const captureScript = path.join(directory, "capture.cjs");
+    const captureShim = path.join(directory, "capture.cmd");
+    await writeFile(captureScript, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n");
+    await writeFile(captureShim, "@echo off\r\nnode \"%~dp0capture.cjs\" %*\r\n");
+    const systemPrompt = "system & %PATH%\nline";
+    const prompt = "task & %PATH%\nline two\n\"quoted\"";
+    const originalArgs = ["--append-system-prompt", "raw", "-p", "raw"];
+    const prepared = await prepareCmdShimArgs(originalArgs, directory, systemPrompt, prompt);
+    try {
+      const invocation = resolveCliInvocation(prepared.args, {
+        platform: "win32",
+        command: captureShim,
+        argv1: "",
+        comSpec: process.env.ComSpec ?? "cmd.exe",
+      });
+      const result = await new Promise((resolve, reject) => {
+        const child = spawn(invocation.command, invocation.args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => { stdout += chunk; });
+        child.stderr.on("data", (chunk) => { stderr += chunk; });
+        child.on("error", reject);
+        child.on("close", (code) => resolve({ code, stdout, stderr }));
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), prepared.args);
+      assert.equal(await readFile(path.join(directory, prepared.args[1]), "utf8"), systemPrompt);
+      assert.equal(await readFile(path.join(directory, prepared.args.at(-1).slice(1)), "utf8"), prompt);
+    } finally {
+      await prepared.cleanup();
+    }
+  });
+});
 
 test("collaboration registry reserves paths and detects peer conflicts", async () => {
   await withCollaborationDirectory(async (directory) => {
@@ -250,8 +348,10 @@ test("extension registers collaboration tools, reservation hook, spawn and overl
     const harness = createExtensionHarness([], {
       cwd: directory,
       exec: async (command, args) => {
-        assert.equal(command, process.platform === "win32" ? "pi.cmd" : "pi");
         launchArgs = args;
+        const expectedInvocation = resolveCliInvocation([]);
+        assert.equal(command, expectedInvocation.command);
+        assert.deepEqual(args.slice(0, expectedInvocation.args.length), expectedInvocation.args);
         assert.ok(args.includes("--extension"));
         return { code: 0, stdout: output, stderr: "" };
       },
@@ -285,7 +385,11 @@ test("extension registers collaboration tools, reservation hook, spawn and overl
     assert.equal(blocked?.block, true);
     const started = await spawnTool.execute("spawn", { task: "finish child", cwd: directory, role: "developer-test" }, undefined, undefined, harness.context);
     assert.match(started.content[0].text, /已启动 1 个/);
+    for (let index = 0; index < 50 && !launchArgs; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     await flush();
+    assert.ok(launchArgs);
     assert.ok(launchArgs.includes("--model"));
     assert.ok(launchArgs.includes("openai-codex/gpt-5.6-luna"));
     assert.ok(launchArgs.includes("--thinking"));
@@ -315,7 +419,7 @@ test("workflow configuration menu exposes collaboration executor", async () => {
   await harness.commands.get("pi-init").handler("config workflow", harness.context);
   const executorMenu = seen.find((item) => item.title === "工作流执行器");
   assert.ok(executorMenu);
-  assert.ok(executorMenu.items.includes("共享工作区协作 Agent"));
+  assert.ok(executorMenu.items.some((item) => item.includes("共享工作区协作 Agent")));
 });
 
 test("old parallel batch session state is ignored without an old entry point", async () => {

@@ -31,7 +31,7 @@
 - 已移除 `parallel_develop`、`parallel_batch`、gmc client、parallel worker 和 worktree/integration 专用实现。当前共享协作由内置 `subagent`、`agent_message`、Agent registry、session tail、`/agents` Overlay 和 reservation 提供；`task_workflow` 通过 `workflowExecutor: "collaboration"` 顺序委派共享目录任务。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可通过 `.pi/role-models.json` 的 `roleModels` 映射覆盖或启用其他合法角色；保存配置使用 `schemaVersion: 2`，并保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。旧版顶层角色字段仅自动读取兼容，显式 `/pi-init save` 时才规范化；旧项目生成的角色 Skill 需人工确认后删除。
 - 模型安全来自角色和工作流配置中的明确引用而非 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧字段被忽略）：角色和 collaboration 工作流子 Agent 使用完整 `provider/model`，由 pi-init roleModels 精确解析并传递 `--model`/`--thinking`，不使用 fork type/TOML fallback；缺失角色或模型显式失败。原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截（见 `docs/decisions.md`）。`/pi-init config` 候选列表展示全部已注册模型，跨 Provider 选择随时可暂存。
-- `workflowExecutor` 支持 `local`（默认）、`subtask` 和 `collaboration`。collaboration 通过共享 cwd 的独立 Pi Agent 进程执行，任务使用 roleModels 的精确模型/推理配置，结果经 `pi-init-collaboration-result` 回到主会话；主扩展唯一写入工作流状态，严格校验 `pi-init/task-result@1`，requestId/recordId 不匹配或无效结果安全阻塞，reload 不自动重新派发非终态任务。旧配置值 `subagents` 继续映射为 `subtask`，不会静默改变旧执行器。
+- `workflowExecutor` 支持 `local`（默认）、`subtask` 和 `collaboration`。collaboration 通过共享 cwd 的独立 Pi Agent 进程执行，任务使用 roleModels 的精确模型/推理配置，结果经 `pi-init-collaboration-result` 回到主会话；主扩展唯一写入工作流状态，严格校验 `pi-init/task-result@1`，requestId/recordId 不匹配或无效结果安全阻塞，reload 不自动重新派发非终态任务。Windows 启动优先复用已确认的 Pi `cli.js`，cmd fallback 把多行提示写入随机临时文件并只传安全相对路径；无法安全传递的路径/参数 fail-closed。旧配置值 `subagents` 继续映射为 `subtask`，不会静默改变旧执行器。
 - 初始化不再生成 `.pi/agents/*.md` 代理脚手架（pi-subagents 专用，随 RPC 执行器一并移除）；subtask fork 复用主会话角色与工具，不需要额外代理定义。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。通用任务执行流程、证据门控、`read`/`edit` 参数、角色交接和真实验证规则由 package 公共 Skill 维护，生成的 `AGENTS.md` 只保留项目特有规则并引用该 Skill。
@@ -39,6 +39,7 @@
 - `edit` 运行时守卫包装 Pi 内置 definition：合法调用保留原生 schema、提示元数据、renderer、严格匹配、重叠检测和文件变更队列；read-shaped/malformed、重复匹配和重叠调用 fail-closed，不写文件并返回可恢复诊断，未知错误透传。提示预检只降低错误率，不能保证模型永不产生非法调用。
 - 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令和职责模型，不再询问 Skill 名称或 slug；TUI 中按 Esc 会返回上一个填写属性并保留已填写内容，最终确认返回角色模型步骤。高级初始化首项从控制中心返回控制中心，直接 `/pi-init advanced` 返回调用方；Ctrl+C、显式“取消”和快速/非 TUI 路径仍保持取消或原有行为。
 - 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，按“初始化/变更/工作流”分组菜单；工作流策略已从“角色与模型”中移到顶层变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度，前置指示点在 Agent 运行时使用主题 accent 高亮、空闲时使用 muted 灰色；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，TUI 菜单和初始化文本输入中按 Esc 返回上一级而非触发取消，初始化通知默认只显示文件数量和冲突摘要。
+- 工作流配置入口使用两级次级菜单：先选择 `workflowMode`，再选择 `workflowExecutor`；任一次级菜单返回或按 Esc 都会取消尚未完成的本次选择，完成后仅暂存当前会话，需执行 `/pi-init save` 才写入 `.pi/role-models.json`。`collaboration` 仍由 `task_workflow` 按任务顺序推进，不自动表示并发。
 - TUI 状态栏新增独立 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认缓存读取/写入。usage 尚未到达时显示“缓存判定中”，零值或未报告不推断缓存命中、写入或未命中；`message_end` 最终 assistant usage 覆盖流式暂态。不同 Provider 的 usage 到达时机不同，R/W 不保证从请求开始实时可见；状态不替换默认 Footer，不写入 session 或 DuckDB。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
@@ -53,6 +54,8 @@
 
 ## 最近一次更新
 
+- 2026-09-11：完成 Windows collaboration CLI 启动修复；仅复用已确认的 Pi `cli.js`，否则经 `cmd.exe /d /s /c pi.cmd` 启动，cmd fallback 使用随机临时文件传递多行提示并对特殊参数 fail-closed；`collaboration-core` 14 项通过。
+- 2026-09-11：补充 README 的控制中心与次级菜单导航，明确工作流策略/执行器选择顺序、Esc 返回取消语义、会话暂存与 `/pi-init save` 持久化边界，并说明 `collaboration` 不自动并发。
 - 2026-09-11：修复 `/pi-init config workflow` 未展示 `collaboration` 选项的问题；同步新增回归测试，`npm test` 123 项通过。
 - 2026-09-11：完成共享工作区协作迁移的代码实现和安全验证；新增 Agent registry、消息、session tail、`/agents`、reservation、角色模型适配和 `collaboration` 工作流，删除 gmc/parallel_batch 旧链路；`npm test` 122 项通过，真实双 Agent process E2E 通过。
 - 2026-09-11：确认 fork `CGOSU/pi-collaborating-agents` 固定 commit `acd50d0ec091deb03bb90b57b694131cff0c297d`，保存迁移计划和第三方 MIT 来源说明；实现前旧 gmc/worktree 链路保持不变，详见 [`docs/plans/collaborating-agents-migration.md`](plans/collaborating-agents-migration.md)。

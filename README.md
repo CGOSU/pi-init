@@ -12,7 +12,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排，由各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写 task_workflow 输入顺序。
-- 工作流执行器默认是 `local`；可选择 `subtask` 或 `collaboration`。`collaboration` 使用共享工作目录中的独立 Agent 进程/session、Agent registry、消息和文件 reservation；主会话仍拥有唯一的 `task_workflow` 状态。
+- 工作流执行器默认是 `local`；可选择 `subtask` 或 `collaboration`。`collaboration` 使用共享工作目录中的独立 Agent 进程/session、Agent registry、消息和文件 reservation；主会话仍拥有唯一的 `task_workflow` 状态。它改变的是任务委派方式，不会把 `task_workflow` 自动改成并行执行。
 - 未进入 `task_workflow` 的普通外部 Agent 执行会在 TUI 中显示开始时间、结束时间和总耗时报告，并与工作流任务完成报告分开。
 - TUI 状态栏另有独立的 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认 `R缓存读`、`W缓存写` 或两者。请求已发送但 usage 尚未到达时显示“缓存判定中”，零值或未报告不会被推断为命中、写入或未命中；`message_end` 的最终 usage 为权威结果。不同 Provider 可能只在流式结束附近报告缓存数据，因此 R/W 不能保证从请求开始就实时可见。该状态不替换默认 Footer，也不写入 session 或 DuckDB。
 - 自动模式在真实跨角色，或编排中的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
@@ -213,6 +213,15 @@ flowchart LR
 /pi-init mode <auto|confirm|manual>
 ```
 
+### 控制中心与次级菜单
+
+`/pi-init` 在 TUI 中打开控制中心，菜单按“初始化”“变更”“保存”“工作流”分组。带有次级菜单的入口需要逐级完成选择：
+
+- “变更 · 工作流策略”先选择 `workflowMode`（`off`、`on` 或 `auto`），再选择 `workflowExecutor`（`local`、`subtask` 或 `collaboration`）。命令行入口 `/pi-init config workflow` 也按这个顺序打开两个菜单。
+- 在任一次级菜单选择“返回”或按 `Esc`，都会返回上一级且取消本次尚未完成的工作流配置选择；完成两个选择后，变更先暂存于当前会话。
+- 选择“保存 · 保存角色配置”或执行 `/pi-init save` 后，才会写入 `.pi/role-models.json`。因此仅在菜单中选择执行器，不代表项目文件已经变更。
+- `collaboration` 使用共享工作区的独立 Agent，但当前 `task_workflow` 仍按任务顺序推进；它不是自动并发开关。
+
 ### 架构前置证据与职责边界
 
 角色路由遵循公共 Skill 的单一层级：明确实现/测试直接交给 `developer-test`，明确文档、版本或 Git 收尾直接交给 `docs-commit`，不明确、含糊或跨职责的指令从 `architect` 开始。低风险判断可由 architect 直接进行受限只读定位；复杂或高风险架构判断仍由 `docs-commit` 先交接包含事实、来源、调用关系、测试、风险和未确认项的结构化证据，architect 负责决策与计划；实现完成并验证后，只有产生文档、版本或 Git 收尾时才交给 `docs-commit`。
@@ -268,6 +277,8 @@ reload 不会自动重新派发非终态的已委派任务，以避免共享工�
 ### collaboration 共享工作区协作执行器
 
 启用 `workflowExecutor: "collaboration"` 后，主会话通过内置 `subagent` 启动独立 Pi Agent 进程。Agent 使用当前共享工作目录，通过 registry、消息和文件 reservation 协作；不创建 Git worktree、不自动合并、不自动提交或推送。
+
+Windows process 模式不会直接把 `pi.cmd` 交给 `pi.exec`：仅在确认当前入口是 Pi 的 `cli.js` 时使用 `process.execPath + process.argv[1]`；无法定位时才使用 `cmd.exe /d /s /c pi.cmd`，以避免 `spawn EINVAL`。cmd fallback 会把多行 system prompt 和任务内容写入当前工作目录下的随机临时文件，只传递安全的相对路径；CLI 路径或固定参数含无法安全传递的 shell 特殊字符时会安全失败。
 
 常用调用：
 

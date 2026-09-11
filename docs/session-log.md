@@ -2,6 +2,18 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-11：完成 Windows collaboration CLI 启动安全修复
+
+- 完成内容：`extensions/collaboration-spawn.ts` 仅在确认 `cli.js` 与 Pi 运行标记后复用 `process.execPath + process.argv[1]`，相对入口按父进程 cwd 解析；fallback 使用 `cmd.exe /d /s /c pi.cmd`，并将多行 system prompt/任务内容写入随机临时文件，只传递安全相对路径。带 shell 特殊字符的 CLI 路径或固定参数 fail-closed；`test/collaboration-core.test.js` 增加入口校验、文件传输、特殊字符和 Windows shim 边界测试。
+- 验证：`node --test test/collaboration-core.test.js`，14 项全部通过；`node scripts/check-line-count.js`、`git diff --check` 通过；实际以 fallback 参数启动 `pi.cmd --version` 返回 `0.85.1`。
+- 遗留：尚未执行真实远程模型驱动的连续多任务 collaboration workflow；当前没有活动 `task_workflow`，因此未执行 retry 或 replan。
+
+### 2026-09-11：补充工作流次级菜单文档
+
+- 完成内容：更新 `README.md` 和 `docs/current-state.md`，说明控制中心分组、`/pi-init config workflow` 的“策略 → 执行器”两级选择、Esc/返回取消语义、当前会话暂存与 `/pi-init save` 持久化边界，并明确 `collaboration` 不自动并发。
+- 验证：人工对照 `extensions/control-center.ts` 的实际菜单流程；未运行测试或构建（仅 Markdown 文档更新）。
+- 遗留：无。
+
 ### 2026-09-11：修复工作流执行器菜单缺少 collaboration 选项
 
 - 完成内容：在 `extensions/control-center.ts` 的工作流执行器菜单加入 `collaboration` 选项，说明共享 cwd、独立 Agent、消息和 reservation 的行为；新增菜单回归测试。

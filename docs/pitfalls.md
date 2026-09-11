@@ -54,13 +54,13 @@
 - 修复：无批次时返回 `undefined` 详情，并在结果渲染器中校验批次身份字段；无效或空状态统一显示“当前没有并行批次”。
 - 验证：`node --test test/parallel-extension.test.js`，4 项全部通过；`git diff --check` 通过。
 
-### 2026-09-10：Windows 下不能把 pi.cmd 直接交给 shell=false 的 Node 子进程
+### 2026-09-11：Windows 下不能把 pi.cmd 直接交给 shell=false 的 Node 子进程
 
-- 日期：2026-09-10；
-- 现象：使用 Node `child_process.execFile`/`spawn` 且 `shell: false` 直接启动 `pi.cmd` 会返回 `EINVAL`；并发 worker 可能被误报为退出失败或残留。
+- 日期：2026-09-11；
+- 现象：使用 Node `child_process.execFile`/`spawn` 且 `shell: false` 直接启动 `pi.cmd` 会返回 `EINVAL`；Pi 生产 `pi.exec` 同样不能直接 CreateProcess 该 shim。
 - 根因：Windows `.cmd` 是命令脚本而不是可直接 CreateProcess 的 PE；Pi npm 安装通常通过该 shim 转发到 Node 和 cli.js。
-- 修复：worker 在 Pi 扩展运行时优先复用当前 `process.execPath + process.argv[1]` 的 CLI 路径；无法定位时使用 `cmd.exe /d /s /c pi.cmd`，并传递 AbortSignal/5 分钟超时；worker 失败时取消同批次其他进程。
-- 验证：`execFile("pi.cmd", ["--version"])` 实测返回 `EINVAL`；`execFile("cmd.exe", ["/d", "/s", "/c", "pi.cmd", "--version"])` 实测成功返回 Pi 版本；对应 worker 单元测试通过。真实模型请求仍受当前网络/Provider 响应限制。
+- 修复：`collaboration-spawn.ts` 仅在确认 Pi `cli.js` 入口后使用 `process.execPath + process.argv[1]`，相对入口按父进程 cwd 解析；fallback 使用 `cmd.exe /d /s /c pi.cmd`，并将多行 system prompt/任务内容写入随机临时文件，只传递安全相对路径。带 shell 特殊字符的 CLI 路径或固定参数 fail-closed。
+- 验证：`node --test test/collaboration-core.test.js`，14 项全部通过；`node scripts/check-line-count.js`、`git diff --check` 通过；使用同一 fallback 参数实际启动 `pi.cmd --version` 返回 Pi `0.85.1`。
 
 ### 2026-09-10：不能用 execFile 包装器替代 Pi 的 pi.exec 做 worker E2E
 
