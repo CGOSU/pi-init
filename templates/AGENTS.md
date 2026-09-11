@@ -16,6 +16,11 @@
 通用的任务执行流程、证据门控、`read`/`edit` 工具调用、角色边界和真实验证要求由随 package 发布的 `pi-init-role-routing` Skill 统一维护。执行代码、测试、文档或工作流任务时，按需读取该 Skill 及对应角色说明；本文件只保留项目定位、环境、命令、知识库和 Git 等项目特有规则。
 
 目标明确的低风险任务由 AI 自主选择实现方案并直接推进；不因 helper、内部拆分、测试组织、排查顺序或恢复既定行为的 bug 请求用户选择。只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问；新增行为、契约、权限或数据结构仍先记录到确认的需求/决策载体。
+
+## 共享 Agent 协作
+
+如使用 `workflowExecutor: "collaboration"`，子 Agent 在共享工作目录中通过 Agent registry、消息和文件 reservation 协作。reservation 只协调 `edit`/`write` 路径，不是 shell 沙箱或回滚机制；取消或失败可能留下部分修改，必须进行实际检查。角色、模型、推理强度和权限以 `.pi/role-models.json` 及公共 `pi-init-role-routing` Skill 为准。
+
 ## 运行环境与命令约定
 
 {{ENVIRONMENT_CONTEXT}}

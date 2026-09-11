@@ -60,7 +60,7 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
 
 export function beginWorkflowDelegation(state, { taskId, requestId, type }, now = Date.now()) {
   if (!state || state.status !== "running") throw new Error("工作流当前不可委派任务");
-  if (state.executor !== "subtask") throw new Error("当前工作流未使用 subtask 执行器");
+  if (!["subtask", "collaboration"].includes(state.executor)) throw new Error("当前工作流未使用 subtask 执行器或 collaboration 执行器");
   if (state.currentTaskId !== taskId) {
     throw new Error(`只能委派当前任务 ${state.currentTaskId ?? "（无）"}`);
   }
@@ -76,6 +76,20 @@ export function beginWorkflowDelegation(state, { taskId, requestId, type }, now 
     status: "spawning",
     createdAt: now,
   };
+  return result;
+}
+
+export function markWorkflowDelegationStarted(state, { taskId, requestId, agentId }, now = Date.now()) {
+  if (!state || state.status !== "running") throw new Error("工作流当前不可更新委派任务");
+  if (!["subtask", "collaboration"].includes(state.executor)) throw new Error("当前工作流未使用可委派执行器");
+  if (state.currentTaskId !== taskId) throw new Error(`只能更新当前任务 ${state.currentTaskId ?? "（无）"}`);
+  const result = cloneState(state, now);
+  const task = getWorkflowTask(result, taskId);
+  if (!task.delegation || task.delegation.requestId !== requestId) throw new Error(`任务 ${taskId} 的 delegation 已变化`);
+  if (!["spawning", "running"].includes(task.delegation.status)) return state;
+  task.delegation.status = "running";
+  task.delegation.agentId = requireText(agentId, "子代理运行 ID");
+  task.delegation.startedAt = now;
   return result;
 }
 

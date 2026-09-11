@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-11：共享工作区 reservation 不是 Git 或 shell 隔离
+
+- 日期：2026-09-11；
+- 现象：`collaboration` 子 Agent 共享当前 cwd；Agent 取消或失败后，已经写入的部分修改可能继续留在工作区，未经过 Pi `edit`/`write` hook 的 shell 写入也可能绕过 reservation。
+- 根因：该模式只维护跨 Agent 的路径所有权和消息协调，不创建 Git worktree，不提供候选分支、自动回滚或文件系统级写保护。
+- 修复：启动任务时为声明的路径建立初始 reservation；`edit`/`write` 冲突直接阻止并提示通过 `agent_message` 协调；任务完成、失败、取消和会话关闭后要求实际检查 `git diff` 或其他变更来源。工作流只接受绑定 requestId/recordId 且符合 `pi-init/task-result@1` 的结果。
+- 验证：`node --test test/collaboration-core.test.js` 10 项、`npm test` 122 项通过；Windows 临时目录真实双 Agent process E2E 两个进程均正常返回并完成 registry 清理。cmux 和 shell 绕过路径未进行真实 E2E。
+
 ### 2026-09-11：parallel_batch retry 的 Working 不是可观察的后台等待
 
 - 日期：2026-09-11；

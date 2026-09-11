@@ -3,7 +3,7 @@ import { normalizeRoleId } from "./roles.js";
 export const WORKFLOW_STATE_VERSION = 3;
 export const WORKFLOW_MAX_TASKS = 12;
 export const WORKFLOW_MAX_NUDGES = 2;
-export const WORKFLOW_EXECUTORS = ["local", "subtask"];
+export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration"];
 export const WORKFLOW_DELEGATION_STATUSES = [
   "spawning",
   "running",

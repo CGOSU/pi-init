@@ -19,6 +19,7 @@ export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
   dispatch: WorkflowDispatch;
   report: WorkflowReport;
+  stopCollaborationTask?: (taskId: string) => boolean;
 };
 
 export function createWorkflowActions(
@@ -75,10 +76,12 @@ export function createWorkflowActions(
         return;
       }
       if (action === "cancel") {
+        const taskId = state.workflowState.currentTaskId;
+        if (taskId) deps.stopCollaborationTask?.(taskId);
         const cancelled = cancelWorkflow(state.workflowState);
         deps.report.persistWorkflowState(cancelled, ctx);
         state.workflowDispatchInFlight = false;
-        ctx.ui.notify("工作流已取消。subtask 运行中的 fork 由 pi-subtask 面板管理，可在其中停止或查看。", "info");
+        ctx.ui.notify("工作流已取消；正在运行的委派 Agent 已请求停止（若仍有迟到结果将被忽略）。", "info");
         return;
       }
       ctx.ui.notify("用法：/pi-init workflow [status|resume|retry <taskId>|cancel]", "error");
@@ -244,10 +247,12 @@ export function createWorkflowActions(
       }
       case "cancel": {
         if (!state.workflowState) throw new Error("当前没有活动工作流");
+        const taskId = state.workflowState.currentTaskId;
+        if (taskId) deps.stopCollaborationTask?.(taskId);
         const next = cancelWorkflow(state.workflowState);
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
-        return { content: [{ type: "text", text: "工作流已取消。subtask 运行中的 fork 由 pi-subtask 面板管理，可在其中停止或查看。" }], details: next, terminate: true };
+        return { content: [{ type: "text", text: "工作流已取消；正在运行的委派 Agent 已请求停止，迟到结果将被忽略。" }], details: next, terminate: true };
       }
       default:
         throw new Error(`未知工作流动作：${params.action}`);

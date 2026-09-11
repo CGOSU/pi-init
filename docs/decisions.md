@@ -8,6 +8,20 @@
 
 ## 已确认决策
 
+### 2026-09-11：完成共享工作区协作迁移并退役 gmc/parallel_batch
+
+- 决定：正式采用共享 cwd、独立 Pi Agent 进程/session、Agent registry、消息、session tail、`/agents` Overlay 和文件 reservation；`workflowExecutor: "collaboration"` 通过 pi-init 的 roleModels 精确选择 provider/model/thinkingLevel，`task_workflow` 继续作为唯一规划、依赖和验收状态机。删除 gmc、Git worktree/integration 和 `parallel_batch` 旧并发入口，不保留新路径失败后的旧链路 fallback。
+- 原因：用户明确选择对方的共享工作区协作模式；其 Agent 通信、状态观察和 reservation 已通过 Windows 临时目录双 Agent 真实远程模型验证，继续维护 gmc 并发底座会产生两套执行器。
+- 约束：reservation 只拦截其他 Agent 的 `edit`/`write` 路径冲突，不是 shell 沙箱、Git 隔离或自动回滚；共享目录失败/取消可能留下部分修改，必须实际检查。角色模型不得被 fork type/TOML 覆盖，Agent 完成不得直接伪造工作流验收；不自动 commit、push、删除工作区或旧 session 产物。cmux、真实多任务连续工作流、reload 人工恢复和凭据失败注入仍未验证。
+- 验收：`npm test` 122 项通过；协作专项 10 项通过；Windows 临时目录真实双 Agent process E2E 两个进程均 code=0、有最终 assistant 结果且 registry 清理完成。
+- 替代：本条替代 2026-09-11“计划采用共享工作区 reservation 作为协作隔离”及 2026-09-10“采用 gmc worktree 作为并行批次的隔离层”的当前实现取舍；历史条目保留用于追溯。
+
+### 2026-09-11：计划采用共享工作区 reservation 作为协作隔离
+
+- 决定：后续 fork 集成以共享工作目录、独立 Agent 进程/session、文件 reservation 和协作消息作为并发隔离方式；保留 pi-init 的角色专业化、`roleModels`、`task_workflow` 规划/依赖/验收、上下文恢复和精确编辑守卫。对方的 Agent 注册、消息、session tail、Overlay 和 reservation 作为协作基础设施来源。
+- 原因：用户希望采用 `pi-collaborating-agents` 的协作模式，而不是继续使用 Git worktree；该模式可以直接复用 Agent 间通信、状态观察和共享工作区协调能力，减少两套并发启动与展示系统。
+- 约束：共享工作区没有 worktree 的回滚和候选集成隔离；reservation 不是文件系统或 shell 写入的绝对安全边界，重叠路径必须拒绝或等待，取消/失败后的部分修改必须显式暴露且不能自动伪造回滚；不自动 commit、push 或把进程完成当作任务验收完成。当前 `parallel_batch`/gmc 实现保持不变，只有在 fork 适配、生命周期/迟到结果/失败语义和真实共享工作区验证完成后，才删除旧的 worktree 并发代码。本条计划完成实施后替代 2026-09-10 的 gmc worktree 隔离决策，历史记录不删除。
+
 ### 2026-09-11：并行批次 worker 在后台运行并保留显式恢复控制
 
 - 决定：`parallel_batch` 的 start/retry 只负责创建并启动 worker，立即返回 `running`；worker 完成后由后台任务持久化结果并发送 follow-up 消息，用户也可通过 status 查看状态、通过 cancel 中止。回收结果必须同时匹配生命周期、batchId 和活动 attemptId，旧批次、旧 attempt 或旧 session tree 不得覆盖当前状态。

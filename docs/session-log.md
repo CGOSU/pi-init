@@ -2,6 +2,18 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-11：完成共享工作区协作迁移和旧并发链路退役
+
+- 完成内容：接入共享 cwd Agent、registry、消息、session tail、`/agents` Overlay、reservation 和 `collaboration` 工作流；角色/模型由 pi-init `roleModels` 精确解析；删除 `parallel_batch`、gmc、worktree/integration 专用实现及测试。旧 parallel batch session entry 会被忽略，不自动恢复或重派。
+- 验证：`npm test`，122 项全部通过；`node scripts/check-line-count.js`、相关 `node --check` 和 `git diff --check` 通过。Windows 临时目录真实双 Agent process E2E 使用 `openai-codex/gpt-5.6-luna`，两个进程均 code=0、有最终 assistant 结果并完成 registry 清理。
+- 遗留：cmux pane、真实远程模型连续多任务 workflow、reload 后人工恢复和凭据失败注入尚未执行；本次未提交、未推送或发布。
+
+### 2026-09-11：确认共享工作区协作隔离并保存迁移计划
+
+- 完成内容：根据用户确认，规划后续采用 fork 的共享工作目录、独立 Agent 进程/session、文件 reservation、消息和 session 观察；保留 pi-init 的角色/模型配置、`task_workflow`、上下文恢复和精确编辑守卫。明确当前 gmc worktree 并发实现暂不删除，待适配和验证完成后再替换。
+- 验证：仅更新 `docs/decisions.md`、`docs/current-state.md` 和本记录；未修改代码，未运行测试或构建。
+- 遗留：尚未提供 fork 仓库地址或本地路径；共享工作区下取消/失败的部分修改、reservation 与 shell 写入边界，以及真实多 Agent 链路仍待实现和验证。
+
 ### 2026-09-11：并行批次 worker 改为后台执行并区分终止原因
 
 - 完成内容：`parallel_batch` 的 start/retry 不再同步等待 Pi worker，返回 `running` 后可通过 status 查看并通过 cancel 中止；终态通过 follow-up 消息通知主会话。后台结果按生命周期、batch/attempt 校验，session_tree、reload、shutdown 后旧 worker 不得写入当前分支。worker 被 timeout/取消时优先报告终止原因；未被终止但只有 `toolUse` 时归类为缺少最终 assistant 结果，不再误报 provider 失败。

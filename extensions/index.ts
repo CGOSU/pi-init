@@ -29,7 +29,8 @@ import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
-import { createParallelBatchRuntime } from "./parallel-batch.ts";
+import { createCollaborationRuntime } from "./collaboration-runtime.ts";
+import { createCollaborationRoleResolver } from "./collaboration-role.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -41,7 +42,6 @@ type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
 type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
-
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
@@ -52,7 +52,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   let acceptedExternalRunSource: string | undefined;
   let externalRunTiming: ReturnType<typeof createRunTiming>;
   let workflowDispatch: WorkflowDispatch;
-
   const workflowMessages = createWorkflowMessages(runtimeState, {
     pi,
     setInternalContinuationPending: (value) => {
@@ -72,12 +71,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
+  const collaborationRuntime = createCollaborationRuntime(pi); collaborationRuntime.setProfileResolver(createCollaborationRoleResolver(roleRuntime));
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
     messages: workflowMessages,
     report: workflowReport,
+    startCollaborationTask: collaborationRuntime.startWorkflowTask,
     getActiveTools: () => typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [],
     setCurrentContext: (ctx) => {
       runtimeState.currentContext = ctx;
@@ -87,18 +88,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
-  });
-  createParallelBatchRuntime(pi, runtimeState, {
-    roleRuntime,
-    getWorkflowState: () => runtimeState.workflowState,
+    stopCollaborationTask: collaborationRuntime.stopWorkflowTask,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;
-
   function loadScaffoldRuntime() {
     return scaffoldRuntimePromise ??= import("./scaffold-runtime.ts");
   }
-
   function loadControlCenter() {
     return controlCenterPromise ??= import("./control-center.ts").then(({ createControlCenter }) =>
       createControlCenter({
@@ -111,7 +107,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }),
     );
   }
-
   function settleExternalRunTiming() {
     const timing = externalRunTiming;
     externalRunTiming = undefined;

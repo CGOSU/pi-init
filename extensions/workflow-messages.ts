@@ -152,6 +152,12 @@ export function createWorkflowMessages(
     ].filter(Boolean).join("\n\n");
   }
 
+  function workflowCollaborationPrompt(taskId: string) {
+    return workflowSubtaskPrompt(taskId)
+      .replace("[PI-INIT SUBTASK WORKFLOW]", "[PI-INIT COLLABORATION WORKFLOW]")
+      .replace("Work in the current shared checkout.", "Work in the current shared checkout and reserve paths with agent_message before editing.");
+  }
+
   function sendSubtaskDispatchMessage(ctx: ExtensionContext, taskId: string) {
     if (!state.workflowState || state.workflowState.currentTaskId !== taskId) return;
     state.workflowDispatchInFlight = false;
@@ -185,6 +191,7 @@ export function createWorkflowMessages(
     workflowReplanPrompt,
     sendWorkflowReplanMessage,
     workflowSubtaskPrompt,
+    workflowCollaborationPrompt,
     sendSubtaskDispatchMessage,
   };
 }
