@@ -302,6 +302,22 @@ test("extension registers collaboration tools, reservation hook, spawn and overl
   });
 });
 
+test("workflow configuration menu exposes collaboration executor", async () => {
+  const seen = [];
+  const harness = createExtensionHarness([], {
+    trusted: true,
+    select: async (title, items) => {
+      seen.push({ title, items });
+      if (title === "工作流执行器") return "共享工作区协作 Agent";
+      return items[0];
+    },
+  });
+  await harness.commands.get("pi-init").handler("config workflow", harness.context);
+  const executorMenu = seen.find((item) => item.title === "工作流执行器");
+  assert.ok(executorMenu);
+  assert.ok(executorMenu.items.includes("共享工作区协作 Agent"));
+});
+
 test("old parallel batch session state is ignored without an old entry point", async () => {
   const harness = createExtensionHarness([
     { type: "custom", customType: "pi-init-parallel-batch", data: { batchId: "legacy", status: "running" } },

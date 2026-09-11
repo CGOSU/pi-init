@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-11：修复工作流执行器菜单缺少 collaboration 选项
+
+- 完成内容：在 `extensions/control-center.ts` 的工作流执行器菜单加入 `collaboration` 选项，说明共享 cwd、独立 Agent、消息和 reservation 的行为；新增菜单回归测试。
+- 验证：`npm test`，123 项全部通过；本次未修改执行器语义，未执行提交前后的真实 E2E。
+- 遗留：已安装的 Pi package 和当前进程需执行 `pi update --extensions` 后 `/reload`，或重启 Pi，才能加载该菜单修复。
+
 ### 2026-09-11：完成共享工作区协作迁移和旧并发链路退役
 
 - 完成内容：接入共享 cwd Agent、registry、消息、session tail、`/agents` Overlay、reservation 和 `collaboration` 工作流；角色/模型由 pi-init `roleModels` 精确解析；删除 `parallel_batch`、gmc、worktree/integration 专用实现及测试。旧 parallel batch session entry 会被忽略，不自动恢复或重派。

@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-11：执行器 schema 增加选项后菜单可能仍是硬编码
+
+- 日期：2026-09-11；
+- 现象：`workflowExecutor` 的 schema 已接受 `collaboration`，但 `/pi-init config workflow` 仍只显示 `local` 和 `subtask`，用户无法选择新执行器。
+- 根因：配置 schema 和控制中心执行器菜单分别维护，新增值只更新了 schema/状态机而未同步菜单。
+- 修复：在 `extensions/control-center.ts` 加入共享工作区协作选项，并新增菜单回归测试；以后增加执行器必须同时检查 schema、标签、菜单和运行时分支。
+- 验证：`npm test`，123 项全部通过。
+
 ### 2026-09-11：共享工作区 reservation 不是 Git 或 shell 隔离
 
 - 日期：2026-09-11；

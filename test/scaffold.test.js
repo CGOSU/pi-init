@@ -113,7 +113,7 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.doesNotMatch(agents, /## 任务执行流程/);
     assert.doesNotMatch(agents, /## 证据与工具调用规则/);
     assert.doesNotMatch(agents, /已有新鲜且精确证据为 0 轮/);
-    assert.doesNotMatch(agents, /workflowExecutor/);
+    assert.match(agents, /workflowExecutor.*collaboration/);
     assert.doesNotMatch(agents, /task_workflow/);
     assert.doesNotMatch(agents, /\.pi\/agents\//);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
@@ -433,7 +433,7 @@ test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async (
     assert.doesNotMatch(agents, /## Evidence and Tool Invocation Rules/);
     assert.doesNotMatch(agents, /0 rounds when fresh/);
     assert.doesNotMatch(agents, /## Task Execution Workflow/);
-    assert.doesNotMatch(agents, /workflowExecutor/);
+    assert.match(agents, /workflowExecutor.*collaboration/);
     assert.doesNotMatch(agents, /task_workflow/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);

@@ -53,6 +53,7 @@
 
 ## 最近一次更新
 
+- 2026-09-11：修复 `/pi-init config workflow` 未展示 `collaboration` 选项的问题；同步新增回归测试，`npm test` 123 项通过。
 - 2026-09-11：完成共享工作区协作迁移的代码实现和安全验证；新增 Agent registry、消息、session tail、`/agents`、reservation、角色模型适配和 `collaboration` 工作流，删除 gmc/parallel_batch 旧链路；`npm test` 122 项通过，真实双 Agent process E2E 通过。
 - 2026-09-11：确认 fork `CGOSU/pi-collaborating-agents` 固定 commit `acd50d0ec091deb03bb90b57b694131cff0c297d`，保存迁移计划和第三方 MIT 来源说明；实现前旧 gmc/worktree 链路保持不变，详见 [`docs/plans/collaborating-agents-migration.md`](plans/collaborating-agents-migration.md)。
 - 2026-09-10：按用户确认增加简单任务的最小验证策略：不创建工作流或启动 worker，不默认运行全量测试、类型检查或构建；高风险边界和明确验证要求不受影响。已同步决策、公共 Skill、developer-test 角色和 README，尚未再次提交或推送。

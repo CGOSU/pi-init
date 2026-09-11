@@ -153,6 +153,11 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         label: config.workflowExecutor === "subtask" ? "保持 pi-subtask 对话 fork" : "pi-subtask 对话 fork",
         description: "需要已安装并启用 gary149/pi-subtask；主会话调用 subtask 工具顺序委派，结果消息回到会话后自动推进",
       },
+      {
+        value: "collaboration",
+        label: config.workflowExecutor === "collaboration" ? "保持共享工作区协作 Agent" : "共享工作区协作 Agent",
+        description: "使用共享 cwd、独立 Agent 进程/session、消息和 reservation；失败可能留下部分修改",
+      },
       { value: MENU_BACK, label: "← 返回上一级" },
     ], { selectedValue: config.workflowExecutor });
     if (!executor || isMenuBack(executor)) return;
