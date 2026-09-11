@@ -23,7 +23,7 @@ import {
 } from "./collaboration-messages.ts";
 import { formatSessionTail, readSessionTail } from "./collaboration-session-tail.ts";
 import { listRuns } from "./collaboration-runs.ts";
-import { abortAllSubagents, abortSubagent, startSubagentBatch } from "./collaboration-spawn.ts";
+import { abortAllSubagents, abortSubagent, formatCollaborationTimeout, startSubagentBatch } from "./collaboration-spawn.ts";
 import { registerAgentMessageTool, type CollaborationToolApi, type CollaborationToolResult } from "./collaboration-tool.ts";
 import { registerAgentsCommand } from "./collaboration-tool.ts";
 import { registerSubagentTool, type SubagentToolApi } from "./collaboration-spawn-tool.ts";
@@ -84,7 +84,7 @@ function formatAgentList(agents: AgentRegistration[], selfName: string): string 
 
 function formatRuns(runs: ListedRun[]): string {
   if (runs.length === 0) return "当前没有子 Agent 运行记录。";
-  return runs.map((run) => `- ${runLabel(run)} · ${run.taskPreview}${run.isStale ? " [stale]" : ""}`).join("\n");
+  return runs.map((run) => `- ${runLabel(run)} · ${run.taskPreview}${run.isStale ? " [stale]" : ""}${run.error ? ` · ${run.error}` : ""}`).join("\n");
 }
 
 export interface CollaborationRuntime {
@@ -276,6 +276,15 @@ export function createCollaborationRuntime(pi: ExtensionAPI): CollaborationRunti
       onBatchSettled: (_batch, results) => {
         const result = results[0];
         if (!result || state.disposed) return;
+        if (ctx.hasUI) {
+          const returned = result.record.status === "completed";
+          ctx.ui.notify(
+            returned
+              ? `协作任务 ${args.taskId} 已返回，主会话正在校验结果。`
+              : `协作任务 ${args.taskId} 未成功返回：${result.record.error ?? "未知错误"}`,
+            returned ? "info" : "warning",
+          );
+        }
         pi.sendMessage({
           customType: "pi-init-collaboration-result",
           content: `共享协作任务 ${args.taskId} 的 Agent 已${result.record.status === "completed" ? "完成" : "失败"}。`,
@@ -286,6 +295,12 @@ export function createCollaborationRuntime(pi: ExtensionAPI): CollaborationRunti
     }, { dirs, parentAgent: state.agentName, profile });
     const recordId = batch.records[0]!.recordId;
     state.workflowRuns.set(args.taskId, recordId);
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        `已启动后台协作 Agent 执行任务 ${args.taskId}（单次最长 ${formatCollaborationTimeout(batch.records[0]?.timeoutMs)}）；可用 /pi-init workflow status 或 /agents 查看进度。`,
+        "info",
+      );
+    }
     return { batchRunId: batch.batchRunId, recordId };
   }
 

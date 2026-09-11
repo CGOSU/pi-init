@@ -8,6 +8,18 @@
 
 ## 已确认决策
 
+### 2026-09-11：协作 Agent 超时必须可配置但不能绕过严格结果门
+
+- 决定：共享协作 Agent 的默认单次总时限调整为 30 分钟，并通过 `PI_COLLAB_TIMEOUT_MS` 支持 1 秒至 24 小时的显式覆盖；超时、用户取消和外部终止分别记录，退出码为 0 也不能视为成功。终止后保存 stdout/session/最后 assistant 文本仅作诊断，只有未被终止且有输出的进程才向工作流交付结果。
+- 原因：原 5 分钟硬编码时限覆盖了 Agent 的正常工具调用和调查阶段；Windows `cmd.exe` wrapper 或 Pi exec 可能在被杀后返回 code=0，不能用退出码推断协议完成。保留诊断可以解释失败而不把部分结果伪造成验收结果。
+- 约束：心跳只表示 supervisor 仍在管理运行，不续期绝对时限；结果仍必须由主会话按 `pi-init/task-result@1` 严格解析和验收。远程真实长任务、进程树完全终止和 reload 恢复仍需单独验证。
+
+### 2026-09-11：后台协作必须提供可见进度而非仅返回最终结果
+
+- 决定：`collaboration` 任务委派后立即在主会话状态栏显示运行阶段、任务进度和实时耗时，并在启动、原始结果返回和真实终态之间使用不同提示；TUI 进度弹窗与 `/agents` 面板通过定时刷新读取最新状态。子 Agent 运行记录由 supervisor 每 5 秒更新 `lastSeenAt`，用于区分仍在运行和 stale。
+- 原因：独立 Pi 子进程的 stdout 只在 `pi.exec` 完成后汇总，主会话在此期间处于空闲等待状态；没有显式状态时用户容易把正常后台执行误判为卡住，旧的静态弹窗也会继续显示过期快照。
+- 约束：状态栏和通知只表达已确认的生命周期事实；“结果已返回”不等同于主会话已通过 `pi-init/task-result@1` 验收。心跳表示 supervisor 仍在等待/管理子进程，不伪造子 Agent 的工具级进度；定时器必须在终态、会话关闭和弹窗关闭时清理。
+
 ### 2026-09-11：完成共享工作区协作迁移并退役 gmc/parallel_batch
 
 - 决定：正式采用共享 cwd、独立 Pi Agent 进程/session、Agent registry、消息、session tail、`/agents` Overlay 和文件 reservation；`workflowExecutor: "collaboration"` 通过 pi-init 的 roleModels 精确选择 provider/model/thinkingLevel，`task_workflow` 继续作为唯一规划、依赖和验收状态机。删除 gmc、Git worktree/integration 和 `parallel_batch` 旧并发入口，不保留新路径失败后的旧链路 fallback。

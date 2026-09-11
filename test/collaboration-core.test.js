@@ -476,6 +476,8 @@ test("collaboration executor preserves workflow dependencies and strict result a
     const dispatch = harness.sentMessages.find((item) => item.message.customType === "pi-init-collaboration-result");
     assert.ok(dispatch);
     assert.equal(dispatch.message.details.status, "completed");
+    assert.ok(harness.notifications.some(({ message }) => message.includes("已启动后台协作 Agent")));
+    assert.ok(harness.notifications.some(({ message }) => message.includes("已返回，主会话正在校验结果")));
     harness.branch.push({ type: "custom_message", customType: "pi-init-collaboration-result", details: dispatch.message.details });
     await emitExtensionEvent(harness, "agent_settled");
     const status = await workflow.execute("status", { action: "status" }, undefined, undefined, harness.context);

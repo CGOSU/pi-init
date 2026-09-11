@@ -353,8 +353,9 @@ export function createWorkflowDispatch(
       return;
     }
     if (started.executor === "collaboration") {
+      const executionStarted = markWorkflowTaskStarted(started, next.id);
       const requestId = nextCollaborationRequestId(next.id);
-      const delegated = beginWorkflowDelegation(started, { taskId: next.id, requestId, type: "collaboration" });
+      const delegated = beginWorkflowDelegation(executionStarted, { taskId: next.id, requestId, type: "collaboration" });
       deps.report.persistWorkflowState(delegated, ctx);
       void dispatchCollaborationTask(ctx, next.id, requestId);
       return;

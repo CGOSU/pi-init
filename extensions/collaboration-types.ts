@@ -4,6 +4,7 @@ export type CollaborationRole = "orchestrator" | "subagent";
 export type DeliveryKind = "direct" | "broadcast";
 export type LaunchMode = "process" | "cmux-pane";
 export type RunStatus = "launching" | "running" | "completed" | "failed";
+export type SubagentTerminationReason = "timeout" | "cancelled" | "killed";
 
 export interface FileReservation {
   pattern: string;
@@ -97,6 +98,8 @@ export interface SubagentRunRecord {
   launchMode: LaunchMode;
   startedAt: string;
   lastSeenAt: string;
+  timeoutMs?: number;
+  terminationReason?: SubagentTerminationReason;
   completedAt?: string;
   exitCode?: number;
   outputPreview?: string;

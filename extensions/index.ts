@@ -249,7 +249,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     await workflowDispatch.scheduleWorkflow(ctx);
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;
     pendingExternalRunSource = undefined;
     acceptedExternalRunSource = undefined;

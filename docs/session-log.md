@@ -2,6 +2,18 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-11：修复 collaboration 超时与终止结果误判
+
+- 完成内容：将共享协作 Agent 默认总时限从 5 分钟调整为 30 分钟，支持 `PI_COLLAB_TIMEOUT_MS` 的 1 秒至 24 小时覆盖，并把实际时限写入运行记录和启动通知。超时、取消、外部 killed 分别记录；code=0 不再覆盖终止状态。终止时尽力解析 stdout、session 和 `agent_end` 结果作为诊断，但不向工作流交付 `resultText`，保持严格 `pi-init/task-result@1` 门。
+- 验证：`npm test`，133 项全部通过；其中超时生命周期专项 6 项通过；`node scripts/check-line-count.js`、`git diff --check` 通过。
+- 遗留：尚未执行真实远程长时任务、进程树终止和 reload 恢复 E2E；当前已安装 Pi exec 的 per-run `env` 传递能力仍需单独核实。
+
+### 2026-09-11：优化 collaboration 后台工作流交互反馈
+
+- 完成内容：后台委派后在独立状态栏显示运行阶段、任务进度和实时耗时，启动与原始结果回传使用可区分的用户通知；TUI 工作流进度弹窗摘要和 `/agents` 面板支持定时刷新；supervisor 每 5 秒刷新运行记录心跳，减少把正常等待误判为 stale。协作任务在实际委派时记录 `startedAt`，补齐任务耗时和整体耗时口径。
+- 验证：`npm test`，127 项全部通过；`node scripts/check-line-count.js`、`git diff --check` 通过（Windows 工作区仅有预期的 LF/CRLF 转换提示）。
+- 遗留：尚未在真实交互式 Pi TUI 中进行视觉验收；心跳反映 supervisor 对子进程的管理状态，不提供子 Agent 工具级实时输出；未执行真实远程连续多任务 workflow。
+
 ### 2026-09-11：完成 Windows collaboration CLI 启动安全修复
 
 - 完成内容：`extensions/collaboration-spawn.ts` 仅在确认 `cli.js` 与 Pi 运行标记后复用 `process.execPath + process.argv[1]`，相对入口按父进程 cwd 解析；fallback 使用 `cmd.exe /d /s /c pi.cmd`，并将多行 system prompt/任务内容写入随机临时文件，只传递安全相对路径。带 shell 特殊字符的 CLI 路径或固定参数 fail-closed；`test/collaboration-core.test.js` 增加入口校验、文件传输、特殊字符和 Windows shim 边界测试。

@@ -14,17 +14,25 @@ class AgentsOverlay {
   private readonly selfName: string;
   private readonly done: (value?: unknown) => void;
   private readonly theme: { fg?: (color: string, text: string) => string; bold?: (text: string) => string };
+  private readonly refreshTimer: ReturnType<typeof setInterval>;
 
   constructor(
     dirs: CollaborationDirs,
     selfName: string,
     done: (value?: unknown) => void,
     theme: { fg?: (color: string, text: string) => string; bold?: (text: string) => string },
+    requestRender: () => void,
   ) {
     this.dirs = dirs;
     this.selfName = selfName;
     this.done = done;
     this.theme = theme;
+    this.refreshTimer = setInterval(requestRender, 1000);
+    this.refreshTimer.unref?.();
+  }
+
+  dispose(): void {
+    clearInterval(this.refreshTimer);
   }
 
   render(_width: number): string[] {
@@ -61,9 +69,16 @@ export async function openAgentsOverlay(ctx: ExtensionContext, dirs: Collaborati
     ctx.ui.notify("当前上下文不支持 Agents Overlay；请使用 agent_message action=list 或 status。", "warning");
     return;
   }
-  await ctx.ui.custom(
-    (_tui: unknown, theme: { fg?: (color: string, text: string) => string; bold?: (text: string) => string }, _kb: unknown, done: (value?: unknown) => void) =>
-      new AgentsOverlay(dirs, selfName, done, theme),
-    { title: "Agents", overlay: true },
-  );
+  let overlay: AgentsOverlay | undefined;
+  try {
+    await ctx.ui.custom(
+      (tui: { requestRender?: () => void }, theme: { fg?: (color: string, text: string) => string; bold?: (text: string) => string }, _kb: unknown, done: (value?: unknown) => void) => {
+        overlay = new AgentsOverlay(dirs, selfName, done, theme, () => tui.requestRender?.());
+        return overlay;
+      },
+      { title: "Agents", overlay: true },
+    );
+  } finally {
+    overlay?.dispose();
+  }
 }

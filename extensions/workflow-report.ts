@@ -56,9 +56,92 @@ export function createWorkflowReport(
   state: ExtensionRuntimeState,
   deps: WorkflowReportDependencies,
 ) {
+  const WORKFLOW_STATUS_KEY = "pi-init-workflow";
+  const WORKFLOW_STATUS_REFRESH_MS = 1000;
+  let workflowStatusTimer: ReturnType<typeof setInterval> | undefined;
+  let workflowStatusContext: ExtensionContext | undefined;
+  function stopWorkflowStatusTimer() {
+    if (workflowStatusTimer) clearInterval(workflowStatusTimer);
+    workflowStatusTimer = undefined;
+    workflowStatusContext = undefined;
+  }
+  function compactTaskId(taskId: string | undefined) {
+    if (!taskId) return undefined;
+    return taskId.length > 32 ? `${taskId.slice(0, 29)}...` : taskId;
+  }
+
+  function formatWorkflowStatusDuration(milliseconds: number | undefined) {
+    if (milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds < 0) return undefined;
+    const seconds = Math.floor(milliseconds / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  }
+
+  function workflowActivityLabel(workflowState: WorkflowState) {
+    const task = workflowState.currentTaskId ? getWorkflowTask(workflowState, workflowState.currentTaskId) : undefined;
+    if (workflowState.status === "replanning") return "等待架构师重规划";
+    if (workflowState.status === "paused") return "已暂停";
+    if (workflowState.status === "completed") return "已完成";
+    if (workflowState.status === "cancelled") return "已取消";
+    if (!task) return "等待调度";
+    const worker = workflowState.executor === "collaboration" ? "协作 Agent" : "子任务";
+    if (task.delegation?.status === "spawning") return `正在启动${worker}`;
+    if (task.delegation?.status === "running") return `后台${worker}运行中`;
+    if (task.delegation?.status === "stop-requested") return `正在停止${worker}`;
+    if (workflowState.executor === "subtask") return "后台子任务运行中";
+    return "任务执行中";
+  }
+
+  function renderWorkflowStatus(ctx: ExtensionContext) {
+    const workflowState = state.workflowState;
+    if (!workflowState || ["completed", "cancelled"].includes(workflowState.status)) {
+      ctx.ui.setStatus(WORKFLOW_STATUS_KEY, undefined);
+      return;
+    }
+
+    const progress = workflowProgress(workflowState);
+    const elapsed = workflowState.status === "running"
+      ? formatWorkflowStatusDuration(getWorkflowElapsedDuration(workflowState))
+      : undefined;
+    const task = compactTaskId(progress.currentTaskId);
+    const parts = [
+      workflowState.status === "running" ? "⏳" : "⏸",
+      workflowActivityLabel(workflowState),
+      `${progress.completed}/${progress.total}`,
+      task,
+      elapsed ? `已运行 ${elapsed}` : undefined,
+    ].filter(Boolean);
+    const color = workflowState.status === "running" ? "accent" : "warning";
+    ctx.ui.setStatus(WORKFLOW_STATUS_KEY, ctx.ui.theme?.fg?.(color, parts.join(" · ")) ?? parts.join(" · "));
+  }
+
   function updateWorkflowStatus(ctx: ExtensionContext) {
     deps.roleRuntime.refreshRoleStatus(ctx, state.roleModeStatus);
-    ctx.ui.setStatus("pi-init-workflow", undefined);
+    workflowStatusContext = ctx;
+    renderWorkflowStatus(ctx);
+    if (!state.workflowState || state.workflowState.status !== "running") {
+      stopWorkflowStatusTimer();
+      return;
+    }
+    if (workflowStatusTimer) return;
+    workflowStatusTimer = setInterval(() => {
+      const current = workflowStatusContext;
+      if (!current || state.runtimeDisposed) {
+        stopWorkflowStatusTimer();
+        return;
+      }
+      renderWorkflowStatus(current);
+    }, WORKFLOW_STATUS_REFRESH_MS);
+    workflowStatusTimer.unref?.();
+  }
+
+  function dispose(ctx?: ExtensionContext) {
+    stopWorkflowStatusTimer();
+    if (ctx?.hasUI) ctx.ui.setStatus(WORKFLOW_STATUS_KEY, undefined);
   }
 
   function persistWorkflowState(next: WorkflowState, ctx: ExtensionContext) {
@@ -106,19 +189,44 @@ export function createWorkflowReport(
     }
 
     const workflowState = state.workflowState;
+    let stopLiveRefresh: (() => void) | undefined;
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-      const statusLabel = workflowState?.status === "running"
-        ? "运行中"
-        : workflowState?.status === "replanning"
-          ? "等待架构师重规划"
-          : workflowState?.status === "paused"
-            ? "已暂停"
-            : workflowState?.status === "completed"
-              ? "已完成"
-              : workflowState?.status === "cancelled"
-                ? "已取消"
-                : "无活动";
-      const progress = workflowState ? workflowProgress(workflowState) : undefined;
+      const summary = new Text("", 0, 0);
+      const refreshSummary = () => {
+        const current = state.workflowState;
+        const statusLabel = current?.status === "running"
+          ? "运行中"
+          : current?.status === "replanning"
+            ? "等待架构师重规划"
+            : current?.status === "paused"
+              ? "已暂停"
+              : current?.status === "completed"
+                ? "已完成"
+                : current?.status === "cancelled"
+                  ? "已取消"
+                  : "无活动";
+        const progress = current ? workflowProgress(current) : undefined;
+        summary.setText(theme.fg("text", current
+          ? [
+              `状态  ${statusLabel}`,
+              `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
+              `总任务开始时间  ${formatWorkflowTimestamp(getWorkflowExecutionBounds(current).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
+              `总任务已运行时间  ${formatWorkflowElapsedDuration(current)}`,
+              `执行器  ${workflowExecutorLabel(current.executor)}`,
+              `规划  ${current.plan.summary}`,
+              ...(current.currentTaskId ? [`当前任务  ${current.currentTaskId}`] : []),
+              ...(current.pauseReason ? [`暂停原因  ${current.pauseReason}${current.taskPauseReason ? ` · ${current.taskPauseReason}` : ""}`] : []),
+              ...getWorkflowBlockDetails(current).flatMap(({ taskId, reason, suggestion }) => [
+                `阻塞原因  任务 ${taskId} · ${reason}`,
+                `建议解决方法  ${suggestion}`,
+              ]),
+              ...(current.pendingRevision ? [
+                `待处理 revision  ${current.pendingRevision.revisionId}`,
+                `用户方向  ${current.pendingRevision.direction}`,
+              ] : []),
+            ].join("\n")
+          : "当前没有活动工作流。"));
+      };
       const taskItems: SelectItem[] = workflowState?.tasks.map((task) => {
         const taskStatus = task.status === "completed"
           ? "✓ 已完成"
@@ -156,29 +264,18 @@ export function createWorkflowReport(
       list.onSelect = () => done();
       list.onCancel = () => done();
 
+      refreshSummary();
+      const liveRefresh = setInterval(() => {
+        refreshSummary();
+        tui.requestRender();
+      }, WORKFLOW_STATUS_REFRESH_MS);
+      liveRefresh.unref?.();
+      stopLiveRefresh = () => clearInterval(liveRefresh);
+
       const content = new Box(2, 1, (text) => theme.bg("customMessageBg", text));
       content.addChild(new Text(theme.bg("selectedBg", theme.fg("text", theme.bold(" 工作流任务进度 "))), 0, 0));
       content.addChild(new Spacer(1));
-      content.addChild(new Text(theme.fg("text", workflowState
-        ? [
-            `状态  ${statusLabel}`,
-            `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
-            `总任务开始时间  ${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
-            `总任务已运行时间  ${formatWorkflowElapsedDuration(workflowState)}`,
-            `执行器  ${workflowExecutorLabel(workflowState.executor)}`,
-            `规划  ${workflowState.plan.summary}`,
-            ...(workflowState.currentTaskId ? [`当前任务  ${workflowState.currentTaskId}`] : []),
-            ...(workflowState.pauseReason ? [`暂停原因  ${workflowState.pauseReason}${workflowState.taskPauseReason ? ` · ${workflowState.taskPauseReason}` : ""}`] : []),
-            ...getWorkflowBlockDetails(workflowState).flatMap(({ taskId, reason, suggestion }) => [
-              `阻塞原因  任务 ${taskId} · ${reason}`,
-              `建议解决方法  ${suggestion}`,
-            ]),
-            ...(workflowState.pendingRevision ? [
-              `待处理 revision  ${workflowState.pendingRevision.revisionId}`,
-              `用户方向  ${workflowState.pendingRevision.direction}`,
-            ] : []),
-          ].join("\n")
-        : "当前没有活动工作流。"), 0, 0));
+      content.addChild(summary);
       content.addChild(new Spacer(1));
       content.addChild(new Text(theme.fg("accent", theme.bold("任务列表")), 0, 0));
       content.addChild(list);
@@ -221,6 +318,9 @@ export function createWorkflowReport(
         maxHeight: "90%",
         margin: 1,
       },
+    }).finally(() => {
+      stopLiveRefresh?.();
+      stopLiveRefresh = undefined;
     });
   }
 
@@ -380,6 +480,7 @@ export function createWorkflowReport(
 
   return {
     updateWorkflowStatus,
+    dispose,
     persistWorkflowState,
     formatWorkflowState,
     formatWorkflowBlockNotice: (workflowState: WorkflowState) => {
