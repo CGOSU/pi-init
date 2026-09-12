@@ -488,6 +488,14 @@ test("task_workflow 区分中间任务和最终工作流报告并保留样式", 
   assert.doesNotMatch(workflowRendered, /schema：npm test：通过/);
   assert.doesNotMatch(workflowRendered, /<muted>|<dim>/);
 
+  const statusRendered = workflowTool.renderResult(
+    { isError: false, content: [{ type: "text", text: "工作流已更新" }], details: completed },
+    { expanded: false },
+    theme,
+  ).render(240).join("\n");
+  assert.match(statusRendered, /<success>✓ <\/success><accent>工作流已完成<\/accent>/);
+  assert.doesNotMatch(statusRendered, /工作流已完成 · \d+\/\d+/);
+
   const passedOnlyReport = report.formatWorkflowTaskCompletion({
     ...intermediate.tasks[0],
     verification: ["npm test：通过"],

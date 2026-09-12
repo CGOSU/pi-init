@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-12：明确工作流完成态的工具结果文案
+
+- 完成内容：`task_workflow` 工具结果在工作流状态为 `completed` 时显示“✓ 工作流已完成”，不再显示任务分数；其他状态继续使用原有进度文案。
+- 验证：`node --test test/extension-roles.test.js`，15 项全部通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。
+- 遗留：未更新已安装 Pi package，未 reload/重启当前 Pi 进程，未提交、未推送。
+
 ### 2026-09-12：修复手动模式角色模型被内部切换误写
 
 - 完成内容：确认 `pi.setModel` 会等待 `model_select` 扩展处理器；`applyRole` 切换模型期间新增内部事件抑制，避免手动模式把目标模型写入旧活动角色；原生 `/model` 写回行为保持不变。新增 `test/role-model-persistence.test.js` 回归覆盖。

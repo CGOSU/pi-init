@@ -430,7 +430,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }
       const progress = workflowProgress(details);
       const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";
-      let text = theme.fg("success", "✓ ") + theme.fg("accent", `工作流 ${progress.completed}/${progress.total}`) + theme.fg("muted", current);
+      const workflowLabel = details.status === "completed"
+        ? "工作流已完成"
+        : `工作流 ${progress.completed}/${progress.total}`;
+      let text = theme.fg("success", "✓ ") + theme.fg("accent", workflowLabel) + theme.fg("muted", current);
       if (details.status === "paused") {
         text += theme.fg("warning", " · 已暂停");
         const blockNotice = workflowReport.formatWorkflowBlockNotice(details);
