@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-12：修复 pi-usage 扫描 SoL-Pi 归档导致的 DuckDB 事务失败
+
+- 完成内容：`listSessionFiles` 跳过 session 目录下的 `sol-pi` 子树，避免将 SoL-Pi 的 `observation-pack/ledger.jsonl` 等内部归档误当作 Pi session；新增回归测试覆盖归档排除。根因与复现细节见 [`docs/pitfalls.md`](pitfalls.md)。
+- 测试：`node --test test/pi-usage.test.js test/pi-usage-range.test.js`，19 项通过；`node scripts/check-line-count.js` 通过；`git diff --check` 通过（仅 CRLF 转换警告）；使用工作区源码执行 `node scripts/pi-usage.js --update` 成功完成更新。
+- 遗留：PATH 中的全局 `pi-usage.cmd` 仍指向已安装旧版本，直接执行仍会复现旧错误；需更新全局 package 或改用工作区脚本后再运行。
+
 ### 2026-09-12：恢复严格 architect 边界
 
 - 完成内容：将 `architect` 运行时守卫收紧为仅允许 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`；读取、搜索、浏览器、shell、编辑、写入、脚本、协作、MCP/mcpScript、直连 MCP 和未知工具均 fail-closed。同步扩展注册提示、工作流消息、公共 `pi-init-role-routing` Skill、`roles/architect.md` 和 README，明确 architect 只负责思考、分析、决策、规划和安排，证据取证由 `docs-commit` 结构化交接。

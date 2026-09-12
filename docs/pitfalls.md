@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-12：SoL-Pi 归档 JSONL 被 pi-usage 当作 session 扫描
+
+- 日期：2026-09-12；
+- 现象：执行 PATH 中旧版 `pi-usage --update` 时出现 `Failed to append: Current transaction is aborted (please ROLLBACK)`；扫描到的 SoL-Pi `observation-pack/ledger.jsonl` 含重复活动事件键，同一 `(source_file, entry_key)` 写入主键表后使当前 DuckDB 事务中止。
+- 根因：`listSessionFiles` 原先递归收集 sessions 目录下所有 `.jsonl`，没有排除 SoL-Pi 在 session 目录内创建的 `sol-pi` 归档子树；`activity_events` 使用主键约束且 appender 在失败后只暴露事务已中止错误。
+- 修复：扫描 session 文件时跳过名为 `sol-pi` 的目录，并增加归档排除回归测试；工作区源码的 `node scripts/pi-usage.js --update` 已成功。
+- 验证：`node --test test/pi-usage.test.js test/pi-usage-range.test.js` 19 项通过；`node scripts/check-line-count.js` 和 `git diff --check` 通过。全局 `pi-usage.cmd` 尚未更新，仍使用旧版代码。
+
 ### 2026-09-11：Windows 被终止的 cmd/Pi 进程可能以 code=0 结束
 
 - 日期：2026-09-11；

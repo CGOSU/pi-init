@@ -54,6 +54,7 @@
 
 ## 最近一次更新
 
+- 2026-09-12：`pi-usage --update` 现在跳过 session 目录下的 SoL-Pi 内部归档 JSONL，避免重复活动事件触发 DuckDB 主键事务失败；实现与验证见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：完成 architect 职责边界调整及验证收尾；当前事实见本节，决策与实现验证分别见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - 2026-09-11：修复 collaboration Agent 5 分钟截断与 code=0 误导：默认总时限调整为 30 分钟，支持 `PI_COLLAB_TIMEOUT_MS`（1 秒至 24 小时），区分 timeout/cancelled/killed，终止时保留 stdout/session 诊断但不交付结果；新增 `agent_end` 解析和生命周期测试。`npm test` 133 项通过。
 - 2026-09-11：优化 collaboration 后台交互反馈；新增工作流状态栏的运行阶段/进度/实时耗时、后台启动与结果回传通知，TUI 进度弹窗和 `/agents` 面板动态刷新，运行记录每 5 秒刷新心跳；协作任务从实际委派时记录开始时间。`npm test` 127 项通过。

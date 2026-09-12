@@ -338,6 +338,7 @@ export function listSessionFiles(directory, files = []) {
     throw error;
   }
   for (const entry of entries) {
+    if (entry.isDirectory() && entry.name === "sol-pi") continue;
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) listSessionFiles(file, files);
     else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(file);

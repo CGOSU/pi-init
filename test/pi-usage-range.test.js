@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scanSessionFile } from "../scripts/pi-usage/core.js";
+import { listSessionFiles, scanSessionFile } from "../scripts/pi-usage/core.js";
 import * as helpers from "./helpers.js";
 import { formatReport, parseUsageRange, summarizeUsage } from "../scripts/pi-usage.js";
 
 const { mkdir, path, withTempDirectory, writeFile } = helpers;
+
+test("pi-usage 不扫描 SoL-Pi 内部归档 JSONL", async () => {
+  await withTempDirectory(async (directory) => {
+    const sessions = path.join(directory, "sessions");
+    const sessionFile = path.join(sessions, "project", "session.jsonl");
+    const archiveFile = path.join(sessions, "project", "session-id", "sol-pi", "observation-pack", "ledger.jsonl");
+    await mkdir(path.dirname(sessionFile), { recursive: true });
+    await mkdir(path.dirname(archiveFile), { recursive: true });
+    await writeFile(sessionFile, "{}\n", "utf8");
+    await writeFile(archiveFile, "{}\n", "utf8");
+
+    assert.deepEqual(listSessionFiles(sessions), [sessionFile]);
+  });
+});
 
 function localDate(day, hour, minute) {
   return new Date(2026, 7, day, hour, minute).toISOString();
