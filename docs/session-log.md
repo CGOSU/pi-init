@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-12：修复手动模式角色模型被内部切换误写
+
+- 完成内容：确认 `pi.setModel` 会等待 `model_select` 扩展处理器；`applyRole` 切换模型期间新增内部事件抑制，避免手动模式把目标模型写入旧活动角色；原生 `/model` 写回行为保持不变。新增 `test/role-model-persistence.test.js` 回归覆盖。
+- 验证：`node --test test/extension-roles.test.js`，16 项通过；`npm test`，137 项通过；`node scripts/check-line-count.js`、`git diff --check` 通过（仅 Windows CRLF 转换警告）。
+- 遗留：尚未 reload/重启当前已安装 Pi package；未提交、未推送。
+
 ### 2026-09-12：修复 pi-usage 扫描 SoL-Pi 归档导致的 DuckDB 事务失败
 
 - 完成内容：`listSessionFiles` 跳过 session 目录下的 `sol-pi` 子树，避免将 SoL-Pi 的 `observation-pack/ledger.jsonl` 等内部归档误当作 Pi session；新增回归测试覆盖归档排除。根因与复现细节见 [`docs/pitfalls.md`](pitfalls.md)。

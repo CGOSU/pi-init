@@ -179,7 +179,19 @@ function createExtensionHarness(branch = [], options = {}) {
     },
     async setModel(model) {
       if (options.setModelResult === false) return false;
+      const previousModel = context?.model;
       if (context) context.model = model;
+      if (
+        options.emitModelSelectOnSetModel
+        && context
+        && (!previousModel
+          || previousModel.provider !== model.provider
+          || previousModel.id !== model.id)
+      ) {
+        for (const handler of handlers.get("model_select") ?? []) {
+          await handler({ type: "model_select", model, previousModel, source: "set" }, context);
+        }
+      }
       return true;
     },
     async sendMessage(message, options) {

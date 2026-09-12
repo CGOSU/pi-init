@@ -60,6 +60,7 @@ export function createRoleRuntime(
   state: ExtensionRuntimeState,
   deps: RoleRuntimeDependencies,
 ) {
+  let internalModelSelectionDepth = 0;
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return undefined;
 
@@ -134,12 +135,12 @@ export function createRoleRuntime(
     else delete next.roleModels;
     state.sessionRoleConfigOverrides = next;
   }
-
   async function writeBackManualModelSelection(
     event: { model?: unknown },
     ctx: ExtensionContext,
     config: ResolvedRoleConfig,
   ) {
+    if (internalModelSelectionDepth > 0) return; // Ignore pi.setModel()'s internal model_select event.
     const role = state.activeRole?.role;
     if (!role || !Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
       ctx.ui.notify(
@@ -152,7 +153,6 @@ export function createRoleRuntime(
       ctx.ui.notify("手动模式写回仅允许在受信任项目中运行；本次切换未写入项目文件。", "info");
       return;
     }
-
     let reference: { provider: string; model: string };
     try {
       reference = normalizeModelReference(event.model, "手动切换模型");
@@ -373,9 +373,9 @@ export function createRoleRuntime(
         `角色 ${roleLabel(normalizedRole)} 配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
       );
     }
-    if (!(await pi.setModel(model))) {
-      throw new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
-    }
+    internalModelSelectionDepth += 1;
+    try { if (!(await pi.setModel(model))) throw new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`); }
+    finally { internalModelSelectionDepth -= 1; }
 
     pi.setThinkingLevel(target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
     const result = {

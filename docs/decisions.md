@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-12：手动模式区分内部角色切换与原生模型切换
+
+- 决定：`applyRole` 调用 Pi `setModel` 期间抑制 `model_select` 的手动模式写回；在该事件写回通道中，只有宿主原生模型切换才更新活动角色的 `.pi/role-models.json`，显式 `/pi-init save` 仍按暂存配置保存。
+- 原因：Pi 的 `setModel` 会等待 `model_select` 扩展处理器；若在 `applyRole` 更新 `activeRole` 前写回，事件会把目标模型错误保存到切换前的旧角色。
+- 约束：抑制范围仅覆盖内部 `setModel` 调用，保留手动模式原生 `/model` 的既有写回语义。
+
 ### 2026-09-12：恢复严格 architect 工具边界并突出规划职责
 
 - 决定：`architect` 只负责思考、分析、决策、规划和安排；所有仓库、代码、测试、文档及外部事实取证由 `docs-commit` 完成并以结构化证据包交接。运行时仅允许 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status")`，对读取、搜索、浏览器、shell、编辑、写入、脚本、协作、MCP/mcpScript、直连 MCP 和未知工具一律 fail-closed。
