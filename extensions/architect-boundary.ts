@@ -25,12 +25,20 @@ function isAllowedArchitectToolCall(toolName: unknown, input: unknown): boolean 
 export function createArchitectBoundary(
   pi: ExtensionAPI,
   getActiveRole: (ctx: ExtensionContext) => string | undefined,
+  onBlocked?: (toolName: string, ctx: ExtensionContext) => void,
 ) {
   pi.on("tool_call", (event, ctx) => {
     if (getActiveRole(ctx) !== ARCHITECT_ROLE) return undefined;
     const toolName = typeof event?.toolName === "string" ? event.toolName : undefined;
     if (isAllowedArchitectToolCall(toolName, event?.input)) return undefined;
 
+    if (toolName) {
+      try {
+        onBlocked?.(toolName, ctx);
+      } catch {
+        // Keep the architectural guard fail-closed even if state reporting fails.
+      }
+    }
     return {
       block: true,
       reason: toolName === "task_workflow" ? TASK_WORKFLOW_BOUNDARY_REASON : ARCHITECT_BOUNDARY_REASON,

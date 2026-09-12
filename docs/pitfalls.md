@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-12：architect 直接触发 subtask 会让工作流静默停在 spawning
+
+- 日期：2026-09-12；
+- 现象：工作流规划完成后主会话仍为 architect，隐藏派发提示要求调用 `subtask`；边界守卫会阻止调用，但旧 delegation 没有进入 blocked，主界面也没有明确恢复路径。
+- 根因：`dispatchSubtaskTask` 原先绕过了任务角色切换，且 `architect-boundary` 只返回阻止结果，没有通知工作流状态机处理正在派发的任务。
+- 修复：派发前按任务角色自动切换；增加 architect 边界阻止回写、派发失败处理、30 秒启动超时和状态栏/通知反馈；实际观察到 `subtask` 工具调用后才标记后台运行。
+- 验证：`node --test test/workflow-dispatch.test.js --test-concurrency=1` 3 项、`node --test --test-concurrency=1` 140 项通过；真实 subtask fork 交互式 E2E 尚未完成。
+
 ### 2026-09-12：手动模式内部角色切换误写回旧角色模型
 
 - 日期：2026-09-12；

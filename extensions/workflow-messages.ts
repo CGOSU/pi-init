@@ -170,12 +170,12 @@ export function createWorkflowMessages(
       .replace("Work in the current shared checkout.", "Work in the current shared checkout and reserve paths with agent_message before editing.");
   }
 
-  function sendSubtaskDispatchMessage(ctx: ExtensionContext, taskId: string) {
-    if (!state.workflowState || state.workflowState.currentTaskId !== taskId) return;
+  async function sendSubtaskDispatchMessage(ctx: ExtensionContext, taskId: string) {
+    if (!state.workflowState || state.workflowState.currentTaskId !== taskId) return false;
     state.workflowDispatchInFlight = false;
     try {
       deps.setInternalContinuationPending(true);
-      deps.pi.sendMessage(
+      await deps.pi.sendMessage(
         {
           customType: "pi-init-subtask-dispatch",
           content: [
@@ -191,9 +191,11 @@ export function createWorkflowMessages(
         },
         { triggerTurn: true },
       );
+      return true;
     } catch (error) {
       deps.setInternalContinuationPending(false);
       ctx.ui.notify(`无法派发 subtask 任务 ${taskId}：${textOf(error)}`, "error");
+      return false;
     }
   }
 

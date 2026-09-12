@@ -32,6 +32,7 @@
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可通过 `.pi/role-models.json` 的 `roleModels` 映射覆盖或启用其他合法角色；保存配置使用 `schemaVersion: 2`，并保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。旧版顶层角色字段仅自动读取兼容，显式 `/pi-init save` 时才规范化；旧项目生成的角色 Skill 需人工确认后删除。
 - 模型安全来自角色和工作流配置中的明确引用而非 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧字段被忽略）：角色和 collaboration 工作流子 Agent 使用完整 `provider/model`，由 pi-init roleModels 精确解析并传递 `--model`/`--thinking`，不使用 fork type/TOML fallback；缺失角色或模型显式失败。原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截（见 `docs/decisions.md`）。`/pi-init config` 候选列表展示全部已注册模型，跨 Provider 选择随时可暂存。
 - `workflowExecutor` 支持 `local`（默认）、`subtask` 和 `collaboration`。collaboration 通过共享 cwd 的独立 Pi Agent 进程执行，任务使用 roleModels 的精确模型/推理配置，结果经 `pi-init-collaboration-result` 回到主会话；主扩展唯一写入工作流状态，严格校验 `pi-init/task-result@1`，requestId/recordId 不匹配或无效结果安全阻塞，reload 不自动重新派发非终态任务。后台委派期间状态栏显示运行阶段、进度和实时耗时，启动/结果回传会通知用户，TUI 进度弹窗与 `/agents` 面板动态刷新；运行记录每 5 秒刷新 supervisor 心跳，避免真实运行被误标为 stale。单次协作默认总时限为 30 分钟，可由 `PI_COLLAB_TIMEOUT_MS` 配置 1 秒至 24 小时；超时、取消和外部终止区分记录且即使退出码为 0 仍失败，终止时保存 stdout/session 仅作诊断，干净退出才交付结果。Windows 启动优先复用已确认的 Pi `cli.js`，cmd fallback 把多行提示写入随机临时文件并只传安全相对路径；无法安全传递的路径/参数 fail-closed。旧配置值 `subagents` 继续映射为 `subtask`，不会静默改变旧执行器。
+- subtask 工作流在派发前自动切换到任务角色；architect 任务不会交给 subtask 执行。派发阶段状态栏显示“准备派发/等待子任务派发”，实际工具调用后显示后台运行；边界拦截和 30 秒未启动超时都会持久化阻塞并提示 retry。
 - 初始化不再生成 `.pi/agents/*.md` 代理脚手架（pi-subagents 专用，随 RPC 执行器一并移除）；subtask fork 复用主会话角色与工具，不需要额外代理定义。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。通用任务执行流程、证据门控、`read`/`edit` 参数、角色交接和真实验证规则由 package 公共 Skill 维护，生成的 `AGENTS.md` 只保留项目特有规则并引用该 Skill。
@@ -54,6 +55,7 @@
 
 ## 最近一次更新
 
+- 2026-09-12：修复 subtask 工作流从 architect 派发时的角色错位和无反馈卡住：派发前切换任务角色，边界失败/30 秒启动超时会暂停任务并显示 retry 建议；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`task_workflow` 工具结果的完成态改为仅显示“工作流已完成”，不再显示任务分数；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`pi-usage --update` 现在跳过 session 目录下的 SoL-Pi 内部归档 JSONL，避免重复活动事件触发 DuckDB 主键事务失败；实现与验证见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：完成 architect 职责边界调整及验证收尾；当前事实见本节，决策与实现验证分别见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。

@@ -89,10 +89,10 @@ export function createWorkflowReport(
     if (workflowState.status === "cancelled") return "已取消";
     if (!task) return "等待调度";
     const worker = workflowState.executor === "collaboration" ? "协作 Agent" : "子任务";
-    if (task.delegation?.status === "spawning") return `正在启动${worker}`;
+    if (task.delegation?.status === "spawning") return workflowState.executor === "subtask" ? "等待子任务派发" : `正在启动${worker}`;
     if (task.delegation?.status === "running") return `后台${worker}运行中`;
     if (task.delegation?.status === "stop-requested") return `正在停止${worker}`;
-    if (workflowState.executor === "subtask") return "后台子任务运行中";
+    if (workflowState.executor === "subtask") return "准备派发子任务";
     return "任务执行中";
   }
 

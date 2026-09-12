@@ -72,7 +72,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
   const collaborationRuntime = createCollaborationRuntime(pi); collaborationRuntime.setProfileResolver(createCollaborationRoleResolver(roleRuntime));
-  createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
+  createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role, (toolName, ctx) => workflowDispatch?.handleArchitectBlockedToolCall(ctx, toolName));
   const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
@@ -84,6 +84,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.currentContext = ctx;
     },
   });
+  pi.on("tool_call", (event, ctx) => workflowDispatch.observeSubtaskToolCall(ctx, event.toolName));
   const workflowActions = createWorkflowActions(runtimeState, {
     roleRuntime,
     dispatch: workflowDispatch,

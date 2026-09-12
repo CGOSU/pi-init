@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-12：subtask 派发必须先离开 architect 并对失败显式收敛
+
+- 决定：architect 继续保持仅规划边界；`subtask` 工作流在发送派发提示前自动切换到当前任务角色，`architect` 角色任务不得使用 subtask 执行器。architect 边界拦截、派发发送失败或 30 秒内未出现 subtask 工具调用时，将任务持久化为 blocked/paused，并在主界面提供 retry 建议。
+- 原因：规划完成后主会话可能仍处于 architect；直接要求该角色调用 subtask 会被正确守卫阻止，但旧流程没有回写 delegation 状态，导致界面无反馈且工作流停留在 spawning。
+- 约束：不放宽 architect 对 subtask、协作、执行和未知工具的 fail-closed 守卫；只有观察到实际 subtask 工具调用后，状态才从等待派发切换为后台运行。
+
 ### 2026-09-12：手动模式区分内部角色切换与原生模型切换
 
 - 决定：`applyRole` 调用 Pi `setModel` 期间抑制 `model_select` 的手动模式写回；在该事件写回通道中，只有宿主原生模型切换才更新活动角色的 `.pi/role-models.json`，显式 `/pi-init save` 仍按暂存配置保存。

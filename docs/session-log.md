@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-12：修复 subtask 派发角色错位和无反馈卡住
+
+- 完成内容：subtask 派发前自动切换到任务角色；architect 角色任务由 subtask 执行器明确阻塞；新增 architect 边界失败回写、30 秒启动超时、派发/后台运行状态和用户通知；补充角色切换、边界失败与超时回归测试。
+- 验证：`node --test test/workflow-dispatch.test.js --test-concurrency=1`，3 项通过；`node --test --test-concurrency=1`，140 项通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。`node scripts/check-line-count.js` 仍被基线文件 `test/extension-roles.test.js` 的 505 行阻塞，本次未修改该无关文件。
+- 遗留：未更新已安装 Pi package，未 reload/重启当前 Pi 进程，未提交、未推送；尚未进行真实 subtask fork 的交互式 E2E。
+
 ### 2026-09-12：明确工作流完成态的工具结果文案
 
 - 完成内容：`task_workflow` 工具结果在工作流状态为 `completed` 时显示“✓ 工作流已完成”，不再显示任务分数；其他状态继续使用原有进度文案。
