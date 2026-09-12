@@ -338,7 +338,7 @@ test("auto 小计划绕过提示按任务角色顺序执行", async () => {
   });
 });
 
-test("重规划提示复用新鲜证据并限制定向读取", async () => {
+test("重规划提示明确 architect 不取证并交由 docs-commit 提供证据", async () => {
   await withTempDirectory(async (directory) => {
     const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
     const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
@@ -365,10 +365,10 @@ test("重规划提示复用新鲜证据并限制定向读取", async () => {
     const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
     assert.ok(message);
     assert.match(message.message.content, /architect.*docs-commit/);
-    assert.match(message.message.content, /architect.*低风险只读定位/);
-    assert.match(message.message.content, /复杂或高风险工作仍先 switch_role 到 docs-commit/);
-    assert.match(message.message.content, /核对最新实现、直接调用方和测试后再规划/);
-    assert.doesNotMatch(message.message.content, /architect.*不自行探索/);
+    assert.match(message.message.content, /architect.*不取证、不执行、不连接 MCP/);
+    assert.match(message.message.content, /先 switch_role 到 docs-commit/);
+    assert.match(message.message.content, /核对后再交回 architect 规划/);
+    assert.match(message.message.content, /architect 不得自行完成低风险只读检查/);
     assert.doesNotMatch(message.message.content, /请重新检查仓库和当前事实/);
   });
 });
@@ -466,13 +466,13 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /## 路由/);
   assert.match(sharedSkill, /明确对应实现\/测试的指令直接交给 `developer-test`/);
   assert.match(sharedSkill, /不明确、含糊、需要需求判断或跨职责的指令从 `architect` 开始/);
-  assert.match(sharedSkill, /`docs-commit` 收集最小结构化证据/);
+  assert.match(sharedSkill, /凡任务需要仓库、代码、测试、文档或外部事实取证，均由 `docs-commit` 完成/);
   assert.match(sharedSkill, /## 共享硬约束/);
   assert.match(sharedSkill, /`read` 只接收 `path`、`offset`、`limit`/);
   assert.match(sharedSkill, /每个 `oldText` 调用前必须精确匹配一次/);
   assert.match(sharedSkill, /运行时守卫对无效或歧义写入 fail-closed/);
   assert.match(sharedSkill, /充分证据不重复读取/);
-  assert.match(roleProfiles[0], /低风险判断可直接使用受限只读探索/);
+  assert.match(roleProfiles[0], /所有需要的仓库、代码、测试、文档和外部事实取证，均由 `docs-commit` 完成/);
   assert.match(roleProfiles[1], /按风险选择验证范围/);
   assert.match(roleProfiles[1], /不默认运行全量测试、类型检查或构建/);
   assert.match(roleProfiles[2], /交接结构化证据包/);
@@ -482,6 +482,8 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.match(sharedSkill, /roles\/docs-commit\.md/);
   assert.doesNotMatch([...roleProfiles, sharedSkill].join("\n"), /openai-codex|gpt-5\.6/);
   assert.match(roleProfiles[0], /architect/);
+  assert.match(roleProfiles[0], /架构师除 `switch_role` 与 `task_workflow.*外不得调用任何工具/);
+  assert.match(sharedSkill, /`architect` 不进行低风险或其他只读探索/);
   assert.match(roleProfiles[1], /developer-test/);
   assert.match(roleProfiles[2], /docs-commit/);
 });

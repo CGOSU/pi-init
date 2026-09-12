@@ -15,7 +15,7 @@ const COMMON_RULES = [
 ].join("\n");
 
 const ROLE_TOOLS: Record<string, string[]> = {
-  architect: ["read", "agent_message"],
+  architect: [],
   "developer-test": ["read", "write", "edit", "bash", "agent_message"],
   "docs-commit": ["read", "write", "edit", "bash", "agent_message"],
 };

@@ -55,6 +55,9 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
       return candidate.customType !== ROLE_RECOVERY_MESSAGE_TYPE;
     });
     const activeRole = state.activeRole?.role ? roleLabel(state.activeRole.role) : "未知";
+    const recoveryToolGuidance = state.activeRole?.role === "architect"
+      ? "当前角色为 architect；在 switch_role 成功前，仅允许查看工作流状态（task_workflow(action=\"status\")）或调用 switch_role；不得读取文件、搜索、浏览、编辑、写入、执行 shell/test、初始化项目、协作或提交完成结果。"
+      : "在 switch_role 成功前，只允许读取文件、查看工作流状态或调用 switch_role；不得编辑、写入、执行 shell/test、初始化项目或提交完成结果。";
     messages.push({
       role: "custom",
       customType: ROLE_RECOVERY_MESSAGE_TYPE,
@@ -63,7 +66,7 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
         "检测到上下文刚完成压缩。压缩恢复了任务内容，但不代表职责边界已经恢复。",
         `扩展记录的上一个角色：${activeRole}（仅供参考，不要直接沿用）。`,
         "恢复顺序：如存在活动工作流，先调用 task_workflow(action=\"status\")；然后根据用户目标和公共 pi-init-role-routing Skill 重新判断职责；最后必须调用 switch_role(role=...)。",
-        "在 switch_role 成功前，只允许读取文件、查看工作流状态或调用 switch_role；不得编辑、写入、执行 shell/test、初始化项目或提交完成结果。",
+        recoveryToolGuidance,
       ].join("\n"),
       display: false,
       details: { activeRole: state.activeRole?.role },
@@ -74,7 +77,8 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
 
   function guardToolCall(event: { toolName: string; input?: Record<string, unknown> }) {
     if (!state.roleRecoveryPending) return undefined;
-    if (event.toolName === "switch_role" || READ_ONLY_TOOLS.has(event.toolName)) return undefined;
+    if (event.toolName === "switch_role") return undefined;
+    if (state.activeRole?.role !== "architect" && READ_ONLY_TOOLS.has(event.toolName)) return undefined;
     if (event.toolName === "task_workflow" && event.input?.action === "status") return undefined;
     return {
       block: true,

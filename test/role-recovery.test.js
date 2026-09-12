@@ -40,6 +40,38 @@ async function withConfiguredHarness(mode, branch, options, run) {
   });
 }
 
+test("架构师恢复门只允许工作流状态和职责切换", async () => {
+  const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
+  const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const harness = createExtensionHarness(recoveryBranch(), {
+    model: architect,
+    availableModels: [architect, developer],
+  });
+  await emitExtensionEvent(harness, "session_start");
+
+  const context = getHandler(harness, "context");
+  const recoveryContext = context({
+    messages: [{ role: "user", content: "继续任务", timestamp: Date.now() }],
+  }, harness.context);
+  const recoveryMessage = recoveryContext.messages.at(-1);
+  assert.match(recoveryMessage.content, /当前角色为 architect/);
+  assert.match(recoveryMessage.content, /不得读取文件/);
+
+  const callTool = async (toolName, input = {}) => {
+    let blocked;
+    for (const handler of harness.handlers.get("tool_call") ?? []) {
+      const result = await handler({ toolName, input }, harness.context);
+      if (result?.block) blocked = result;
+    }
+    return blocked;
+  };
+  assert.equal((await callTool("read"))?.block, true);
+  assert.equal((await callTool("agent_message"))?.block, true);
+  assert.equal(await callTool("task_workflow", { action: "status" }), undefined);
+  assert.equal((await callTool("task_workflow", { action: "plan" }))?.block, true);
+  assert.equal(await callTool("switch_role", { role: "docs-commit" }), undefined);
+});
+
 test("上下文压缩后必须恢复职责才能执行写入工具", async () => {
   const harness = createExtensionHarness();
   await emitExtensionEvent(harness, "session_start");

@@ -5,6 +5,7 @@ import {
   createExtensionHarness,
   emitExtensionEvent,
 } from "./helpers.js";
+import { createCollaborationRoleResolver } from "../extensions/collaboration-role.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
@@ -25,71 +26,76 @@ function architectHarness() {
   });
 }
 
-test("architect 可直接只读定位，但拒绝写入、执行和未知工具", async () => {
+function assertArchitectBlocked(result, toolName) {
+  assert.equal(result?.block, true, toolName);
+  assert.match(result?.reason ?? "", /architect-boundary/);
+  assert.match(result?.reason ?? "", /不取证/);
+  assert.match(result?.reason ?? "", /不执行/);
+  assert.match(result?.reason ?? "", /不连接 MCP/);
+  assert.match(result?.reason ?? "", /switch_role/);
+}
+
+test("architect 仅允许职责切换和 task_workflow 规划控制", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
 
-  for (const toolName of ["switch_role", "task_workflow", "read", "grep", "find", "ls", "ffgrep", "fffind"]) {
-    assert.equal(await callToolCall(harness, toolName), undefined, toolName);
+  assert.equal(await callToolCall(harness, "switch_role", { role: "docs-commit" }), undefined);
+  for (const action of ["plan", "replan", "status"]) {
+    assert.equal(await callToolCall(harness, "task_workflow", { action }), undefined, action);
   }
 
+  for (const action of ["complete", "block", "resume", "retry", "cancel", "unknown", ""]) {
+    assertArchitectBlocked(await callToolCall(harness, "task_workflow", { action }), `task_workflow:${action}`);
+  }
+  assertArchitectBlocked(await callToolCall(harness, "task_workflow"), "task_workflow:missing-action");
+  assertArchitectBlocked(await callToolCall(harness, "task_workflow", null), "task_workflow:null-input");
+});
+
+test("architect 对取证、执行、MCP、协作和未知工具全部 fail-closed", async () => {
+  const harness = architectHarness();
+  await emitExtensionEvent(harness, "session_start");
+
   for (const toolName of [
+    "read",
+    "grep",
+    "find",
+    "ffgrep",
+    "fffind",
+    "browser",
+    "ls",
+    "shell",
     "bash",
     "powershell",
-    "mcp",
-    "mcp__penpot_execute_code",
     "edit",
     "write",
     "init_project",
+    "mcp",
+    "mcpScript",
+    "mcp__penpot_execute_code",
+    "direct-mcp",
     "subtask",
+    "agent_message",
     "future-exploration-tool",
   ]) {
-    const result = await callToolCall(harness, toolName);
-    assert.equal(result?.block, true, toolName);
-    assert.match(result?.reason ?? "", /architect-boundary/);
-    assert.match(result?.reason ?? "", /switch_role/);
+    assertArchitectBlocked(await callToolCall(harness, toolName), toolName);
   }
+
+  assertArchitectBlocked(
+    await callToolCall(harness, "browser", { command: "open https://example.com" }),
+    "browser-command",
+  );
 });
 
-test("architect 只允许安全的 browser 观察命令", async () => {
-  const harness = architectHarness();
-  await emitExtensionEvent(harness, "session_start");
-
-  for (const command of [
-    "open https://example.com",
-    "snapshot -i",
-    "get text",
-    "get title @e1",
-    "get url",
-    "wait 100",
-    "wait @e1",
-    "scroll down 200",
-    "screenshot --full",
-  ]) {
-    assert.equal(await callToolCall(harness, "browser", { command }), undefined, command);
-  }
-
-  for (const command of [
-    "click @e1",
-    "fill @e1 password",
-    "type @e1 text",
-    "select @e1 value",
-    "press Enter",
-    "persist on work",
-    "close",
-    "eval document.title",
-    "open file:///secret.txt",
-    "open https://example.com && get text",
-    "snapshot -i; get text",
-    "open https://example.com\nget text",
-  ]) {
-    const result = await callToolCall(harness, "browser", { command });
-    assert.equal(result?.block, true, command);
-    assert.match(result?.reason ?? "", /browser/);
-  }
-
-  const malformed = await callToolCall(harness, "browser", { command: "get cookies" });
-  assert.equal(malformed?.block, true);
+test("architect 协作 profile 不暴露取证或协作工具", async () => {
+  const resolver = createCollaborationRoleResolver({
+    readSessionRoleConfig: async () => ({
+      roleModels: { architect: { provider: "provider-x", model: "model-x", thinkingLevel: "max" } },
+    }),
+  });
+  const profile = await resolver("architect", {
+    modelRegistry: { find(provider, id) { return { provider, id }; } },
+  });
+  assert.deepEqual(profile.allowedTools, []);
 });
 
 test("非 architect 角色和未知角色不触发 architect 守卫", async () => {
@@ -100,6 +106,7 @@ test("非 architect 角色和未知角色不触发 architect 守卫", async () =
   await emitExtensionEvent(developerHarness, "session_start");
   assert.equal(await callToolCall(developerHarness, "read"), undefined);
   assert.equal(await callToolCall(developerHarness, "write"), undefined);
+  assert.equal(await callToolCall(developerHarness, "unknown-tool"), undefined);
 
   const unknownModel = { provider: "custom", id: "unknown-model" };
   const unknownHarness = createExtensionHarness([], {

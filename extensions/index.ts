@@ -401,14 +401,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "task_workflow",
     label: "Task Workflow",
     description:
-      `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect creates an ordered plan, Development and Test Engineers complete one task at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
+      `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; Development and Test Engineers complete one task at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect.",
-      "Before planning complex or high-risk work, architect must consume fresh structured evidence from docs-commit; low-risk planning may use bounded read-only inspection directly. Missing evidence or high-risk work requires docs-commit to check the latest implementation, direct callers, and tests.",
+      "Architect 不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；architect 不得读取、搜索、浏览、运行 shell、编辑、写入或调用任何其他工具。需要最新实现、直接调用方或测试等结构化证据时，先 switch_role 到 docs-commit，由 docs-commit 核对 latest implementation, direct callers, and tests 后再交回 architect 规划。fresh structured evidence from docs-commit 必须由 docs-commit 提供，architect 不得自行完成低风险只读检查。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
-      "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures.",
-      "After completion, continue only to the next ready task; with a pending revision, wait for architect to replan. Only architect may call replan with the exact revisionId and valid retained task IDs.",
+      "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
+      "After completion, continue only to the next ready task; with a pending revision, wait for architect to replan. Only architect may call replan with the exact revisionId and valid retained task IDs; architect may call only plan, replan, or status on task_workflow.",
     ],
     parameters: taskWorkflowParameters,
     renderCall(args, theme) {
@@ -457,7 +457,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Call switch_role when entering a responsibility selected by the project's role-routing Skill or crossing a role boundary; do not repeat it within the same responsibility.",
       "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before resuming implementation, tests, docs, or shell work when the role is not already re-established.",
-      "Use the role ID required by the current task; architect remains the planning role, while other configured role IDs may execute their assigned work.",
+      "Use the role ID required by the current task; architect only thinks, analyzes, decides, plans, and arranges responsibilities, while other configured role IDs may execute their assigned work. Architect must not gather evidence, execute commands, or connect to MCP.",
       "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
     ],
     parameters: switchRoleParameters,

@@ -173,9 +173,9 @@ pi-usage
 
 ### 读取与探索策略
 
-完整的读取、精确编辑、证据门控和验证规则统一遵循随 package 发布的公共 `pi-init-role-routing` Skill；README 不重复维护细节。目标明确的低风险任务由当前适合角色直接调查、实现和验证，不因普通实现选择建立工作流；恢复既定行为的 bug 不重新确认需求。只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问。
+完整的读取、精确编辑、证据门控和验证规则统一遵循随 package 发布的公共 `pi-init-role-routing` Skill；README 不重复维护细节。简单只读咨询可直接由适合的非 `architect` 角色完成；目标明确的低风险开发由 `developer-test` 直接调查、实现和验证，不因普通实现选择建立工作流。需要仓库、代码、测试、文档或外部事实取证时，统一由 `docs-commit` 完成并结构化交接给 `architect`；只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问。
 
-architect 的运行时守卫允许受限只读定位（`read`、`grep`、`find`、`ls`、`ffgrep`、`fffind`），以及 browser 的单条 `open`、`snapshot`、`get`、`wait`、`scroll`、`screenshot` 观察命令；仍拒绝 `edit`、`write`、初始化写入、shell、MCP、脚本、浏览器交互/持久化/关闭/命令串联和未知工具。能力放行不是 shell/MCP 沙箱，工具自身仍须遵循安全和授权边界。提示层只用于降低错误率，运行时守卫仍对无效或歧义写入 fail-closed，正常合法调用不新增工具 schema 或模型调用。
+`architect` 只负责思考、分析、决策、规划和安排。其运行时除 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status")` 外不得调用任何工具，不得连接或调用 MCP；`read`、搜索、shell、编辑、浏览器、脚本、协作和未知工具均由运行时 fail-closed 阻断。提示层只用于降低错误率，运行时守卫仍对无效或歧义调用 fail-closed，正常合法调用不新增工具 schema 或模型调用。
 
 角色、模型和模式的关系：
 
@@ -224,7 +224,7 @@ flowchart LR
 
 ### 架构前置证据与职责边界
 
-角色路由遵循公共 Skill 的单一层级：明确实现/测试直接交给 `developer-test`，明确文档、版本或 Git 收尾直接交给 `docs-commit`，不明确、含糊或跨职责的指令从 `architect` 开始。低风险判断可由 architect 直接进行受限只读定位；复杂或高风险架构判断仍由 `docs-commit` 先交接包含事实、来源、调用关系、测试、风险和未确认项的结构化证据，architect 负责决策与计划；实现完成并验证后，只有产生文档、版本或 Git 收尾时才交给 `docs-commit`。
+角色路由遵循公共 Skill 的单一层级：明确实现/测试直接交给 `developer-test`，明确文档、版本或 Git 收尾直接交给 `docs-commit`，不明确、含糊或跨职责的指令从 `architect` 开始。简单只读咨询可直接由适合的非 `architect` 角色完成；凡需要仓库、代码、测试、文档或外部事实取证，均由 `docs-commit` 完成并交接包含事实、来源、相关符号、调用/依赖、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只消费证据，负责思考、分析、决策、规划和安排，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status` 外不调用工具、不连接 MCP；实现完成并验证后，只有产生文档、版本或 Git 收尾时才交给 `docs-commit`。
 
 当公共 Skill 或扩展更新后，已安装的 package 和当前 Pi 进程不会自动获得新规则；请执行 `pi update --extensions`，然后 `/reload` 或重启 Pi。新守卫只在扩展重新加载后生效。当前仓库源码的修改不会自动覆盖已安装 Git package；本次未执行安装、更新、reload、提交或推送。
 

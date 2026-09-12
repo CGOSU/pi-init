@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-12：恢复严格 architect 边界
+
+- 完成内容：将 `architect` 运行时守卫收紧为仅允许 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`；读取、搜索、浏览器、shell、编辑、写入、脚本、协作、MCP/mcpScript、直连 MCP 和未知工具均 fail-closed。同步扩展注册提示、工作流消息、公共 `pi-init-role-routing` Skill、`roles/architect.md` 和 README，明确 architect 只负责思考、分析、决策、规划和安排，证据取证由 `docs-commit` 结构化交接。
+- 测试：初次针对性测试在文档断言同步后为 18/18 通过；随后补齐恢复门和 architect 协作 profile 的遗漏，最终 `npm test` 135/135 通过，`node --test test/architect-boundary.test.js test/role-recovery.test.js` 13/13 通过，`node --test test/collaboration-core.test.js test/scaffold.test.js --test-concurrency=1` 29/29 通过；静态 7 文件检查、`node scripts/check-line-count.js` 和 `git diff --check` 均通过（仅 CRLF 转换警告）。
+- 遗留：本次未更新已安装 package、未 reload/重启 Pi、未提交、未推送。
+
 ### 2026-09-11：修复 collaboration 超时与终止结果误判
 
 - 完成内容：将共享协作 Agent 默认总时限从 5 分钟调整为 30 分钟，支持 `PI_COLLAB_TIMEOUT_MS` 的 1 秒至 24 小时覆盖，并把实际时限写入运行记录和启动通知。超时、取消、外部 killed 分别记录；code=0 不再覆盖终止状态。终止时尽力解析 stdout、session 和 `agent_end` 结果作为诊断，但不向工作流交付 `resultText`，保持严格 `pi-init/task-result@1` 门。
