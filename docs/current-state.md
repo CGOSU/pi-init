@@ -10,6 +10,13 @@
 ## 当前目标
 
 - 维护随 package 发布的公共职责路由 Skill，并让项目 `roleModels` 映射成为启用角色和模型选择的唯一来源。
+- 维护 pi-init 与独立 agent-runtime 的 Runtime workflow 双轨 backend；同一 workflow 只允许一个冻结 authority，旧 local/subtask/collaboration 链路在迁移验收前继续保留。
+
+## 当前已确认事实
+
+- `workflowExecutor: "runtime"` 会在 workflow 创建时冻结 Runtime Graph、ProfileSnapshot、endpoint、agent backend、permission profile 和事件 cursor；Runtime 是该 workflow 的唯一状态、Attempt、cancel/retry 和事件事实源。
+- pi-init Runtime backend 已通过模型无关 mock 与实际 `runtime-daemon` development direct-host fixture 的 submit、role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart 和 client reconnect；worker reconnect 证据仍由 agent-runtime worker 层测试提供，真实 Pi 测试继续显式 ignored。
+- 旧调度链路删除清单见 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md)，当前 `cutover-ready: 否`；本轮不删除 local/subtask/collaboration 符号，也不将 development direct-host 描述为生产隔离。
 - 已完成集成用户 fork 的共享工作区协作模式：使用 Agent 进程/session、registry、消息、session tail、`/agents` Overlay 和 reservation；角色模型仍由 pi-init 管理。旧 gmc/worktree 并发链路已退役。
 
 ## 已知状态
@@ -56,6 +63,7 @@
 
 ## 最近一次更新
 
+- 2026-09-13：Runtime backend 继续保持 provider-agnostic：agent-runtime 的第二真实 Provider（Codex）因生命周期/结果/恢复接口未核实而 blocked，pi-init Runtime client 不猜测 CLI 参数、不读取模型凭据、不增加本地 fallback；Rust 侧仅有无模型 command fixture，双轨迁移清单仍为 `cutover-ready: 否`。
 - 2026-09-13：修复非架构角色触发工作流规划的误导反馈：`plan`/`replan` 在工具调用入口提前阻断，调用摘要改为“工作流请求”，失败结果显示具体原因；验证明细见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：修复 subtask 工作流从 architect 派发时的角色错位和无反馈卡住：派发前切换任务角色，边界失败/30 秒启动超时会暂停任务并显示 retry 建议；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`task_workflow` 工具结果的完成态改为仅显示“工作流已完成”，不再显示任务分数；针对性测试见 [`docs/session-log.md`](session-log.md)。
@@ -63,7 +71,8 @@
 - 2026-09-12：完成 architect 职责边界调整及验证收尾；当前事实见本节，决策与实现验证分别见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - 2026-09-11：修复 collaboration Agent 5 分钟截断与 code=0 误导：默认总时限调整为 30 分钟，支持 `PI_COLLAB_TIMEOUT_MS`（1 秒至 24 小时），区分 timeout/cancelled/killed，终止时保留 stdout/session 诊断但不交付结果；新增 `agent_end` 解析和生命周期测试。`npm test` 133 项通过。
 - 2026-09-11：优化 collaboration 后台交互反馈；新增工作流状态栏的运行阶段/进度/实时耗时、后台启动与结果回传通知，TUI 进度弹窗和 `/agents` 面板动态刷新，运行记录每 5 秒刷新心跳；协作任务从实际委派时记录开始时间。`npm test` 127 项通过。
-- 2026-09-11：完成 Windows collaboration CLI 启动修复；仅复用已确认的 Pi `cli.js`，否则经 `cmd.exe /d /s /c pi.cmd` 启动，cmd fallback 使用随机临时文件传递多行提示并对特殊参数 fail-closed；`collaboration-core` 14 项通过。
+- 2026-09-13：完成 Runtime backend 双轨联调与切换清单：实际 runtime-daemon development fixture 覆盖同计划 local/runtime authority、Pi role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart、client reconnect 和重复 request；worker reconnect 复用 agent-runtime 的实际 worker fixture，真实 Pi 仍需显式 gate。旧调度符号逐项清单见 `docs/plans/runtime-migration.md`，cutover-ready 仍为否；`npm test` 被既有 `test/extension-roles.test.js` 505 行门禁阻塞。
+- 2026-09-13：完成 Windows collaboration CLI 启动修复；仅复用已确认的 Pi `cli.js`，否则经 `cmd.exe /d /s /c pi.cmd` 启动，cmd fallback 使用随机临时文件传递多行提示并对特殊参数 fail-closed；`collaboration-core` 14 项通过。
 - 2026-09-11：补充 README 的控制中心与次级菜单导航，明确工作流策略/执行器选择顺序、Esc 返回取消语义、会话暂存与 `/pi-init save` 持久化边界，并说明 `collaboration` 不自动并发。
 - 2026-09-11：修复 `/pi-init config workflow` 未展示 `collaboration` 选项的问题；同步新增回归测试，`npm test` 123 项通过。
 - 2026-09-11：完成共享工作区协作迁移的代码实现和安全验证；新增 Agent registry、消息、session tail、`/agents`、reservation、角色模型适配和 `collaboration` 工作流，删除 gmc/parallel_batch 旧链路；`npm test` 122 项通过，真实双 Agent process E2E 通过。

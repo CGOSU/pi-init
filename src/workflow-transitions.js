@@ -6,6 +6,71 @@ import {
   normalizeTextList,
   requireText,
 } from "./workflow-model.js";
+import { resolveRoleModel } from "./roles.js";
+
+function stableHash(value) {
+  let hash = 0x811c9dc5;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function runtimeTaskInput(task) {
+  return [task.task, "", "Files:", ...task.files.map((file) => `- ${file}`)].join("\n");
+}
+
+export function buildRuntimeWorkflow(workflow, config, cwd, clientConfig) {
+  const runtime = config.runtime;
+  if (!runtime || typeof runtime !== "object") throw new Error("workflowExecutor=runtime 需要显式 runtime endpoint/profile 配置");
+  if (typeof runtime.agentBackend !== "string" || !runtime.agentBackend.trim()) throw new Error("runtime.agentBackend 必须是非空 Agent backend ID");
+  if (typeof runtime.permissionProfile !== "string" || !runtime.permissionProfile.trim()) throw new Error("runtime.permissionProfile 必须是非空 permission profile 引用");
+  const graphId = `pi-init-${stableHash(JSON.stringify({
+    cwd,
+    createdAt: workflow.createdAt,
+    plan: workflow.plan,
+    tasks: workflow.tasks.map(({ id, task, files, acceptanceCriteria, dependsOn, role }) => ({ id, task, files, acceptanceCriteria, dependsOn, role })),
+  }))}`;
+  const tasks = workflow.tasks.map((task) => {
+    const model = resolveRoleModel(config, task.role);
+    const profileSnapshot = {
+      role: task.role,
+      agent_backend: runtime.agentBackend.trim(),
+      model_provider: model.provider,
+      model: model.model,
+      thinking_level: model.thinkingLevel,
+      permission_profile: runtime.permissionProfile.trim(),
+    };
+    return {
+      task_id: task.id,
+      name: task.task,
+      input: runtimeTaskInput(task),
+      dependencies: [...task.dependsOn],
+      acceptance_criteria: [...task.acceptanceCriteria],
+      profile_snapshot: profileSnapshot,
+    };
+  });
+  const graph = {
+    protocol_version: 2,
+    graph_revision: { graph_id: graphId, revision: 1 },
+    tasks,
+    profile_snapshot: tasks[0].profile_snapshot,
+  };
+  const runtimeAuthority = {
+    kind: "runtime",
+    endpoint: clientConfig.endpoint.address,
+    graphRevision: { graphId, revision: 1 },
+    graph,
+    submitRequestId: `pi-init-runtime-submit-${graphId}`,
+    eventCursor: 0,
+    status: "pending",
+    timeoutMs: clientConfig.timeoutMs,
+    retries: clientConfig.retries,
+    maxFrameBytes: clientConfig.maxFrameBytes,
+  };
+  return { runtimeAuthority };
+}
 
 function dependenciesCompleted(state, task) {
   return task.dependsOn.every((dependency) => getWorkflowTask(state, dependency)?.status === "completed");

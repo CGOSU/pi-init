@@ -20,12 +20,22 @@ export type ReportTheme = {
   bold: (text: string) => string;
 };
 
+export type RuntimeConfig = {
+  endpoint: string;
+  agentBackend: string;
+  permissionProfile: string;
+  timeoutMs?: number;
+  retries?: number;
+  maxFrameBytes?: number;
+};
+
 export type ResolvedRoleConfig = {
   schemaVersion: number;
   mode: string;
   workflowMode: string;
   workflowExecutor: string;
   roleModels: Record<string, RoleModelConfig>;
+  runtime?: RuntimeConfig;
 };
 
 export type MenuItem = {
@@ -47,6 +57,15 @@ export const roleModelSchema = Type.Object({
     description: "Pi 推理强度",
   }),
 });
+
+export const runtimeConfigSchema = Type.Object({
+  endpoint: Type.String({ description: "显式 numeric loopback Runtime endpoint，例如 127.0.0.1:7878" }),
+  agentBackend: Type.String({ description: "Runtime Agent backend ID；必须与 AgentProvider 匹配" }),
+  permissionProfile: Type.String({ description: "宿主解析的 permission profile 引用；不包含凭据" }),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Runtime transport timeout (ms)" })),
+  retries: Type.Optional(Type.Integer({ minimum: 0, maximum: 8, description: "仅 transport error 的有限重试次数" })),
+  maxFrameBytes: Type.Optional(Type.Integer({ minimum: 1, description: "Runtime JSONL frame 上限" })),
+}, { additionalProperties: false, description: "非敏感 Runtime endpoint/profile 配置" });
 
 export const roleModelsMapSchema = Type.Record(
   Type.String({
@@ -70,8 +89,9 @@ export const roleModelsSchema = Type.Object({
     description: "兼容旧配置；未设置 workflowMode 时 true 映射 on、false 映射 off",
   })),
   workflowExecutor: Type.Optional(StringEnum(WORKFLOW_EXECUTORS, {
-    description: "工作流执行器：local、subtask 或 collaboration；默认 local",
+    description: "工作流执行器：local、subtask、collaboration 或 runtime；默认 local",
   })),
+  runtime: Type.Optional(runtimeConfigSchema),
   roleModels: Type.Optional(roleModelsMapSchema),
 }, { additionalProperties: true });
 

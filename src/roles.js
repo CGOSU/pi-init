@@ -2,7 +2,7 @@ export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
 export const WORKFLOW_MODES = ["off", "on", "auto"];
 export const DEFAULT_WORKFLOW_MODE = "auto";
-export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration"];
+export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration", "runtime"];
 export const DEFAULT_WORKFLOW_EXECUTOR = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
@@ -168,6 +168,7 @@ const CONFIG_METADATA_KEYS = new Set([
   "workflowExecutor",
   "roleModels",
   "providerPolicy",
+  "runtime",
 ]);
 
 function configObject(config) {
@@ -286,6 +287,36 @@ export function resolveWorkflowExecutor(config) {
   return executor;
 }
 
+export function resolveRuntimeConfig(config) {
+  const runtime = config?.runtime;
+  if (runtime === undefined) return undefined;
+  if (!isRecord(runtime)) throw new Error("runtime 配置必须是对象");
+  const allowed = new Set(["endpoint", "agentBackend", "permissionProfile", "timeoutMs", "retries", "maxFrameBytes"]);
+  for (const key of Object.keys(runtime)) {
+    if (!allowed.has(key)) throw new Error(`runtime 配置包含未知字段：${key}`);
+  }
+  for (const [field, label] of [["endpoint", "endpoint"], ["agentBackend", "agentBackend"], ["permissionProfile", "permissionProfile"]]) {
+    if (typeof runtime[field] !== "string" || !runtime[field].trim()) {
+      throw new Error(`runtime.${label} 必须是非空字符串`);
+    }
+  }
+  for (const field of ["timeoutMs", "retries", "maxFrameBytes"]) {
+    if (runtime[field] !== undefined && (!Number.isInteger(runtime[field]) || runtime[field] < 0)) {
+      throw new Error(`runtime.${field} 必须是非负整数`);
+    }
+  }
+  if (runtime.timeoutMs !== undefined && runtime.timeoutMs === 0) throw new Error("runtime.timeoutMs 必须大于 0");
+  if (runtime.maxFrameBytes !== undefined && runtime.maxFrameBytes === 0) throw new Error("runtime.maxFrameBytes 必须大于 0");
+  return {
+    endpoint: runtime.endpoint.trim(),
+    agentBackend: runtime.agentBackend.trim(),
+    permissionProfile: runtime.permissionProfile.trim(),
+    ...(runtime.timeoutMs !== undefined ? { timeoutMs: runtime.timeoutMs } : {}),
+    ...(runtime.retries !== undefined ? { retries: runtime.retries } : {}),
+    ...(runtime.maxFrameBytes !== undefined ? { maxFrameBytes: runtime.maxFrameBytes } : {}),
+  };
+}
+
 export function shouldOrchestrateWorkflow({ mode, taskCount }) {
   if (!WORKFLOW_MODES.includes(mode)) {
     throw new Error(`工作流模式 workflowMode 无效：${mode}`);
@@ -346,12 +377,14 @@ export function mergeRoleConfig(base, changes) {
 export function resolveRoleConfig(config) {
   const source = configObject(config);
   const roleModels = normalizeRoleModels(source);
+  const runtime = resolveRuntimeConfig(source);
   const resolved = {
     schemaVersion: ROLE_CONFIG_SCHEMA_VERSION,
     mode: resolveRoleMode(source),
     workflowMode: resolveWorkflowMode(source),
     workflowExecutor: resolveWorkflowExecutor(source),
     roleModels,
+    ...(runtime ? { runtime } : {}),
   };
   // Keep property access working for the legacy scaffold until it is migrated.
   for (const [role, model] of Object.entries(roleModels)) {

@@ -3,7 +3,7 @@ import { normalizeRoleId } from "./roles.js";
 export const WORKFLOW_STATE_VERSION = 3;
 export const WORKFLOW_MAX_TASKS = 12;
 export const WORKFLOW_MAX_NUDGES = 2;
-export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration"];
+export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration", "runtime"];
 export const WORKFLOW_DELEGATION_STATUSES = [
   "spawning",
   "running",
@@ -250,11 +250,124 @@ export function normalizePendingRevision(revision) {
   return result;
 }
 
+function runtimeProjectionError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+export function eventIdOf(event) {
+  const value = event?.payload?.header?.event_id ?? event?.event_id;
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+export function eventGraphRevisionOf(event) {
+  return event?.payload?.header?.graph_revision;
+}
+
+export function eventResults(events) {
+  const results = new Map();
+  for (const event of events) {
+    if (event?.event === "result_accepted" && event.payload?.result?.task_id) {
+      results.set(event.payload.result.task_id, event.payload.result);
+    }
+  }
+  return results;
+}
+
+export function projectRuntimeState(workflow, remote, events) {
+  const authority = workflow?.runtimeAuthority;
+  const revision = remote?.graph_revision;
+  if (!authority || authority.kind !== "runtime") {
+    throw runtimeProjectionError("state_mismatch", "Runtime workflow authority is missing");
+  }
+  if (revision?.graph_id !== authority.graphRevision.graphId || revision?.revision !== authority.graphRevision.revision) {
+    throw runtimeProjectionError("revision_mismatch", "Runtime returned a different graph revision");
+  }
+  if (!Array.isArray(remote.tasks) || remote.tasks.length !== workflow.tasks.length) {
+    throw runtimeProjectionError("state_mismatch", "Runtime task set does not match the frozen workflow plan");
+  }
+  const remoteTasks = new Map(remote.tasks.map((task) => [task.task_id, task.state]));
+  const results = eventResults(events);
+  const next = cloneState(workflow);
+  let runningTaskId;
+  let failed = false;
+  let cancelled = false;
+  for (const task of next.tasks) {
+    const remoteState = remoteTasks.get(task.id);
+    if (!remoteState) throw runtimeProjectionError("state_mismatch", `Runtime task ${task.id} is missing`);
+    if (task.status === "completed" && remoteState !== "succeeded") {
+      throw runtimeProjectionError("state_regression", `Runtime task ${task.id} regressed after completion`);
+    }
+    if (["pending", "ready"].includes(remoteState)) {
+      task.status = "pending";
+      delete task.currentTaskId;
+    } else if (remoteState === "running") {
+      task.status = "in_progress";
+      runningTaskId = task.id;
+    } else if (remoteState === "succeeded") {
+      const result = results.get(task.id);
+      task.status = "completed";
+      task.completionSummary = result?.output || "Runtime acceptance gate accepted the task result";
+      task.implementationRationale = "Runtime is the sole workflow authority; completion came from ResultAccepted";
+      task.verification = ["Runtime ResultAccepted event observed"];
+      delete task.blockReason;
+      task.completedAt = Date.now();
+    } else if (["failed", "blocked"].includes(remoteState)) {
+      task.status = "blocked";
+      task.blockReason = results.get(task.id)?.diagnostics || `Runtime task entered ${remoteState}`;
+      failed = true;
+    } else if (["cancelled", "timed_out"].includes(remoteState)) {
+      task.status = "blocked";
+      task.blockReason = `Runtime task entered ${remoteState}`;
+      cancelled = true;
+    } else {
+      throw runtimeProjectionError("state_mismatch", `Runtime returned unknown task state ${remoteState}`);
+    }
+  }
+  next.currentTaskId = runningTaskId;
+  if (cancelled) {
+    next.status = "cancelled";
+    next.pauseReason = "runtime-cancelled";
+    delete next.currentTaskId;
+  } else if (failed) {
+    next.status = "paused";
+    next.pauseReason = "runtime-task-failed";
+    delete next.currentTaskId;
+  } else if (next.tasks.every((task) => task.status === "completed")) {
+    next.status = "completed";
+    next.completedAt = Date.now();
+    delete next.currentTaskId;
+  } else {
+    next.status = "running";
+    delete next.pauseReason;
+  }
+  next.runtimeAuthority.status = next.status === "completed" ? "completed" : next.status === "running" ? "running" : next.status;
+  return next;
+}
+
+export function eventCursor(events, current, authority) {
+  let cursor = current;
+  for (const event of events) {
+    const revision = eventGraphRevisionOf(event);
+    if (revision && (revision.graph_id !== authority.graphRevision.graphId || revision.revision !== authority.graphRevision.revision)) {
+      throw runtimeProjectionError("revision_mismatch", "Runtime event belongs to another graph revision");
+    }
+    const id = eventIdOf(event);
+    if (id === undefined) throw runtimeProjectionError("invalid_event", "Runtime event has no positive event_id");
+    if (id <= cursor) continue;
+    cursor = id;
+  }
+  return cursor;
+}
+
 export function createWorkflowState(input, now = Date.now()) {
   const plan = validateWorkflowPlan(input);
+  const executor = normalizeExecutor(input.executor);
   return {
     version: WORKFLOW_STATE_VERSION,
-    executor: normalizeExecutor(input.executor),
+    executor,
+    authority: executor,
     status: plan.reviewRequired ? "paused" : "running",
     pauseReason: plan.reviewRequired ? "architecture-review" : undefined,
     plan: {
@@ -267,6 +380,37 @@ export function createWorkflowState(input, now = Date.now()) {
     revisions: [],
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+export function cloneRuntimeAuthority(authority) {
+  if (!authority || typeof authority !== "object") return undefined;
+  return {
+    ...authority,
+    ...(authority.graphRevision ? { graphRevision: { ...authority.graphRevision } } : {}),
+    ...(authority.graph
+      ? {
+          graph: {
+            ...authority.graph,
+            graph_revision: authority.graph.graph_revision
+              ? { ...authority.graph.graph_revision }
+              : authority.graph.graph_revision,
+            profile_snapshot: authority.graph.profile_snapshot
+              ? { ...authority.graph.profile_snapshot }
+              : authority.graph.profile_snapshot,
+            tasks: Array.isArray(authority.graph.tasks)
+              ? authority.graph.tasks.map((task) => ({
+                  ...task,
+                  dependencies: [...(task.dependencies ?? [])],
+                  acceptance_criteria: [...(task.acceptance_criteria ?? [])],
+                  ...(task.profile_snapshot
+                    ? { profile_snapshot: { ...task.profile_snapshot } }
+                    : {}),
+                }))
+              : authority.graph.tasks,
+          },
+        }
+      : {}),
   };
 }
 
@@ -310,10 +454,17 @@ export function getWorkflowExecutionDuration(state) {
 }
 
 export function cloneState(state, now = Date.now()) {
+  const executor = normalizeExecutor(state.executor);
+  const authority = normalizeExecutor(state.authority ?? executor);
+  if (authority !== executor) throw new Error("工作流 authority 不允许在创建后切换");
   return {
     ...state,
     version: WORKFLOW_STATE_VERSION,
-    executor: normalizeExecutor(state.executor),
+    executor,
+    authority,
+    ...(state.runtimeAuthority
+      ? { runtimeAuthority: cloneRuntimeAuthority(state.runtimeAuthority) }
+      : {}),
     plan: clonePlan(state.plan),
     tasks: state.tasks.map(cloneTask),
     revisions: (state.revisions ?? []).map(cloneRevision),

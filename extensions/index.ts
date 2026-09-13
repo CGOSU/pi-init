@@ -3,6 +3,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+export * from "./runtime-client.ts";
 import {
   ROLE_MODES,
   findMatchingRole,
@@ -114,11 +115,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     pendingExternalRunSource = undefined;
     acceptedExternalRunSource = undefined;
     if (!timing || (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState))) return;
-
     const completed = completeRunTiming(timing);
     if (completed) pi.appendEntry(RUN_TIMING_ENTRY_TYPE, completed);
   }
-
   pi.registerEntryRenderer<RunTimingEntryData>(RUN_TIMING_ENTRY_TYPE, (entry, _options, theme) => {
     const data = entry.data && typeof entry.data === "object"
       ? entry.data as RunTimingEntryData
@@ -146,6 +145,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     event: { text?: unknown; source?: unknown },
     ctx: ExtensionContext,
   ) {
+    if (runtimeState.workflowState?.executor === "runtime") return false;
     if (
       !runtimeState.workflowState ||
       !["running", "replanning"].includes(runtimeState.workflowState.status) ||
@@ -233,7 +233,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     if (
       !runtimeState.workflowState ||
-      runtimeState.workflowState.executor === "subtask" ||
+      ["subtask", "runtime"].includes(runtimeState.workflowState.executor) ||
       !runtimeState.workflowState.currentTaskId ||
       !isWorkflowActive(runtimeState.workflowState)
     ) return;
@@ -249,8 +249,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.startPendingRoleCompaction(ctx);
     await workflowDispatch.scheduleWorkflow(ctx);
   });
-
   pi.on("session_shutdown", async (_event, ctx) => {
+    runtimeState.runtimeBackend?.dispose();
     workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;
     pendingExternalRunSource = undefined;

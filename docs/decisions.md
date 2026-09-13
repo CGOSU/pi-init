@@ -8,6 +8,19 @@
 
 ## 已确认决策
 
+### 2026-09-13：pi-init Runtime client 不为未取证 Provider 猜测协议或 fallback
+
+- 决定：Runtime client 只传递冻结的 `agentBackend`/profile 和 Runtime wire command，不实现 Codex CLI 参数、事件解析、凭据注入或 backend fallback；Runtime 未注册 backend 的错误原样返回。
+- 原因：第二真实 Provider 的 start/poll/cancel/terminate/result/recovery 和认证/重连协议尚未被固定版本官方资料核实，client 不应替 Runtime 扩大外部协议假设。
+- 约束：`workflowExecutor: runtime` 仍只有 Runtime 一个 authority；当前无模型 command fixture 只存在 agent-runtime 测试侧，旧 local/subtask/collaboration 链路和 `cutover-ready: 否` 保持不变。
+
+### 2026-09-13：Runtime 双轨联调不等于旧调度链路可删除
+
+- 决定：`workflowExecutor: runtime` 作为第四种、创建时冻结的 authority 接入；同一 workflow 的状态、next-task、Attempt、cancel/retry 和 event cursor 只由 Runtime 负责。`local`、`subtask`、`collaboration` 继续保留，迁移清单逐符号记录在 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md)，当前不标记 `cutover-ready`。
+- 原因：无模型实际 daemon fixture 已能验证 submit、role execution、事件/ack、cancel/retry、compaction、terminal restart 和 client reconnect，但这不能证明生产 external launcher、active broker recovery、历史 entry migration 或所有旧调用方已经迁出。
+- 约束：pi-init Runtime 联调只使用 development direct-host fixture，不描述为 sandbox；worker reconnect 以 agent-runtime 的无模型 worker test 为独立证据，真实 Pi 保持显式 ignored gate。不得因 Runtime 分支通过而删除旧 scheduler/transition 或添加本地 fallback。
+- 验收：联调命令、结果差异和未完成切换条件只维护在 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md) 与 [`docs/session-log.md`](session-log.md)，本条不重复维护测试明细。
+
 ### 2026-09-13：工作流规划入口必须在调用前拒绝非架构角色
 
 - 决定：`task_workflow` 的 `plan`/`replan` 在 `tool_call` 入口即检查活动角色；非 `architect` 直接阻断并要求 `switch_role(role=architect)`。调用预览使用“工作流请求”措辞，失败渲染保留具体原因。

@@ -18,9 +18,7 @@ import { textOf, type ExtensionRuntimeState, type RoleCompactionContinuation } f
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowMessages } from "./workflow-messages.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
-
 export const SUBTASK_DISPATCH_TIMEOUT_MS = 30_000;
-
 export type WorkflowDispatchDependencies = {
   roleRuntime: RoleRuntime;
   getActiveTools: () => string[];
@@ -46,7 +44,6 @@ export function createWorkflowDispatch(
     if (subtaskDispatchTimer) clearTimeout(subtaskDispatchTimer);
     subtaskDispatchTimer = undefined;
   }
-
   function armSubtaskDispatchTimeout(ctx: ExtensionContext, taskId: string, requestId: string) {
     clearSubtaskDispatchTimer();
     const timer = setTimeout(() => {
@@ -270,7 +267,6 @@ export function createWorkflowDispatch(
       blockDelegatedTask(ctx, taskId, `共享协作 Agent 结果无效：${textOf(error)}`);
     }
   }
-
   async function consumeSubtaskResult(ctx: ExtensionContext) {
     if (!state.workflowState || state.workflowState.executor !== "subtask" || !isWorkflowActive(state.workflowState)) return;
     const taskId = state.workflowState.currentTaskId;
@@ -374,7 +370,11 @@ export function createWorkflowDispatch(
       return;
     }
     if (!isWorkflowActive(state.workflowState)) return;
-
+    if (state.workflowState.executor === "runtime") {
+      if (!state.runtimeBackend) { ctx.ui.notify("Runtime workflow backend 未初始化；不会回退到本地调度。", "error"); return; }
+      await state.runtimeBackend.schedule(ctx);
+      return;
+    }
     if (state.workflowState.currentTaskId) {
       const currentTask = getWorkflowTask(state.workflowState, state.workflowState.currentTaskId);
       if (state.workflowState.executor === "subtask") {

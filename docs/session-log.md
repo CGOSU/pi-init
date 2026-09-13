@@ -2,6 +2,18 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-13：确认第二 Provider 的安全边界并完成 Runtime 回归
+
+- 完成内容：确认 Codex CLI 取证尚不足以实现 Runtime `AgentProvider` 生命周期，保持真实 adapter blocked；agent-runtime 只提供无模型 `command-fixture`，pi-init Runtime client 保持 backend-agnostic，不猜测 CLI 参数或增加本地 fallback。Runtime 双轨迁移的 `cutover-ready` 仍为否。
+- 验证：`node --test test/runtime-client.test.js test/workflow-runtime-backend.test.js test/runtime-integration.test.js`，16 项通过；Rust workspace 与 execution/daemon focused 回归由 agent-runtime 会话记录维护。
+- 遗留：真实 Codex lifecycle/认证/重连和生产隔离仍需固定版本官方证据；真实 Pi 继续显式 ignored；未更新已安装 package、未 reload/重启、未提交、未推送。
+
+### 2026-09-13：完成 Runtime 双轨联调、恢复投影和旧链路切换清单
+
+- 完成内容：新增 `test/runtime-integration.test.js`，用实际 `runtime-daemon` development direct-host fixture 和无模型 Pi RPC fixture 验证同一计划的 local/runtime authority 差异、role execution、Graph submit、Result/event ack、cancel/retry、重复 request、context compaction、terminal daemon restart、branch reload 和 client reconnect；Runtime workflow 不发送本地 task message。新增 `docs/plans/runtime-migration.md`，逐符号记录旧 scheduler/transition/dispatch 的直接调用方、保留/迁移/删除条件；旧链路未删除，cutover-ready 保持否。
+- 验证：`cargo build -p agent-runtime-daemon -p agent-runtime-worker` 通过；`cargo test -p agent-runtime-worker --test control_lifecycle -- --nocapture`，1 项通过；`AGENT_RUNTIME_DAEMON=D:/cargo-target/debug/runtime-daemon.exe node --test test/runtime-integration.test.js`，3 项通过；`AGENT_RUNTIME_DAEMON=D:/cargo-target/debug/runtime-daemon.exe node --test --test-concurrency=1`，158 项全部通过；`cargo test --workspace`，workspace 全部通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。`node scripts/check-line-count.js` 与 `npm test` 仍在执行前被既有 `test/extension-roles.test.js` 505 行门禁阻塞，本次未修改该文件。
+- 遗留：pi-init integration 当前是 development direct-host，active broker recovery/worker reconnect 依赖 agent-runtime 层证据，真实 Pi 仍是显式 ignored gate；未删除旧 scheduler，未更新已安装 package、未 reload/重启当前 Pi，未提交、未推送。
+
 ### 2026-09-13：修复非架构角色触发工作流规划的误导反馈
 
 - 完成内容：在 `tool_call` 入口提前阻断非 `architect` 角色的 `task_workflow` `plan`/`replan`；规划调用摘要改为“工作流请求”，失败结果保留具体原因；扩展提示明确规划前必须先 `switch_role(role=architect)`；新增边界和渲染回归测试。
