@@ -158,6 +158,11 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         label: config.workflowExecutor === "collaboration" ? "保持共享工作区协作 Agent" : "共享工作区协作 Agent",
         description: "使用共享 cwd、独立 Agent 进程/session、消息和 reservation；失败可能留下部分修改",
       },
+      {
+        value: "runtime",
+        label: config.workflowExecutor === "runtime" ? "保持 Runtime 执行器" : "Runtime 执行器",
+        description: "通过配置的 Runtime endpoint 执行工作流任务；需要有效的 Runtime 配置和权限 profile",
+      },
       { value: MENU_BACK, label: "← 返回上一级" },
     ], { selectedValue: config.workflowExecutor });
     if (!executor || isMenuBack(executor)) return;
