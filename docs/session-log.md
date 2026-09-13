@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-13：修复非架构角色触发工作流规划的误导反馈
+
+- 完成内容：在 `tool_call` 入口提前阻断非 `architect` 角色的 `task_workflow` `plan`/`replan`；规划调用摘要改为“工作流请求”，失败结果保留具体原因；扩展提示明确规划前必须先 `switch_role(role=architect)`；新增边界和渲染回归测试。
+- 验证：`node --test test/architect-boundary.test.js`，7 项通过；`node --test test/extension-roles.test.js`，15 项通过；`node --test`，142 项通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。`npm test` 仍被既有基线文件 `test/extension-roles.test.js` 的 505 行物理行数门禁阻塞，本次未修改该文件。
+- 遗留：未更新已安装 Pi package，未 reload/重启当前 Pi 进程，未提交、未推送。
+
 ### 2026-09-12：修复 subtask 派发角色错位和无反馈卡住
 
 - 完成内容：subtask 派发前自动切换到任务角色；architect 角色任务由 subtask 执行器明确阻塞；新增 architect 边界失败回写、30 秒启动超时、派发/后台运行状态和用户通知；补充角色切换、边界失败与超时回归测试。

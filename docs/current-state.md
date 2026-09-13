@@ -25,6 +25,7 @@
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
 - 自动模式在真实跨角色，或活动工作流的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。任务边界压缩不改变角色，成功或失败后继续下一任务/重规划；最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不触发。会话启动、resume 或 reload 时会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，并要求各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
+- `task_workflow` 的 `plan`/`replan` 在工具调用入口即要求活动角色为 `architect`，非架构角色会在状态持久化前被阻断；调用摘要标记为“工作流请求”，失败结果保留具体原因，避免把调用预览误认为已创建工作流。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写用户提供的 task_workflow 输入顺序。低风险局部工作仍可在 `workflowMode: auto` 下绕过持久工作流，不改变既有任务数量阈值、配置或状态机。
 - 活动工作流支持普通自然语言方向变更：同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并到一个 `pendingRevision`/`revisionId`，同步更新 revision 审计记录；当前任务完成后进入 `replanning`，由架构师依据完整指令通过 `task_workflow(action="replan")` 仅重规划未完成后续任务。新计划应用前 local、`subtask` 和 `collaboration` 均不会启动旧后续任务，运行中的委派 Agent 不会被旧计划重复派发，立即停止仍使用既有 cancel 流程。工作流阻塞时，状态报告、TUI、工具结果和暂停通知会显示阻塞原因及建议解决方法；解决后可 retry，方向变化则由架构师 replan。
 - 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
@@ -55,6 +56,7 @@
 
 ## 最近一次更新
 
+- 2026-09-13：修复非架构角色触发工作流规划的误导反馈：`plan`/`replan` 在工具调用入口提前阻断，调用摘要改为“工作流请求”，失败结果显示具体原因；验证明细见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：修复 subtask 工作流从 architect 派发时的角色错位和无反馈卡住：派发前切换任务角色，边界失败/30 秒启动超时会暂停任务并显示 retry 建议；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`task_workflow` 工具结果的完成态改为仅显示“工作流已完成”，不再显示任务分数；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`pi-usage --update` 现在跳过 session 目录下的 SoL-Pi 内部归档 JSONL，避免重复活动事件触发 DuckDB 主键事务失败；实现与验证见 [`docs/session-log.md`](session-log.md)。

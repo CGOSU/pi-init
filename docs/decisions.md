@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-13：工作流规划入口必须在调用前拒绝非架构角色
+
+- 决定：`task_workflow` 的 `plan`/`replan` 在 `tool_call` 入口即检查活动角色；非 `architect` 直接阻断并要求 `switch_role(role=architect)`。调用预览使用“工作流请求”措辞，失败渲染保留具体原因。
+- 原因：工具调用摘要会先于执行结果显示，原有“工作流 plan · N 个任务”容易被误认为工作流已经创建；虽然执行函数随后会拒绝，但反馈时机和措辞不清晰。
+- 约束：不自动替非架构角色切换职责；`complete`/`block`/`resume`/`retry`/`cancel` 仍由对应任务或工作流状态校验，架构角色边界保持 fail-closed。
+
 ### 2026-09-12：subtask 派发必须先离开 architect 并对失败显式收敛
 
 - 决定：architect 继续保持仅规划边界；`subtask` 工作流在发送派发提示前自动切换到当前任务角色，`architect` 角色任务不得使用 subtask 执行器。architect 边界拦截、派发发送失败或 30 秒内未出现 subtask 工具调用时，将任务持久化为 blocked/paused，并在主界面提供 retry 建议。

@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-13：task_workflow 调用摘要不是成功创建状态
+
+- 日期：2026-09-13；
+- 现象：界面先显示“工作流 plan · N 个任务”，随后才提示当前角色不是 `architect`，看起来像工作流已创建后才失败。
+- 根因：Pi 先渲染工具调用摘要，再执行工具；旧摘要没有区分待执行请求与成功结果。
+- 修复：`tool_call` 入口提前阻断非 `architect` 的 `plan`/`replan`；摘要改为“工作流请求”，失败结果显示具体错误。
+- 验证：`node --test test/architect-boundary.test.js` 7 项、`node --test` 142 项通过；完整 `npm test` 仍受既有 `test/extension-roles.test.js` 505 行物理行数门禁阻塞。
+
 ### 2026-09-12：architect 直接触发 subtask 会让工作流静默停在 spawning
 
 - 日期：2026-09-12；

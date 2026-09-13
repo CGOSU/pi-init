@@ -405,7 +405,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; Development and Test Engineers complete one task at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
-      "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect.",
+      "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",
       "Architect 不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；architect 不得读取、搜索、浏览、运行 shell、编辑、写入或调用任何其他工具。需要最新实现、直接调用方或测试等结构化证据时，先 switch_role 到 docs-commit，由 docs-commit 核对 latest implementation, direct callers, and tests 后再交回 architect 规划。fresh structured evidence from docs-commit 必须由 docs-commit 提供，architect 不得自行完成低风险只读检查。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
@@ -415,10 +415,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     renderCall(args, theme) {
       const action = typeof args.action === "string" ? args.action : "...";
       const taskCount = Array.isArray(args.tasks) ? ` · ${args.tasks.length} 个任务` : "";
-      return new Text(theme.fg("toolTitle", theme.bold("工作流 ")) + theme.fg("muted", `${action}${taskCount}`), 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold("工作流请求 ")) + theme.fg("muted", `${action}${taskCount}`), 0, 0);
     },
     renderResult(result, { expanded }, theme) {
-      if (result.isError) return new Text(theme.fg("error", "工作流操作失败"), 0, 0);
+      if (result.isError) return new Text(theme.fg("error", result.content[0]?.type === "text" && result.content[0].text.trim() ? `工作流操作失败：${result.content[0].text.trim()}` : "工作流操作失败"), 0, 0);
       const firstContent = result.content[0];
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
       if (contentText.startsWith("任务完成报告") || contentText.startsWith("工作流完成报告")) {

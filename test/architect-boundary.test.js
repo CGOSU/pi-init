@@ -118,6 +118,48 @@ test("非 architect 角色和未知角色不触发 architect 守卫", async () =
   assert.equal(await callToolCall(unknownHarness, "unknown-tool"), undefined);
 });
 
+test("非 architect 角色在工具调用入口阻断工作流规划", async () => {
+  const harness = createExtensionHarness([], {
+    model: developer,
+    availableModels: [developer, architect],
+  });
+  await emitExtensionEvent(harness, "session_start");
+
+  for (const action of ["plan", "replan"]) {
+    const result = await callToolCall(harness, "task_workflow", { action });
+    assert.equal(result?.block, true, action);
+    assert.match(result?.reason ?? "", /只有架构角色/);
+    assert.match(result?.reason ?? "", /switch_role\(role=architect\)/);
+  }
+  assert.equal(await callToolCall(harness, "task_workflow", { action: "complete" }), undefined);
+});
+
+test("task_workflow 调用预览和失败结果明确表示尚未创建", () => {
+  const harness = createExtensionHarness();
+  const workflowTool = harness.tools.find((tool) => tool.name === "task_workflow");
+  assert.ok(workflowTool);
+  const theme = {
+    fg: (_color, text) => text,
+    bold: (text) => text,
+  };
+
+  const callRendered = workflowTool.renderCall(
+    { action: "plan", tasks: [{}, {}] },
+    theme,
+  ).render(120).join("\n").trim();
+  assert.match(callRendered, /^工作流请求 plan · 2 个任务$/);
+
+  const errorRendered = workflowTool.renderResult(
+    {
+      isError: true,
+      content: [{ type: "text", text: "只有架构角色可以执行 task_workflow 的 plan/replan；请先调用 switch_role(role=architect)。" }],
+    },
+    { expanded: false },
+    theme,
+  ).render(120).join("\n").trim();
+  assert.match(errorRendered, /工作流操作失败：只有架构角色可以执行 task_workflow/);
+});
+
 test("architect 切换到 docs-commit 后恢复探索能力", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
