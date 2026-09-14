@@ -60,6 +60,7 @@ export async function showMenu(
       scrollInfo: (text) => theme.fg("dim", text),
       noMatch: (text) => theme.fg("warning", text),
     });
+    const hasSaveAction = items.some((item) => item.value === "save");
     const selectedIndex = options.selectedValue === undefined
       ? -1
       : items.findIndex((item) => item.value === options.selectedValue);
@@ -76,7 +77,13 @@ export async function showMenu(
         new Text(theme.fg("text", summaryText), 0, 1, (line) => theme.bg("selectedBg", line)),
       );
     }
-    content.addChild(new Text(theme.fg("dim", "↑↓ 选择 · Enter 确认 · Esc 返回"), 0, 0));
+    content.addChild(new Text(
+      theme.fg("dim", hasSaveAction
+        ? "↑↓ 选择 · Enter 确认 · Ctrl+S 保存 · Esc 返回"
+        : "↑↓ 选择 · Enter 确认 · Esc 返回"),
+      0,
+      0,
+    ));
     content.addChild(list);
 
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
@@ -89,6 +96,8 @@ export async function showMenu(
       handleInput: (data: string) => {
         if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
+        } else if (hasSaveAction && matchesKey(data, Key.ctrl("s"))) {
+          done("save");
         } else {
           list.handleInput(data);
         }

@@ -220,6 +220,7 @@ flowchart LR
 - “变更 · 工作流策略”先选择 `workflowMode`（`off`、`on` 或 `auto`），再选择 `workflowExecutor`（`local`、`subtask` 或 `collaboration`）。命令行入口 `/pi-init config workflow` 也按这个顺序打开两个菜单。
 - 在任一次级菜单选择“返回”或按 `Esc`，都会返回上一级且取消本次尚未完成的工作流配置选择；完成两个选择后，变更先暂存于当前会话。
 - 选择“保存 · 保存角色配置”或执行 `/pi-init save` 后，才会写入 `.pi/role-models.json`。因此仅在菜单中选择执行器，不代表项目文件已经变更。
+- 在 TUI 控制中心及“角色与模型”保存菜单中，按 `Ctrl+S` 可直接触发保存；其他菜单仍使用 `Enter` 确认、`Esc` 返回。
 - `collaboration` 使用共享工作区的独立 Agent，但当前 `task_workflow` 仍按任务顺序推进；它不是自动并发开关。
 
 ### 架构前置证据与职责边界

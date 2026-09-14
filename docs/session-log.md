@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-14：新增保存 Ctrl+S 快捷键
+
+- 完成内容：TUI 中包含保存项的菜单（控制中心及“角色与模型”菜单）支持按 `Ctrl+S` 直接触发保存，并显示快捷键提示；新增对应回归测试。
+- 验证：`node --test test/extension-roles.test.js`，16 项全部通过。
+- 遗留：未执行 Git commit、push、安装 package 或 reload。
+
 ### 2026-09-13：确认第二 Provider 的安全边界并完成 Runtime 回归
 
 - 完成内容：确认 Codex CLI 取证尚不足以实现 Runtime `AgentProvider` 生命周期，保持真实 adapter blocked；agent-runtime 只提供无模型 `command-fixture`，pi-init Runtime client 保持 backend-agnostic，不猜测 CLI 参数或增加本地 fallback。Runtime 双轨迁移的 `cutover-ready` 仍为否。

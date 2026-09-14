@@ -47,7 +47,7 @@
 - 精确文件修改支持会话内逻辑快照：成功 `edit` 且没有其他写入来源时可复用确定的替换结果；每次调用 `edit` 前必须预检每个 `oldText` 并确认精确匹配 1 次、payload 只含 `path` 和 `edits` 且 edits 不重叠，出现 0 次或多次时不得调用；可能发生写入后必须重新读取。`oldText` 零匹配时只允许定向重读、重新确认唯一精确替换并最多重试一次；不生成缓存文件或持久状态。
 - `edit` 运行时守卫包装 Pi 内置 definition：合法调用保留原生 schema、提示元数据、renderer、严格匹配、重叠检测和文件变更队列；read-shaped/malformed、重复匹配和重叠调用 fail-closed，不写文件并返回可恢复诊断，未知错误透传。提示预检只降低错误率，不能保证模型永不产生非法调用。
 - 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令和职责模型，不再询问 Skill 名称或 slug；TUI 中按 Esc 会返回上一个填写属性并保留已填写内容，最终确认返回角色模型步骤。高级初始化首项从控制中心返回控制中心，直接 `/pi-init advanced` 返回调用方；Ctrl+C、显式“取消”和快速/非 TUI 路径仍保持取消或原有行为。
-- 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，按“初始化/变更/工作流”分组菜单；工作流策略已从“角色与模型”中移到顶层变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度，前置指示点在 Agent 运行时使用主题 accent 高亮、空闲时使用 muted 灰色；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，TUI 菜单和初始化文本输入中按 Esc 返回上一级而非触发取消，初始化通知默认只显示文件数量和冲突摘要。
+- 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，按“初始化/变更/工作流”分组菜单；工作流策略已从“角色与模型”中移到顶层变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度，前置指示点在 Agent 运行时使用主题 accent 高亮、空闲时使用 muted 灰色；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，TUI 菜单和初始化文本输入中按 Esc 返回上一级而非触发取消，初始化通知默认只显示文件数量和冲突摘要；包含保存项的 TUI 菜单支持 `Ctrl+S` 直接保存。
 - 工作流配置入口使用两级次级菜单：先选择 `workflowMode`，再选择 `workflowExecutor`；任一次级菜单返回或按 Esc 都会取消尚未完成的本次选择，完成后仅暂存当前会话，需执行 `/pi-init save` 才写入 `.pi/role-models.json`。`collaboration` 仍由 `task_workflow` 按任务顺序推进，不自动表示并发。
 - TUI 状态栏新增独立 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认缓存读取/写入。usage 尚未到达时显示“缓存判定中”，零值或未报告不推断缓存命中、写入或未命中；`message_end` 最终 assistant usage 覆盖流式暂态。不同 Provider 的 usage 到达时机不同，R/W 不保证从请求开始实时可见；状态不替换默认 Footer，不写入 session 或 DuckDB。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；活动弹窗的摘要每秒刷新，避免后台状态变化时显示旧快照；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时；`task_workflow` 工具结果在完成态仅显示“工作流已完成”，避免把完成提示和进度数字混在一起。
@@ -71,6 +71,7 @@
 - 2026-09-12：完成 architect 职责边界调整及验证收尾；当前事实见本节，决策与实现验证分别见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - 2026-09-11：修复 collaboration Agent 5 分钟截断与 code=0 误导：默认总时限调整为 30 分钟，支持 `PI_COLLAB_TIMEOUT_MS`（1 秒至 24 小时），区分 timeout/cancelled/killed，终止时保留 stdout/session 诊断但不交付结果；新增 `agent_end` 解析和生命周期测试。`npm test` 133 项通过。
 - 2026-09-11：优化 collaboration 后台交互反馈；新增工作流状态栏的运行阶段/进度/实时耗时、后台启动与结果回传通知，TUI 进度弹窗和 `/agents` 面板动态刷新，运行记录每 5 秒刷新心跳；协作任务从实际委派时记录开始时间。`npm test` 127 项通过。
+- 2026-09-14：TUI 控制中心及“角色与模型”菜单新增 `Ctrl+S` 保存快捷键，并补充针对性回归测试。
 - 2026-09-13：完成 Runtime backend 双轨联调与切换清单：实际 runtime-daemon development fixture 覆盖同计划 local/runtime authority、Pi role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart、client reconnect 和重复 request；worker reconnect 复用 agent-runtime 的实际 worker fixture，真实 Pi 仍需显式 gate。旧调度符号逐项清单见 `docs/plans/runtime-migration.md`，cutover-ready 仍为否；`npm test` 被既有 `test/extension-roles.test.js` 505 行门禁阻塞。
 - 2026-09-13：完成 Windows collaboration CLI 启动修复；仅复用已确认的 Pi `cli.js`，否则经 `cmd.exe /d /s /c pi.cmd` 启动，cmd fallback 使用随机临时文件传递多行提示并对特殊参数 fail-closed；`collaboration-core` 14 项通过。
 - 2026-09-11：补充 README 的控制中心与次级菜单导航，明确工作流策略/执行器选择顺序、Esc 返回取消语义、会话暂存与 `/pi-init save` 持久化边界，并说明 `collaboration` 不自动并发。
