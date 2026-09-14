@@ -2,7 +2,7 @@ export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
 export const WORKFLOW_MODES = ["off", "on", "auto"];
 export const DEFAULT_WORKFLOW_MODE = "auto";
-export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration", "runtime"];
+export const WORKFLOW_EXECUTORS = ["local", "runtime"];
 export const DEFAULT_WORKFLOW_EXECUTOR = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
@@ -279,8 +279,7 @@ export function resolveWorkflowMode(config) {
 }
 
 export function resolveWorkflowExecutor(config) {
-  // Legacy "subagents" (pi-subagents RPC) now maps to the "subtask" executor.
-  const executor = config?.workflowExecutor === "subagents" ? "subtask" : config?.workflowExecutor ?? DEFAULT_WORKFLOW_EXECUTOR;
+  const executor = config?.workflowExecutor ?? DEFAULT_WORKFLOW_EXECUTOR;
   if (!WORKFLOW_EXECUTORS.includes(executor)) {
     throw new Error(`工作流执行器 workflowExecutor 无效：${executor}`);
   }

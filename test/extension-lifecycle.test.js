@@ -41,7 +41,6 @@ const {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
-  beginWorkflowDelegation,
   cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
@@ -59,12 +58,7 @@ const {
   retryWorkflowTask,
   startWorkflowTask,
   validateWorkflowPlan,
-  requestWorkflowDelegationStop,
   workflowProgress,
-  SUBTASK_RESULT_MAX_BYTES,
-  SUBTASK_RESULT_PROTOCOL,
-  extractSubtaskResultJson,
-  parseSubtaskResult,
   completeRunTiming,
   createRunTiming,
   getRunTimingDuration,
@@ -297,9 +291,9 @@ test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async (
 test("扩展注册工作流工具、命令和生命周期处理器", async () => {
   const harness = createExtensionHarness();
   const toolNames = harness.tools.map((tool) => tool.name).sort();
-  assert.deepEqual(toolNames, ["agent_message", "edit", "init_project", "subagent", "switch_role", "task_workflow"]);
+  assert.deepEqual(toolNames, ["edit", "init_project", "switch_role", "task_workflow"]);
   assert.ok(harness.commands.has("pi-init"));
-  assert.ok(harness.commands.has("agents"));
+  assert.equal(harness.commands.has("agents"), false);
   assert.ok(harness.handlers.has("session_start"));
   assert.ok(harness.handlers.has("input"));
   assert.ok(harness.handlers.has("agent_start"));
@@ -457,10 +451,13 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.equal(resolveWorkflowMode({ workflowMode: "auto", workflowEnabled: false }), "auto");
   assert.equal(resolveWorkflowExecutor(undefined), DEFAULT_WORKFLOW_EXECUTOR);
   assert.equal(resolveWorkflowExecutor({ workflowExecutor: "local" }), "local");
-  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "subtask" }), "subtask");
-  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "collaboration" }), "collaboration");
-  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "subagents" }), "subtask");
-  assert.throws(() => resolveWorkflowExecutor({ workflowExecutor: "remote" }), /workflowExecutor 无效/);
+  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "runtime" }), "runtime");
+  for (const workflowExecutor of ["subagents", "subtask", "collaboration", "remote"]) {
+    assert.throws(
+      () => resolveWorkflowExecutor({ workflowExecutor }),
+      /workflowExecutor 无效/,
+    );
+  }
   assert.throws(
     () => resolveWorkflowMode({ workflowEnabled: "yes" }),
     /workflowEnabled.*布尔值/,
@@ -476,7 +473,10 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     () => shouldOrchestrateWorkflow({ mode: "auto", taskCount: 0 }),
     /工作流任务数无效/,
   );
-  assert.equal(resolveRoleConfig({ workflowExecutor: "subagents" }).workflowExecutor, "subtask");
+  assert.throws(
+    () => resolveRoleConfig({ workflowExecutor: "subagents" }),
+    /workflowExecutor 无效/,
+  );
   assert.deepEqual(resolveRoleModel(undefined, "architect"), DEFAULT_ROLE_MODELS.architect);
   assert.deepEqual(
     resolveRoleModel(

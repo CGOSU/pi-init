@@ -30,8 +30,6 @@ import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
-import { createCollaborationRuntime } from "./collaboration-runtime.ts";
-import { createCollaborationRoleResolver } from "./collaboration-role.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -72,25 +70,20 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
-  const collaborationRuntime = createCollaborationRuntime(pi); collaborationRuntime.setProfileResolver(createCollaborationRoleResolver(roleRuntime));
-  createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role, (toolName, ctx) => workflowDispatch?.handleArchitectBlockedToolCall(ctx, toolName));
+  createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
     messages: workflowMessages,
     report: workflowReport,
-    startCollaborationTask: collaborationRuntime.startWorkflowTask,
-    getActiveTools: () => typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [],
     setCurrentContext: (ctx) => {
       runtimeState.currentContext = ctx;
     },
   });
-  pi.on("tool_call", (event, ctx) => workflowDispatch.observeSubtaskToolCall(ctx, event.toolName));
   const workflowActions = createWorkflowActions(runtimeState, {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
-    stopCollaborationTask: collaborationRuntime.stopWorkflowTask,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;
@@ -233,7 +226,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     if (
       !runtimeState.workflowState ||
-      ["subtask", "runtime"].includes(runtimeState.workflowState.executor) ||
+      runtimeState.workflowState.executor === "runtime" ||
       !runtimeState.workflowState.currentTaskId ||
       !isWorkflowActive(runtimeState.workflowState)
     ) return;

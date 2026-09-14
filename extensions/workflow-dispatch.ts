@@ -1,72 +1,35 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  beginWorkflowDelegation,
-  markWorkflowDelegationStarted,
   blockWorkflowTask,
-  completeWorkflowTask,
   getNextWorkflowTask,
   getWorkflowTask,
   hydrateWorkflowState,
   isWorkflowActive,
-  markWorkflowTaskStarted,
   recordWorkflowNudge,
   startWorkflowTask,
 } from "../src/workflow.js";
-import { parseSubtaskResult } from "../src/subtask.js";
 import { shouldCompactAfterWorkflowTask } from "../src/roles.js";
 import { textOf, type ExtensionRuntimeState, type RoleCompactionContinuation } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowMessages } from "./workflow-messages.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
-export const SUBTASK_DISPATCH_TIMEOUT_MS = 30_000;
+
 export type WorkflowDispatchDependencies = {
   roleRuntime: RoleRuntime;
-  getActiveTools: () => string[];
   messages: WorkflowMessages;
   report: WorkflowReport;
   setCurrentContext: (ctx: ExtensionContext) => void;
-  startCollaborationTask?: (ctx: ExtensionContext, args: { taskId: string; requestId: string; role: string; prompt: string; files: string[]; acceptanceCriteria: string[] }) => Promise<{ batchRunId: string; recordId: string }>;
 };
 
 export function createWorkflowDispatch(
   state: ExtensionRuntimeState,
   deps: WorkflowDispatchDependencies,
 ) {
-  function nextSubtaskRequestId(taskId: string) {
-    return `pi-init-${taskId}-${Date.now()}`;
-  }
-
-  function nextCollaborationRequestId(taskId: string) {
-    return `pi-init-collaboration-${taskId}-${Date.now()}`;
-  }
-  let subtaskDispatchTimer: ReturnType<typeof setTimeout> | undefined;
-  function clearSubtaskDispatchTimer() {
-    if (subtaskDispatchTimer) clearTimeout(subtaskDispatchTimer);
-    subtaskDispatchTimer = undefined;
-  }
-  function armSubtaskDispatchTimeout(ctx: ExtensionContext, taskId: string, requestId: string) {
-    clearSubtaskDispatchTimer();
-    const timer = setTimeout(() => {
-      subtaskDispatchTimer = undefined;
-      const workflow = state.workflowState;
-      const task = workflow && getWorkflowTask(workflow, taskId);
-      if (
-        !workflow
-        || workflow.executor !== "subtask"
-        || !isWorkflowActive(workflow)
-        || workflow.currentTaskId !== taskId
-        || task?.delegation?.requestId !== requestId
-        || task?.delegation?.status !== "spawning"
-      ) return;
-      blockDelegatedTask(ctx, taskId, `subtask 派发等待超过 ${SUBTASK_DISPATCH_TIMEOUT_MS / 1000} 秒；请重试任务`);
-    }, SUBTASK_DISPATCH_TIMEOUT_MS);
-    timer.unref?.();
-    subtaskDispatchTimer = timer;
-  }
   function formatBlockedWorkflowMessage(message: string, workflowState: NonNullable<ExtensionRuntimeState["workflowState"]>) {
     const guidance = deps.report.formatWorkflowBlockNotice(workflowState);
     return guidance ? `${message}\n${guidance}` : message;
   }
+
   function startTaskBoundaryCompaction(ctx: ExtensionContext, continuation: RoleCompactionContinuation) {
     if (!shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) return false;
     const role = state.activeRole?.role ?? "workflow";
@@ -75,14 +38,15 @@ export function createWorkflowDispatch(
     deps.roleRuntime.startPendingRoleCompaction(ctx);
     return true;
   }
+
   async function scheduleWorkflowReplan(ctx: ExtensionContext) {
     if (
-      state.workflowDispatchInFlight ||
-      state.roleCompactionInFlight ||
-      state.pendingRoleCompaction ||
-      !state.workflowState ||
-      state.workflowState.status !== "replanning" ||
-      !state.workflowState.pendingRevision
+      state.workflowDispatchInFlight
+      || state.roleCompactionInFlight
+      || state.pendingRoleCompaction
+      || !state.workflowState
+      || state.workflowState.status !== "replanning"
+      || !state.workflowState.pendingRevision
     ) return;
 
     const taskCompletionPending = state.workflowTaskCompactionPending;
@@ -129,239 +93,28 @@ export function createWorkflowDispatch(
     deps.report.updateWorkflowStatus(ctx);
   }
 
-  function blockDelegatedTask(ctx: ExtensionContext, taskId: string, reason: string) {
-    clearSubtaskDispatchTimer();
+  function blockWorkflowTaskFromDispatch(ctx: ExtensionContext, taskId: string, reason: string) {
     if (state.runtimeDisposed || !state.workflowState || state.workflowState.currentTaskId !== taskId || !isWorkflowActive(state.workflowState)) return;
     try {
       const blocked = blockWorkflowTask(state.workflowState, { taskId, reason });
       deps.report.persistWorkflowState(blocked, ctx);
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(
-        formatBlockedWorkflowMessage(`工作流已暂停：委派任务 ${taskId}：${reason}`, blocked),
+        formatBlockedWorkflowMessage(`工作流任务 ${taskId} 已暂停：${reason}`, blocked),
         "warning",
       );
     } catch (error) {
       state.workflowDispatchInFlight = false;
-      ctx.ui.notify(`无法记录委派任务 ${taskId} 的失败：${textOf(error)}`, "error");
+      ctx.ui.notify(`无法记录任务 ${taskId} 的失败：${textOf(error)}`, "error");
     }
   }
 
-  async function dispatchCollaborationTask(ctx: ExtensionContext, taskId: string, requestId: string) {
-    const task = state.workflowState && getWorkflowTask(state.workflowState, taskId);
-    if (!task || !deps.startCollaborationTask) {
-      blockDelegatedTask(ctx, taskId, "未配置共享工作区协作执行器");
-      return;
-    }
-    try {
-      const launched = await deps.startCollaborationTask(ctx, {
-        taskId,
-        requestId,
-        role: task.role,
-        prompt: deps.messages.workflowCollaborationPrompt(taskId),
-        files: task.files,
-        acceptanceCriteria: task.acceptanceCriteria,
-      });
-      if (!state.workflowState || state.workflowState.currentTaskId !== taskId || !isWorkflowActive(state.workflowState)) return;
-      const attached = markWorkflowDelegationStarted(state.workflowState, { taskId, requestId, agentId: launched.recordId });
-      deps.report.persistWorkflowState(attached, ctx);
-      state.workflowDispatchInFlight = false;
-    } catch (error) {
-      blockDelegatedTask(ctx, taskId, `无法派发共享协作 Agent：${textOf(error)}`);
-    }
-  }
-
-  async function dispatchSubtaskTask(ctx: ExtensionContext, taskId: string) {
-    if (!state.workflowState || state.workflowState.currentTaskId !== taskId || !isWorkflowActive(state.workflowState)) return;
-    const task = getWorkflowTask(state.workflowState, taskId);
-    if (!task) return;
-    const activeTools = deps.getActiveTools();
-    if (!activeTools.includes("subtask")) {
-      blockDelegatedTask(ctx, taskId, "未检测到 subtask 工具；请先安装并启用 gary149/pi-subtask 扩展");
-      return;
-    }
-    if (task.role === "architect") {
-      blockDelegatedTask(ctx, taskId, "subtask 执行器不能派发 architect 角色任务；请改用 local/collaboration 或调整任务角色");
-      return;
-    }
-    try {
-      const selection = deps.roleRuntime.activeRoleFor(ctx)?.role === task.role
-        ? { result: { role: task.role }, transition: undefined }
-        : await deps.roleRuntime.automaticRole(task.role, ctx);
-      if (selection.result.role !== task.role) {
-        blockDelegatedTask(ctx, taskId, `任务要求角色 ${task.role}，但当前角色为 ${selection.result.role}`);
-        return;
-      }
-      if (selection.transition && state.pendingRoleCompaction) {
-        state.pendingRoleCompaction.continuation = { kind: "workflow-schedule" };
-        deps.roleRuntime.startPendingRoleCompaction(ctx);
-        return;
-      }
-      const requestId = nextSubtaskRequestId(task.id);
-      const spawning = beginWorkflowDelegation(state.workflowState, {
-        taskId,
-        requestId,
-        type: "subtask",
-      });
-      const started = markWorkflowTaskStarted(spawning, taskId);
-      deps.report.persistWorkflowState(started, ctx);
-      ctx.ui.notify(`工作流任务 ${taskId} 已切换到 ${task.role}，正在等待 subtask 派发。`, "info");
-      if (!(await deps.messages.sendSubtaskDispatchMessage(ctx, taskId))) {
-        blockDelegatedTask(ctx, taskId, "无法发送 subtask 派发请求；请重试任务");
-        return;
-      }
-      armSubtaskDispatchTimeout(ctx, taskId, requestId);
-    } catch (error) {
-      blockDelegatedTask(ctx, taskId, `无法派发 subtask：${textOf(error)}`);
-    }
-  }
-  function latestSubtaskResult(ctx: ExtensionContext) {
-    const branch = ctx.sessionManager.getBranch();
-    for (let index = branch.length - 1; index >= 0; index -= 1) {
-      const entry = branch[index];
-      if (entry.type === "custom_message" && entry.customType === "subtask-result") return entry;
-    }
-    return undefined;
-  }
-  function latestCollaborationResult(ctx: ExtensionContext) {
-    const branch = ctx.sessionManager.getBranch();
-    for (let index = branch.length - 1; index >= 0; index -= 1) {
-      const entry = branch[index];
-      if (entry.type === "custom_message" && entry.customType === "pi-init-collaboration-result") return entry;
-    }
-    return undefined;
-  }
-  async function consumeCollaborationResult(ctx: ExtensionContext) {
-    if (!state.workflowState || state.workflowState.executor !== "collaboration" || !isWorkflowActive(state.workflowState)) return;
-    const taskId = state.workflowState.currentTaskId;
-    if (!taskId) return;
-    const task = getWorkflowTask(state.workflowState, taskId);
-    const delegation = task?.delegation;
-    if (!delegation || !["spawning", "running"].includes(delegation.status)) return;
-    const details = latestCollaborationResult(ctx)?.details as { taskId?: string; requestId?: string; recordId?: string; status?: string; resultText?: string; error?: string } | undefined;
-    if (!details || details.taskId !== taskId || details.requestId !== delegation.requestId) return;
-    if (delegation.agentId && details.recordId !== delegation.agentId) return;
-    if (details.status !== "completed" || typeof details.resultText !== "string") {
-      blockDelegatedTask(ctx, taskId, details.error || `共享协作 Agent 未成功完成（${details.status ?? "未知"}）`);
-      return;
-    }
-    try {
-      const result = parseSubtaskResult(details.resultText);
-      if (result.outcome === "blocked") {
-        blockDelegatedTask(ctx, taskId, result.reason);
-        return;
-      }
-      const next = completeWorkflowTask(state.workflowState, {
-        taskId,
-        completionSummary: result.completionSummary,
-        implementationRationale: result.implementationRationale,
-        verification: result.verification,
-      });
-      const completedTask = getWorkflowTask(next, taskId);
-      const taskCompletionReport = deps.report.formatWorkflowTaskCompletion(completedTask);
-      const completionReport = next.status === "completed" ? deps.report.formatWorkflowCompletion(next, completedTask) : taskCompletionReport;
-      deps.report.persistWorkflowState(next, ctx);
-      state.workflowTaskCompactionPending = next.status !== "completed";
-      state.workflowDispatchInFlight = false;
-      ctx.ui.notify(completionReport, "info");
-    } catch (error) {
-      blockDelegatedTask(ctx, taskId, `共享协作 Agent 结果无效：${textOf(error)}`);
-    }
-  }
-  async function consumeSubtaskResult(ctx: ExtensionContext) {
-    if (!state.workflowState || state.workflowState.executor !== "subtask" || !isWorkflowActive(state.workflowState)) return;
-    const taskId = state.workflowState.currentTaskId;
-    if (!taskId) return;
-    const task = getWorkflowTask(state.workflowState, taskId);
-    const delegation = task?.delegation;
-    if (!delegation || !["spawning", "running"].includes(delegation.status)) return;
-
-    const details = latestSubtaskResult(ctx)?.details as
-      | { name?: string; task?: string; status?: string; resultText?: string }
-      | undefined;
-    if (!details || typeof details.task !== "string" || typeof details.resultText !== "string") return;
-
-    if (details.task !== deps.messages.workflowSubtaskPrompt(taskId)) return;
-
-    if (details.status !== "done") {
-      blockDelegatedTask(ctx, taskId, `subtask 未成功完成（${details.status ?? "未知"}）`);
-      return;
-    }
-
-    try {
-      clearSubtaskDispatchTimer();
-      const result = parseSubtaskResult(details.resultText);
-      if (result.outcome === "blocked") {
-        blockDelegatedTask(ctx, taskId, result.reason);
-        return;
-      }
-      const next = completeWorkflowTask(state.workflowState, {
-        taskId,
-        completionSummary: result.completionSummary,
-        implementationRationale: result.implementationRationale,
-        verification: result.verification,
-      });
-      const completedTask = getWorkflowTask(next, taskId);
-      const taskCompletionReport = deps.report.formatWorkflowTaskCompletion(completedTask);
-      const completionReport = next.status === "completed"
-        ? deps.report.formatWorkflowCompletion(next, completedTask)
-        : taskCompletionReport;
-      deps.report.persistWorkflowState(next, ctx);
-      state.workflowTaskCompactionPending = next.status !== "completed";
-      state.workflowDispatchInFlight = false;
-      ctx.ui.notify(completionReport, "info");
-    } catch (error) {
-      blockDelegatedTask(ctx, taskId, `subtask 结果无效：${textOf(error)}`);
-    }
-  }
-  function observeSubtaskToolCall(ctx: ExtensionContext, toolName: unknown) {
-    if (toolName !== "subtask") return;
-    const workflow = state.workflowState;
-    const taskId = workflow?.currentTaskId;
-    const task = taskId ? getWorkflowTask(workflow, taskId) : undefined;
-    const delegation = task?.delegation;
-    if (
-      !workflow
-      || workflow.executor !== "subtask"
-      || !isWorkflowActive(workflow)
-      || !taskId
-      || !delegation
-      || delegation.status !== "spawning"
-    ) return;
-    try {
-      const running = markWorkflowDelegationStarted(workflow, {
-        taskId,
-        requestId: delegation.requestId,
-        agentId: "subtask",
-      });
-      deps.report.persistWorkflowState(running, ctx);
-      clearSubtaskDispatchTimer();
-      ctx.ui.notify(`工作流任务 ${taskId} 已交给 subtask 后台执行。`, "info");
-    } catch (error) {
-      blockDelegatedTask(ctx, taskId, `无法记录 subtask 启动：${textOf(error)}`);
-    }
-  }
-
-  function handleArchitectBlockedToolCall(ctx: ExtensionContext, toolName: string) {
-    if (toolName !== "subtask") return;
-    const workflow = state.workflowState;
-    const taskId = workflow?.currentTaskId;
-    const task = taskId ? getWorkflowTask(workflow, taskId) : undefined;
-    if (
-      !workflow
-      || workflow.executor !== "subtask"
-      || !isWorkflowActive(workflow)
-      || !taskId
-      || !task?.delegation
-      || !["spawning", "running"].includes(task.delegation.status)
-    ) return;
-    blockDelegatedTask(ctx, taskId, "architect 角色不允许调用 subtask；任务派发前的角色切换未完成");
-  }
   async function scheduleWorkflow(ctx: ExtensionContext) {
     if (
-      state.workflowDispatchInFlight ||
-      state.roleCompactionInFlight ||
-      state.pendingRoleCompaction ||
-      !state.workflowState
+      state.workflowDispatchInFlight
+      || state.roleCompactionInFlight
+      || state.pendingRoleCompaction
+      || !state.workflowState
     ) {
       return;
     }
@@ -371,54 +124,31 @@ export function createWorkflowDispatch(
     }
     if (!isWorkflowActive(state.workflowState)) return;
     if (state.workflowState.executor === "runtime") {
-      if (!state.runtimeBackend) { ctx.ui.notify("Runtime workflow backend 未初始化；不会回退到本地调度。", "error"); return; }
+      if (!state.runtimeBackend) {
+        ctx.ui.notify("Runtime workflow backend 未初始化；不会回退到本地调度。", "error");
+        return;
+      }
       await state.runtimeBackend.schedule(ctx);
       return;
     }
+
     if (state.workflowState.currentTaskId) {
-      const currentTask = getWorkflowTask(state.workflowState, state.workflowState.currentTaskId);
-      if (state.workflowState.executor === "subtask") {
-        if (currentTask?.delegation) {
-          await consumeSubtaskResult(ctx);
-          if (state.workflowState?.status === "replanning") {
-            await scheduleWorkflowReplan(ctx);
-            return;
-          }
-          if (!state.workflowState || !isWorkflowActive(state.workflowState) || state.workflowState.currentTaskId) return;
-        } else {
-          state.workflowDispatchInFlight = true;
-          await dispatchSubtaskTask(ctx, state.workflowState.currentTaskId);
-          return;
-        }
-      } else if (state.workflowState.executor === "collaboration") {
-        if (currentTask?.delegation) {
-          await consumeCollaborationResult(ctx);
-          if (state.workflowState?.status === "replanning") {
-            await scheduleWorkflowReplan(ctx);
-            return;
-          }
-          if (!state.workflowState || !isWorkflowActive(state.workflowState) || state.workflowState.currentTaskId) return;
-        } else {
-          ctx.ui.notify("共享协作任务缺少持久化 delegation；不会自动重新派发，请先 retry。", "warning");
-          return;
-        }
-      } else {
-        const nudged = recordWorkflowNudge(state.workflowState);
-        if (nudged === state.workflowState) return;
-        deps.report.persistWorkflowState(nudged, ctx);
-        if (nudged.status === "paused") {
-          ctx.ui.notify(
-            formatBlockedWorkflowMessage(
-              "工作流已暂停：任务未提交 complete/block。",
-              nudged,
-            ),
-            "warning",
-          );
-          return;
-        }
-        deps.messages.sendWorkflowTaskMessage(ctx, nudged.currentTaskId!, "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow。");
+      const nudged = recordWorkflowNudge(state.workflowState);
+      if (nudged === state.workflowState) return;
+      deps.report.persistWorkflowState(nudged, ctx);
+      if (nudged.status === "paused") {
+        ctx.ui.notify(
+          formatBlockedWorkflowMessage("工作流已暂停：任务未提交 complete/block。", nudged),
+          "warning",
+        );
         return;
       }
+      deps.messages.sendWorkflowTaskMessage(
+        ctx,
+        nudged.currentTaskId!,
+        "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow。",
+      );
+      return;
     }
 
     const next = getNextWorkflowTask(state.workflowState);
@@ -430,23 +160,8 @@ export function createWorkflowDispatch(
     const taskCompletionPending = state.workflowTaskCompactionPending;
     state.workflowTaskCompactionPending = false;
     state.workflowDispatchInFlight = true;
-    if (["subtask", "collaboration"].includes(state.workflowState.executor) && taskCompletionPending
-      && startTaskBoundaryCompaction(ctx, { kind: "workflow-schedule" })) return;
-
     const started = startWorkflowTask(state.workflowState, next.id);
     deps.report.persistWorkflowState(started, ctx);
-    if (started.executor === "subtask") {
-      await dispatchSubtaskTask(ctx, next.id);
-      return;
-    }
-    if (started.executor === "collaboration") {
-      const executionStarted = markWorkflowTaskStarted(started, next.id);
-      const requestId = nextCollaborationRequestId(next.id);
-      const delegated = beginWorkflowDelegation(executionStarted, { taskId: next.id, requestId, type: "collaboration" });
-      deps.report.persistWorkflowState(delegated, ctx);
-      void dispatchCollaborationTask(ctx, next.id, requestId);
-      return;
-    }
 
     try {
       const selection = await deps.roleRuntime.automaticRole(next.role, ctx);
@@ -488,11 +203,6 @@ export function createWorkflowDispatch(
   return {
     scheduleWorkflowReplan,
     restoreWorkflowState,
-    blockDelegatedTask,
-    dispatchSubtaskTask,
-    consumeSubtaskResult,
-    observeSubtaskToolCall,
-    handleArchitectBlockedToolCall,
     scheduleWorkflow,
   };
 }

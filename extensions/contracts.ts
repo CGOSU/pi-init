@@ -89,7 +89,7 @@ export const roleModelsSchema = Type.Object({
     description: "兼容旧配置；未设置 workflowMode 时 true 映射 on、false 映射 off",
   })),
   workflowExecutor: Type.Optional(StringEnum(WORKFLOW_EXECUTORS, {
-    description: "工作流执行器：local、subtask、collaboration 或 runtime；默认 local",
+    description: "工作流执行器：local 或 runtime；默认 local",
   })),
   runtime: Type.Optional(runtimeConfigSchema),
   roleModels: Type.Optional(roleModelsMapSchema),

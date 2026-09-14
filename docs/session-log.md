@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-14：移除 subagents、subtask、collaboration 委派执行链路
+
+- 完成内容：工作流执行器收窄为 `local`/`runtime`；删除 subtask 结果协议、collaboration Agent 进程/registry/消息/overlay/reservation/session-tail 工具链、控制中心选项、调度分支、超时与结果消费；删除对应测试和第三方源码声明。历史 local/runtime 状态中的 delegation 字段仍可读取，但不再推进委派状态。
+- 验证：`npm test`，132 项全部通过；`node --check` 覆盖修改后的扩展、核心模型和转换模块，全部通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。
+- 遗留：未更新已安装 Pi package、未 reload/重启当前 Pi、未提交、未推送；历史文档中的旧执行器记录仅作为历史保留。
+
 ### 2026-09-14：新增保存 Ctrl+S 快捷键
 
 - 完成内容：TUI 中包含保存项的菜单（控制中心及“角色与模型”菜单）支持按 `Ctrl+S` 直接触发保存，并显示快捷键提示；新增对应回归测试。

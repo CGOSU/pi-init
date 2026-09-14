@@ -17,9 +17,9 @@ The package-published `pi-init-role-routing` Skill is the single source for the 
 
 For a clear, low-risk goal, make ordinary implementation choices and proceed without asking the user about helpers, internal decomposition, test organization, investigation order, or bug fixes that restore intended behavior. Ask only for business or contract conflicts, missing permission or credentials, irreversible or external-state operations, unsafe merges, or blocked real verification; record newly requested behavior, contracts, permissions, or data structures in the confirmed requirements or decision record first.
 
-## Shared Agent Collaboration
+## Workflow Executors
 
-When `workflowExecutor: "collaboration"` is enabled, child Agents work in the shared directory using the Agent registry, messages, and file reservations. Reservations coordinate `edit`/`write` paths but are not a shell sandbox or rollback mechanism; cancellation or failure may leave partial changes and requires actual inspection. Roles, models, reasoning levels, and permissions come from `.pi/role-models.json` and the public `pi-init-role-routing` Skill.
+`workflowExecutor` supports only `local` (sequential execution in the main session) and `runtime` (execution through the configured Runtime endpoint); the default is `local`.
 
 ## Runtime Environment and Command Conventions
 

@@ -50,8 +50,6 @@ export function workflowModeLabel(mode: string) {
 
 export function workflowExecutorLabel(executor: string) {
   if (executor === "local") return "主会话顺序执行";
-  if (executor === "subtask") return "pi-subtask 对话 fork";
-  if (executor === "collaboration") return "共享工作区协作 Agent";
   if (executor === "runtime") return "Runtime 执行器";
   return executor;
 }

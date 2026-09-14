@@ -41,7 +41,6 @@ const {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
-  beginWorkflowDelegation,
   cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
@@ -59,12 +58,7 @@ const {
   retryWorkflowTask,
   startWorkflowTask,
   validateWorkflowPlan,
-  requestWorkflowDelegationStop,
   workflowProgress,
-  SUBTASK_RESULT_MAX_BYTES,
-  SUBTASK_RESULT_PROTOCOL,
-  extractSubtaskResultJson,
-  parseSubtaskResult,
   completeRunTiming,
   createRunTiming,
   getRunTimingDuration,
@@ -113,7 +107,7 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.doesNotMatch(agents, /## 任务执行流程/);
     assert.doesNotMatch(agents, /## 证据与工具调用规则/);
     assert.doesNotMatch(agents, /已有新鲜且精确证据为 0 轮/);
-    assert.match(agents, /workflowExecutor.*collaboration/);
+    assert.match(agents, /workflowExecutor/);
     assert.doesNotMatch(agents, /task_workflow/);
     assert.doesNotMatch(agents, /\.pi\/agents\//);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
@@ -144,7 +138,7 @@ test("自定义三职责配置会同步规范化 JSON 且不生成项目级 Skil
     const roleModels = {
       mode: "confirm",
       workflowMode: "on",
-      workflowExecutor: "subtask",
+      workflowExecutor: "local",
       architect: {
         provider: "provider-architect",
         model: "model-architect",
@@ -173,7 +167,7 @@ test("自定义三职责配置会同步规范化 JSON 且不生成项目级 Skil
     );
     assert.deepEqual(config, resolveRoleConfig(roleModels));
     assert.equal(config.workflowMode, "on");
-    assert.equal(config.workflowExecutor, "subtask");
+    assert.equal(config.workflowExecutor, "local");
   });
 });
 
@@ -373,37 +367,6 @@ test("重规划提示明确 architect 不取证并交由 docs-commit 提供证�
   });
 });
 
-test("subtask 隐藏提示复用新鲜证据并保留高风险检查", async () => {
-  await withTempDirectory(async (directory) => {
-    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
-    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
-    const state = createWorkflowState({
-      summary: "subtask 读取策略",
-      executor: "subtask",
-      tasks: [{ id: "current", role: "developer-test", task: "完成当前任务", files: ["src/current.js"], acceptanceCriteria: ["通过"] }],
-    }, 100);
-    const harness = createExtensionHarness([
-      { type: "custom", customType: "pi-init-workflow", data: state },
-    ], {
-      cwd: directory,
-      trusted: true,
-      model: developer,
-      availableModels: [architect, developer],
-      activeTools: ["subtask"],
-    });
-
-    await emitExtensionEvent(harness, "session_start");
-
-    const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-subtask-dispatch");
-    assert.ok(message);
-    assert.match(message.message.content, /Follow the public pi-init-role-routing Skill/);
-    assert.match(message.message.content, /stay within the allowed scope/);
-    assert.match(message.message.content, /use the shared checkout/);
-    assert.match(message.message.content, /do not commit or push/);
-    assert.match(message.message.content, /report only real verification/);
-  });
-});
-
 test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "商城");
@@ -433,7 +396,7 @@ test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async (
     assert.doesNotMatch(agents, /## Evidence and Tool Invocation Rules/);
     assert.doesNotMatch(agents, /0 rounds when fresh/);
     assert.doesNotMatch(agents, /## Task Execution Workflow/);
-    assert.match(agents, /workflowExecutor.*collaboration/);
+    assert.match(agents, /workflowExecutor/);
     assert.doesNotMatch(agents, /task_workflow/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);

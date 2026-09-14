@@ -42,7 +42,6 @@ const {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
-  beginWorkflowDelegation,
   cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
@@ -60,12 +59,7 @@ const {
   retryWorkflowTask,
   startWorkflowTask,
   validateWorkflowPlan,
-  requestWorkflowDelegationStop,
   workflowProgress,
-  SUBTASK_RESULT_MAX_BYTES,
-  SUBTASK_RESULT_PROTOCOL,
-  extractSubtaskResultJson,
-  parseSubtaskResult,
   completeRunTiming,
   createRunTiming,
   getRunTimingDuration,
@@ -75,69 +69,6 @@ const {
   emitExtensionEvent,
   runExternalAgent,
 } = helpers;
-
-test("subtask 结果协议严格验证完成、阻塞和异常结果", () => {
-  const complete = parseSubtaskResult(JSON.stringify({
-    protocol: SUBTASK_RESULT_PROTOCOL,
-    outcome: "complete",
-    completionSummary: "实现完成",
-    implementationRationale: "复用现有边界以降低改动风险",
-    verification: ["npm test：通过", "npm test：通过"],
-  }));
-  assert.deepEqual(complete, {
-    outcome: "complete",
-    completionSummary: "实现完成",
-    implementationRationale: "复用现有边界以降低改动风险",
-    verification: ["npm test：通过"],
-  });
-  assert.throws(
-    () => parseSubtaskResult(JSON.stringify({
-      protocol: SUBTASK_RESULT_PROTOCOL,
-      outcome: "complete",
-      completionSummary: "完成",
-      verification: ["通过"],
-    })),
-    /缺少字段：implementationRationale/,
-  );
-  assert.deepEqual(parseSubtaskResult(JSON.stringify({
-    protocol: SUBTASK_RESULT_PROTOCOL,
-    outcome: "blocked",
-    reason: "缺少凭据",
-  })), { outcome: "blocked", reason: "缺少凭据" });
-  assert.throws(
-    () => parseSubtaskResult(JSON.stringify({
-      protocol: SUBTASK_RESULT_PROTOCOL,
-      outcome: "complete",
-      completionSummary: "完成",
-      implementationRationale: "保持验证要求明确",
-      verification: [],
-    })),
-    /verification 必须是非空数组/,
-  );
-  assert.throws(
-    () => parseSubtaskResult(JSON.stringify({
-      protocol: SUBTASK_RESULT_PROTOCOL,
-      outcome: "complete",
-      completionSummary: "完成",
-      implementationRationale: "保持协议字段受控",
-      verification: ["通过"],
-      extra: true,
-    })),
-    /不支持的字段/,
-  );
-  assert.throws(
-    () => parseSubtaskResult("x".repeat(SUBTASK_RESULT_MAX_BYTES + 1)),
-    /结果过大/,
-  );
-  assert.deepEqual(
-    extractSubtaskResultJson("```json\n" + JSON.stringify({ protocol: SUBTASK_RESULT_PROTOCOL, outcome: "blocked", reason: "卡住" }) + "\n```"),
-    JSON.stringify({ protocol: SUBTASK_RESULT_PROTOCOL, outcome: "blocked", reason: "卡住" }),
-  );
-  assert.throws(
-    () => parseSubtaskResult("不是 JSON"),
-    /JSON/,
-  );
-});
 
 test("阻塞工作流状态显示原因和建议解决方法", () => {
   const planned = createWorkflowState({

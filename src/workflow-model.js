@@ -3,7 +3,7 @@ import { normalizeRoleId } from "./roles.js";
 export const WORKFLOW_STATE_VERSION = 3;
 export const WORKFLOW_MAX_TASKS = 12;
 export const WORKFLOW_MAX_NUDGES = 2;
-export const WORKFLOW_EXECUTORS = ["local", "subtask", "collaboration", "runtime"];
+export const WORKFLOW_EXECUTORS = ["local", "runtime"];
 export const WORKFLOW_DELEGATION_STATUSES = [
   "spawning",
   "running",
@@ -26,8 +26,7 @@ export function requireText(value, label) {
 }
 
 export function normalizeExecutor(value) {
-  // Legacy "subagents" (pi-subagents RPC) maps to the "subtask" executor.
-  const executor = value === "subagents" ? "subtask" : value ?? "local";
+  const executor = value ?? "local";
   if (!WORKFLOW_EXECUTORS.includes(executor)) {
     throw new Error(`工作流执行器无效：${executor}`);
   }

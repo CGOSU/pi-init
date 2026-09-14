@@ -1,4 +1,4 @@
-# 当前状态
+## 待处理 当前状态
 
 “最近一次更新”列表按日期倒序排列，当前状态正文只描述现状，不按时间排列。
 
@@ -10,18 +10,15 @@
 ## 当前目标
 
 - 维护随 package 发布的公共职责路由 Skill，并让项目 `roleModels` 映射成为启用角色和模型选择的唯一来源。
-- 维护 pi-init 与独立 agent-runtime 的 Runtime workflow 双轨 backend；同一 workflow 只允许一个冻结 authority，旧 local/subtask/collaboration 链路在迁移验收前继续保留。
 
 ## 当前已确认事实
 
+- `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留。
 - `workflowExecutor: "runtime"` 会在 workflow 创建时冻结 Runtime Graph、ProfileSnapshot、endpoint、agent backend、permission profile 和事件 cursor；Runtime 是该 workflow 的唯一状态、Attempt、cancel/retry 和事件事实源。
 - pi-init Runtime backend 已通过模型无关 mock 与实际 `runtime-daemon` development direct-host fixture 的 submit、role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart 和 client reconnect；worker reconnect 证据仍由 agent-runtime worker 层测试提供，真实 Pi 测试继续显式 ignored。
-- 旧调度链路删除清单见 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md)，当前 `cutover-ready: 否`；本轮不删除 local/subtask/collaboration 符号，也不将 development direct-host 描述为生产隔离。
-- 已完成集成用户 fork 的共享工作区协作模式：使用 Agent 进程/session、registry、消息、session tail、`/agents` Overlay 和 reservation；角色模型仍由 pi-init 管理。旧 gmc/worktree 并发链路已退役。
 
 ## 已知状态
 
-- 共享协作 Agent 使用独立 Pi 进程/session、共享 cwd、Agent registry、消息、session tail、`/agents` Overlay 和 reservation；`subagent` 与 `collaboration` 工作流均不创建 Git worktree。reservation 只拦截其他 Agent 对 `edit`/`write` 的路径冲突，不是 shell 沙箱或回滚机制；失败/取消可能留下部分修改，必须实际检查。根因、迁移和验证见 [`docs/plans/collaborating-agents-migration.md`](plans/collaborating-agents-migration.md) 与 [`docs/session-log.md`](session-log.md)。
 
 - 提供统一的 `/pi-init` 控制中心和 `init_project` 模型工具；控制中心包含快速初始化、高级初始化、职责与模型配置、职责切换和会话模式切换。控制中心和脚手架运行时已改为扩展实例内 Promise 缓存的按需加载，工作流恢复从 session branch 末尾直接查找最新状态。
 - `pi-usage` 的 session 导入已使用 DuckDB Appender、每文件事务和 1024 行有界 flush；JSONL 使用流式读取并在 `session_files` 保存 offset、行号、cwd、尾部校验和不完整尾部状态。追加内容只读取新增字节，截断、改写或校验失败回退全量重建；duration summary 只刷新受影响日期。schema v3 使用稳定 entry key（Pi id 或 legacy 哈希）跨 fork 文件去重 usage、speed、activity 和 session；schema 不一致时事务化清理并全量重建所有派生表与 checkpoint。
@@ -34,21 +31,13 @@
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，并要求各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - `task_workflow` 的 `plan`/`replan` 在工具调用入口即要求活动角色为 `architect`，非架构角色会在状态持久化前被阻断；调用摘要标记为“工作流请求”，失败结果保留具体原因，避免把调用预览误认为已创建工作流。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写用户提供的 task_workflow 输入顺序。低风险局部工作仍可在 `workflowMode: auto` 下绕过持久工作流，不改变既有任务数量阈值、配置或状态机。
-- 活动工作流支持普通自然语言方向变更：同一任务执行期间的连续 interactive/rpc 普通输入按到达顺序合并到一个 `pendingRevision`/`revisionId`，同步更新 revision 审计记录；当前任务完成后进入 `replanning`，由架构师依据完整指令通过 `task_workflow(action="replan")` 仅重规划未完成后续任务。新计划应用前 local、`subtask` 和 `collaboration` 均不会启动旧后续任务，运行中的委派 Agent 不会被旧计划重复派发，立即停止仍使用既有 cancel 流程。工作流阻塞时，状态报告、TUI、工具结果和暂停通知会显示阻塞原因及建议解决方法；解决后可 retry，方向变化则由架构师 replan。
-- 未进入活动 `task_workflow` 的 `interactive`/`rpc` Agent 执行会追加 `pi-init-run-timing` session custom entry，并在 TUI 显示来源、开始/结束时间、总耗时和计时口径；计时从首次 `agent_start` 到最终 `agent_settled`，不把普通执行报告当作任务完成。活动工作流、subtask、扩展隐藏续跑以及 reload/会话切换/中断不会重复或补造普通报告。
-- 已移除 `parallel_develop`、`parallel_batch`、gmc client、parallel worker 和 worktree/integration 专用实现。当前共享协作由内置 `subagent`、`agent_message`、Agent registry、session tail、`/agents` Overlay 和 reservation 提供；`task_workflow` 通过 `workflowExecutor: "collaboration"` 顺序委派共享目录任务。
 - 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可通过 `.pi/role-models.json` 的 `roleModels` 映射覆盖或启用其他合法角色；保存配置使用 `schemaVersion: 2`，并保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。旧版顶层角色字段仅自动读取兼容，显式 `/pi-init save` 时才规范化；旧项目生成的角色 Skill 需人工确认后删除。
-- 模型安全来自角色和工作流配置中的明确引用而非 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧字段被忽略）：角色和 collaboration 工作流子 Agent 使用完整 `provider/model`，由 pi-init roleModels 精确解析并传递 `--model`/`--thinking`，不使用 fork type/TOML fallback；缺失角色或模型显式失败。原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截（见 `docs/decisions.md`）。`/pi-init config` 候选列表展示全部已注册模型，跨 Provider 选择随时可暂存。
-- `workflowExecutor` 支持 `local`（默认）、`subtask` 和 `collaboration`。collaboration 通过共享 cwd 的独立 Pi Agent 进程执行，任务使用 roleModels 的精确模型/推理配置，结果经 `pi-init-collaboration-result` 回到主会话；主扩展唯一写入工作流状态，严格校验 `pi-init/task-result@1`，requestId/recordId 不匹配或无效结果安全阻塞，reload 不自动重新派发非终态任务。后台委派期间状态栏显示运行阶段、进度和实时耗时，启动/结果回传会通知用户，TUI 进度弹窗与 `/agents` 面板动态刷新；运行记录每 5 秒刷新 supervisor 心跳，避免真实运行被误标为 stale。单次协作默认总时限为 30 分钟，可由 `PI_COLLAB_TIMEOUT_MS` 配置 1 秒至 24 小时；超时、取消和外部终止区分记录且即使退出码为 0 仍失败，终止时保存 stdout/session 仅作诊断，干净退出才交付结果。Windows 启动优先复用已确认的 Pi `cli.js`，cmd fallback 把多行提示写入随机临时文件并只传安全相对路径；无法安全传递的路径/参数 fail-closed。旧配置值 `subagents` 继续映射为 `subtask`，不会静默改变旧执行器。
-- subtask 工作流在派发前自动切换到任务角色；architect 任务不会交给 subtask 执行。派发阶段状态栏显示“准备派发/等待子任务派发”，实际工具调用后显示后台运行；边界拦截和 30 秒未启动超时都会持久化阻塞并提示 retry。
-- 初始化不再生成 `.pi/agents/*.md` 代理脚手架（pi-subagents 专用，随 RPC 执行器一并移除）；subtask fork 复用主会话角色与工具，不需要额外代理定义。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。通用任务执行流程、证据门控、`read`/`edit` 参数、角色交接和真实验证规则由 package 公共 Skill 维护，生成的 `AGENTS.md` 只保留项目特有规则并引用该 Skill。
 - 精确文件修改支持会话内逻辑快照：成功 `edit` 且没有其他写入来源时可复用确定的替换结果；每次调用 `edit` 前必须预检每个 `oldText` 并确认精确匹配 1 次、payload 只含 `path` 和 `edits` 且 edits 不重叠，出现 0 次或多次时不得调用；可能发生写入后必须重新读取。`oldText` 零匹配时只允许定向重读、重新确认唯一精确替换并最多重试一次；不生成缓存文件或持久状态。
 - `edit` 运行时守卫包装 Pi 内置 definition：合法调用保留原生 schema、提示元数据、renderer、严格匹配、重叠检测和文件变更队列；read-shaped/malformed、重复匹配和重叠调用 fail-closed，不写文件并返回可恢复诊断，未知错误透传。提示预检只降低错误率，不能保证模型永不产生非法调用。
 - 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令和职责模型，不再询问 Skill 名称或 slug；TUI 中按 Esc 会返回上一个填写属性并保留已填写内容，最终确认返回角色模型步骤。高级初始化首项从控制中心返回控制中心，直接 `/pi-init advanced` 返回调用方；Ctrl+C、显式“取消”和快速/非 TUI 路径仍保持取消或原有行为。
 - 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，按“初始化/变更/工作流”分组菜单；工作流策略已从“角色与模型”中移到顶层变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度，前置指示点在 Agent 运行时使用主题 accent 高亮、空闲时使用 muted 灰色；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，TUI 菜单和初始化文本输入中按 Esc 返回上一级而非触发取消，初始化通知默认只显示文件数量和冲突摘要；包含保存项的 TUI 菜单支持 `Ctrl+S` 直接保存。
-- 工作流配置入口使用两级次级菜单：先选择 `workflowMode`，再选择 `workflowExecutor`；任一次级菜单返回或按 Esc 都会取消尚未完成的本次选择，完成后仅暂存当前会话，需执行 `/pi-init save` 才写入 `.pi/role-models.json`。`collaboration` 仍由 `task_workflow` 按任务顺序推进，不自动表示并发。
 - TUI 状态栏新增独立 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认缓存读取/写入。usage 尚未到达时显示“缓存判定中”，零值或未报告不推断缓存命中、写入或未命中；`message_end` 最终 assistant usage 覆盖流式暂态。不同 Provider 的 usage 到达时机不同，R/W 不保证从请求开始实时可见；状态不替换默认 Footer，不写入 session 或 DuckDB。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；活动弹窗的摘要每秒刷新，避免后台状态变化时显示旧快照；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时；`task_workflow` 工具结果在完成态仅显示“工作流已完成”，避免把完成提示和进度数字混在一起。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
@@ -57,26 +46,18 @@
 
 ## 待处理
 
-- 旧 gmc/parallel_batch worktree 隔离链路已删除；当前共享协作 process 模式已用 Windows 临时工作区和真实 `openai-codex/gpt-5.6-luna` 双 Agent 只读 E2E 验证，两个进程均正常返回并完成 registry 清理。cmux pane、真实共享工作流多任务和凭据失败注入尚未执行。
-- `task_workflow` 的 collaboration 结果协议、取消和迟到结果已有自动化覆盖；真实远程双 Agent process 链路已验证，但真实远程模型驱动的连续多任务工作流、reload 后人工恢复和 cmux 仍未执行。
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
 
+- 2026-09-14：按用户反馈移除 subagents、subtask、collaboration 三条委派执行链路及其专用扩展、协议、Agent registry/overlay/reservation、进程启动和测试；当前仅保留 local/runtime，`npm test` 132 项通过。历史记录仍保留在本文件后部，不再作为当前可用能力。
 - 2026-09-13：Runtime backend 继续保持 provider-agnostic：agent-runtime 的第二真实 Provider（Codex）因生命周期/结果/恢复接口未核实而 blocked，pi-init Runtime client 不猜测 CLI 参数、不读取模型凭据、不增加本地 fallback；Rust 侧仅有无模型 command fixture，双轨迁移清单仍为 `cutover-ready: 否`。
 - 2026-09-13：修复非架构角色触发工作流规划的误导反馈：`plan`/`replan` 在工具调用入口提前阻断，调用摘要改为“工作流请求”，失败结果显示具体原因；验证明细见 [`docs/session-log.md`](session-log.md)。
-- 2026-09-12：修复 subtask 工作流从 architect 派发时的角色错位和无反馈卡住：派发前切换任务角色，边界失败/30 秒启动超时会暂停任务并显示 retry 建议；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`task_workflow` 工具结果的完成态改为仅显示“工作流已完成”，不再显示任务分数；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`pi-usage --update` 现在跳过 session 目录下的 SoL-Pi 内部归档 JSONL，避免重复活动事件触发 DuckDB 主键事务失败；实现与验证见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：完成 architect 职责边界调整及验证收尾；当前事实见本节，决策与实现验证分别见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
-- 2026-09-11：修复 collaboration Agent 5 分钟截断与 code=0 误导：默认总时限调整为 30 分钟，支持 `PI_COLLAB_TIMEOUT_MS`（1 秒至 24 小时），区分 timeout/cancelled/killed，终止时保留 stdout/session 诊断但不交付结果；新增 `agent_end` 解析和生命周期测试。`npm test` 133 项通过。
-- 2026-09-11：优化 collaboration 后台交互反馈；新增工作流状态栏的运行阶段/进度/实时耗时、后台启动与结果回传通知，TUI 进度弹窗和 `/agents` 面板动态刷新，运行记录每 5 秒刷新心跳；协作任务从实际委派时记录开始时间。`npm test` 127 项通过。
 - 2026-09-14：TUI 控制中心及“角色与模型”菜单新增 `Ctrl+S` 保存快捷键，并补充针对性回归测试。
 - 2026-09-13：完成 Runtime backend 双轨联调与切换清单：实际 runtime-daemon development fixture 覆盖同计划 local/runtime authority、Pi role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart、client reconnect 和重复 request；worker reconnect 复用 agent-runtime 的实际 worker fixture，真实 Pi 仍需显式 gate。旧调度符号逐项清单见 `docs/plans/runtime-migration.md`，cutover-ready 仍为否；`npm test` 被既有 `test/extension-roles.test.js` 505 行门禁阻塞。
-- 2026-09-13：完成 Windows collaboration CLI 启动修复；仅复用已确认的 Pi `cli.js`，否则经 `cmd.exe /d /s /c pi.cmd` 启动，cmd fallback 使用随机临时文件传递多行提示并对特殊参数 fail-closed；`collaboration-core` 14 项通过。
-- 2026-09-11：补充 README 的控制中心与次级菜单导航，明确工作流策略/执行器选择顺序、Esc 返回取消语义、会话暂存与 `/pi-init save` 持久化边界，并说明 `collaboration` 不自动并发。
-- 2026-09-11：修复 `/pi-init config workflow` 未展示 `collaboration` 选项的问题；同步新增回归测试，`npm test` 123 项通过。
-- 2026-09-11：完成共享工作区协作迁移的代码实现和安全验证；新增 Agent registry、消息、session tail、`/agents`、reservation、角色模型适配和 `collaboration` 工作流，删除 gmc/parallel_batch 旧链路；`npm test` 122 项通过，真实双 Agent process E2E 通过。
 - 2026-09-11：确认 fork `CGOSU/pi-collaborating-agents` 固定 commit `acd50d0ec091deb03bb90b57b694131cff0c297d`，保存迁移计划和第三方 MIT 来源说明；实现前旧 gmc/worktree 链路保持不变，详见 [`docs/plans/collaborating-agents-migration.md`](plans/collaborating-agents-migration.md)。
 - 2026-09-10：按用户确认增加简单任务的最小验证策略：不创建工作流或启动 worker，不默认运行全量测试、类型检查或构建；高风险边界和明确验证要求不受影响。已同步决策、公共 Skill、developer-test 角色和 README，尚未再次提交或推送。
 - 2026-09-10：复核 Pi worker 退出问题并修正诊断/提示；确认生产 `pi.exec` + Pi CLI 路径可完成最小 worker，`npm test` 130 项通过。此前临时 E2E 的 `execFile` 包装器把超时/子进程退出映射为 code=1，PowerShell 管道还会将中文任务转换为问号；双 worker + gmc 完整 E2E 仍待在稳定终端链路复测，详见 `docs/session-log.md`。
@@ -98,13 +79,10 @@
 - 2026-08-26：修复 Pi fork/branch 复制历史 entry 导致的重复统计；schema v3 按稳定 entry key 去重 usage、speed、activity、session 和 duration，首次升级事务化重建 DuckDB 派生缓存；`npm test` 通过 58 项。
 - 2026-08-25：`pi-usage` 新增 `yesterday`、`Nd`、`YYYY-MM`、单日和双日期闭区间查询；跨日汇总按源文件去重 session，`npm test` 通过 56 项。
 - 2026-08-25：删除会在仓库根目录遗留临时目录的 `test/extension-workflow.test.js`；剩余测试通过，`npm test` 通过 54 项。
-- 2026-08-25：活动工作流将同一任务期间连续 interactive/rpc 方向输入按顺序合并为单一 revision，并在任务边界将完整指令交给架构师重规划；新增核心、local 集成和 subtask 边界回归覆盖，删除工作流扩展测试前曾通过 61 项。
 - 2026-08-23：工作流进度面板增加总任务已运行时间；已完成任务耗时移到描述列并优化主列宽度，避免窄面板遮挡任务信息。
 - 2026-08-22：工作流进度面板增加总任务开始时间，并在已完成任务后显示任务耗时；TUI 与非 TUI 状态展示均已同步。
 - 2026-08-22：完成启动优化验证。12 组交替 fresh RPC（24 个新进程）中，无扩展 wall 中位数为 808.2 ms，加载 pi-init 为 824.7 ms，增量 16.5 ms；`PI_TIMING` 的 main TOTAL 中位数为 58.5/79.0 ms，扩展首阶段为 9.0/28.5 ms。相较此前 25.7 ms 增量基线减少约 9.2 ms，超过约 5 ms 保留阈值；完整验证见 `docs/session-log.md`。
 - 2026-08-20：完成测试、工作流状态、扩展职责和 pi-usage 的职责拆分；保留 `extensions/index.ts`、`src/workflow.js`、`scripts/pi-usage.js` 公共 facade，并让安装器携带 pi-usage 支持模块。新增 500 物理行数门禁及边界测试；最终验证见 `docs/session-log.md`。
-- 2026-08-20：工作流支持普通自然语言方向变更和 revision 审计；任务边界暂停旧计划，由架构师通过 `replan` 提交未完成后续的新计划，local/subtask 和 manual/confirm 边界均安全暂停。README、双语模板和项目记忆已同步。
-- 2026-08-19：`workflowExecutor` 从 `subagents`（`@tintinweb/pi-subagents` RPC）切换到 `subtask`（gary149/pi-subtask 对话 fork）：主会话调用 `subtask` 工具派发、`subtask-result` 消息回传后自动推进；旧值 `subagents` 兼容映射为新执行器，不再生成 `.pi/agents/*.md` 脚手架。README、模板和文档同步更新。
 - 2026-08-18：TUI 工作流状态查看改为居中 overlay 弹窗，增加主题背景、标题高亮和四边框以强化弹窗识别，并保留非 TUI 通知回退；增加对应回归测试。
 - 2026-08-16：移除 fail-closed Provider 白名单，改为精确模型引用：删除 `providerPolicy` 解析、`model_select` 回滚和 `session_start`/输入/provider 请求前守卫，Agent spawn 保留“省略注入完整模型、模糊拒绝、精确存在校验”；`/pi-init config` 展示全部已注册模型；版本更新为 `1.1.0`。
 - 2026-08-16：手动模式升级为直连宿主：原生 `/model` 切换不回滚并把活动角色模型直接写回 `.pi/role-models.json`；同步中英文模板、README 和决策文档；版本更新为 `1.0.8`。

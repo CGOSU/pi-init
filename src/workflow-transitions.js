@@ -123,53 +123,6 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
   return result;
 }
 
-export function beginWorkflowDelegation(state, { taskId, requestId, type }, now = Date.now()) {
-  if (!state || state.status !== "running") throw new Error("工作流当前不可委派任务");
-  if (!["subtask", "collaboration"].includes(state.executor)) throw new Error("当前工作流未使用 subtask 执行器或 collaboration 执行器");
-  if (state.currentTaskId !== taskId) {
-    throw new Error(`只能委派当前任务 ${state.currentTaskId ?? "（无）"}`);
-  }
-
-  const result = cloneState(state, now);
-  const task = getWorkflowTask(result, taskId);
-  if (task.delegation && ["spawning", "running", "stop-requested"].includes(task.delegation.status)) {
-    throw new Error(`任务 ${taskId} 已有进行中的子代理委派`);
-  }
-  task.delegation = {
-    requestId: requireText(requestId, "子代理请求 ID"),
-    type: requireText(type, "子代理类型"),
-    status: "spawning",
-    createdAt: now,
-  };
-  return result;
-}
-
-export function markWorkflowDelegationStarted(state, { taskId, requestId, agentId }, now = Date.now()) {
-  if (!state || state.status !== "running") throw new Error("工作流当前不可更新委派任务");
-  if (!["subtask", "collaboration"].includes(state.executor)) throw new Error("当前工作流未使用可委派执行器");
-  if (state.currentTaskId !== taskId) throw new Error(`只能更新当前任务 ${state.currentTaskId ?? "（无）"}`);
-  const result = cloneState(state, now);
-  const task = getWorkflowTask(result, taskId);
-  if (!task.delegation || task.delegation.requestId !== requestId) throw new Error(`任务 ${taskId} 的 delegation 已变化`);
-  if (!["spawning", "running"].includes(task.delegation.status)) return state;
-  task.delegation.status = "running";
-  task.delegation.agentId = requireText(agentId, "子代理运行 ID");
-  task.delegation.startedAt = now;
-  return result;
-}
-
-export function requestWorkflowDelegationStop(state, now = Date.now()) {
-  if (!state || ["completed", "cancelled"].includes(state.status)) return state;
-  const result = cloneState(state, now);
-  for (const task of result.tasks) {
-    if (task.delegation && ["spawning", "running"].includes(task.delegation.status)) {
-      task.delegation.status = "stop-requested";
-      task.delegation.stopRequestedAt = now;
-    }
-  }
-  return result;
-}
-
 export function getWorkflowTaskDuration(task) {
   if (!task || !Number.isFinite(task.startedAt) || !Number.isFinite(task.completedAt)) return undefined;
   if (task.completedAt < task.startedAt) return undefined;
@@ -191,10 +144,6 @@ export function completeWorkflowTask(
   const checks = normalizeTextList(verification, "任务验证结果", { required: true });
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
-  if (task.delegation) {
-    task.delegation.status = "completed";
-    task.delegation.completedAt = now;
-  }
   task.status = "completed";
   task.completionSummary = summary;
   task.implementationRationale = rationale;
@@ -223,11 +172,6 @@ export function blockWorkflowTask(state, { taskId, reason }, now = Date.now()) {
 
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
-  if (task.delegation && task.delegation.status !== "completed") {
-    task.delegation.status = "failed";
-    task.delegation.reason = requireText(reason, "任务阻塞原因");
-    task.delegation.completedAt = now;
-  }
   task.status = "blocked";
   task.blockReason = requireText(reason, "任务阻塞原因");
   result.currentTaskId = undefined;
@@ -277,7 +221,7 @@ export function cancelWorkflow(state, now = Date.now()) {
   if (!state || ["completed", "cancelled"].includes(state.status)) {
     throw new Error("工作流已经结束");
   }
-  const result = requestWorkflowDelegationStop(cloneState(state, now), now);
+  const result = cloneState(state, now);
   result.status = "cancelled";
   result.currentTaskId = undefined;
   result.nudgeCount = 0;

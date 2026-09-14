@@ -41,7 +41,6 @@ const {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
-  beginWorkflowDelegation,
   cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
@@ -60,12 +59,7 @@ const {
   retryWorkflowTask,
   startWorkflowTask,
   validateWorkflowPlan,
-  requestWorkflowDelegationStop,
   workflowProgress,
-  SUBTASK_RESULT_MAX_BYTES,
-  SUBTASK_RESULT_PROTOCOL,
-  extractSubtaskResultJson,
-  parseSubtaskResult,
   completeRunTiming,
   createRunTiming,
   getRunTimingDuration,
@@ -436,55 +430,44 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
   );
 });
 
-test("subtask 工作流保存委派、失败和取消状态", () => {
-  const planned = createWorkflowState({
-    executor: "subtask",
-    summary: "委派实现任务",
+test("已移除的委派执行器明确拒绝，历史 delegation 不改变本地状态", () => {
+  for (const executor of ["subagents", "subtask", "collaboration"]) {
+    assert.throws(
+      () => createWorkflowState({
+        executor,
+        summary: "已移除执行器",
+        tasks: [{ id: "implementation", task: "执行实现", files: ["src"], acceptanceCriteria: ["完成"] }],
+      }),
+      /工作流执行器无效/,
+    );
+  }
+
+  const legacyDelegation = {
+    requestId: "old-request",
+    type: "old-delegation",
+    status: "running",
+    createdAt: 100,
+    startedAt: 110,
+  };
+  const restored = hydrateWorkflowState({
+    version: 3,
+    executor: "local",
+    status: "running",
+    plan: { summary: "兼容旧状态", constraints: [] },
     tasks: [{
       id: "implementation",
       task: "执行实现",
-      files: ["src/feature.js"],
-      acceptanceCriteria: ["测试通过"],
+      role: "developer-test",
+      files: ["src"],
+      acceptanceCriteria: ["完成"],
+      dependsOn: [],
+      status: "in_progress",
+      delegation: legacyDelegation,
     }],
-  }, 100);
-  const started = startWorkflowTask(planned, "implementation", 110);
-  const spawning = beginWorkflowDelegation(
-    started,
-    { taskId: "implementation", requestId: "request-1", type: "workflow-developer" },
-    120,
-  );
-  assert.deepEqual(spawning.tasks[0].delegation, {
-    requestId: "request-1",
-    type: "workflow-developer",
-    status: "spawning",
-    createdAt: 120,
+    currentTaskId: "implementation",
   });
-  assert.throws(
-    () => beginWorkflowDelegation(createWorkflowState({ executor: "local", summary: "本地", tasks: [{ id: "implementation", task: "本地执行", files: ["src"], acceptanceCriteria: ["完成"] }] }, 90), {
-      taskId: "implementation",
-      requestId: "request",
-      type: "workflow-developer",
-    }),
-    /subtask 执行器/,
-  );
-  const blocked = blockWorkflowTask(spawning, { taskId: "implementation", reason: "结果协议无效" }, 150);
+  const blocked = blockWorkflowTask(restored, { taskId: "implementation", reason: "需要人工处理" }, 120);
   assert.equal(blocked.status, "paused");
-  assert.equal(blocked.tasks[0].delegation.status, "failed");
-  assert.equal(blocked.tasks[0].delegation.reason, "结果协议无效");
-
-  const retried = retryWorkflowTask(blocked, "implementation", 160);
-  assert.equal(retried.tasks[0].startedAt, undefined);
-  assert.equal(retried.tasks[0].executionStartedAt, undefined);
-  assert.equal(retried.tasks[0].completedAt, undefined);
-  assert.equal(retried.tasks[0].delegation, undefined);
-  const redelegated = beginWorkflowDelegation(
-    startWorkflowTask(retried, "implementation", 170),
-    { taskId: "implementation", requestId: "request-2", type: "workflow-developer" },
-    180,
-  );
-  const cancelled = cancelWorkflow(redelegated, 200);
-  assert.equal(cancelled.status, "cancelled");
-  assert.equal(cancelled.tasks[0].delegation.status, "stop-requested");
-  assert.equal(requestWorkflowDelegationStop(cancelled), cancelled);
+  assert.deepEqual(blocked.tasks[0].delegation, legacyDelegation);
 });
 

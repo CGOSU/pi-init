@@ -5,7 +5,6 @@ import {
   createExtensionHarness,
   emitExtensionEvent,
 } from "./helpers.js";
-import { createCollaborationRoleResolver } from "../extensions/collaboration-role.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
@@ -84,18 +83,6 @@ test("architect 对取证、执行、MCP、协作和未知工具全部 fail-clos
     await callToolCall(harness, "browser", { command: "open https://example.com" }),
     "browser-command",
   );
-});
-
-test("architect 协作 profile 不暴露取证或协作工具", async () => {
-  const resolver = createCollaborationRoleResolver({
-    readSessionRoleConfig: async () => ({
-      roleModels: { architect: { provider: "provider-x", model: "model-x", thinkingLevel: "max" } },
-    }),
-  });
-  const profile = await resolver("architect", {
-    modelRegistry: { find(provider, id) { return { provider, id }; } },
-  });
-  assert.deepEqual(profile.allowedTools, []);
 });
 
 test("非 architect 角色和未知角色不触发 architect 守卫", async () => {

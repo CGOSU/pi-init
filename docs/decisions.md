@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-14：移除无效率收益的委派执行器，只保留 local/runtime
+
+- 决定：删除 `subagents`、`subtask`、`collaboration` 三种工作流执行器及其 pi-init 专用派发协议、结果解析、Agent registry/overlay/reservation、子进程启动和生命周期代码；`workflowExecutor` 仅保留 `local` 与 `runtime`，旧值明确报无效，不再兼容映射。
+- 原因：用户实际体验未观察到委派执行器带来开发速度提升；继续维护多套顺序委派链路会增加状态、进程和恢复复杂度而没有对应收益。
+- 约束：保留 local 主会话顺序执行、Runtime authority、任务编排状态机和历史 local/runtime 状态读取；历史 delegation 仅做读取归一化，不再推进委派生命周期。Pi 宿主自身的通用 `subagent`/`agent_message` 工具不由本次清理修改。
+
 ### 2026-09-13：pi-init Runtime client 不为未取证 Provider 猜测协议或 fallback
 
 - 决定：Runtime client 只传递冻结的 `agentBackend`/profile 和 Runtime wire command，不实现 Codex CLI 参数、事件解析、凭据注入或 backend fallback；Runtime 未注册 backend 的错误原样返回。

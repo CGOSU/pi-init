@@ -12,7 +12,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排，由各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写 task_workflow 输入顺序。
-- 工作流执行器默认是 `local`；可选择 `subtask`、`collaboration` 或 `runtime`。`collaboration` 使用共享工作目录中的独立 Agent 进程/session、Agent registry、消息和文件 reservation；`runtime` 通过配置的 Runtime endpoint 执行任务。主会话仍拥有唯一的 `task_workflow` 状态；执行器改变的是任务委派方式，不会把 `task_workflow` 自动改成并行执行。后台协作期间状态栏会持续显示运行阶段、任务进度和耗时，启动/返回会有通知，`/agents` 面板会自动刷新。
+- 工作流执行器仅支持 `local`（默认，主会话顺序执行）和 `runtime`（通过配置的 Runtime endpoint 执行任务）。`task_workflow` 仍负责工作流编排；Runtime 工作流创建后由 Runtime authority 驱动。
 - 未进入 `task_workflow` 的普通外部 Agent 执行会在 TUI 中显示开始时间、结束时间和总耗时报告，并与工作流任务完成报告分开。
 - TUI 状态栏另有独立的 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认 `R缓存读`、`W缓存写` 或两者。请求已发送但 usage 尚未到达时显示“缓存判定中”，零值或未报告不会被推断为命中、写入或未命中；`message_end` 的最终 usage 为权威结果。不同 Provider 可能只在流式结束附近报告缓存数据，因此 R/W 不能保证从请求开始就实时可见。该状态不替换默认 Footer，也不写入 session 或 DuckDB。
 - 自动模式在真实跨角色，或编排中的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后压缩上下文并自动继续任务。
@@ -43,16 +43,6 @@ pi install https://github.com/CGOSU/pi-init
 ```bash
 pi install git:github.com/CGOSU/pi-init
 ```
-
-如果要启用 `subtask` 执行器，还需要在同一个 Pi 环境中单独安装并启用第三方扩展；pi-init 不会复制或声明该依赖：
-
-```bash
-pi install npm:pi-subtask
-```
-
-未安装该扩展时请保持 `workflowExecutor: "local"`；`subtask` 模式会在缺少工具时安全阻塞当前任务。旧配置值 `subagents` 会自动映射到 `subtask`，不会切换到已停止接入的 `@tintinweb/pi-subagents` RPC 执行器。
-
-`workflowExecutor: "collaboration"` 使用 pi-init 内置的共享工作区协作底座，不需要 gmc 或 Git worktree。Agent 会自动注册并可通过 `/agents` 查看；模型、推理强度和角色提示仍来自 `.pi/role-models.json` 与公共角色 Skill。
 
 仅当前会话临时使用：
 
@@ -217,11 +207,10 @@ flowchart LR
 
 `/pi-init` 在 TUI 中打开控制中心，菜单按“初始化”“变更”“保存”“工作流”分组。带有次级菜单的入口需要逐级完成选择：
 
-- “变更 · 工作流策略”先选择 `workflowMode`（`off`、`on` 或 `auto`），再选择 `workflowExecutor`（`local`、`subtask` 或 `collaboration`）。命令行入口 `/pi-init config workflow` 也按这个顺序打开两个菜单。
+- “变更 · 工作流策略”先选择 `workflowMode`（`off`、`on` 或 `auto`），再选择 `workflowExecutor`（`local` 或 `runtime`）。命令行入口 `/pi-init config workflow` 也按这个顺序打开两个菜单。
 - 在任一次级菜单选择“返回”或按 `Esc`，都会返回上一级且取消本次尚未完成的工作流配置选择；完成两个选择后，变更先暂存于当前会话。
 - 选择“保存 · 保存角色配置”或执行 `/pi-init save` 后，才会写入 `.pi/role-models.json`。因此仅在菜单中选择执行器，不代表项目文件已经变更。
 - 在 TUI 控制中心及“角色与模型”保存菜单中，按 `Ctrl+S` 可直接触发保存；其他菜单仍使用 `Enter` 确认、`Esc` 返回。
-- `collaboration` 使用共享工作区的独立 Agent，但当前 `task_workflow` 仍按任务顺序推进；它不是自动并发开关。
 
 ### 架构前置证据与职责边界
 
@@ -231,7 +220,7 @@ flowchart LR
 
 任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 在当前会话暂存 `off`、`on` 或 `auto`，执行 `/pi-init save` 后才写入项目配置；也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，并要求按各任务指定角色切换后直接顺序执行，架构角色不直接实现；超过 2 个任务才进入编排。已开始的工作流仍可查看和收尾。旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
 
-`workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `subtask` 或 `collaboration`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
+`workflowExecutor` 同样位于 `.pi/role-models.json` 顶层，默认值为 `local`，可设为 `runtime`。配置变更先只影响当前会话，执行 `/pi-init save` 后才持久化；活动工作流会持久化创建时的执行器，之后配置不会把已有工作流切换到另一执行器。
 
 ### 活动工作流中的方向变更
 
@@ -239,16 +228,12 @@ flowchart LR
 
 停在重规划边界后，扩展会将工作交给架构师。架构师必须只规划未完成的后续工作，使用 `task_workflow(action="replan")` 提交新计划；只有架构角色可以应用该计划。已完成任务、完成摘要和真实验证记录保持不变，仍有效的未来任务可通过 `retainTaskIds` 保留，新任务必须使用未出现过的 ID。若需要立刻停止当前任务，继续使用既有的 `/pi-init workflow cancel` 流程，而不是依赖方向变更输入中断任务。
 
-在 `subtask` 或 `collaboration` 执行器下，方向变更同样等到当前委派 Agent 返回结果后才进入重规划边界；pi-init 不会自动重新派发旧计划的非终态任务，也不会把迟到结果当作新任务完成。`collaboration` 的子 Agent 可通过 `agent_message` 和 `/agents` 观察，取消时会请求停止；共享目录中的部分修改仍需人工确认。
-
 ### 模型引用策略
 
 模型安全来自角色和工作流配置中的明确引用，不维护 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧配置中的该字段会被忽略）：
 
-- 角色模型和 `subtask` 工作流配置使用完整 `provider/model` 引用，并要求显式引用在注册表中存在。
+- 角色模型和 `runtime` 工作流配置使用完整 `provider/model` 引用，并要求显式引用在注册表中存在。
 - 原生 Agent 子代理由 Pi 宿主决定模型；pi-init 不注入、不校验、不拦截其 `model` 参数，模糊名称和跨 Provider 解析由宿主负责。
-- `subtask` fork 仍由 pi-init 管理派发、结果协议和工作流状态，不等同于原生 Agent 子代理。
-
 历史上的 OpenRouter 意外调用曾与 Agent 子代理的模糊模型解析有关；当前项目不再在原生 Agent 边界重复实现模型路由，需要控制该行为时应配置 Pi 宿主或显式使用完整模型引用。
 
 原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截。需要使用其他 Provider 时：
@@ -261,43 +246,11 @@ flowchart LR
 
 每个中间任务完成时只输出该任务的精简报告：任务、摘要、实现原因、耗时和验证。`implementationRationale` 必须由执行角色说明采用该实现的原因和关键取舍，不能重复摘要。验证结果只显示明确失败的验证项；成功项不显示，没有失败项时省略验证行，不再输出灰色 bullet 辅助项。完整 verification 仍保存在工作流状态中。
 
-仅当最后一个任务完成、工作流进入 `completed` 时，才输出一次工作流完成报告：目标、进度、最终任务的摘要/实现原因/验证，以及整体开始/结束时间和总耗时；不会重新汇总前序任务。最终任务验证同样只显示明确失败的验证项。这样可以保留最终交付的完整上下文，同时避免任务报告和工作流报告重复。规划、架构审阅等待和任务之间的调度等待不计入整体执行耗时；不调用模型生成主观内容。local、`subtask` 与 `collaboration` 执行器使用相同格式。报告中的开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
+仅当最后一个任务完成、工作流进入 `completed` 时，才输出一次工作流完成报告：目标、进度、最终任务的摘要/实现原因/验证，以及整体开始/结束时间和总耗时；不会重新汇总前序任务。最终任务验证同样只显示明确失败的验证项。这样可以保留最终交付的完整上下文，同时避免任务报告和工作流报告重复。规划、架构审阅等待和任务之间的调度等待不计入整体执行耗时；不调用模型生成主观内容。local 与 `runtime` 执行器使用相同格式。报告中的开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 
-未走 `task_workflow` 的普通外部执行也会显示“普通执行时间报告”，字段包括来源、开始时间、结束时间、总耗时和计时口径。它只跟踪 `interactive` 或 `rpc` 输入，时间边界是首次 `agent_start` 到最终 `agent_settled`；这只表示本次 Agent 执行，不等同于工作流任务或业务任务完成。活动工作流、subtask 和扩展隐藏续跑不会重复生成普通记录。报告使用不进入 LLM 上下文的 session custom entry 持久化；reload、会话切换或中断时不会补造未完成记录。
+未走 `task_workflow` 的普通外部执行也会显示“普通执行时间报告”，字段包括来源、开始时间、结束时间、总耗时和计时口径。它只跟踪 `interactive` 或 `rpc` 输入，时间边界是首次 `agent_start` 到最终 `agent_settled`；这只表示本次 Agent 执行，不等同于工作流任务或业务任务完成。活动工作流和扩展隐藏续跑不会重复生成普通记录。报告使用不进入 LLM 上下文的 session custom entry 持久化；reload、会话切换或中断时不会补造未完成记录。
 
 `/pi-init mode`、`/pi-init role`、`switch_role` 和 `/pi-init config` 的运行时变更只影响当前会话；只有明确执行 `/pi-init save` 才会把暂存角色配置写入项目文件。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，角色自动切换以当前会话配置为准。
-
-### subtask 顺序执行器边界
-
-启用 `workflowExecutor: "subtask"` 后，主会话调用 `subtask` 工具把当前就绪任务顺序委派到独立的对话 fork。fork 在共享工作区运行，不创建 worktree、不并行、不合并分支、不自动提交或推送；主会话是 `task_workflow` 状态的唯一写入者，fork 不能调用该工具。派发消息（`pi-init-subtask-dispatch`）不进入 LLM 上下文，fork 的提示词内嵌严格的 `pi-init/task-result@1` 协议，结果通过 `subtask-result` custom 消息回到会话；成功结果还必须包含 `implementationRationale`，说明关键实现取舍。
-
-fork 返回的结果必须携带符合 `pi-init/task-result@1` 的严格 JSON；只有 `outcome: "complete"` 且包含实现原因和真实验证记录的结果才会完成任务。无效结果、非 done 状态或缺少 `subtask` 工具都会安全阻塞任务，而不会猜测性推进。运行中的 fork 由 pi-subtask 面板管理，可在其中停止或查看；pi-init 取消或阻塞工作流时不会伪造任务完成，必要时仍需人工确认 fork 状态。
-
-reload 不会自动重新派发非终态的已委派任务，以避免共享工作区并发写入。持久化的 delegation 只用于状态展示和人工恢复；旧配置值 `subagents`（pi-subagents RPC）自动映射到 `subtask`，但不会把工作流切换到已停止接入的 RPC 执行器。
-
-### collaboration 共享工作区协作执行器
-
-启用 `workflowExecutor: "collaboration"` 后，主会话通过内置 `subagent` 启动独立 Pi Agent 进程。Agent 使用当前共享工作目录，通过 registry、消息和文件 reservation 协作；不创建 Git worktree、不自动合并、不自动提交或推送。
-
-Windows process 模式不会直接把 `pi.cmd` 交给 `pi.exec`：仅在确认当前入口是 Pi 的 `cli.js` 时使用 `process.execPath + process.argv[1]`；无法定位时才使用 `cmd.exe /d /s /c pi.cmd`，以避免 `spawn EINVAL`。cmd fallback 会把多行 system prompt 和任务内容写入当前工作目录下的随机临时文件，只传递安全的相对路径；CLI 路径或固定参数含无法安全传递的 shell 特殊字符时会安全失败。
-
-常用调用：
-
-```text
-subagent({ role: "developer-test", task: "实现认证模块" })
-agent_message({ action: "reserve", paths: ["src/auth/"] })
-agent_message({ action: "list" })
-agent_message({ action: "sessions" })
-/agents
-```
-
-`role` 必须是 `.pi/role-models.json` 中已配置的角色。子 Agent 的 provider/model、thinkingLevel、system prompt 和工具权限由 pi-init 角色配置决定，不使用 fork 的 type/TOML 模型回退。子 Agent 不能调用主工作流工具；返回 `pi-init/task-result@1` 后，主会话仍需按验收标准判断任务是否完成。
-
-reservation 只拦截其他 Agent 对 `edit`/`write` 的路径冲突；它不是 shell 沙箱，也不提供 worktree 回滚。Agent 取消或失败后共享目录可能保留部分修改，必须通过 `git diff` 或其他实际检查确认。`/agents` 可查看活跃 Agent、消息、reservation 和运行记录；`agent_message` 支持 direct、broadcast、feed、thread、session 和 tail。
-
-协作状态默认保存到 `~/.pi/agent/collaborating-agents/`，可使用 `COLLABORATING_AGENTS_DIR` 指定隔离目录。后台运行时主会话不会同步等待子 Agent，而是在状态栏显示“后台协作 Agent 运行中”；`/pi-init workflow status` 的 TUI 弹窗和 `/agents` 面板会动态刷新，子 Agent 运行记录每 5 秒刷新心跳。单次协作默认最多运行 30 分钟，可通过 `PI_COLLAB_TIMEOUT_MS` 设置 1 秒到 24 小时的总时限；超时、取消或外部终止即使退出码为 0 也保持失败，保留的 stdout/session 仅用于诊断，不会绕过严格 `pi-init/task-result@1` 验收。process 模式已在 Windows 与真实远程模型双 Agent 临时测试中验证；cmux pane 尚未完成真实验证，不能将其描述为已支持。
-
-工作流进入阻塞状态时，状态报告、TUI 弹窗、工具结果和暂停通知都会同时显示具体阻塞原因及建议解决方法。解决原因后执行 `/pi-init workflow retry <taskId>`；如果需求或方案已改变，由架构师通过 `task_workflow(action="replan")` 重规划。
 
 ### 工作流运行时版本不一致
 

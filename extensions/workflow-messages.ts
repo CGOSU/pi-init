@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getWorkflowTask } from "../src/workflow.js";
-import { SUBTASK_RESULT_PROTOCOL } from "../src/subtask.js";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { textOf } from "./runtime-state.ts";
 
@@ -138,75 +137,11 @@ export function createWorkflowMessages(
     }
   }
 
-  function workflowSubtaskPrompt(taskId: string) {
-    const workflowState = state.workflowState;
-    if (!workflowState) throw new Error("当前没有活动工作流");
-    const task = getWorkflowTask(workflowState, taskId);
-    if (!task) throw new Error(`工作流任务不存在：${taskId}`);
-    const completed = workflowState.tasks
-      .filter((item) => item.status === "completed")
-      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}`);
-
-    return [
-      "[PI-INIT SUBTASK WORKFLOW]",
-      `Workflow goal: ${workflowState.plan.summary}`,
-      workflowState.plan.constraints.length > 0 ? `Architecture constraints:\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
-      completed.length > 0 ? `Completed tasks:\n${completed.join("\n")}` : "",
-      `Current task (${task.id}, role ${task.role}): ${task.task}`,
-      `Allowed files or directories: ${task.files.join(", ")}`,
-      `Acceptance criteria:\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
-      "Follow the public pi-init-role-routing Skill; stay within the allowed scope, use the shared checkout, do not commit or push, and report only real verification.",
-
-      "Work in the current shared checkout. Do not create worktrees, merge branches, commit, or push.",
-      "Do not call pi-init task_workflow tools. The parent session owns workflow state.",
-      "If the user describes a changed direction or new follow-up work, do not dispatch or assume any old next task; the parent session records the request and waits for the Architect at the task boundary.",
-      `When finished, output only one JSON object using protocol ${SUBTASK_RESULT_PROTOCOL}. For success use {"protocol":"${SUBTASK_RESULT_PROTOCOL}","outcome":"complete","completionSummary":"...","implementationRationale":"why this implementation was chosen and its key trade-offs","verification":["actual command and result"]}. If genuinely blocked use {"protocol":"${SUBTASK_RESULT_PROTOCOL}","outcome":"blocked","reason":"..."}. Do not wrap it in Markdown fences or add other text.`,
-    ].filter(Boolean).join("\n\n");
-  }
-
-  function workflowCollaborationPrompt(taskId: string) {
-    return workflowSubtaskPrompt(taskId)
-      .replace("[PI-INIT SUBTASK WORKFLOW]", "[PI-INIT COLLABORATION WORKFLOW]")
-      .replace("Work in the current shared checkout.", "Work in the current shared checkout and reserve paths with agent_message before editing.");
-  }
-
-  async function sendSubtaskDispatchMessage(ctx: ExtensionContext, taskId: string) {
-    if (!state.workflowState || state.workflowState.currentTaskId !== taskId) return false;
-    state.workflowDispatchInFlight = false;
-    try {
-      deps.setInternalContinuationPending(true);
-      await deps.pi.sendMessage(
-        {
-          customType: "pi-init-subtask-dispatch",
-          content: [
-            "请调用 subtask 工具派发当前工作流任务。",
-            "subtask 工具的 task 参数必须原样使用下面整段文本（逐字不变，不要改写、截断或概括）：",
-            "",
-            workflowSubtaskPrompt(taskId),
-            "",
-            "调用 subtask 工具后立即结束当前回合：不要自行执行该任务，不要等待或轮询结果，不要调用 task_workflow。subtask 完成后其结果会自动回到本会话，工作流会自动推进到下一步。",
-          ].join("\n"),
-          display: false,
-          details: { taskId },
-        },
-        { triggerTurn: true },
-      );
-      return true;
-    } catch (error) {
-      deps.setInternalContinuationPending(false);
-      ctx.ui.notify(`无法派发 subtask 任务 ${taskId}：${textOf(error)}`, "error");
-      return false;
-    }
-  }
-
   return {
     workflowTaskPrompt,
     sendWorkflowTaskMessage,
     workflowReplanPrompt,
     sendWorkflowReplanMessage,
-    workflowSubtaskPrompt,
-    workflowCollaborationPrompt,
-    sendSubtaskDispatchMessage,
   };
 }
 

@@ -149,16 +149,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         description: "使用当前会话和现有角色切换逻辑",
       },
       {
-        value: "subtask",
-        label: config.workflowExecutor === "subtask" ? "保持 pi-subtask 对话 fork" : "pi-subtask 对话 fork",
-        description: "需要已安装并启用 gary149/pi-subtask；主会话调用 subtask 工具顺序委派，结果消息回到会话后自动推进",
-      },
-      {
-        value: "collaboration",
-        label: config.workflowExecutor === "collaboration" ? "保持共享工作区协作 Agent" : "共享工作区协作 Agent",
-        description: "使用共享 cwd、独立 Agent 进程/session、消息和 reservation；失败可能留下部分修改",
-      },
-      {
         value: "runtime",
         label: config.workflowExecutor === "runtime" ? "保持 Runtime 执行器" : "Runtime 执行器",
         description: "通过配置的 Runtime endpoint 执行工作流任务；需要有效的 Runtime 配置和权限 profile",
