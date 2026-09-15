@@ -2,7 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
-### 2026-09-15：将普通执行完成态改为 Worked for 分隔线
+### 2026-09-15：将 Worked for 改为 session 累计工作时间
+
+- 完成内容：保留普通工作报告中的每轮耗时；新增 session 级 Agent 实际工作时间累计，Pi 工作时清除空闲提示并使用原生 `Working`，空闲后在编辑器上方显示累计的 `─ Worked for ... ─`；每次 `agent_settled` 持久化累计快照，恢复 session 时优先读取快照并兼容已有普通执行记录。
+- 验证：`node --test test/session-work-time.test.js test/run-timing.test.js`（6 项通过）；`npm test`（149 项通过）。
+- 遗留问题：本轮修正尚未提交或推送；未执行安装、reload；真实交互式 TUI 视觉效果未在终端中手工确认。
+
+### 2026-09-15：将普通执行完成态改为 Worked for 分隔线（已被本条替代）
 
 - 完成内容：复用既有普通执行计时和 `pi-init-run-timing` session entry；Pi 空闲后将 TUI 展示从多行时间报告改为类似用户截图的 `─ Worked for ... ─` 横向分隔线，保留完整计时数据。
 - 验证：`node --test test/run-timing.test.js test/extension-lifecycle.test.js`（13 项通过）；`npm test`（144 项通过）。

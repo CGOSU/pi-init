@@ -84,6 +84,7 @@ function createExtensionHarness(branch = [], options = {}) {
   const selectCalls = [];
   const customCalls = [];
   const statusCalls = [];
+  const widgets = new Map();
   const renderers = new Map();
   const tools = [];
   const aborts = [];
@@ -235,6 +236,13 @@ function createExtensionHarness(branch = [], options = {}) {
       setStatus(name, text) {
         statusCalls.push({ name, text });
       },
+      setWidget(name, content, widgetOptions) {
+        if (content === undefined) {
+          widgets.delete(name);
+        } else {
+          widgets.set(name, { content, options: widgetOptions });
+        }
+      },
       async select(title, items) {
         selectCalls.push({ title, items });
         return options.select?.(title, items);
@@ -290,6 +298,7 @@ function createExtensionHarness(branch = [], options = {}) {
     selectCalls,
     customCalls,
     statusCalls,
+    widgets,
     renderers,
     tools,
     aborts,

@@ -98,12 +98,13 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   await runExternalAgent(harness, "rpc");
   await runExternalAgent(harness, "extension");
 
-  assert.equal(harness.entries.length, 2);
-  assert.deepEqual(harness.entries.map(({ type, data }) => ({ type, source: data.source })), [
+  const runEntries = harness.entries.filter(({ type }) => type === "pi-init-run-timing");
+  assert.equal(runEntries.length, 2);
+  assert.deepEqual(runEntries.map(({ type, data }) => ({ type, source: data.source })), [
     { type: "pi-init-run-timing", source: "interactive" },
     { type: "pi-init-run-timing", source: "rpc" },
   ]);
-  for (const entry of harness.entries) {
+  for (const entry of runEntries) {
     assert.equal(typeof entry.data.startedAt, "number");
     assert.equal(typeof entry.data.completedAt, "number");
     assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
@@ -112,7 +113,7 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   const renderer = harness.renderers.get("pi-init-run-timing");
   assert.equal(typeof renderer, "function");
   const component = renderer(
-    { data: harness.entries[0].data },
+    { data: runEntries[0].data },
     { expanded: false },
     {
       fg: (color, text) => `<${color}>${text}</${color}>`,
@@ -120,17 +121,11 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
     },
   );
   const rendered = component.render(240).join("\n");
-  assert.match(rendered, /<dim>─ Worked for \d+s ─+/);
-  assert.doesNotMatch(rendered, /普通执行时间报告/);
-
-  const longComponent = renderer(
-    { data: { source: "interactive", startedAt: 0, completedAt: 4_669_000 } },
-    { expanded: false },
-    {
-      fg: (color, text) => `<${color}>${text}</${color}>`,
-      bold: (text) => `<bold>${text}</bold>`,
-    },
-  );
-  assert.match(longComponent.render(80).join("\n"), /Worked for 1h 17m 49s/);
+  assert.match(rendered, /<accent><bold>◆ 普通执行时间报告<\/bold><\/accent>/);
+  assert.match(rendered, /<warning><bold>总耗时：/);
+  assert.match(rendered, /开始时间：/);
+  assert.match(rendered, /结束时间：/);
+  assert.match(rendered, /总耗时：/);
+  assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
 });
 

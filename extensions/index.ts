@@ -22,7 +22,7 @@ import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/
 import { Text } from "@earendil-works/pi-tui";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { createCacheStatus } from "./cache-status.ts";
-import { renderRunTimingSeparator } from "./run-timing-separator.ts";
+import { registerSessionWorkTime } from "./session-work-time.ts";
 import { createArchitectBoundary } from "./architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
@@ -117,7 +117,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const data = entry.data && typeof entry.data === "object"
       ? entry.data as RunTimingEntryData
       : {};
-    return renderRunTimingSeparator(data, theme);
+    return new Text(workflowReport.styleReportText(workflowReport.formatRunTimingReport(data), theme), 0, 0);
   });
 
   pi.on("model_select", async (event, ctx) => {
@@ -493,4 +493,5 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       };
     },
   });
+  registerSessionWorkTime(pi);
 }

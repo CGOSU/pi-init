@@ -8,7 +8,13 @@
 
 ## 已确认决策
 
-### 2026-09-15：普通执行空闲时采用 Worked for 横向分隔线
+### 2026-09-15：Worked for 显示 session 累计工作时间并与单轮报告分离
+
+- 决定：保留每轮普通执行的 `pi-init-run-timing` 完整工作报告；另在 TUI 编辑器上方维护 session 级累计 Agent 工作时长，工作中显示 Pi 原生 `Working`，空闲时显示 `─ Worked for ... ─`。累计只计算 Agent 实际运行区间，不包含闲置时间；每轮完成后保存独立累计快照，恢复 session 时优先读取快照，并兼容已有普通执行记录。
+- 原因：单轮耗时已经由工作报告提供，`Worked for` 应作为 session 总工作时长的简洁空闲提示，避免两者语义重复。
+- 约束：普通报告仍按 `interactive`/`rpc` 输入和首次 `agent_start` 到最终 `agent_settled` 记录；活动工作流、隐藏续跑、取消和中断不得重复计时或伪造完成提示。
+
+### 2026-09-15：普通执行空闲时采用 Worked for 横向分隔线（已被本条替代）
 
 - 决定：保留 `pi-init-run-timing` 对 `interactive`/`rpc` 输入的首次 `agent_start` 到最终 `agent_settled` 计时和完整 session entry，只将 TUI renderer 改为在 Pi 空闲后显示 `─ Worked for ... ─` 单行分隔线。
 - 原因：沿用已有真实计时边界和持久化数据，借鉴用户提供的紧凑完成态提示，避免在工作结束后占用多行报告区域。
