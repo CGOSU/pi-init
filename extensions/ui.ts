@@ -53,19 +53,31 @@ export async function showMenu(
 
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
     const container = new Container();
-    const list = new SelectList(items, Math.min(items.length, options.maxVisible ?? 10), {
+    const listItems = items.map(({ value, label }) => ({ value, label }));
+    const list = new SelectList(listItems, Math.min(items.length, options.maxVisible ?? 10), {
       selectedPrefix: (text) => theme.fg("accent", text),
       selectedText: (text) => theme.fg("accent", text),
       description: (text) => theme.fg("muted", text),
       scrollInfo: (text) => theme.fg("dim", text),
       noMatch: (text) => theme.fg("warning", text),
+    }, {
+      minPrimaryColumnWidth: 24,
+      maxPrimaryColumnWidth: 72,
     });
+    const descriptionByValue = new Map(items.map((item) => [item.value, item.description]));
+    const selectedDescription = new Text("", 2, 0);
+    const updateSelectedDescription = () => {
+      const description = descriptionByValue.get(list.getSelectedItem()?.value ?? "");
+      selectedDescription.setText(description ? theme.fg("muted", `↳ ${description}`) : "");
+    };
+    list.onSelectionChange = updateSelectedDescription;
     const hasSaveAction = options.onSave !== undefined;
     let saveInFlight = false;
     const selectedIndex = options.selectedValue === undefined
       ? -1
       : items.findIndex((item) => item.value === options.selectedValue);
     if (selectedIndex >= 0) list.setSelectedIndex(selectedIndex);
+    updateSelectedDescription();
     list.onSelect = (item) => done(item.value);
     list.onCancel = () => done(null);
 
@@ -86,6 +98,7 @@ export async function showMenu(
       0,
     ));
     content.addChild(list);
+    content.addChild(selectedDescription);
 
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
     container.addChild(content);
@@ -121,6 +134,14 @@ export async function showMenu(
         tui.requestRender();
       },
     };
+  }, {
+    overlay: true,
+    overlayOptions: {
+      width: "100%",
+      minWidth: 72,
+      maxHeight: "90%",
+      margin: 1,
+    },
   });
 
   return result ?? undefined;

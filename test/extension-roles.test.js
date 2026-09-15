@@ -99,12 +99,18 @@ test("高级初始化首项 Esc 在控制中心和直接命令中返回上级", 
   const harness = createExtensionHarness([], { mode: "tui", trusted: true, custom: async (call) => {
     screens.push(call.component.render(120).join("\n"));
     const index = screens.length;
-    for (const data of index === 1 ? [String.fromCharCode(27) + "[B", "\n"] : index === 2 || index === 3 ? ["\u001b"] : []) {
+    for (const data of index === 1
+      ? ["\n"]
+      : index === 2
+        ? [String.fromCharCode(27) + "[B", "\n"]
+        : index === 3 || index === 4
+          ? ["\u001b"]
+          : []) {
       call.component.handleInput(data);
     }
   } });
   await harness.commands.get("pi-init").handler("", harness.context);
-  assert.deepEqual(screens.map((screen) => /Pi Init 控制中心/.test(screen) ? "center" : "project"), ["center", "project", "center"]);
+  assert.deepEqual(screens.map((screen) => /Pi Init 控制中心/.test(screen) ? "center" : /快速初始化当前项目/.test(screen) ? "init" : "project"), ["center", "init", "project", "init", "center"]);
 
   const direct = createExtensionHarness([], { mode: "tui", custom: async (call) => call.component.handleInput("\u001b") });
   assert.equal(await advancedInit(".", direct.context), MENU_BACK);

@@ -252,7 +252,9 @@ export function createControlCenter(deps: ControlCenterDependencies) {
 
     const showGuide = !state.controlCenterGuideShown;
     state.controlCenterGuideShown = true;
-    let selectedAction: string | undefined;
+    let selectedSection: string | undefined;
+    let selectedInitializationAction: string | undefined;
+    let selectedChangeAction: string | undefined;
     while (true) {
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       state.workflowModeStatus = config.workflowMode;
@@ -273,45 +275,72 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         `工作流状态  ${roleRuntime.workflowStateLabel()}`,
       ];
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
-      const action = await showMenu(ctx, "Pi Init 控制中心", [
-        { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
-        { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和角色模型" },
-        { value: "sync", label: "◆ 更新 · 同步项目模板", description: "更新托管模板区块并保留项目记忆" },
-        { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或暂存已配置角色的模型" },
-        { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
-        { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
-        { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
-        { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
+      const section = await showMenu(ctx, "Pi Init 控制中心", [
+        { value: "init", label: "初始化", description: "快速初始化或高级初始化当前项目" },
+        { value: "change", label: "变更", description: "角色与模型、工作流策略、角色和会话模式" },
+        { value: "sync", label: "同步", description: "同步项目模板并保留项目记忆" },
+        { value: "workflow", label: "工作流", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
-      ], { summary, selectedValue: selectedAction, ...saveMenuOptions(ctx) });
-      if (!action || isMenuBack(action) || action === "exit") return;
-      if (action === "quick") return deps.quickInit(".", ctx);
-      if (action === "advanced") {
-        const result = await deps.advancedInit(".", ctx);
-        if (isMenuBack(result)) continue;
-        return;
-      }
-      selectedAction = action;
-      if (action === "config") {
-        await configureRoleCenter(ctx);
+      ], { summary, selectedValue: selectedSection, ...saveMenuOptions(ctx) });
+      if (!section || isMenuBack(section) || section === "exit") return;
+      selectedSection = section;
+
+      if (section === "init") {
+        while (true) {
+          const action = await showMenu(ctx, "初始化", [
+            { value: "quick", label: "快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
+            { value: "advanced", label: "高级初始化", description: "编辑项目名称、语言、测试命令和角色模型" },
+            { value: MENU_BACK, label: "← 返回上一级", description: "返回控制中心" },
+          ], { selectedValue: selectedInitializationAction, ...saveMenuOptions(ctx) });
+          if (!action || isMenuBack(action)) break;
+          selectedInitializationAction = action;
+          if (action === "quick") return deps.quickInit(".", ctx);
+          if (action === "advanced") {
+            const result = await deps.advancedInit(".", ctx);
+            if (isMenuBack(result)) continue;
+            return;
+          }
+        }
         continue;
       }
-      if (action === "sync") {
+
+      if (section === "change") {
+        while (true) {
+          const currentConfig = await roleRuntime.readSessionRoleConfig(ctx);
+          const currentMode = state.sessionModeOverride ?? currentConfig.mode;
+          const action = await showMenu(ctx, "变更", [
+            { value: "config", label: "角色与模型", description: "查看或暂存已配置角色的模型" },
+            { value: "workflow-config", label: `工作流策略：${workflowModeLabel(currentConfig.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
+            { value: "role", label: "切换角色", description: "立即应用某个角色的模型和推理强度" },
+            { value: "mode", label: `切换模式：${roleModeLabel(currentMode)}`, description: "只影响当前会话" },
+            { value: MENU_BACK, label: "← 返回上一级", description: "返回控制中心" },
+          ], { selectedValue: selectedChangeAction, ...saveMenuOptions(ctx) });
+          if (!action || isMenuBack(action)) break;
+          selectedChangeAction = action;
+          if (action === "config") {
+            await configureRoleCenter(ctx);
+            continue;
+          }
+          if (action === "workflow-config") {
+            await configureWorkflow(ctx);
+            continue;
+          }
+          if (action === "role") {
+            await switchRole(undefined, ctx);
+            continue;
+          }
+          if (action === "mode") {
+            await setSessionMode(undefined, ctx);
+          }
+        }
+        continue;
+      }
+
+      if (section === "sync") {
         await deps.syncProject(".", ctx);
         continue;
       }
-      if (action === "workflow-config") {
-        await configureWorkflow(ctx);
-        continue;
-      }
-      if (action === "role") {
-        await switchRole(undefined, ctx);
-        continue;
-      }
-      if (action === "mode") {
-        await setSessionMode(undefined, ctx);
-      }
-      if (action === "workflow") {
+      if (section === "workflow") {
         await deps.workflowCommand("status", undefined, ctx);
       }
     }

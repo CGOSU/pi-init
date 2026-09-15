@@ -56,6 +56,48 @@ test("控制中心提供模板同步入口并在当前项目变更后 reload", a
   });
 });
 
+test("控制中心根菜单提升为初始化、变更、同步、工作流四个分组", async () => {
+  const screens = [];
+  const harness = createExtensionHarness([], {
+    mode: "tui",
+    custom: async (call) => {
+      screens.push(call.component.render(120).join("\n"));
+      call.component.handleInput(screens.length === 1 ? "\n" : "\u001b");
+    },
+  });
+
+  await harness.commands.get("pi-init").handler("", harness.context);
+
+  assert.match(screens[0], /初始化/);
+  assert.match(screens[0], /变更/);
+  assert.match(screens[0], /同步/);
+  assert.match(screens[0], /工作流/);
+  assert.doesNotMatch(screens[0], /◆/);
+  assert.match(screens[1], /快速初始化当前项目/);
+  assert.match(screens[1], /高级初始化/);
+});
+
+test("TUI 菜单在窄宽度下换行显示当前描述", async () => {
+  let rendered = "";
+  const harness = createExtensionHarness([], {
+    mode: "tui",
+    custom: async (call) => {
+      rendered = call.component.render(50).join("\n");
+      call.component.handleInput("\n");
+    },
+  });
+  const description = "这是一段很长的描述，用来确认窄屏下内容会自动换行而不是被截断。";
+
+  const result = await showMenu(harness.context, "测试菜单", [
+    { value: "item", label: "菜单项", description },
+  ]);
+
+  assert.equal(result, "item");
+  assert.match(rendered, /这是一段很长的描述/);
+  assert.match(rendered, /自动换行而不是被截断/);
+  assert.ok(rendered.split("\n").filter((line) => line.includes("描述") || line.includes("自动换行")).length >= 2);
+});
+
 test("控制中心根菜单通过 Ctrl+S 保存且不显示保存列表项", async () => {
   await withTempDirectory(async (directory) => {
     let menuCalls = 0;
@@ -95,9 +137,11 @@ test("角色与模型子菜单通过 Ctrl+S 保存且不显示保存列表项", 
       custom: async (call) => {
         menuCalls += 1;
         if (menuCalls === 1) {
-          for (let index = 0; index < 3; index += 1) call.component.handleInput("\u001b[B");
+          call.component.handleInput("\u001b[B");
           call.component.handleInput("\n");
         } else if (menuCalls === 2) {
+          call.component.handleInput("\n");
+        } else if (menuCalls === 3) {
           roleMenuRendered = call.component.render(120).join("\n");
           call.component.handleInput("\u0013");
           await new Promise((resolve) => setTimeout(resolve, 0));
