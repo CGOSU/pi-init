@@ -45,9 +45,9 @@ test("从已有普通执行记录恢复 session 累计工作时间", () => {
   const widget = [...harness.widgets.values()][0];
   const component = widget.content({}, harness.context.ui.theme);
   const rendered = component.render(80).join("\n");
-  assert.match(rendered, /─ Worked for 3s/);
-  assert.match(rendered, /本轮开始时间：/);
-  assert.match(rendered, /本轮结束时间：/);
+  assert.match(rendered, /─ ⏱ Worked for 3s/);
+  assert.match(rendered, /▶ 本轮开始时间：/);
+  assert.match(rendered, /■ 本轮结束时间：/);
 });
 
 test("独立 session 记录恢复累计时间并保留最近一轮时间", () => {
@@ -67,9 +67,9 @@ test("独立 session 记录恢复累计时间并保留最近一轮时间", () =>
   const widget = [...harness.widgets.values()][0];
   const component = widget.content({}, harness.context.ui.theme);
   const rendered = component.render(80).join("\n");
-  assert.match(rendered, /─ Worked for 1h 17m 51s/);
-  assert.match(rendered, /本轮开始时间：1970-01-01 \d{2}:23:20[+-]\d{2}:\d{2}/);
-  assert.match(rendered, /本轮结束时间：1970-01-01 \d{2}:23:22[+-]\d{2}:\d{2}/);
+  assert.match(rendered, /─ ⏱ Worked for 1h 17m 51s/);
+  assert.match(rendered, /▶ 本轮开始时间：1970-01-01 \d{2}:23:20[+-]\d{2}:\d{2}/);
+  assert.match(rendered, /■ 本轮结束时间：1970-01-01 \d{2}:23:22[+-]\d{2}:\d{2}/);
 });
 
 test("空闲 UI 显示累计 Worked for，开始下一轮时清除", () => {
@@ -85,9 +85,9 @@ test("空闲 UI 显示累计 Worked for，开始下一轮时清除", () => {
   const widget = [...harness.widgets.values()][0];
   const component = widget.content({}, harness.context.ui.theme);
   const rendered = component.render(80).join("\n");
-  assert.match(rendered, /─ Worked for 1h 17m 49s/);
-  assert.match(rendered, /本轮开始时间：1970-01-01 \d{2}:00:01[+-]\d{2}:\d{2}/);
-  assert.match(rendered, /本轮结束时间：1970-01-01 \d{2}:17:50[+-]\d{2}:\d{2}/);
+  assert.match(rendered, /─ ⏱ Worked for 1h 17m 49s/);
+  assert.match(rendered, /▶ 本轮开始时间：1970-01-01 \d{2}:00:01[+-]\d{2}:\d{2}/);
+  assert.match(rendered, /■ 本轮结束时间：1970-01-01 \d{2}:17:50[+-]\d{2}:\d{2}/);
 
   now = 5_000_000;
   tracker.start(harness.context);
@@ -98,9 +98,9 @@ test("空闲 UI 显示累计 Worked for，开始下一轮时清除", () => {
   const nextWidget = [...harness.widgets.values()][0];
   const nextComponent = nextWidget.content({}, harness.context.ui.theme);
   const nextRendered = nextComponent.render(80).join("\n");
-  assert.match(nextRendered, /─ Worked for 1h 17m 51s/);
-  assert.match(nextRendered, /本轮开始时间：1970-01-01 \d{2}:23:20[+-]\d{2}:\d{2}/);
-  assert.match(nextRendered, /本轮结束时间：1970-01-01 \d{2}:23:22[+-]\d{2}:\d{2}/);
+  assert.match(nextRendered, /─ ⏱ Worked for 1h 17m 51s/);
+  assert.match(nextRendered, /▶ 本轮开始时间：1970-01-01 \d{2}:23:20[+-]\d{2}:\d{2}/);
+  assert.match(nextRendered, /■ 本轮结束时间：1970-01-01 \d{2}:23:22[+-]\d{2}:\d{2}/);
 });
 
 test("session 生命周期在 TUI 空闲时显示累计工作时间", async () => {

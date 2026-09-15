@@ -88,12 +88,12 @@ function formatSessionTimestamp(value: number) {
 
 function renderWorkedFor(width: number, duration: number, lastRun: WorkInterval | undefined, theme: SessionWorkTimeTheme) {
   const safeWidth = Math.max(1, Math.floor(width));
-  const label = `─ Worked for ${formatSessionWorkTime(duration)} `;
+  const label = `─ ⏱ Worked for ${formatSessionWorkTime(duration)} `;
   const line = `${label}${"─".repeat(Math.max(0, safeWidth - visibleWidth(label)))}`;
   const lines = [theme.fg("dim", truncateToWidth(line, safeWidth, ""))];
   if (lastRun) {
-    lines.push(theme.fg("dim", truncateToWidth(`  本轮开始时间：${formatSessionTimestamp(lastRun.startedAt)}`, safeWidth, "")));
-    lines.push(theme.fg("dim", truncateToWidth(`  本轮结束时间：${formatSessionTimestamp(lastRun.completedAt)}`, safeWidth, "")));
+    lines.push(theme.fg("dim", truncateToWidth(`  ▶ 本轮开始时间：${formatSessionTimestamp(lastRun.startedAt)}`, safeWidth, "")));
+    lines.push(theme.fg("dim", truncateToWidth(`  ■ 本轮结束时间：${formatSessionTimestamp(lastRun.completedAt)}`, safeWidth, "")));
   }
   return lines;
 }
