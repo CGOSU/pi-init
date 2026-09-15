@@ -46,8 +46,6 @@
 
 ## 会话收尾
 
-符合全局 Fast Path 且未产生后续实现需要依赖的新事实、重要决策、遗留问题、关键验证结果或可复发陷阱时，以下会话文档可以不更新：`docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md` 和 `docs/pitfalls.md`。否则仍按以下要求收尾。
-
 完成任务后：
 
 1. 更新 `docs/current-state.md`，只保留当前事实和未完成事项；其“最近一次更新”列表按日期倒序；

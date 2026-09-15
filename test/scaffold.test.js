@@ -108,8 +108,10 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.doesNotMatch(agents, /## 证据与工具调用规则/);
     assert.doesNotMatch(agents, /已有新鲜且精确证据为 0 轮/);
     assert.match(agents, /workflowExecutor/);
-    assert.doesNotMatch(agents, /task_workflow/);
+    assert.match(agents, /task_workflow/);
     assert.doesNotMatch(agents, /\.pi\/agents\//);
+    assert.match(agents, /## Fast Path 收尾优先级/);
+    assert.ok(agents.indexOf("## Fast Path 收尾优先级") < agents.indexOf("## 会话收尾"));
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
     assert.match(cleanCode, /## Hard rules/);
@@ -188,6 +190,8 @@ test("部分职责配置回退默认值且不生成项目级 Skill", async () =>
     const config = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
     assert.match(agents, /pi-init-role-routing/);
+    assert.match(agents, /## Fast Path Wrap-up Priority/);
+    assert.ok(agents.indexOf("## Fast Path Wrap-up Priority") < agents.indexOf("## Session Wrap-up"));
     await assert.rejects(
       readFile(path.join(target, ".pi/skills/partial-app/SKILL.md"), "utf8"),
       { code: "ENOENT" },
@@ -397,7 +401,9 @@ test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async (
     assert.doesNotMatch(agents, /0 rounds when fresh/);
     assert.doesNotMatch(agents, /## Task Execution Workflow/);
     assert.match(agents, /workflowExecutor/);
-    assert.doesNotMatch(agents, /task_workflow/);
+    assert.match(agents, /task_workflow/);
+    assert.match(agents, /## Fast Path Wrap-up Priority/);
+    assert.ok(agents.indexOf("## Fast Path Wrap-up Priority") < agents.indexOf("## Session Wrap-up"));
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
     assert.match(agents, /git config user\.name CGOSU/);

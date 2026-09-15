@@ -31,6 +31,26 @@ For a clear, low-risk goal, make ordinary implementation choices and proceed wit
 
 
 
+## Fast Path Wrap-up Priority
+
+When all Fast Path conditions defined by the global `AGENTS.md` are met, this section takes precedence over the general session wrap-up rules below.
+
+- Modify only explicitly targeted files and direct related files required to keep the repository consistent;
+- Do not create `task_workflow` or an additional written plan;
+- Do not pre-read or update `docs/current-state.md`, `docs/decisions.md`, `docs/session-log.md`, or `docs/pitfalls.md` merely to decide whether to leave a record;
+- Do not run test, typecheck, lint, formatter, build, or dev server by default; perform only necessary static checks;
+- Do not switch roles merely for planning or routine record-keeping; role routing, the context-recovery gate, and the architect's execution prohibition remain effective.
+
+If the target file itself is documentation or a project record, it may be read and modified directly without exiting Fast Path.
+
+Exit Fast Path when any of the following applies:
+
+- The change modifies an API, data structure, dependency, architecture, business rule, permission, route, interaction, or accessibility semantics;
+- The change creates a new fact, important decision, remaining issue, key verification result, or recurring pitfall that later development depends on;
+- The scope is no longer local, low-risk, or reversible.
+
+When the user explicitly requests tests, builds, other documentation updates, or Git wrap-up, perform only the requested action and continue to follow the applicable responsibility rules.
+
 ## Session Wrap-up
 
 After completing a task:
