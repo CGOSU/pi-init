@@ -76,26 +76,11 @@ function persistedWorkTime(ctx: ExtensionContext) {
     : { totalMilliseconds: legacyTotalMilliseconds, hasWork: legacyLastRun !== undefined, lastRun: legacyLastRun };
 }
 
-function formatSessionTimestamp(value: number) {
-  const date = new Date(value);
-  const pad = (part: number) => String(part).padStart(2, "0");
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const absoluteOffset = Math.abs(offsetMinutes);
-  const offset = `${sign}${pad(Math.floor(absoluteOffset / 60))}:${pad(absoluteOffset % 60)}`;
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset}`;
-}
-
-function renderWorkedFor(width: number, duration: number, lastRun: WorkInterval | undefined, theme: SessionWorkTimeTheme) {
+function renderWorkedFor(width: number, duration: number, theme: SessionWorkTimeTheme) {
   const safeWidth = Math.max(1, Math.floor(width));
   const label = `─ ⏱ Worked for ${formatSessionWorkTime(duration)} `;
   const line = `${label}${"─".repeat(Math.max(0, safeWidth - visibleWidth(label)))}`;
-  const lines = [theme.fg("dim", truncateToWidth(line, safeWidth, ""))];
-  if (lastRun) {
-    lines.push(theme.fg("dim", truncateToWidth(`  ▶ 本轮开始时间：${formatSessionTimestamp(lastRun.startedAt)}`, safeWidth, "")));
-    lines.push(theme.fg("dim", truncateToWidth(`  ■ 本轮结束时间：${formatSessionTimestamp(lastRun.completedAt)}`, safeWidth, "")));
-  }
-  return lines;
+  return [theme.fg("dim", truncateToWidth(line, safeWidth, ""))];
 }
 
 export function createSessionWorkTimeTracker(now = () => Date.now()) {
@@ -167,9 +152,8 @@ export function createSessionWorkTimeTracker(now = () => Date.now()) {
   function show(ctx: ExtensionContext) {
     if (!canRender(ctx) || !hasCompletedWork || !ctx.isIdle()) return;
     const duration = getSessionWorkTime(workTime, now());
-    const lastRun = lastCompletedWork;
     ctx.ui.setWidget(SESSION_WORK_TIME_WIDGET_KEY, (_tui, theme) => ({
-      render: (width: number) => renderWorkedFor(width, duration, lastRun, theme),
+      render: (width: number) => renderWorkedFor(width, duration, theme),
       invalidate: () => {},
     }));
   }
