@@ -8,6 +8,18 @@
 
 ## 已确认决策
 
+### 2026-09-15：Fast Path 默认不预读项目记忆文档
+
+- 决定：Fast Path 不为判断是否需要留痕而预读 `current-state.md`、`decisions.md`、`session-log.md` 或 `pitfalls.md`；仅在任务直接依赖其中事实，或产生需要记录的新事实时，定向读取对应文档。
+- 原因：避免微修改为了决定是否记录而先承担项目文档读取成本；将读取动作与实际依赖或新事实绑定，保持 Fast Path 的低成本边界。
+- 约束：一旦发现任务依赖文档事实或产生重要决策、遗留问题、关键验证结果或可复发陷阱，应退出 Fast Path 或按项目规则定向读取并更新。
+
+### 2026-09-15：Fast Path 的文档同步采用分层例外
+
+- 决定：全局 `AGENTS.md` 只定义 Fast Path 的通用适用边界和“只同步直接关联内容”的原则；`pi-init/AGENTS.md` 针对项目记忆文档增加条件例外。符合 Fast Path 且未产生后续实现需要依赖的新事实、重要决策、遗留问题、关键验证结果或可复发陷阱时，可跳过 `current-state.md`、`decisions.md`、`session-log.md` 和 `pitfalls.md`。
+- 原因：通用执行策略与项目专属的会话收尾文件分层维护，避免全局规则依赖某个项目的目录结构，同时避免微修改产生仪式性文档噪音。
+- 约束：Fast Path 不得跳过保持代码、测试、快照或生成产物一致性所必需的直接关联更新；用户明确要求和项目级规则优先，任一适用条件不满足时退出 Fast Path。
+
 ### 2026-09-14：移除无效率收益的委派执行器，只保留 local/runtime
 
 - 决定：删除 `subagents`、`subtask`、`collaboration` 三种工作流执行器及其 pi-init 专用派发协议、结果解析、Agent registry/overlay/reservation、子进程启动和生命周期代码；`workflowExecutor` 仅保留 `local` 与 `runtime`，旧值明确报无效，不再兼容映射。

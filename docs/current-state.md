@@ -13,6 +13,8 @@
 
 ## 当前已确认事实
 
+- Fast Path 的通用边界、最小同步原则和文档读取边界维护在全局 `AGENTS.md`；本项目 `AGENTS.md` 对会话收尾文档增加了条件例外：未产生后续实现所需的新事实、重要决策、遗留问题、关键验证结果或可复发陷阱时，可跳过状态、决策、会话和陷阱文档更新。Fast Path 不为判断是否需要留痕而预读这些文档；具体决定见 [`docs/decisions.md`](decisions.md)。
+
 - `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留。
 - `workflowExecutor: "runtime"` 会在 workflow 创建时冻结 Runtime Graph、ProfileSnapshot、endpoint、agent backend、permission profile 和事件 cursor；Runtime 是该 workflow 的唯一状态、Attempt、cancel/retry 和事件事实源。
 - pi-init Runtime backend 已通过模型无关 mock 与实际 `runtime-daemon` development direct-host fixture 的 submit、role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart 和 client reconnect；worker reconnect 证据仍由 agent-runtime worker 层测试提供，真实 Pi 测试继续显式 ignored。

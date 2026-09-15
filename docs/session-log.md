@@ -2,6 +2,18 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-15：补充 Fast Path 的文档读取边界
+
+- 完成内容：全局 `AGENTS.md` 明确 Fast Path 不为判断是否需要留痕而预读项目状态、决策、会话或陷阱文档，仅在存在直接事实依赖或新事实时定向读取。
+- 验证：定向读取并核对全局 `AGENTS.md` 及项目记忆文档相关章节；`git diff --check` 通过（仅有 Windows LF/CRLF 转换警告）。
+- 遗留：未运行测试；未执行 Git commit、push 或 package 安装/reload。
+
+### 2026-09-15：明确 Fast Path 的文档同步边界
+
+- 完成内容：全局 `AGENTS.md` 增加 Fast Path 的通用最小同步原则和直接关联内容例外；项目 `AGENTS.md` 明确无新事实、重要决策、遗留问题、关键验证结果或可复发陷阱时，可跳过四类项目记忆文档更新。
+- 验证：定向读取并核对全局与项目 `AGENTS.md` 的相关章节；`git diff -- AGENTS.md` 已确认项目规则变更。
+- 遗留：未运行测试；未执行 Git commit、push 或 package 安装/reload。
+
 ### 2026-09-14：移除 subagents、subtask、collaboration 委派执行链路
 
 - 完成内容：工作流执行器收窄为 `local`/`runtime`；删除 subtask 结果协议、collaboration Agent 进程/registry/消息/overlay/reservation/session-tail 工具链、控制中心选项、调度分支、超时与结果消费；删除对应测试和第三方源码声明。历史 local/runtime 状态中的 delegation 字段仍可读取，但不再推进委派状态。
