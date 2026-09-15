@@ -120,11 +120,17 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
     },
   );
   const rendered = component.render(240).join("\n");
-  assert.match(rendered, /<accent><bold>◆ 普通执行时间报告<\/bold><\/accent>/);
-  assert.match(rendered, /<warning><bold>总耗时：/);
-  assert.match(rendered, /开始时间：/);
-  assert.match(rendered, /结束时间：/);
-  assert.match(rendered, /总耗时：/);
-  assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
+  assert.match(rendered, /<dim>─ Worked for \d+s ─+/);
+  assert.doesNotMatch(rendered, /普通执行时间报告/);
+
+  const longComponent = renderer(
+    { data: { source: "interactive", startedAt: 0, completedAt: 4_669_000 } },
+    { expanded: false },
+    {
+      fg: (color, text) => `<${color}>${text}</${color}>`,
+      bold: (text) => `<bold>${text}</bold>`,
+    },
+  );
+  assert.match(longComponent.render(80).join("\n"), /Worked for 1h 17m 49s/);
 });
 
