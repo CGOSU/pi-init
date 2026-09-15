@@ -29,6 +29,7 @@
 
 - 测试：`{{TEST_COMMAND}}`
 
+<!-- pi-init:managed:start fast-path-wrap-up -->
 ## Fast Path 收尾优先级
 
 满足全局 `AGENTS.md` 定义的全部 Fast Path 条件时，本节优先于下方通用会话收尾规则。
@@ -48,6 +49,7 @@
 - 修改范围不再局部、低风险或可逆。
 
 用户明确要求测试、构建、更新其他文档或执行 Git 收尾时，只增加对应动作，并继续遵循相应职责规则。
+<!-- pi-init:managed:end fast-path-wrap-up -->
 
 ## 会话收尾
 

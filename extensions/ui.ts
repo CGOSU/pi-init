@@ -11,7 +11,7 @@ import {
   filterRoleModels,
   roleLabel,
 } from "../src/roles.js";
-import type { MenuItem, MenuOptions, RoleModelConfig } from "./contracts.ts";
+import type { MenuItem, MenuOptions, MenuSaveHandler, RoleModelConfig } from "./contracts.ts";
 
 export const MENU_BACK = "__pi_init_back__" as const;
 
@@ -60,7 +60,8 @@ export async function showMenu(
       scrollInfo: (text) => theme.fg("dim", text),
       noMatch: (text) => theme.fg("warning", text),
     });
-    const hasSaveAction = items.some((item) => item.value === "save");
+    const hasSaveAction = options.onSave !== undefined;
+    let saveInFlight = false;
     const selectedIndex = options.selectedValue === undefined
       ? -1
       : items.findIndex((item) => item.value === options.selectedValue);
@@ -94,10 +95,26 @@ export async function showMenu(
       render: (width: number) => container.render(width),
       invalidate: () => container.invalidate(),
       handleInput: (data: string) => {
+        if (saveInFlight) {
+          tui.requestRender();
+          return;
+        }
         if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
         } else if (hasSaveAction && matchesKey(data, Key.ctrl("s"))) {
-          done("save");
+          if (!saveInFlight) {
+            saveInFlight = true;
+            Promise.resolve()
+              .then(() => options.onSave?.())
+              .catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`保存失败：${message}`, "error");
+              })
+              .finally(() => {
+                saveInFlight = false;
+                tui.requestRender();
+              });
+          }
         } else {
           list.handleInput(data);
         }
@@ -132,6 +149,7 @@ async function selectModelWithSearch(
   role: string,
   models: any[],
   selectedModel?: any,
+  onSave?: MenuSaveHandler,
 ) {
   if (ctx.mode !== "tui") {
     const query = await ctx.ui.input(
@@ -154,6 +172,7 @@ async function selectModelWithSearch(
 
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
     let filteredModels = models;
+    let saveInFlight = false;
     let list: SelectList;
     const search = new Input();
     const selectedValue = selectedModel
@@ -197,7 +216,7 @@ async function selectModelWithSearch(
       return [
         ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
         ...new Text(theme.fg("accent", theme.bold(`选择 ${roleLabel(role)} 模型`)), 1, 0).render(width),
-        new Text(theme.fg("dim", "输入关键词即时筛选 · ↑↓ 选择 · Enter 确认 · Esc 返回"), 1, 0).render(width)[0] ?? "",
+        new Text(theme.fg("dim", `输入关键词即时筛选 · ↑↓ 选择 · Enter 确认${onSave ? " · Ctrl+S 保存" : ""} · Esc 返回`), 1, 0).render(width)[0] ?? "",
         ...search.render(innerWidth).map((line) => ` ${line}`),
         ...list.render(innerWidth).map((line) => ` ${line}`),
         ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
@@ -219,10 +238,28 @@ async function selectModelWithSearch(
         list.invalidate();
       },
       handleInput: (data: string) => {
+        if (saveInFlight) {
+          tui.requestRender();
+          return;
+        }
         if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
           list.handleInput(data);
         } else if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
+        } else if (onSave && matchesKey(data, Key.ctrl("s"))) {
+          if (!saveInFlight) {
+            saveInFlight = true;
+            Promise.resolve()
+              .then(() => onSave())
+              .catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                ctx.ui.notify(`保存失败：${message}`, "error");
+              })
+              .finally(() => {
+                saveInFlight = false;
+                tui.requestRender();
+              });
+          }
         } else if (matchesKey(data, Key.ctrl("c"))) {
           done(null);
         } else {
@@ -244,6 +281,7 @@ export async function selectRoleModel(
   ctx: ExtensionContext,
   role: string,
   initialConfig?: RoleModelConfig,
+  options: Pick<MenuOptions, "onSave"> = {},
 ) {
   const models = getAvailableRoleModels(ctx);
   if (models.length === 0) {
@@ -254,7 +292,7 @@ export async function selectRoleModel(
     ? models.find((model) => model.provider === initialConfig.provider && model.id === initialConfig.model)
     : undefined;
   while (true) {
-    const model = await selectModelWithSearch(ctx, role, models, selectedModel);
+    const model = await selectModelWithSearch(ctx, role, models, selectedModel, options.onSave);
     if (isMenuBack(model)) return MENU_BACK;
     if (!model) return undefined;
     const selectedModelLabel = `${model.provider}/${model.id}`;
@@ -273,6 +311,7 @@ export async function selectRoleModel(
       })),
       {
         selectedValue: selectedModel === model ? initialConfig?.thinkingLevel : undefined,
+        onSave: options.onSave,
       },
     );
     if (isMenuBack(thinkingLevel)) {

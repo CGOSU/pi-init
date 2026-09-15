@@ -32,20 +32,6 @@ test("TUI 菜单按 Esc 返回上一级而不是取消", async () => {
   assert.equal(result, MENU_BACK);
 });
 
-test("TUI 菜单按 Ctrl+S 直接选择保存", async () => {
-  const harness = createExtensionHarness([], {
-    mode: "tui",
-    custom: async (call) => call.component.handleInput("\u0013"),
-  });
-
-  const result = await showMenu(harness.context, "测试菜单", [
-    { value: "save", label: "保存" },
-    { value: "item", label: "菜单项" },
-  ]);
-
-  assert.equal(result, "save");
-});
-
 test("TUI 文本输入按 Esc 返回且恢复内容可继续追加", async () => {
   const backHarness = createExtensionHarness([], { mode: "tui", custom: async (call) => call.component.handleInput("\u001b") });
   assert.equal(await input(backHarness.context, "测试输入", "占位文本"), MENU_BACK);

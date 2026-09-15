@@ -44,10 +44,13 @@ export type MenuItem = {
   description?: string;
 };
 
+export type MenuSaveHandler = () => Promise<void> | void;
+
 export type MenuOptions = {
   summary?: string[];
   maxVisible?: number;
   selectedValue?: string;
+  onSave?: MenuSaveHandler;
 };
 
 export const roleModelSchema = Type.Object({

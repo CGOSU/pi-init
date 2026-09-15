@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-15：完成模板同步与统一 Ctrl+S 保存
+
+- 完成内容：补充 README 的 `/pi-init sync`、托管区块、历史保留、冲突语义和统一 `Ctrl+S` 保存说明；同步记录模板状态、决策取舍和实际验证结果。
+- 验证：`node --test test/control-center-menu.test.js test/extension-roles.test.js test/extension-lifecycle.test.js test/scaffold.test.js test/scaffold-sync.test.js`，50 项全部通过；`npm test`，142 项全部通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。
+- 遗留：未安装 package、未 reload/重启当前 Pi、未提交、未推送。
+
 ### 2026-09-15：将 Fast Path 约束加入项目脚手架模板
 
 - 完成内容：中英文 `templates/AGENTS.md` 增加 Fast Path 会话收尾优先级、退出条件、文档目标例外和用户显式要求例外；更新脚手架测试覆盖生成内容及章节顺序。

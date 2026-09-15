@@ -96,15 +96,25 @@ pi-usage
 │   ├── session-log.md
 │   └── pitfalls.md
 └── .pi/
-    └── role-models.json
+    ├── role-models.json
+    └── pi-init-state.json
 ```
 
-初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径可编辑项目名称、语言、项目定位、测试命令和角色模型，不再询问 Skill 名称或 slug。当前项目初始化完成后会自动 reload。生成的 `AGENTS.md` 只保留项目定位、环境、命令和知识库等项目特有规则，并引用随 package 发布的 `pi-init-role-routing` Skill；通用任务执行流程、证据门控、工具调用、角色交接和真实验证规则统一由公共 Skill 维护。它仍要求按需读取随模板生成的 `docs/clean-code.md`，并记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
+初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径可编辑项目名称、语言、项目定位、测试命令和角色模型，不再询问 Skill 名称或 slug。当前项目初始化完成后会自动 reload。另可通过 `/pi-init sync [目录]` 安全同步已有项目的托管模板区块。生成的 `AGENTS.md` 只保留项目定位、环境、命令和知识库等项目特有规则，并引用随 package 发布的 `pi-init-role-routing` Skill；通用任务执行流程、证据门控、工具调用、角色交接和真实验证规则统一由公共 Skill 维护。它仍要求按需读取随模板生成的 `docs/clean-code.md`，并记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
 
 默认模板面向 CGOSU 工作流，包含团队知识库和 Git 身份规则。其他团队使用前，请修改：
 
 - `templates/AGENTS.md`
 - `templates/en/AGENTS.md`
+
+### 模板同步与历史保留
+
+`/pi-init sync [目录]` 用于把已有项目升级到当前模板版本，不会重新初始化或覆盖项目配置。脚手架会在 `.pi/pi-init-state.json` 中记录模板 schema 版本和托管区块基线。
+
+- `AGENTS.md` 仅同步带有 `pi-init` 标记的托管区块；其他项目规则保持不变。
+- `docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md` 和 `docs/pitfalls.md` 已存在时完整保留，只在缺失时创建。
+- 老项目首次同步会迁移可精确识别的 Fast Path 区块；无法确认是否为模板内容时报告冲突，不静默覆盖。
+- 同步会先执行内部 `dryRun` 预览，区分新增、更新、保留和冲突；冲突时不写入文件，成功后可重复执行且不会重复插入区块。
 
 ## 公共角色 Skill 与动态配置
 
@@ -191,11 +201,12 @@ flowchart LR
 /pi-init
 ```
 
-控制中心提供快速初始化、高级初始化、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
+控制中心提供快速初始化、高级初始化、项目模板同步、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
 
 ```text
 /pi-init init [目录]
 /pi-init advanced [目录]
+/pi-init sync [目录]
 /pi-init role <role-id>
 /pi-init config [role-id]
 /pi-init config workflow
@@ -205,12 +216,13 @@ flowchart LR
 
 ### 控制中心与次级菜单
 
-`/pi-init` 在 TUI 中打开控制中心，菜单按“初始化”“变更”“保存”“工作流”分组。带有次级菜单的入口需要逐级完成选择：
+`/pi-init` 在 TUI 中打开控制中心，菜单按“初始化”“更新”“变更”“工作流”分组。保存不再作为列表项出现，统一使用 `Ctrl+S`；带有次级菜单的入口需要逐级完成选择：
 
 - “变更 · 工作流策略”先选择 `workflowMode`（`off`、`on` 或 `auto`），再选择 `workflowExecutor`（`local` 或 `runtime`）。命令行入口 `/pi-init config workflow` 也按这个顺序打开两个菜单。
 - 在任一次级菜单选择“返回”或按 `Esc`，都会返回上一级且取消本次尚未完成的工作流配置选择；完成两个选择后，变更先暂存于当前会话。
-- 选择“保存 · 保存角色配置”或执行 `/pi-init save` 后，才会写入 `.pi/role-models.json`。因此仅在菜单中选择执行器，不代表项目文件已经变更。
-- 在 TUI 控制中心及“角色与模型”保存菜单中，按 `Ctrl+S` 可直接触发保存；其他菜单仍使用 `Enter` 确认、`Esc` 返回。
+- 在任一角色配置菜单中按 `Ctrl+S`，会保存当前暂存的角色配置；保存完成或失败后仍停留在当前菜单，重复按键不会并发写入。
+- `Ctrl+S` 覆盖控制中心、角色与模型、模式、工作流策略/执行器、角色选择、模型搜索和推理强度等层级；初始化表单仍使用 `Enter` 确认、`Esc` 返回。
+- 执行 `/pi-init save` 仍是非 TUI 和兼容场景的显式保存入口。
 
 ### 架构前置证据与职责边界
 
@@ -238,7 +250,7 @@ flowchart LR
 
 原生 `/model` 切换由用户自主决定，扩展不回滚、不拦截。需要使用其他 Provider 时：
 
-- `/pi-init config [角色]`：候选列表展示全部已注册模型（含刚登录的 Provider），随时暂存，执行 `/pi-init save` 持久化。
+- `/pi-init config [角色]`：候选列表展示全部已注册模型（含刚登录的 Provider），随时暂存；在 TUI 配置菜单中按 `Ctrl+S`，或执行 `/pi-init save`，即可持久化。
 - 直接编辑 `.pi/role-models.json` 的角色模型：保存即生效。
 - 手动模式（`mode: "manual"`）：原生 `/model` 切换会把活动角色的模型直接写回 `.pi/role-models.json`。
 
@@ -250,7 +262,7 @@ flowchart LR
 
 未走 `task_workflow` 的普通外部执行也会显示“普通执行时间报告”，字段包括来源、开始时间、结束时间、总耗时和计时口径。它只跟踪 `interactive` 或 `rpc` 输入，时间边界是首次 `agent_start` 到最终 `agent_settled`；这只表示本次 Agent 执行，不等同于工作流任务或业务任务完成。活动工作流和扩展隐藏续跑不会重复生成普通记录。报告使用不进入 LLM 上下文的 session custom entry 持久化；reload、会话切换或中断时不会补造未完成记录。
 
-`/pi-init mode`、`/pi-init role`、`switch_role` 和 `/pi-init config` 的运行时变更只影响当前会话；只有明确执行 `/pi-init save` 才会把暂存角色配置写入项目文件。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，角色自动切换以当前会话配置为准。
+`/pi-init mode`、`/pi-init role`、`switch_role` 和 `/pi-init config` 的运行时变更只影响当前会话；TUI 配置菜单可按 `Ctrl+S` 保存暂存角色配置，非 TUI 或兼容场景仍使用 `/pi-init save`。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，角色自动切换以当前会话配置为准。
 
 ### 工作流运行时版本不一致
 

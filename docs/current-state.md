@@ -13,7 +13,7 @@
 
 ## 当前已确认事实
 
-- Fast Path 的通用边界、最小同步原则和文档读取边界维护在全局 `AGENTS.md`；项目脚手架生成的中英文 `AGENTS.md` 在会话收尾前明确 Fast Path 的优先级、退出条件和文档目标例外。Fast Path 不为判断是否需要留痕而预读或更新项目记忆文档；具体决定见 [`docs/decisions.md`](decisions.md)。
+- 项目脚手架生成的中英文 `AGENTS.md` 包含带标记的 Fast Path 收尾约束；`/pi-init sync [目录]` 只更新托管区块、创建缺失的项目记忆文档并保留已有记录，冲突时不写入。控制中心各级角色配置菜单统一使用 `Ctrl+S` 保存，显式保存列表项已移除；非 TUI 和兼容场景保留 `/pi-init save`。具体取舍见 [`docs/decisions.md`](decisions.md)。
 
 - `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留。
 - `workflowExecutor: "runtime"` 会在 workflow 创建时冻结 Runtime Graph、ProfileSnapshot、endpoint、agent backend、permission profile 和事件 cursor；Runtime 是该 workflow 的唯一状态、Attempt、cancel/retry 和事件事实源。

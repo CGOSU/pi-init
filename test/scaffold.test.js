@@ -82,6 +82,7 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
       "docs/session-log.md",
       "docs/pitfalls.md",
       ".pi/role-models.json",
+      ".pi/pi-init-state.json",
     ]);
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
     const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
@@ -110,8 +111,16 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.match(agents, /workflowExecutor/);
     assert.match(agents, /task_workflow/);
     assert.doesNotMatch(agents, /\.pi\/agents\//);
+    assert.match(agents, /<!-- pi-init:managed:start fast-path-wrap-up -->/);
+    assert.match(agents, /<!-- pi-init:managed:end fast-path-wrap-up -->/);
     assert.match(agents, /## Fast Path 收尾优先级/);
     assert.ok(agents.indexOf("## Fast Path 收尾优先级") < agents.indexOf("## 会话收尾"));
+    const templateState = JSON.parse(await readFile(path.join(target, ".pi/pi-init-state.json"), "utf8"));
+    assert.equal(templateState.schemaVersion, 1);
+    assert.equal(templateState.templateSchemaVersion, 1);
+    assert.equal(templateState.language, "zh-CN");
+    assert.equal(templateState.managedBlocks["fast-path-wrap-up"].file, "AGENTS.md");
+    assert.match(templateState.managedBlocks["fast-path-wrap-up"].hash, /^[0-9a-f]{64}$/);
     assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
     assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
     assert.match(cleanCode, /## Hard rules/);

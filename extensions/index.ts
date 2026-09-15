@@ -96,6 +96,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         state: runtimeState,
         roleRuntime,
         quickInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).quickInit(targetDir, ctx),
+        syncProject: async (targetDir, ctx) => (await loadScaffoldRuntime()).syncProject(targetDir, ctx),
         advancedInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).advancedInit(targetDir, ctx),
         getThinkingLevel: () => pi.getThinkingLevel(),
         workflowCommand: workflowActions.workflowCommand,
@@ -294,7 +295,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow"];
+        const values = ["init", "advanced", "sync", "config", "save", "role", "mode", "workflow"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -319,6 +320,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (!action) return (await loadControlCenter()).showControlCenter(ctx);
         if (action === "init") return (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx);
         if (action === "advanced") return (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx);
+        if (action === "sync") return (await loadScaffoldRuntime()).syncProject(tokens.join(" ") || ".", ctx);
         if (action === "config") return (await loadControlCenter()).configureRole(tokens[0], ctx);
         if (action === "save") return roleRuntime.saveRoleConfig(ctx);
         if (action === "role") return (await loadControlCenter()).switchRole(tokens[0], ctx);

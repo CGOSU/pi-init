@@ -87,6 +87,7 @@ function createExtensionHarness(branch = [], options = {}) {
   const renderers = new Map();
   const tools = [];
   const aborts = [];
+  const reloadCalls = [];
   const sentMessages = [];
   const defaultModel = options.model ?? { provider: "openai-codex", id: "gpt-5.6-luna" };
   const availableModels = options.availableModels ?? [defaultModel];
@@ -267,6 +268,10 @@ function createExtensionHarness(branch = [], options = {}) {
     abort() {
       aborts.push(true);
     },
+    async reload() {
+      reloadCalls.push(true);
+      await options.reload?.();
+    },
     sessionManager: {
       getBranch() {
         return branch;
@@ -288,6 +293,7 @@ function createExtensionHarness(branch = [], options = {}) {
     renderers,
     tools,
     aborts,
+    reloadCalls,
     context,
     sentMessages,
     completeCompaction,

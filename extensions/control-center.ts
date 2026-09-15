@@ -24,6 +24,7 @@ export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
   roleRuntime: RoleRuntime;
   quickInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
+  syncProject: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
   advancedInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void | typeof MENU_BACK>;
   getThinkingLevel: () => string;
   workflowCommand: (
@@ -33,7 +34,7 @@ export type ControlCenterDependencies = {
   ) => Promise<void>;
 };
 
-function roleMenuItems(config: ResolvedRoleConfig, mode: string, hasPendingChanges: boolean) {
+function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
   return [
     {
       value: "mode",
@@ -45,19 +46,16 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string, hasPendingChang
       label: `● ${roleLabel(role)} · ${shortModelName(config.roleModels[role].model)}/${config.roleModels[role].thinkingLevel}`,
       description: formatRoleModel(config.roleModels[role]),
     })),
-    {
-      value: "save",
-      label: hasPendingChanges ? "◆ 保存角色配置（已修改，尚未保存）" : "◆ 保存角色配置",
-      description: hasPendingChanges
-        ? "角色配置已修改，尚未保存；保存后写入项目文件"
-        : "角色配置已保存",
-    },
     { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
   ];
 }
 
 export function createControlCenter(deps: ControlCenterDependencies) {
   const { state, roleRuntime } = deps;
+
+  function saveMenuOptions(ctx: ExtensionCommandContext) {
+    return { onSave: () => roleRuntime.saveRoleConfig(ctx) };
+  }
 
   async function setSessionMode(requested: string | undefined, ctx: ExtensionCommandContext) {
     const mode = requested || await showMenu(
@@ -71,6 +69,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
           : value === "manual" ? "不自动换角，原生 /model 切换直接写回项目配置"
           : undefined,
       })),
+      saveMenuOptions(ctx),
     );
     if (!mode || isMenuBack(mode)) return undefined;
     if (!ROLE_MODES.includes(mode)) {
@@ -94,6 +93,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       ctx,
       "切换角色",
       roleNames.map((value) => ({ value, label: roleLabel(value) })),
+      saveMenuOptions(ctx),
     );
     if (!role || isMenuBack(role)) return;
     if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
@@ -139,7 +139,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         description: "不超过 2 个任务时跳过编排，更多任务使用工作流",
       },
       { value: MENU_BACK, label: "← 返回上一级" },
-    ], { selectedValue: config.workflowMode });
+    ], { selectedValue: config.workflowMode, ...saveMenuOptions(ctx) });
     if (!choice || isMenuBack(choice)) return;
 
     const executor = await showMenu(ctx, "工作流执行器", [
@@ -154,7 +154,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         description: "通过配置的 Runtime endpoint 执行工作流任务；需要有效的 Runtime 配置和权限 profile",
       },
       { value: MENU_BACK, label: "← 返回上一级" },
-    ], { selectedValue: config.workflowExecutor });
+    ], { selectedValue: config.workflowExecutor, ...saveMenuOptions(ctx) });
     if (!executor || isMenuBack(executor)) return;
 
     if (choice !== config.workflowMode || executor !== config.workflowExecutor) {
@@ -189,6 +189,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       ctx,
       "配置角色模型",
       roleNames.map((value) => ({ value, label: roleLabel(value) })),
+      saveMenuOptions(ctx),
     );
     if (!role || isMenuBack(role)) return;
     if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
@@ -201,7 +202,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     }
 
     try {
-      const selection = await selectRoleModel(ctx, role, config.roleModels[role]);
+      const selection = await selectRoleModel(ctx, role, config.roleModels[role], saveMenuOptions(ctx));
       if (isMenuBack(selection)) return;
       if (!selection) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
@@ -227,15 +228,10 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     let config = await roleRuntime.readSessionRoleConfig(ctx);
     while (true) {
       const mode = state.sessionModeOverride ?? config.mode;
-      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode, roleRuntime.hasPendingRoleConfigChanges()));
+      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode), saveMenuOptions(ctx));
       if (!action || isMenuBack(action)) return;
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
-        continue;
-      }
-      if (action === "save") {
-        await roleRuntime.saveRoleConfig(ctx);
-        config = await roleRuntime.readSessionRoleConfig(ctx);
         continue;
       }
       if (action === "workflow") {
@@ -280,14 +276,14 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       const action = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "quick", label: "◆ 初始化 · 快速初始化当前项目", description: "自动读取项目元数据，只确认一次" },
         { value: "advanced", label: "◆ 初始化 · 高级初始化", description: "编辑项目名称、语言、测试命令和角色模型" },
+        { value: "sync", label: "◆ 更新 · 同步项目模板", description: "更新托管模板区块并保留项目记忆" },
         { value: "config", label: "◆ 变更 · 角色与模型", description: "查看或暂存已配置角色的模型" },
         { value: "workflow-config", label: `◆ 变更 · 工作流策略：${workflowModeLabel(config.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
         { value: "role", label: "◆ 变更 · 切换角色", description: "立即应用某个角色的模型和推理强度" },
         { value: "mode", label: `◆ 变更 · 切换模式：${roleModeLabel(mode)}`, description: "只影响当前会话" },
-        { value: "save", label: roleRuntime.hasPendingRoleConfigChanges() ? "◆ 保存 · 保存角色配置（已修改，尚未保存）" : "◆ 保存 · 保存角色配置", description: roleRuntime.hasPendingRoleConfigChanges() ? "角色配置已修改，尚未保存；保存后写入 .pi/role-models.json" : "角色配置已保存" },
         { value: "workflow", label: "◆ 工作流 · 查看任务进度", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
-      ], { summary, selectedValue: selectedAction });
+      ], { summary, selectedValue: selectedAction, ...saveMenuOptions(ctx) });
       if (!action || isMenuBack(action) || action === "exit") return;
       if (action === "quick") return deps.quickInit(".", ctx);
       if (action === "advanced") {
@@ -300,8 +296,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         await configureRoleCenter(ctx);
         continue;
       }
-      if (action === "save") {
-        await roleRuntime.saveRoleConfig(ctx);
+      if (action === "sync") {
+        await deps.syncProject(".", ctx);
         continue;
       }
       if (action === "workflow-config") {

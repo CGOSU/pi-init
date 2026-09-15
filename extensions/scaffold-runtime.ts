@@ -6,7 +6,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_ROLE_NAMES } from "../src/roles.js";
-import { createScaffold } from "../src/scaffold.js";
+import { createScaffold, syncScaffold } from "../src/scaffold.js";
 import type { RoleModelConfig } from "./contracts.ts";
 import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
 
@@ -99,8 +99,40 @@ function formatCompactResult(result: ScaffoldOutcome) {
   return `${prefix} ${result.files.length} 个文件${conflicts}\n${result.targetDir}`;
 }
 
+export function formatSyncResult(result: SyncOutcome) {
+  const lines = [
+    result.dryRun ? `项目 ${result.projectName} 的模板同步预览：` : `已同步项目 ${result.projectName} 的模板：`,
+    `目标目录：${result.targetDir}`,
+  ];
+  for (const [label, files] of [
+    ["新增", result.created],
+    ["更新", result.updated],
+    ["保留", result.preserved],
+  ] as const) {
+    if (files.length > 0) lines.push(`${label}：`, ...files.map((file) => `- ${file}`));
+  }
+  if (result.conflicts.length > 0) {
+    lines.push(
+      "冲突（未写入）：",
+      ...result.conflicts.map(({ path, code, message }) => `- ${path} [${code}]：${message}`),
+    );
+  }
+  if (result.conflicts.length === 0 && result.created.length === 0 && result.updated.length === 0) {
+    lines.push("没有需要同步的变更。");
+  }
+  return lines.join("\n");
+}
+
+function formatCompactSyncResult(result: SyncOutcome) {
+  const changes = result.created.length + result.updated.length;
+  const conflictText = result.conflicts.length > 0 ? ` · 冲突 ${result.conflicts.length}` : "";
+  return `${result.dryRun ? "预览" : "✓ 已同步"} ${changes} 个变更 · 保留 ${result.preserved.length} 个${conflictText}\n${result.targetDir}`;
+}
+
 type ScaffoldResult = Awaited<ReturnType<typeof createScaffold>>;
 export type ScaffoldOutcome = ScaffoldResult & { cancelled?: boolean; backedOut?: boolean };
+type SyncResult = Awaited<ReturnType<typeof syncScaffold>>;
+export type SyncOutcome = SyncResult;
 
 type AdvancedOptions = {
   projectName: string;
@@ -315,6 +347,34 @@ export async function finishScaffold(ctx: ExtensionCommandContext, result: Scaff
     ctx.ui.notify("当前项目已更新，正在重新加载 Skill。", "info");
     await ctx.reload();
   }
+}
+
+export async function finishSync(ctx: ExtensionCommandContext, result: SyncOutcome) {
+  ctx.ui.notify(formatCompactSyncResult(result), result.conflicts.length > 0 ? "warning" : "info");
+  const isCurrentProject = result.targetDir === resolve(ctx.cwd, ".");
+  if (isCurrentProject && !result.dryRun && result.changed && result.conflicts.length === 0) {
+    ctx.ui.notify("当前项目模板已更新，正在重新加载 Skill。", "info");
+    await ctx.reload();
+  }
+}
+
+export async function syncProject(targetDir: string, ctx: ExtensionCommandContext) {
+  const result = await runSync(ctx, targetDir, {});
+  await finishSync(ctx, result);
+  return result;
+}
+
+export async function runSync(
+  ctx: ExtensionCommandContext,
+  targetDir: string,
+  options: Record<string, unknown> = {},
+): Promise<SyncOutcome> {
+  const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
+  return withFileMutationQueue(absoluteTarget, async () => {
+    const preview = await syncScaffold(absoluteTarget, { ...options, dryRun: true });
+    if (options.dryRun === true || preview.conflicts.length > 0 || !preview.changed) return preview;
+    return syncScaffold(absoluteTarget, options);
+  });
 }
 
 export async function quickInit(targetDir: string, ctx: ExtensionCommandContext) {

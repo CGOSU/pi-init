@@ -31,6 +31,7 @@ For a clear, low-risk goal, make ordinary implementation choices and proceed wit
 
 
 
+<!-- pi-init:managed:start fast-path-wrap-up -->
 ## Fast Path Wrap-up Priority
 
 When all Fast Path conditions defined by the global `AGENTS.md` are met, this section takes precedence over the general session wrap-up rules below.
@@ -50,6 +51,7 @@ Exit Fast Path when any of the following applies:
 - The scope is no longer local, low-risk, or reversible.
 
 When the user explicitly requests tests, builds, other documentation updates, or Git wrap-up, perform only the requested action and continue to follow the applicable responsibility rules.
+<!-- pi-init:managed:end fast-path-wrap-up -->
 
 ## Session Wrap-up
 
