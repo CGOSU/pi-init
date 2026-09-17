@@ -24,7 +24,7 @@ export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
   roleRuntime: RoleRuntime;
   quickInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
-  syncProject: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
+  syncProject: (targetDir: string, ctx: ExtensionCommandContext) => Promise<{ reloaded: boolean }>;
   advancedInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void | typeof MENU_BACK>;
   getThinkingLevel: () => string;
   workflowCommand: (
@@ -337,7 +337,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       }
 
       if (section === "sync") {
-        await deps.syncProject(".", ctx);
+        const result = await deps.syncProject(".", ctx);
+        if (result.reloaded) return;
         continue;
       }
       if (section === "workflow") {

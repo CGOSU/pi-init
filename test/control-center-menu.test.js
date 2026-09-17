@@ -52,6 +52,7 @@ test("控制中心提供模板同步入口并在当前项目变更后 reload", a
 
     assert.match(await readFile(path.join(directory, "AGENTS.md"), "utf8"), /fast-path-wrap-up/);
     assert.equal(harness.reloadCalls.length, 1);
+    assert.equal(menuCalls, 1);
     assert.match(harness.notifications.at(-2)?.message ?? "", /已同步/);
   });
 });

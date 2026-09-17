@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-17：reload 后终止旧控制中心调用，不复用旧 ctx
+
+- 决定：模板同步结果显式返回 `reloaded`；控制中心同步当前项目并触发 `ctx.reload()` 后立即退出当前菜单调用，不再执行下一轮菜单或访问旧 `ctx`。无变更或冲突时不 reload，继续保留控制中心交互。
+- 原因：Pi 的 `ctx.reload()` 会替换扩展/session context，旧 command context 在 `await ctx.reload()` 后不可继续使用；原同步路径的 `continue` 会在首次实际变更后重新进入菜单并触发 stale context 错误。
+- 约束：reload 后的状态恢复由新的 `session_start` 处理；不通过异常吞掉、延时调用或伪造 context 规避生命周期边界。同步算法和冲突保护保持不变。
+
 ### 2026-09-15：Worked for 显示 session 累计工作时间并与单轮报告分离
 
 - 决定：保留每轮普通执行的 `pi-init-run-timing` 完整工作报告；另在 TUI 编辑器上方维护 session 级累计 Agent 工作时长，工作中显示 Pi 原生 `Working`，空闲时显示 `─ Worked for ... ─`。累计只计算 Agent 实际运行区间，不包含闲置时间；每轮完成后保存独立累计快照，恢复 session 时优先读取快照，并兼容已有普通执行记录。

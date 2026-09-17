@@ -349,19 +349,23 @@ export async function finishScaffold(ctx: ExtensionCommandContext, result: Scaff
   }
 }
 
-export async function finishSync(ctx: ExtensionCommandContext, result: SyncOutcome) {
+export async function finishSync(ctx: ExtensionCommandContext, result: SyncOutcome): Promise<boolean> {
   ctx.ui.notify(formatCompactSyncResult(result), result.conflicts.length > 0 ? "warning" : "info");
   const isCurrentProject = result.targetDir === resolve(ctx.cwd, ".");
   if (isCurrentProject && !result.dryRun && result.changed && result.conflicts.length === 0) {
     ctx.ui.notify("当前项目模板已更新，正在重新加载 Skill。", "info");
     await ctx.reload();
+    return true;
   }
+  return false;
 }
 
-export async function syncProject(targetDir: string, ctx: ExtensionCommandContext) {
+export type SyncProjectOutcome = SyncOutcome & { reloaded: boolean };
+
+export async function syncProject(targetDir: string, ctx: ExtensionCommandContext): Promise<SyncProjectOutcome> {
   const result = await runSync(ctx, targetDir, {});
-  await finishSync(ctx, result);
-  return result;
+  const reloaded = await finishSync(ctx, result);
+  return { ...result, reloaded };
 }
 
 export async function runSync(

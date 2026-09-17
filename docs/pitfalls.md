@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-17：ctx.reload 后控制中心不得继续使用旧 context
+
+- 日期：2026-09-17；
+- 现象：控制中心首次同步当前项目后提示 `Extension "command:pi-init" error: This extension ctx is stale after session replacement or reload`。
+- 根因：同步实际写入后调用 `await ctx.reload()`；旧控制中心路径随后通过 `continue` 进入下一轮菜单并继续使用旧 `ctx`。
+- 修复：`syncProject` 返回结构化的 `reloaded` 标记；控制中心检测到该标记后立即退出当前调用，由新的 `session_start` 接管后续 context。
+- 验证：`node --test test/control-center-menu.test.js` 9 项、`npm test` 149 项通过。
+
 ### 2026-09-14：旧委派执行器配置不会再自动迁移
 
 - 日期：2026-09-14；

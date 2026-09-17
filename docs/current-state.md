@@ -15,6 +15,7 @@
 
 - 项目脚手架生成的中英文 `AGENTS.md` 包含带标记的 Fast Path 收尾约束；`/pi-init sync [目录]` 只更新托管区块、创建缺失的项目记忆文档并保留已有记录，冲突时不写入。控制中心各级角色配置菜单统一使用 `Ctrl+S` 保存，显式保存列表项已移除；非 TUI 和兼容场景保留 `/pi-init save`。具体取舍见 [`docs/decisions.md`](decisions.md)。
 
+- 控制中心同步当前项目发生实际变更并执行 `ctx.reload()` 后立即结束旧控制中心调用；同步结果通过 `reloaded` 标记向调用方表达，避免 reload 后继续使用失效的旧 `ctx`。无变更或有冲突时不 reload，菜单仍可继续。具体决策与验证见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留。
 - `workflowExecutor: "runtime"` 会在 workflow 创建时冻结 Runtime Graph、ProfileSnapshot、endpoint、agent backend、permission profile 和事件 cursor；Runtime 是该 workflow 的唯一状态、Attempt、cancel/retry 和事件事实源。
 - pi-init Runtime backend 已通过模型无关 mock 与实际 `runtime-daemon` development direct-host fixture 的 submit、role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart 和 client reconnect；worker reconnect 证据仍由 agent-runtime worker 层测试提供，真实 Pi 测试继续显式 ignored。
@@ -53,6 +54,7 @@
 
 ## 最近一次更新
 
+- 2026-09-17：修复控制中心首次同步 reload 后继续使用旧 `ctx` 的问题；同步结果显式返回 `reloaded`，当前项目变更后退出旧菜单，`npm test` 149 项通过。
 - 2026-09-15：`Worked for` 改为当前 session 的累计 Agent 工作时间；工作中清除该提示并显示 Pi 原生 `Working`，空闲后在编辑器上方显示累计时长，每次 `agent_settled` 持久化累计快照，普通工作报告仍保留每轮耗时，`npm test` 149 项通过。
 - 2026-09-15：控制中心根菜单提升为“初始化/变更/同步/工作流”四个顶层分组；初始化和变更保留逐级返回，TUI 菜单改用宽弹窗并将选中项说明独立换行显示，`npm test` 144 项通过。
 - 2026-09-14：按用户反馈移除 subagents、subtask、collaboration 三条委派执行链路及其专用扩展、协议、Agent registry/overlay/reservation、进程启动和测试；当前仅保留 local/runtime，`npm test` 132 项通过。历史记录仍保留在本文件后部，不再作为当前可用能力。

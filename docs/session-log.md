@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-17：修复模板同步 reload 后使用旧 ctx
+
+- 完成内容：同步完成后由 `syncProject` 返回 `reloaded` 状态；控制中心当前项目发生变更并 reload 后直接结束旧菜单调用，避免 `continue` 重新使用失效的 command context；增加菜单不再二次进入的回归断言。
+- 验证：`node --test test/control-center-menu.test.js`，9 项通过；`npm test`，149 项通过；`git diff --check` 通过（仅 Windows LF/CRLF 转换警告）。
+- 遗留问题：未安装 package、未在真实 Pi 会话中 reload/重启、未提交或推送；当前未增加真实交互式 reload E2E。
+
 ### 2026-09-15：将 Worked for 改为 session 累计工作时间
 
 - 完成内容：保留普通工作报告中的每轮耗时；新增 session 级 Agent 实际工作时间累计，Pi 工作时清除空闲提示并使用原生 `Working`，空闲后在编辑器上方显示累计的 `─ Worked for ... ─`；每次 `agent_settled` 持久化累计快照，恢复 session 时优先读取快照并兼容已有普通执行记录。
