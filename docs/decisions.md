@@ -8,6 +8,18 @@
 
 ## 已确认决策
 
+### 2026-09-18：Local 工作流交接以真实 Agent 启动为准
+
+- 决定：Local 工作流只有在当前任务记录 `executionStartedAt` 后才显示“任务执行中”；此前按调度锁、主动压缩阶段和排队续跑状态分别显示任务交接、等待启动、正在压缩或压缩等待异常。running 且没有真实执行或有效瞬态操作时，`resume` 可安全重新调度；已启动、已排队或压缩中的任务不重复派发。
+- 原因：`currentTaskId`/`in_progress` 只表示状态机已预占任务，不等于 Agent turn 已开始；隐藏续跑消息丢失或调度异常时，原 UI 会把等待状态误报为执行中，并且 resume 可能造成重复 turn。
+- 约束：Runtime executor 保持原有 authority 和调度链路；恢复前必须尊重 `roleCompactionInFlight`、pending compaction、`internalContinuationPending` 和实际调度中的瞬态锁。
+
+### 2026-09-18：Local 主动压缩采用幂等收敛和安全 watchdog
+
+- 决定：实际角色切换仍可在自动模式且上下文达到 50% 时主动压缩；同角色连续 Local 任务不再执行任务边界主动压缩，依赖 Pi 原生自动压缩。主动压缩以 operationId 标识，`onComplete`、`onError`、`session_compact` 和失败事件统一进入一次性 settle；watchdog 超时只告警，不在无法取消的 `compact` 仍运行时并发启动下一轮。
+- 原因：Pi 的 ExtensionContext `compact()` 是不等待完成的触发器，扩展层没有安全取消句柄；并发续跑会让压缩与下一轮 Agent 竞争上下文。将压缩控制器独立出来可集中释放锁、清理计时器并忽略迟到回调。
+- 约束：watchdog 停滞后的安全恢复是等待 Pi 完成或 reload 后使用 workflow resume；不新增必须迁移的持久化工作流字段，Runtime executor 不复用 Local 压缩控制器。
+
 ### 2026-09-17：reload 后终止旧控制中心调用，不复用旧 ctx
 
 - 决定：模板同步结果显式返回 `reloaded`；控制中心同步当前项目并触发 `ctx.reload()` 后立即退出当前菜单调用，不再执行下一轮菜单或访问旧 `ctx`。无变更或冲突时不 reload，继续保留控制中心交互。

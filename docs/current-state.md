@@ -30,7 +30,8 @@
 - package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 集中维护风险分级路由、自主决策边界和共享硬约束，角色说明只保留各自职责/边界/交接，运行时提示只保留当前任务硬约束，不嵌入具体模型值。`architect` 只负责思考、分析、决策、规划和安排；所有仓库、代码、测试、文档和外部事实取证由 `docs-commit` 结构化交接，architect 仅允许 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`，其他工具及 MCP 均由运行时 fail-closed 阻断。目标明确的低风险任务由适合的非 architect 角色调查、实现和验证；复杂/高风险任务仍要求新鲜结构化证据、角色边界、真实验证和授权。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；简单只读咨询和低风险开发由适合的非 architect 角色直接完成，凡需仓库、代码、测试、文档或外部事实取证均由 `docs-commit` 收集并交接包含事实、来源、相关符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只负责思考、分析、决策、规划和安排，不修改文件、不执行命令、不连接 MCP，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status` 外不调用工具。开发测试工程师负责自主实现/验证且不写项目 Markdown，文档与收尾工程师不写代码；仅遇到业务/契约冲突、权限/凭据、不可逆或外部状态、已有改动无法安全合并或真实验证阻塞时才暂停。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
-- 自动模式在真实跨角色，或活动工作流的非最终任务完成且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；若 Pi 刚在同一边界完成自动压缩，则跳过重复调用并直接续跑，避免 `Already compacted` 警告。任务边界压缩不改变角色，成功或失败后继续下一任务/重规划；最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不触发。会话启动、resume 或 reload 时会根据当前模型和推理强度唯一匹配角色并恢复角色状态。
+- 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；同角色连续 Local 任务不再触发 50% 的主动边界压缩，依赖 Pi 原生自动压缩。主动压缩通过 operationId 和 onComplete、onError、session_compact 收敛路径幂等交接；无取消能力的 compact 超时只告警，不并发续跑，session shutdown/reload 会清理 watchdog 和瞬态锁。
+- Local 工作流状态栏和进度摘要以任务的 `executionStartedAt` 作为真实 Agent 执行门槛，区分任务交接、等待启动、上下文压缩、压缩等待异常和任务执行中；`/pi-init workflow resume` 仅在没有真实执行、排队续跑或主动压缩时安全重新调度，不会重复已启动任务。Runtime executor 的调度和 authority 链路未改变。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，并要求各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - `task_workflow` 的 `plan`/`replan` 在工具调用入口即要求活动角色为 `architect`，非架构角色会在状态持久化前被阻断；调用摘要标记为“工作流请求”，失败结果保留具体原因，避免把调用预览误认为已创建工作流。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写用户提供的 task_workflow 输入顺序。低风险局部工作仍可在 `workflowMode: auto` 下绕过持久工作流，不改变既有任务数量阈值、配置或状态机。
@@ -54,16 +55,17 @@
 
 ## 最近一次更新
 
+- 2026-09-18：修复 Local executor 任务交接假死：同角色任务跳过主动边界压缩，压缩生命周期改为幂等收敛并增加只告警 watchdog；状态展示改用 `executionStartedAt` 区分交接和真实执行，running 工作流支持安全 resume，`npm test` 156 项通过。
 - 2026-09-17：修复控制中心首次同步 reload 后继续使用旧 `ctx` 的问题；同步结果显式返回 `reloaded`，当前项目变更后退出旧菜单，`npm test` 149 项通过。
 - 2026-09-15：`Worked for` 改为当前 session 的累计 Agent 工作时间；工作中清除该提示并显示 Pi 原生 `Working`，空闲后在编辑器上方显示累计时长，每次 `agent_settled` 持久化累计快照，普通工作报告仍保留每轮耗时，`npm test` 149 项通过。
 - 2026-09-15：控制中心根菜单提升为“初始化/变更/同步/工作流”四个顶层分组；初始化和变更保留逐级返回，TUI 菜单改用宽弹窗并将选中项说明独立换行显示，`npm test` 144 项通过。
+- 2026-09-14：TUI 控制中心及“角色与模型”菜单新增 `Ctrl+S` 保存快捷键，并补充针对性回归测试。
 - 2026-09-14：按用户反馈移除 subagents、subtask、collaboration 三条委派执行链路及其专用扩展、协议、Agent registry/overlay/reservation、进程启动和测试；当前仅保留 local/runtime，`npm test` 132 项通过。历史记录仍保留在本文件后部，不再作为当前可用能力。
 - 2026-09-13：Runtime backend 继续保持 provider-agnostic：agent-runtime 的第二真实 Provider（Codex）因生命周期/结果/恢复接口未核实而 blocked，pi-init Runtime client 不猜测 CLI 参数、不读取模型凭据、不增加本地 fallback；Rust 侧仅有无模型 command fixture，双轨迁移清单仍为 `cutover-ready: 否`。
 - 2026-09-13：修复非架构角色触发工作流规划的误导反馈：`plan`/`replan` 在工具调用入口提前阻断，调用摘要改为“工作流请求”，失败结果显示具体原因；验证明细见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`task_workflow` 工具结果的完成态改为仅显示“工作流已完成”，不再显示任务分数；针对性测试见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：`pi-usage --update` 现在跳过 session 目录下的 SoL-Pi 内部归档 JSONL，避免重复活动事件触发 DuckDB 主键事务失败；实现与验证见 [`docs/session-log.md`](session-log.md)。
 - 2026-09-12：完成 architect 职责边界调整及验证收尾；当前事实见本节，决策与实现验证分别见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
-- 2026-09-14：TUI 控制中心及“角色与模型”菜单新增 `Ctrl+S` 保存快捷键，并补充针对性回归测试。
 - 2026-09-13：完成 Runtime backend 双轨联调与切换清单：实际 runtime-daemon development fixture 覆盖同计划 local/runtime authority、Pi role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart、client reconnect 和重复 request；worker reconnect 复用 agent-runtime 的实际 worker fixture，真实 Pi 仍需显式 gate。旧调度符号逐项清单见 `docs/plans/runtime-migration.md`，cutover-ready 仍为否；`npm test` 被既有 `test/extension-roles.test.js` 505 行门禁阻塞。
 - 2026-09-11：确认 fork `CGOSU/pi-collaborating-agents` 固定 commit `acd50d0ec091deb03bb90b57b694131cff0c297d`，保存迁移计划和第三方 MIT 来源说明；实现前旧 gmc/worktree 链路保持不变，详见 [`docs/plans/collaborating-agents-migration.md`](plans/collaborating-agents-migration.md)。
 - 2026-09-10：按用户确认增加简单任务的最小验证策略：不创建工作流或启动 worker，不默认运行全量测试、类型检查或构建；高风险边界和明确验证要求不受影响。已同步决策、公共 Skill、developer-test 角色和 README，尚未再次提交或推送。

@@ -71,6 +71,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
+  pi.on("session_compact", (event, ctx) => roleRuntime.handleSessionCompact(event, ctx));
+  pi.on("session_compact_failed", (event, ctx) => roleRuntime.handleSessionCompactFailed(event, ctx));
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
@@ -245,6 +247,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
+    roleRuntime.disposeWorkflowCompaction();
     runtimeState.runtimeBackend?.dispose();
     workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;

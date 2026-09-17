@@ -21,6 +21,8 @@ export type PendingRoleCompaction = {
   continuation?: RoleCompactionContinuation;
 };
 
+export type RoleCompactionPhase = "idle" | "compacting" | "stalled";
+
 export type RuntimeBackendHooks = {
   initialize: (workflow: WorkflowState, config: unknown, ctx: ExtensionContext) => Promise<WorkflowState>;
   schedule: (ctx: ExtensionContext) => Promise<void>;
@@ -40,6 +42,10 @@ export type ExtensionRuntimeState = {
   workflowExecutorStatus: string;
   roleRecoveryPending: boolean;
   pendingRoleCompaction?: PendingRoleCompaction;
+  roleCompactionPhase: RoleCompactionPhase;
+  roleCompactionStalled: boolean;
+  roleCompactionOperationId?: string;
+  roleCompactionStartedAt?: number;
   workflowTaskCompactionPending: boolean;
   roleCompactionInFlight: boolean;
   workflowState?: WorkflowState;
@@ -65,6 +71,8 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     workflowModeStatus: "auto",
     workflowExecutorStatus: "local",
     roleRecoveryPending: false,
+    roleCompactionPhase: "idle",
+    roleCompactionStalled: false,
     workflowTaskCompactionPending: false,
     roleCompactionInFlight: false,
     workflowDispatchInFlight: false,

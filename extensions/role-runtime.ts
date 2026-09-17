@@ -23,13 +23,7 @@ import {
 import type { ResolvedRoleConfig } from "./contracts.ts";
 import { activeRoleMatches, textOf, type ExtensionRuntimeState, type WorkflowState } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
-
-const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
-  "这是自动角色切换或工作流任务边界触发的上下文压缩。",
-  "请保留后续角色继续工作所需的完整信息：用户目标与约束、关键决策及原因、已完成/进行中/阻塞事项、读取和修改的文件、实际执行的验证命令与结果、下一步。",
-  "不要把未完成事项写成已完成；保持项目路径、错误信息和待处理问题的准确性。",
-].join("\n");
-const ROLE_SWITCH_CONTINUATION_TYPE = "pi-init-role-transition";
+import { createWorkflowCompaction } from "./workflow-compaction.ts";
 
 export type RoleRuntimeDependencies = {
   getWorkflowState: () => WorkflowState | undefined;
@@ -60,6 +54,7 @@ export function createRoleRuntime(
   deps: RoleRuntimeDependencies,
 ) {
   let internalModelSelectionDepth = 0;
+  const workflowCompaction = createWorkflowCompaction(pi, state, deps);
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return undefined;
 
@@ -254,6 +249,19 @@ export function createRoleRuntime(
     if (workflowState.status === "replanning") return `等待重规划 ${progress.completed}/${progress.total}${executor}`;
     if (workflowState.status === "completed") return `已完成 ${progress.completed}/${progress.total}${executor}`;
     if (workflowState.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}${executor}`;
+    if (workflowState.executor === "local" && progress.currentTaskId) {
+      const task = workflowState.tasks.find((item) => item.id === progress.currentTaskId);
+      if (task?.executionStartedAt === undefined) {
+        const phase = state.roleCompactionPhase === "stalled"
+          ? "压缩等待异常"
+          : state.roleCompactionPhase === "compacting" || state.pendingRoleCompaction
+            ? "正在压缩上下文"
+            : state.workflowDispatchInFlight
+              ? "正在交接任务"
+              : "等待任务启动";
+        return `${phase} ${progress.completed}/${progress.total}${executor}${current}`;
+      }
+    }
     return `运行 ${progress.completed}/${progress.total}${executor}${current || " · 待调度"}`;
   }
 
@@ -280,81 +288,8 @@ export function createRoleRuntime(
     state.roleModeStatus = mode;
     refreshRoleStatus(ctx, mode);
   }
-  function branchHasOnlyCustomEntriesAfterCompaction(ctx: ExtensionContext) {
-    const branch = ctx.sessionManager.getBranch();
-    for (let index = branch.length - 1; index >= 0; index -= 1) {
-      if (branch[index].type !== "custom") return branch[index].type === "compaction";
-    }
-    return false;
-  }
   function startPendingRoleCompaction(ctx: ExtensionContext) {
-    if (!state.pendingRoleCompaction || state.roleCompactionInFlight) return;
-
-    const transition = state.pendingRoleCompaction;
-    state.pendingRoleCompaction = undefined;
-    state.roleCompactionInFlight = true;
-    ctx.ui.setStatus("pi-init-compaction", "● 正在压缩上下文");
-
-    const continueAfterTransition = (warning?: string) => {
-      if (!warning) deps.acknowledgeRoleRecovery(transition.toRole);
-      if (warning) ctx.ui.notify(warning, "warning");
-      if (transition.continuation?.kind === "workflow-task") {
-        deps.sendWorkflowTaskMessage(ctx, transition.continuation.taskId, warning);
-        return;
-      }
-      if (transition.continuation?.kind === "workflow-schedule") {
-        deps.setWorkflowDispatchInFlight(false);
-        void deps.scheduleWorkflow(ctx).catch((error) => ctx.ui.notify(`工作流自动续跑失败：${textOf(error)}`, "error"));
-        return;
-      }
-      if (transition.continuation?.kind === "workflow-review") {
-        deps.setWorkflowDispatchInFlight(false);
-        return;
-      }
-      if (transition.continuation?.kind === "workflow-replan") {
-        deps.setWorkflowDispatchInFlight(false);
-        deps.sendWorkflowReplanMessage(ctx);
-        return;
-      }
-
-      try {
-        deps.setInternalContinuationPending(true);
-        pi.sendMessage(
-          {
-            customType: ROLE_SWITCH_CONTINUATION_TYPE,
-            content: `已完成从${roleLabel(transition.fromRole)}到${roleLabel(transition.toRole)}的自动角色切换和上下文压缩。请继续当前任务。`,
-            display: false,
-            details: transition,
-          },
-          { triggerTurn: true },
-        );
-      } catch (error) {
-        deps.setInternalContinuationPending(false);
-        ctx.ui.notify(`上下文压缩已完成，但无法自动继续：${textOf(error)}`, "warning");
-      }
-    };
-
-    // Ignore non-context recovery entries after Pi's automatic compaction.
-    if (branchHasOnlyCustomEntriesAfterCompaction(ctx)) {
-      state.roleCompactionInFlight = false;
-      ctx.ui.setStatus("pi-init-compaction", undefined);
-      continueAfterTransition();
-      return;
-    }
-
-    ctx.compact({
-      customInstructions: ROLE_SWITCH_COMPACTION_INSTRUCTIONS,
-      onComplete: () => {
-        state.roleCompactionInFlight = false;
-        ctx.ui.setStatus("pi-init-compaction", undefined);
-        continueAfterTransition();
-      },
-      onError: (error) => {
-        state.roleCompactionInFlight = false;
-        ctx.ui.setStatus("pi-init-compaction", undefined);
-        continueAfterTransition(`上下文压缩失败，仍将继续当前任务：${error.message}`);
-      },
-    });
+    workflowCompaction.start(ctx);
   }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
@@ -488,6 +423,9 @@ export function createRoleRuntime(
     refreshRoleStatus,
     setRoleStatus,
     startPendingRoleCompaction,
+    handleSessionCompact: workflowCompaction.handleSessionCompact,
+    handleSessionCompactFailed: workflowCompaction.handleSessionCompactFailed,
+    disposeWorkflowCompaction: workflowCompaction.dispose,
     applyRole,
     automaticRole,
     currentRole,

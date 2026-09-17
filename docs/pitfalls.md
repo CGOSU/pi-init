@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-09-18：Local 工作流的 in_progress 不代表 Agent 已启动
+
+- 日期：2026-09-18；
+- 现象：任务已经被标记为 `in_progress`，但隐藏交接消息、角色切换或上下文压缩尚未完成；如果仍显示“任务执行中”，用户容易误判为模型假死，手动恢复还可能重复触发任务。
+- 根因：Local 调度会先写入 `currentTaskId`/`in_progress`，真正的 Agent turn 只有在 `agent_start` 事件中才记录 `executionStartedAt`；主动 `compact()` 又是不等待完成且没有扩展层取消句柄。
+- 修复：UI 以 `executionStartedAt` 作为“任务执行中”门槛；压缩回调和 `session_compact` 使用 operationId 幂等收敛；resume 先检查压缩、排队续跑、真实执行和实际调度锁，只有安全时才 kick；watchdog 不并发启动下一轮。
+- 验证：`node --test test/workflow-compaction.test.js`，9 项通过；`npm test`，156 项通过。
+
 ### 2026-09-17：ctx.reload 后控制中心不得继续使用旧 context
 
 - 日期：2026-09-17；

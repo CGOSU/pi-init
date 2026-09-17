@@ -88,6 +88,12 @@ export function createWorkflowReport(
     if (workflowState.status === "completed") return "已完成";
     if (workflowState.status === "cancelled") return "已取消";
     if (!task) return "等待调度";
+    if (workflowState.executor === "local" && task.executionStartedAt === undefined) {
+      if (state.roleCompactionPhase === "stalled") return "压缩等待异常";
+      if (state.roleCompactionPhase === "compacting" || state.pendingRoleCompaction) return "正在压缩上下文";
+      if (state.workflowDispatchInFlight) return "正在交接任务";
+      return "等待任务启动";
+    }
     return "任务执行中";
   }
 
@@ -151,6 +157,7 @@ export function createWorkflowReport(
     const progress = workflowProgress(workflowState);
     const lines = [
       `状态：${workflowState.status}`,
+      `阶段：${workflowActivityLabel(workflowState)}`,
       `进度：${progress.completed}/${progress.total}`,
       `总任务开始时间：${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
       `总任务已运行时间：${formatWorkflowElapsedDuration(workflowState)}`,
@@ -189,17 +196,7 @@ export function createWorkflowReport(
       const summary = new Text("", 0, 0);
       const refreshSummary = () => {
         const current = state.workflowState;
-        const statusLabel = current?.status === "running"
-          ? "运行中"
-          : current?.status === "replanning"
-            ? "等待架构师重规划"
-            : current?.status === "paused"
-              ? "已暂停"
-              : current?.status === "completed"
-                ? "已完成"
-                : current?.status === "cancelled"
-                  ? "已取消"
-                  : "无活动";
+        const statusLabel = current ? workflowActivityLabel(current) : "无活动";
         const progress = current ? workflowProgress(current) : undefined;
         summary.setText(theme.fg("text", current
           ? [

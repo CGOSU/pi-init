@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-18：修复 Local 工作流任务交接假死
+
+- 完成内容：将主动压缩生命周期拆分为独立控制器；同角色连续 Local 任务跳过主动边界压缩；以 operationId 幂等处理压缩完成、失败和 `session_compact` 信号；watchdog 只告警，session shutdown/reload 清理定时器和瞬态锁。
+- 完成内容：Local 状态栏和进度摘要以 `executionStartedAt` 区分真实 Agent 执行与任务交接/等待启动/压缩阶段；`/pi-init workflow resume` 增加安全 kick，保护已启动、已排队或压缩中的任务不重复派发。
+- 验证：`node --test test/workflow-compaction.test.js`，9 项全部通过；`npm test`，156 项全部通过并通过 500 行代码行数检查；`git diff --check` 通过，仅有 Windows 工作区预期的 LF/CRLF 转换提示。
+- 遗留问题：尚未在真实交互式 Pi 长工作流中复现并进行性能/压缩时序观测；`compact()` 无扩展层取消句柄，watchdog 停滞后仍需等待 Pi 完成或 reload 后再 resume；未安装 package、未 reload/重启当前 Pi、未提交或推送。
+
 ### 2026-09-17：修复模板同步 reload 后使用旧 ctx
 
 - 完成内容：同步完成后由 `syncProject` 返回 `reloaded` 状态；控制中心当前项目发生变更并 reload 后直接结束旧菜单调用，避免 `continue` 重新使用失效的 command context；增加菜单不再二次进入的回归断言。

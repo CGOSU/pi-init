@@ -246,6 +246,10 @@ export function createWorkflowActions(
           await deps.dispatch.scheduleWorkflow(ctx);
           return;
         }
+        if (state.workflowState.status === "running") {
+          await deps.dispatch.resumeLocalWorkflow(ctx);
+          return;
+        }
         deps.report.persistWorkflowState(resumeWorkflow(state.workflowState), ctx);
         await deps.dispatch.scheduleWorkflow(ctx);
         return;
@@ -434,6 +438,21 @@ export function createWorkflowActions(
           await deps.dispatch.scheduleWorkflow(ctx);
           return {
             content: [{ type: "text", text: "工作流仍在等待架构师重规划；已尝试继续架构调度。" }],
+            details: state.workflowState,
+            terminate: true,
+          };
+        }
+        if (state.workflowState.status === "running") {
+          const result = await deps.dispatch.resumeLocalWorkflow(ctx);
+          const messages = {
+            "blocked-by-compaction": "工作流仍在等待上下文压缩，不会并发启动任务。",
+            "continuation-pending": "自动任务交接消息已排队，未重复派发。",
+            "already-started": "当前任务已真实启动，未重复派发。",
+            "dispatch-in-flight": "任务交接仍在进行，未重复派发。",
+            scheduled: "已安全重新调度 Local 工作流。",
+          };
+          return {
+            content: [{ type: "text", text: messages[result] }],
             details: state.workflowState,
             terminate: true,
           };

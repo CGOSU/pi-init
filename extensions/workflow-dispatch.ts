@@ -25,17 +25,25 @@ export function createWorkflowDispatch(
   state: ExtensionRuntimeState,
   deps: WorkflowDispatchDependencies,
 ) {
+  let localScheduleInFlight = false;
+
   function formatBlockedWorkflowMessage(message: string, workflowState: NonNullable<ExtensionRuntimeState["workflowState"]>) {
     const guidance = deps.report.formatWorkflowBlockNotice(workflowState);
     return guidance ? `${message}\n${guidance}` : message;
   }
 
-  function startTaskBoundaryCompaction(ctx: ExtensionContext, continuation: RoleCompactionContinuation) {
+  function startTaskBoundaryCompaction(
+    ctx: ExtensionContext,
+    continuation: RoleCompactionContinuation,
+    fromRole: string | undefined,
+    toRole: string,
+  ) {
+    if (!fromRole || fromRole === toRole) return false;
     if (!shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) return false;
-    const role = state.activeRole?.role ?? "workflow";
-    state.pendingRoleCompaction ??= { fromRole: role, toRole: role };
+    state.pendingRoleCompaction ??= { fromRole, toRole };
     state.pendingRoleCompaction.continuation = continuation;
     deps.roleRuntime.startPendingRoleCompaction(ctx);
+    deps.report.updateWorkflowStatus(ctx);
     return true;
   }
 
@@ -52,6 +60,7 @@ export function createWorkflowDispatch(
     const taskCompletionPending = state.workflowTaskCompactionPending;
     state.workflowTaskCompactionPending = false;
     state.workflowDispatchInFlight = true;
+    const previousRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     try {
       const selection = await deps.roleRuntime.automaticRole("architect", ctx);
       if (selection.result.role !== "architect") {
@@ -65,9 +74,15 @@ export function createWorkflowDispatch(
       if (selection.transition && state.pendingRoleCompaction) {
         state.pendingRoleCompaction.continuation = { kind: "workflow-replan" };
         deps.roleRuntime.startPendingRoleCompaction(ctx);
+        deps.report.updateWorkflowStatus(ctx);
         return;
       }
-      if (taskCompletionPending && startTaskBoundaryCompaction(ctx, { kind: "workflow-replan" })) return;
+      if (taskCompletionPending && startTaskBoundaryCompaction(
+        ctx,
+        { kind: "workflow-replan" },
+        previousRole,
+        selection.result.role,
+      )) return;
       deps.messages.sendWorkflowReplanMessage(ctx);
     } catch (error) {
       state.workflowDispatchInFlight = false;
@@ -118,6 +133,15 @@ export function createWorkflowDispatch(
     ) {
       return;
     }
+    localScheduleInFlight = true;
+    try {
+      await scheduleWorkflowInternal(ctx);
+    } finally {
+      localScheduleInFlight = false;
+    }
+  }
+
+  async function scheduleWorkflowInternal(ctx: ExtensionContext) {
     if (state.workflowState.status === "replanning") {
       await scheduleWorkflowReplan(ctx);
       return;
@@ -148,6 +172,7 @@ export function createWorkflowDispatch(
         nudged.currentTaskId!,
         "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow。",
       );
+      deps.report.updateWorkflowStatus(ctx);
       return;
     }
 
@@ -160,6 +185,7 @@ export function createWorkflowDispatch(
     const taskCompletionPending = state.workflowTaskCompactionPending;
     state.workflowTaskCompactionPending = false;
     state.workflowDispatchInFlight = true;
+    const previousRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     const started = startWorkflowTask(state.workflowState, next.id);
     deps.report.persistWorkflowState(started, ctx);
 
@@ -182,10 +208,17 @@ export function createWorkflowDispatch(
       if (selection.transition && state.pendingRoleCompaction) {
         state.pendingRoleCompaction.continuation = { kind: "workflow-task", taskId: next.id };
         deps.roleRuntime.startPendingRoleCompaction(ctx);
+        deps.report.updateWorkflowStatus(ctx);
         return;
       }
-      if (taskCompletionPending && startTaskBoundaryCompaction(ctx, { kind: "workflow-task", taskId: next.id })) return;
+      if (taskCompletionPending && startTaskBoundaryCompaction(
+        ctx,
+        { kind: "workflow-task", taskId: next.id },
+        previousRole,
+        selection.result.role,
+      )) return;
       deps.messages.sendWorkflowTaskMessage(ctx, next.id);
+      deps.report.updateWorkflowStatus(ctx);
     } catch (error) {
       const paused = blockWorkflowTask(state.workflowState, {
         taskId: next.id,
@@ -200,10 +233,51 @@ export function createWorkflowDispatch(
     }
   }
 
+  async function resumeLocalWorkflow(ctx: ExtensionContext) {
+    const workflow = state.workflowState;
+    if (!workflow || workflow.executor !== "local" || workflow.status !== "running") {
+      throw new Error("只有运行中的 Local 工作流可以执行安全恢复");
+    }
+
+    const currentTask = workflow.currentTaskId
+      ? workflow.tasks.find((task) => task.id === workflow.currentTaskId)
+      : undefined;
+    if (state.roleCompactionInFlight || state.pendingRoleCompaction) {
+      const phase = state.roleCompactionPhase === "stalled"
+        ? "上下文压缩等待异常"
+        : "上下文压缩仍在进行";
+      ctx.ui.notify(`${phase}，未重复派发任务；请等待压缩完成，或执行 /reload 后再使用 /pi-init workflow resume。`, "warning");
+      return "blocked-by-compaction";
+    }
+    if (state.internalContinuationPending) {
+      ctx.ui.notify("自动任务交接消息已排队，未重复派发任务。", "info");
+      return "continuation-pending";
+    }
+    if (currentTask?.executionStartedAt !== undefined) {
+      ctx.ui.notify(`任务 ${currentTask.id} 已真实启动，未重复派发任务。`, "info");
+      return "already-started";
+    }
+    if (!resetStaleWorkflowDispatch()) {
+      ctx.ui.notify("任务交接调度仍在进行，未重复派发任务。", "info");
+      return "dispatch-in-flight";
+    }
+
+    await scheduleWorkflow(ctx);
+    return "scheduled";
+  }
+
+  function resetStaleWorkflowDispatch() {
+    if (localScheduleInFlight) return false;
+    state.workflowDispatchInFlight = false;
+    return true;
+  }
+
   return {
     scheduleWorkflowReplan,
     restoreWorkflowState,
     scheduleWorkflow,
+    resumeLocalWorkflow,
+    resetStaleWorkflowDispatch,
   };
 }
 
