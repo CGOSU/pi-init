@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-20：关闭详细阶段耗时监控
+
+- 完成内容：关闭 Provider 请求、工具执行和 Agent 生命周期的逐次耗时采集与报告展示；保留普通 `pi-init-run-timing` 总耗时及 session `Worked for` 所需的基础计时。
+- 验证：`node --test test/run-timing.test.js`，2 项通过；`npm test`，159 项中 156 项通过、3 项跳过；`node scripts/check-line-count.js` 和 `git diff --check` 通过。
+- 遗留问题：详细监控保留为关闭状态，后续如需再次定位 Provider/工具延迟可重新打开开关；未提交、未推送。
+
 ### 2026-09-20：增加简单无工具问答快速通道
 
 - 完成内容：新增 `extensions/runtime-routing-context.ts`，在 `before_agent_start` 的 `sections.pi_init_runtime` 注入当前有效职责、Provider/模型/推理强度、恢复门和活动工作流摘要；同步调整职责恢复提示，区分无活动工作流与活动工作流。

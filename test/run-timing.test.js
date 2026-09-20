@@ -105,25 +105,23 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
     { type: "pi-init-run-timing", source: "rpc" },
   ]);
   for (const entry of runEntries) {
-    assert.equal(typeof entry.data.inputAt, "number");
-    assert.equal(typeof entry.data.beforeAgentStartAt, "number");
+    assert.equal(entry.data.inputAt, undefined);
+    assert.equal(entry.data.beforeAgentStartAt, undefined);
     assert.equal(typeof entry.data.startedAt, "number");
-    assert.equal(typeof entry.data.beforeProviderRequestAt, "number");
-    assert.equal(typeof entry.data.firstMessageUpdateAt, "number");
-    assert.equal(typeof entry.data.assistantMessageEndAt, "number");
-    assert.equal(typeof entry.data.agentEndAt, "number");
+    assert.equal(entry.data.beforeProviderRequestAt, undefined);
+    assert.equal(entry.data.firstMessageUpdateAt, undefined);
+    assert.equal(entry.data.assistantMessageEndAt, undefined);
+    assert.equal(entry.data.agentEndAt, undefined);
     assert.equal(typeof entry.data.completedAt, "number");
-    assert.equal(typeof entry.data.settledAt, "number");
-    assert.equal(entry.data.providerRequestCount, 1);
-    assert.equal(entry.data.providerRequestDurations.length, 1);
-    assert.equal(entry.data.agentStartCount, 2);
-    assert.equal(entry.data.agentEndCount, 2);
+    assert.equal(entry.data.settledAt, undefined);
+    assert.equal(entry.data.providerRequestCount, undefined);
+    assert.equal(entry.data.agentStartCount, undefined);
+    assert.equal(entry.data.agentEndCount, undefined);
     assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
   }
-  assert.equal(runEntries[1].data.toolExecutionCount, 1);
-  assert.deepEqual(runEntries[1].data.toolNames, ["read"]);
-  assert.equal(runEntries[1].data.toolDurations.length, 1);
-  assert.equal(runEntries[1].data.toolDurations[0].name, "read");
+  assert.equal(runEntries[1].data.toolExecutionCount, undefined);
+  assert.equal(runEntries[1].data.toolNames, undefined);
+  assert.equal(runEntries[1].data.toolDurations, undefined);
 
   const renderer = harness.renderers.get("pi-init-run-timing");
   assert.equal(typeof renderer, "function");
@@ -141,13 +139,9 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   assert.match(rendered, /开始时间：/);
   assert.match(rendered, /结束时间：/);
   assert.match(rendered, /总耗时：/);
-  assert.match(rendered, /阶段耗时：/);
-  assert.match(rendered, /input → before_agent_start：/);
-  assert.match(rendered, /before_provider_request → 首个 assistant 更新：/);
-  assert.match(rendered, /最后 assistant message_end → agent_end：/);
-  assert.match(rendered, /Provider 请求次数：1/);
-  assert.match(rendered, /Provider 各次耗时：#1 /);
-  assert.match(rendered, /Agent run 次数：2 启动 \/ 2 结束/);
+  assert.doesNotMatch(rendered, /阶段耗时：/);
+  assert.doesNotMatch(rendered, /Provider 请求次数：/);
+  assert.doesNotMatch(rendered, /工具执行次数：/);
   assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
 });
 

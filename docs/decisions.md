@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-20：关闭详细阶段耗时监控
+
+- 决定：关闭 Provider/工具/Agent 生命周期的详细阶段诊断和报告展示，保留 `pi-init-run-timing` 的普通总耗时，以及 session `Worked for` 所需的基础 `agent_start` 到 `agent_settled` 计时。
+- 原因：已完成首次响应延迟定位；详细时间点会增加持久化诊断字段和报告噪声，当前不再需要持续监控。
+- 约束：不删除基础计时链路；历史代码保留关闭开关以便需要时恢复，普通执行时间报告的既有语义不变。
+
 ### 2026-09-20：简单无工具问答采用运行状态快速通道
 
 - 决定：`before_agent_start` 仅通过 `systemPromptOptions.sections.pi_init_runtime` 注入真实运行状态；职责已确认且无活动工作流时，简单无工具问答不调用 `task_workflow(status)` 或重复 `switch_role`。`roleRecoveryPending` 且无活动工作流时允许直接回答无需工具/新证据的问题，但回答不写入 acknowledged；需要执行时仍先 `switch_role`。

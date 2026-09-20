@@ -3,6 +3,8 @@ import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/
 import type { RunTimingEntryData } from "./contracts.ts";
 
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
+// Keep basic total timing for Worked for; detailed Provider/tool lifecycle diagnostics are disabled.
+const DETAILED_TIMING_DIAGNOSTICS_ENABLED = false;
 
 type PendingProbe = {
   source: string;
@@ -67,16 +69,22 @@ export function createRunTimingDiagnostics(
       return;
     }
     if (activeTiming) {
-      activeTiming.agentStartCount = (activeTiming.agentStartCount as number ?? 0) + 1;
+      if (DETAILED_TIMING_DIAGNOSTICS_ENABLED) {
+        activeTiming.agentStartCount = (activeTiming.agentStartCount as number ?? 0) + 1;
+      }
       return;
     }
     if (!probe) return;
     const timing = createRunTiming(probe.source);
-    if (timing) activeTiming = { ...timing, ...probe, agentStartCount: 1 };
+    if (timing) {
+      activeTiming = DETAILED_TIMING_DIAGNOSTICS_ENABLED
+        ? { ...timing, ...probe, agentStartCount: 1 }
+        : timing;
+    }
   }
 
   function finishProviderRequest(endedAt: number) {
-    if (!activeTiming || providerRequestStartedAt === undefined || endedAt < providerRequestStartedAt) return;
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming || providerRequestStartedAt === undefined || endedAt < providerRequestStartedAt) return;
     const durations = Array.isArray(activeTiming.providerRequestDurations)
       ? activeTiming.providerRequestDurations.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
       : [];
@@ -94,7 +102,7 @@ export function createRunTimingDiagnostics(
     toolStarts.clear();
     clearProbes();
     if (!timing || isWorkflowActive()) return;
-    timing.settledAt = settledAt;
+    if (DETAILED_TIMING_DIAGNOSTICS_ENABLED) timing.settledAt = settledAt;
     const completed = completeRunTiming(timing, settledAt);
     if (completed) pi.appendEntry(RUN_TIMING_ENTRY_TYPE, completed);
   }
@@ -107,7 +115,7 @@ export function createRunTimingDiagnostics(
   }
 
   pi.on("before_provider_request", () => {
-    if (!activeTiming) return;
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
     const requestedAt = Date.now();
     finishProviderRequest(requestedAt);
     providerRequestStartedAt = requestedAt;
@@ -117,6 +125,7 @@ export function createRunTimingDiagnostics(
   });
 
   pi.on("message_update", (event) => {
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED) return;
     if (
       activeTiming
       && activeTiming.firstMessageUpdateAt === undefined
@@ -127,7 +136,7 @@ export function createRunTimingDiagnostics(
   });
 
   pi.on("message_end", (event) => {
-    if (!activeTiming || event.message?.role !== "assistant") return;
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming || event.message?.role !== "assistant") return;
     const endedAt = Date.now();
     finishProviderRequest(endedAt);
     activeTiming.assistantMessageEndAt = endedAt;
@@ -135,7 +144,7 @@ export function createRunTimingDiagnostics(
   });
 
   pi.on("agent_end", () => {
-    if (!activeTiming) return;
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
     const endedAt = Date.now();
     finishProviderRequest(endedAt);
     activeTiming.agentEndAt = endedAt;
@@ -143,7 +152,7 @@ export function createRunTimingDiagnostics(
   });
 
   pi.on("tool_execution_start", (event) => {
-    if (!activeTiming) return;
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
     const startedAt = Date.now();
     toolStarts.set(event.toolCallId, { name: event.toolName, startedAt });
     activeTiming.toolExecutionStartAt ??= startedAt;
@@ -154,7 +163,7 @@ export function createRunTimingDiagnostics(
   });
 
   pi.on("tool_execution_end", (event) => {
-    if (!activeTiming) return;
+    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
     const endedAt = Date.now();
     activeTiming.toolExecutionEndAt = endedAt;
     const started = toolStarts.get(event.toolCallId);
