@@ -46,7 +46,7 @@
 - TUI 状态栏新增独立 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认缓存读取/写入。usage 尚未到达时显示“缓存判定中”，零值或未报告不推断缓存命中、写入或未命中；`message_end` 最终 assistant usage 覆盖流式暂态。不同 Provider 的 usage 到达时机不同，R/W 不保证从请求开始实时可见；状态不替换默认 Footer，不写入 session 或 DuckDB。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；活动弹窗的摘要每秒刷新，避免后台状态变化时显示旧快照；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时；`task_workflow` 工具结果在完成态仅显示“工作流已完成”，避免把完成提示和进度数字混在一起。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
-- 测试命令为 `npm test`；该命令先执行 `scripts/check-line-count.js`，递归保证受检 JavaScript/TypeScript 文件不超过 500 个物理行，再运行 Node 原生测试。包版本为 `2.0.3`，扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
+- 测试命令为 `npm test`；该命令先执行 `scripts/check-line-count.js`，递归保证受检 JavaScript/TypeScript 文件不超过 500 个物理行，再运行 Node 原生测试。包版本为 `2.0.3`；当前 Pi peer 依赖已对齐 `0.86.0`，Node 最低版本为 `22.19.0`。扩展在工作流策略函数缺失时会报告扩展与 `src/roles.js` 版本不一致，并提示 `pi update --extensions`、`/reload` 或重启 Pi。
 - 提供跨平台 `scripts/pi-usage.*` 用量统计命令；Windows PowerShell 安装器会把所需文件复制到 Pi 所在的 npm 可执行目录，POSIX 安装器优先使用 Pi 可执行目录、无写权限时回退到用户 bin 目录。`pi-usage` 普通查询在首次查询、距离上次检查超过 1 小时或跨自然日时自动执行增量检查，其余时间直接读取 DuckDB；`--update` 始终强制检查。日期参数支持 `yesterday`、`Nd`、`YYYY-MM`、单日和两个 `YYYY-MM-DD` 组成的闭区间，跨日统计按日期范围聚合并对 session 去重；TTY 刷新摘要中的重算日期取 session 文件最新修改时间并精确到分钟，同时显示受影响日期。报告标题会显示与 `pi-init` 共用的 package 版本号，启动器安装时从 `package.json` 嵌入该版本；报表还显示 DuckDB 缓存最近更新时间（`YYYY-MM-DD HH:mm`）。`postinstall` 查找 Pi 时会跳过当前 npm 包 `node_modules/.bin` 中的本地 `pi` shim，避免 `pi update --extensions` 把启动器复制到随后会被清理的依赖目录。角色模型和工作流配置变更默认只存在当前会话，执行 `/pi-init save` 才写入 `.pi/role-models.json`。Models 表还可导入 `pi-token-speed` 扩展写入的有效生成时长，按模型展示加权平均 TPS；扩展在 `message_end` 生命周期记录样本，避免等待 `agent_end` 或重复记录。
 
 ## 待处理
@@ -55,6 +55,7 @@
 
 ## 最近一次更新
 
+- 2026-09-20：从 npm registry 确认 `@earendil-works/pi-coding-agent` 最新版为 `0.86.0`；`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 和 `typebox` peer 范围同步到 Pi 0.86 兼容线，Node 最低版本同步为 `22.19.0`，依赖锁定并完成 `npm test`（153 项通过、3 项跳过）。
 - 2026-09-18：修复 Local executor 任务交接假死：同角色任务跳过主动边界压缩，压缩生命周期改为幂等收敛并增加只告警 watchdog；状态展示改用 `executionStartedAt` 区分交接和真实执行，running 工作流支持安全 resume，`npm test` 156 项通过。
 - 2026-09-17：修复控制中心首次同步 reload 后继续使用旧 `ctx` 的问题；同步结果显式返回 `reloaded`，当前项目变更后退出旧菜单，`npm test` 149 项通过。
 - 2026-09-15：`Worked for` 改为当前 session 的累计 Agent 工作时间；工作中清除该提示并显示 Pi 原生 `Working`，空闲后在编辑器上方显示累计时长，每次 `agent_settled` 持久化累计快照，普通工作报告仍保留每轮耗时，`npm test` 149 项通过。

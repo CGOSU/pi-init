@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-20：Pi peer 依赖对齐 0.86.0
+
+- 决定：将 `@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 的 peer 范围统一为 `^0.86.0`，将 `typebox` 对齐到 `^1.3.27`，并将 Node 最低版本提升到 `22.19.0`；同步刷新 `package-lock.json`。
+- 原因：项目已使用 Pi 0.86 提供的 `before_agent_start` 扩展事件及其相关 API，继续声明任意版本会允许旧 Pi 被安装并导致生命周期能力缺失或类型/运行时不一致。
+- 约束：不提升 `pi-init` 自身 package 版本；当前运行中的 Pi 仍需通过 `pi update --extensions` 后 `/reload` 或重启才能加载新安装内容。
+
 ### 2026-09-18：Local 工作流交接以真实 Agent 启动为准
 
 - 决定：Local 工作流只有在当前任务记录 `executionStartedAt` 后才显示“任务执行中”；此前按调度锁、主动压缩阶段和排队续跑状态分别显示任务交接、等待启动、正在压缩或压缩等待异常。running 且没有真实执行或有效瞬态操作时，`resume` 可安全重新调度；已启动、已排队或压缩中的任务不重复派发。

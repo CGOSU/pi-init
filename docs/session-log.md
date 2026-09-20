@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-20：对齐 Pi 0.86.0 依赖
+
+- 完成内容：从 npm registry 确认 `@earendil-works/pi-coding-agent` 最新版为 `0.86.0`；将 Pi 相关 peer 依赖对齐到 `^0.86.0`，`typebox` 对齐到 `^1.3.27`，Node 最低版本提升到 `22.19.0`，并刷新 `package-lock.json`。本地依赖已安装为 `pi-coding-agent/pi-ai/pi-tui 0.86.0`、`typebox 1.3.34`。
+- 验证：`npm install --ignore-scripts` 成功；`npm ls @earendil-works/pi-coding-agent @earendil-works/pi-ai @earendil-works/pi-tui typebox --depth=0` 无 invalid 依赖；`npm test` 通过 153 项、跳过 3 项；`git diff --check` 通过。
+- 遗留问题：尚未执行 `pi update --extensions`、当前 Pi `/reload` 或重启；未提交、未推送。
+
 ### 2026-09-18：修复 Local 工作流任务交接假死
 
 - 完成内容：将主动压缩生命周期拆分为独立控制器；同角色连续 Local 任务跳过主动边界压缩；以 operationId 幂等处理压缩完成、失败和 `session_compact` 信号；watchdog 只告警，session shutdown/reload 清理定时器和瞬态锁。
