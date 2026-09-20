@@ -37,6 +37,12 @@ export function formatRunTimingDiagnostics(
   ];
   const providerCount = validNumber(data.providerRequestCount);
   if (providerCount !== undefined) lines.push(`Provider 请求次数：${providerCount}`);
+  const providerDurations = Array.isArray(data.providerRequestDurations)
+    ? data.providerRequestDurations.filter((value): value is number => validNumber(value) !== undefined)
+    : [];
+  if (providerDurations.length > 0) {
+    lines.push(`Provider 各次耗时：${providerDurations.map((value, index) => `#${index + 1} ${formatDuration(value)}`).join("、")}`);
+  }
   const agentStartCount = validNumber(data.agentStartCount);
   const agentEndCount = validNumber(data.agentEndCount);
   if (agentStartCount !== undefined || agentEndCount !== undefined) {
@@ -48,6 +54,12 @@ export function formatRunTimingDiagnostics(
     if (toolCount > 0) {
       const names = Array.isArray(data.toolNames) ? data.toolNames.filter((name): name is string => typeof name === "string") : [];
       lines.push(`工具名称：${names.join("、") || "未知"}`);
+      const durations = Array.isArray(data.toolDurations)
+        ? data.toolDurations.filter((value): value is { name?: unknown; durationMs?: unknown } => value !== null && typeof value === "object")
+        : [];
+      if (durations.length > 0) {
+        lines.push(`工具各次耗时：${durations.map((value, index) => `${value.name || `#${index + 1}`} ${formatDuration(validNumber(value.durationMs))}`).join("、")}`);
+      }
       lines.push(stage("工具执行跨度", data.toolExecutionStartAt, data.toolExecutionEndAt));
       lines.push(`工具累计耗时：${formatDuration(validNumber(data.toolExecutionDurationMs))}`);
     }

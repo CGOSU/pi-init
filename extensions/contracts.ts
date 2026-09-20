@@ -18,6 +18,7 @@ export type RunTimingEntryData = {
   beforeProviderRequestAt?: unknown;
   lastProviderRequestAt?: unknown;
   providerRequestCount?: unknown;
+  providerRequestDurations?: unknown;
   firstMessageUpdateAt?: unknown;
   assistantMessageEndAt?: unknown;
   assistantMessageEndCount?: unknown;
@@ -28,6 +29,7 @@ export type RunTimingEntryData = {
   toolExecutionDurationMs?: unknown;
   toolExecutionCount?: unknown;
   toolNames?: unknown;
+  toolDurations?: unknown;
   completedAt?: unknown;
   settledAt?: unknown;
 };

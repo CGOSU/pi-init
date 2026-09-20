@@ -22,7 +22,8 @@ export function createRunTimingDiagnostics(
   let pendingProbe: PendingProbe | undefined;
   let acceptedProbe: AcceptedProbe | undefined;
   let activeTiming: ActiveTiming | undefined;
-  const toolStarts = new Map<string, number>();
+  let providerRequestStartedAt: number | undefined;
+  const toolStarts = new Map<string, { name: string; startedAt: number }>();
 
   function clearProbes() {
     pendingProbe = undefined;
@@ -61,6 +62,8 @@ export function createRunTimingDiagnostics(
     pendingProbe = undefined;
     if (isWorkflowActive()) {
       activeTiming = undefined;
+      providerRequestStartedAt = undefined;
+      toolStarts.clear();
       return;
     }
     if (activeTiming) {
@@ -72,13 +75,25 @@ export function createRunTimingDiagnostics(
     if (timing) activeTiming = { ...timing, ...probe, agentStartCount: 1 };
   }
 
+  function finishProviderRequest(endedAt: number) {
+    if (!activeTiming || providerRequestStartedAt === undefined || endedAt < providerRequestStartedAt) return;
+    const durations = Array.isArray(activeTiming.providerRequestDurations)
+      ? activeTiming.providerRequestDurations.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      : [];
+    if (durations.length < 8) durations.push(endedAt - providerRequestStartedAt);
+    activeTiming.providerRequestDurations = durations;
+    providerRequestStartedAt = undefined;
+  }
+
   function settle() {
     const timing = activeTiming;
+    const settledAt = Date.now();
+    finishProviderRequest(settledAt);
     activeTiming = undefined;
+    providerRequestStartedAt = undefined;
     toolStarts.clear();
     clearProbes();
     if (!timing || isWorkflowActive()) return;
-    const settledAt = Date.now();
     timing.settledAt = settledAt;
     const completed = completeRunTiming(timing, settledAt);
     if (completed) pi.appendEntry(RUN_TIMING_ENTRY_TYPE, completed);
@@ -86,6 +101,7 @@ export function createRunTimingDiagnostics(
 
   function reset() {
     activeTiming = undefined;
+    providerRequestStartedAt = undefined;
     toolStarts.clear();
     clearProbes();
   }
@@ -93,6 +109,8 @@ export function createRunTimingDiagnostics(
   pi.on("before_provider_request", () => {
     if (!activeTiming) return;
     const requestedAt = Date.now();
+    finishProviderRequest(requestedAt);
+    providerRequestStartedAt = requestedAt;
     activeTiming.beforeProviderRequestAt ??= requestedAt;
     activeTiming.lastProviderRequestAt = requestedAt;
     activeTiming.providerRequestCount = (activeTiming.providerRequestCount as number ?? 0) + 1;
@@ -110,20 +128,24 @@ export function createRunTimingDiagnostics(
 
   pi.on("message_end", (event) => {
     if (!activeTiming || event.message?.role !== "assistant") return;
-    activeTiming.assistantMessageEndAt = Date.now();
+    const endedAt = Date.now();
+    finishProviderRequest(endedAt);
+    activeTiming.assistantMessageEndAt = endedAt;
     activeTiming.assistantMessageEndCount = (activeTiming.assistantMessageEndCount as number ?? 0) + 1;
   });
 
   pi.on("agent_end", () => {
     if (!activeTiming) return;
-    activeTiming.agentEndAt = Date.now();
+    const endedAt = Date.now();
+    finishProviderRequest(endedAt);
+    activeTiming.agentEndAt = endedAt;
     activeTiming.agentEndCount = (activeTiming.agentEndCount as number ?? 0) + 1;
   });
 
   pi.on("tool_execution_start", (event) => {
     if (!activeTiming) return;
     const startedAt = Date.now();
-    toolStarts.set(event.toolCallId, startedAt);
+    toolStarts.set(event.toolCallId, { name: event.toolName, startedAt });
     activeTiming.toolExecutionStartAt ??= startedAt;
     activeTiming.toolExecutionCount = (activeTiming.toolExecutionCount as number ?? 0) + 1;
     const names = Array.isArray(activeTiming.toolNames) ? activeTiming.toolNames : [];
@@ -135,9 +157,13 @@ export function createRunTimingDiagnostics(
     if (!activeTiming) return;
     const endedAt = Date.now();
     activeTiming.toolExecutionEndAt = endedAt;
-    const startedAt = toolStarts.get(event.toolCallId);
-    if (startedAt !== undefined) {
-      activeTiming.toolExecutionDurationMs = (activeTiming.toolExecutionDurationMs as number ?? 0) + endedAt - startedAt;
+    const started = toolStarts.get(event.toolCallId);
+    if (started !== undefined) {
+      const durationMs = Math.max(0, endedAt - started.startedAt);
+      activeTiming.toolExecutionDurationMs = (activeTiming.toolExecutionDurationMs as number ?? 0) + durationMs;
+      const durations = Array.isArray(activeTiming.toolDurations) ? activeTiming.toolDurations : [];
+      if (durations.length < 8) durations.push({ name: started.name, durationMs });
+      activeTiming.toolDurations = durations;
       toolStarts.delete(event.toolCallId);
     }
   });

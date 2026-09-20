@@ -55,7 +55,7 @@
 
 ## 最近一次更新
 
-- 2026-09-20：扩展普通外部执行阶段诊断，增加 `message_end`、`agent_end`、Provider 请求次数、工具执行次数/名称/耗时和 Agent run 次数，进一步区分模型生成、工具调用、重试和 settled 收尾；`npm test` 156 项通过、3 项跳过。
+- 2026-09-20：扩展普通外部执行阶段诊断，增加 `message_end`、`agent_end`、Provider 请求次数/逐次耗时、工具执行次数/名称/逐次耗时和 Agent run 次数，进一步区分模型生成、Provider 往返、工具调用、重试和 settled 收尾；`npm test` 156 项通过、3 项跳过。
 - 2026-09-20：从 npm registry 确认 `@earendil-works/pi-coding-agent` 最新版为 `0.86.0`；`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 和 `typebox` peer 范围同步到 Pi 0.86 兼容线，Node 最低版本同步为 `22.19.0`，依赖锁定并完成 `npm test`（153 项通过、3 项跳过）。
 - 2026-09-18：修复 Local executor 任务交接假死：同角色任务跳过主动边界压缩，压缩生命周期改为幂等收敛并增加只告警 watchdog；状态展示改用 `executionStartedAt` 区分交接和真实执行，running 工作流支持安全 resume，`npm test` 156 项通过。
 - 2026-09-17：修复控制中心首次同步 reload 后继续使用旧 `ctx` 的问题；同步结果显式返回 `reloaded`，当前项目变更后退出旧菜单，`npm test` 149 项通过。
