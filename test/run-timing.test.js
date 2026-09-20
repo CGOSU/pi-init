@@ -95,7 +95,7 @@ test("普通执行计时限定外部来源并拒绝无效时间边界", () => {
 test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告", async () => {
   const harness = createExtensionHarness();
   await runExternalAgent(harness, "interactive");
-  await runExternalAgent(harness, "rpc");
+  await runExternalAgent(harness, "rpc", { toolName: "read" });
   await runExternalAgent(harness, "extension");
 
   const runEntries = harness.entries.filter(({ type }) => type === "pi-init-run-timing");
@@ -110,10 +110,17 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
     assert.equal(typeof entry.data.startedAt, "number");
     assert.equal(typeof entry.data.beforeProviderRequestAt, "number");
     assert.equal(typeof entry.data.firstMessageUpdateAt, "number");
+    assert.equal(typeof entry.data.assistantMessageEndAt, "number");
+    assert.equal(typeof entry.data.agentEndAt, "number");
     assert.equal(typeof entry.data.completedAt, "number");
     assert.equal(typeof entry.data.settledAt, "number");
+    assert.equal(entry.data.providerRequestCount, 1);
+    assert.equal(entry.data.agentStartCount, 2);
+    assert.equal(entry.data.agentEndCount, 2);
     assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
   }
+  assert.equal(runEntries[1].data.toolExecutionCount, 1);
+  assert.deepEqual(runEntries[1].data.toolNames, ["read"]);
 
   const renderer = harness.renderers.get("pi-init-run-timing");
   assert.equal(typeof renderer, "function");
@@ -134,6 +141,9 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   assert.match(rendered, /阶段耗时：/);
   assert.match(rendered, /input → before_agent_start：/);
   assert.match(rendered, /before_provider_request → 首个 assistant 更新：/);
+  assert.match(rendered, /最后 assistant message_end → agent_end：/);
+  assert.match(rendered, /Provider 请求次数：1/);
+  assert.match(rendered, /Agent run 次数：2 启动 \/ 2 结束/);
   assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
 });
 

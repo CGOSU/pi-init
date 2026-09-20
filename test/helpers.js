@@ -315,13 +315,30 @@ async function emitExtensionEvent(harness, name, event = {}) {
   }
 }
 
-async function runExternalAgent(harness, source) {
+async function runExternalAgent(harness, source, options = {}) {
   await emitExtensionEvent(harness, "input", { source });
   await emitExtensionEvent(harness, "before_agent_start");
   await emitExtensionEvent(harness, "agent_start");
   await emitExtensionEvent(harness, "before_provider_request");
   await emitExtensionEvent(harness, "message_update", { message: { role: "assistant" } });
+  await emitExtensionEvent(harness, "message_end", { message: { role: "assistant" } });
+  if (options.toolName) {
+    await emitExtensionEvent(harness, "tool_execution_start", {
+      toolCallId: "test-tool-call",
+      toolName: options.toolName,
+      args: {},
+    });
+    await emitExtensionEvent(harness, "tool_execution_end", {
+      toolCallId: "test-tool-call",
+      toolName: options.toolName,
+      result: {},
+      isError: false,
+    });
+  }
+  await emitExtensionEvent(harness, "agent_end");
   await emitExtensionEvent(harness, "agent_start");
+  await emitExtensionEvent(harness, "message_end", { message: { role: "assistant" } });
+  await emitExtensionEvent(harness, "agent_end");
   await emitExtensionEvent(harness, "agent_settled");
 }
 

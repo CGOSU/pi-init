@@ -22,6 +22,7 @@ export function createRunTimingDiagnostics(
   let pendingProbe: PendingProbe | undefined;
   let acceptedProbe: AcceptedProbe | undefined;
   let activeTiming: ActiveTiming | undefined;
+  const toolStarts = new Map<string, number>();
 
   function clearProbes() {
     pendingProbe = undefined;
@@ -62,14 +63,19 @@ export function createRunTimingDiagnostics(
       activeTiming = undefined;
       return;
     }
-    if (activeTiming || !probe) return;
+    if (activeTiming) {
+      activeTiming.agentStartCount = (activeTiming.agentStartCount as number ?? 0) + 1;
+      return;
+    }
+    if (!probe) return;
     const timing = createRunTiming(probe.source);
-    if (timing) activeTiming = { ...timing, ...probe };
+    if (timing) activeTiming = { ...timing, ...probe, agentStartCount: 1 };
   }
 
   function settle() {
     const timing = activeTiming;
     activeTiming = undefined;
+    toolStarts.clear();
     clearProbes();
     if (!timing || isWorkflowActive()) return;
     const settledAt = Date.now();
@@ -80,13 +86,16 @@ export function createRunTimingDiagnostics(
 
   function reset() {
     activeTiming = undefined;
+    toolStarts.clear();
     clearProbes();
   }
 
   pi.on("before_provider_request", () => {
-    if (activeTiming && activeTiming.beforeProviderRequestAt === undefined) {
-      activeTiming.beforeProviderRequestAt = Date.now();
-    }
+    if (!activeTiming) return;
+    const requestedAt = Date.now();
+    activeTiming.beforeProviderRequestAt ??= requestedAt;
+    activeTiming.lastProviderRequestAt = requestedAt;
+    activeTiming.providerRequestCount = (activeTiming.providerRequestCount as number ?? 0) + 1;
   });
 
   pi.on("message_update", (event) => {
@@ -96,6 +105,40 @@ export function createRunTimingDiagnostics(
       && event.message?.role === "assistant"
     ) {
       activeTiming.firstMessageUpdateAt = Date.now();
+    }
+  });
+
+  pi.on("message_end", (event) => {
+    if (!activeTiming || event.message?.role !== "assistant") return;
+    activeTiming.assistantMessageEndAt = Date.now();
+    activeTiming.assistantMessageEndCount = (activeTiming.assistantMessageEndCount as number ?? 0) + 1;
+  });
+
+  pi.on("agent_end", () => {
+    if (!activeTiming) return;
+    activeTiming.agentEndAt = Date.now();
+    activeTiming.agentEndCount = (activeTiming.agentEndCount as number ?? 0) + 1;
+  });
+
+  pi.on("tool_execution_start", (event) => {
+    if (!activeTiming) return;
+    const startedAt = Date.now();
+    toolStarts.set(event.toolCallId, startedAt);
+    activeTiming.toolExecutionStartAt ??= startedAt;
+    activeTiming.toolExecutionCount = (activeTiming.toolExecutionCount as number ?? 0) + 1;
+    const names = Array.isArray(activeTiming.toolNames) ? activeTiming.toolNames : [];
+    if (typeof event.toolName === "string" && names.length < 8 && !names.includes(event.toolName)) names.push(event.toolName);
+    activeTiming.toolNames = names;
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    if (!activeTiming) return;
+    const endedAt = Date.now();
+    activeTiming.toolExecutionEndAt = endedAt;
+    const startedAt = toolStarts.get(event.toolCallId);
+    if (startedAt !== undefined) {
+      activeTiming.toolExecutionDurationMs = (activeTiming.toolExecutionDurationMs as number ?? 0) + endedAt - startedAt;
+      toolStarts.delete(event.toolCallId);
     }
   });
 

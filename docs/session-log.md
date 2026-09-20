@@ -4,10 +4,10 @@
 
 ### 2026-09-20：增加首次执行阶段耗时诊断
 
-- 完成内容：新增 `extensions/run-timing-diagnostics.ts`，在不改变 Agent 生命周期的前提下记录外部执行的 `input`、`before_agent_start`、`agent_start`、首次 `before_provider_request`、首个 assistant `message_update` 和 `agent_settled` 时间点；普通执行报告增加阶段耗时，旧报告保持兼容。
-- 完成内容：将诊断状态从 `extensions/index.ts` 拆出，并补充运行计时测试，避免主扩展和报告文件超过项目 500 行代码限制。
-- 验证：`node scripts/check-line-count.js` 通过；`npm test` 通过 153 项、跳过 3 项；`git diff --check` 通过。
-- 遗留问题：尚未在真实交互式 Pi 中收集首次消息的实际阶段数据；未提交、未推送。
+- 完成内容：新增 `extensions/run-timing-diagnostics.ts`，在不改变 Agent 生命周期的前提下记录外部执行的 `input`、`before_agent_start`、`agent_start`、Provider 请求、首个 assistant `message_update`、`message_end`、`agent_end`、工具执行和 `agent_settled` 时间点，并记录 Provider 请求、Agent run、工具次数及工具名称。
+- 完成内容：将诊断状态从 `extensions/index.ts` 拆出，并补充运行计时测试，避免主扩展和报告文件超过项目 500 行代码限制；旧报告没有新增字段时保持原格式。
+- 验证：`node scripts/check-line-count.js` 通过；`npm test` 通过 153 项、跳过 3 项；`node --test test/run-timing.test.js` 2 项通过；`git diff --check` 通过。
+- 遗留问题：尚未在真实交互式 Pi 中收集新的 Agent/工具阶段数据；未提交、未推送。
 
 ### 2026-09-20：对齐 Pi 0.86.0 依赖
 

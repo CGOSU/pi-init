@@ -42,7 +42,7 @@
 - `edit` 运行时守卫包装 Pi 内置 definition：合法调用保留原生 schema、提示元数据、renderer、严格匹配、重叠检测和文件变更队列；read-shaped/malformed、重复匹配和重叠调用 fail-closed，不写文件并返回可恢复诊断，未知错误透传。提示预检只降低错误率，不能保证模型永不产生非法调用。
 - 初始化提供快速和高级两条路径；快速路径从 `package.json`、包管理器锁文件和目录名推断项目元数据，只需一次确认，并在当前项目完成后自动 reload。高级路径仍可编辑项目名称、语言、描述、测试命令和职责模型，不再询问 Skill 名称或 slug；TUI 中按 Esc 会返回上一个填写属性并保留已填写内容，最终确认返回角色模型步骤。高级初始化首项从控制中心返回控制中心，直接 `/pi-init advanced` 返回调用方；Ctrl+C、显式“取消”和快速/非 TUI 路径仍保持取消或原有行为。
 - 控制中心现在显示模式、角色、模型和工作流策略/状态卡片，根菜单按“初始化/变更/同步/工作流”四个顶层分组；初始化和变更分别进入次级菜单，工作流策略位于变更入口，主 `pi-init` 状态项也持续显示策略和活动工作流进度，前置指示点在 Agent 运行时使用主题 accent 高亮、空闲时使用 muted 灰色；工作流完成或取消后，底部状态恢复为策略、执行器和无活动工作流摘要。标题下有间距、内容统一左右留出 2 格 padding，状态卡片文字与背景之间另有 1 格内边距；首次进入提供简短引导，TUI 菜单和初始化文本输入中按 Esc 返回上一级而非触发取消，初始化通知默认只显示文件数量和冲突摘要；TUI 菜单使用宽弹窗，选中项说明独立显示并自动换行，包含保存项的 TUI 菜单支持 `Ctrl+S` 直接保存。
-- 非工作流的 `interactive`/`rpc` 外部输入从首次 `agent_start` 计时到最终 `agent_settled`，完成后写入不进入 LLM 上下文的 `pi-init-run-timing` custom entry，工作报告继续显示每轮耗时；诊断同时记录 `input`、`before_agent_start`、`agent_start`、`before_provider_request`、首个 assistant 更新和 `agent_settled` 阶段，定位首次消息延迟；TUI 工作时使用 Pi 原生 `Working`，空闲后在编辑器上方显示 `─ Worked for ... ─`，累计本次 session 的 Agent 实际工作时间且不计闲置时间。session 恢复时优先从每轮完成后保存的独立累计快照恢复，并兼容只有普通执行记录的旧 session；活动工作流、扩展隐藏续跑和未完成/中断执行不补造普通报告。
+- 非工作流的 `interactive`/`rpc` 外部输入从首次 `agent_start` 计时到最终 `agent_settled`，完成后写入不进入 LLM 上下文的 `pi-init-run-timing` custom entry，工作报告继续显示每轮耗时；诊断同时记录 `input`、`before_agent_start`、`agent_start`、Provider 请求、首个 assistant 更新、`message_end`、`agent_end`、工具执行和 `agent_settled` 阶段，定位首次消息延迟；TUI 工作时使用 Pi 原生 `Working`，空闲后在编辑器上方显示 `─ Worked for ... ─`，累计本次 session 的 Agent 实际工作时间且不计闲置时间。session 恢复时优先从每轮完成后保存的独立累计快照恢复，并兼容只有普通执行记录的旧 session；活动工作流、扩展隐藏续跑和未完成/中断执行不补造普通报告。
 - TUI 状态栏新增独立 `pi-cache` 状态项：请求发送阶段以主题 `accent` 加粗高亮 `↑Input`，首个输出 delta 后高亮 `↓Output`；Provider 明确报告 `cacheRead`/`cacheWrite` 正数时以 `success` 确认缓存读取/写入。usage 尚未到达时显示“缓存判定中”，零值或未报告不推断缓存命中、写入或未命中；`message_end` 最终 assistant usage 覆盖流式暂态。不同 Provider 的 usage 到达时机不同，R/W 不保证从请求开始实时可见；状态不替换默认 Footer，不写入 session 或 DuckDB。
 - TUI 中“工作流 · 查看任务进度”以及 `/pi-init workflow status` 现在打开居中 overlay 弹窗，使用主题背景色、标题高亮和四边框明确区分弹窗，显示状态、进度、总任务开始时间、总任务已运行时间、执行器、规划、暂停原因和可滚动任务列表；活动弹窗的摘要每秒刷新，避免后台状态变化时显示旧快照；已完成任务的耗时移到任务描述列，避免挤压任务标题，并在窄面板保持可见；RPC 等非 TUI 模式的状态文本也显示总任务开始时间、总任务已运行时间和已完成任务耗时；`task_workflow` 工具结果在完成态仅显示“工作流已完成”，避免把完成提示和进度数字混在一起。
 - 模型选择在 TUI 中使用带即时筛选的搜索列表，显示模型名称和支持的推理级别，并使用友好的角色和模式名称；Pi 原生 `/model` 与 `Shift+Tab` 仍是会话级临时切换。
@@ -55,7 +55,7 @@
 
 ## 最近一次更新
 
-- 2026-09-20：增加普通外部执行的阶段耗时诊断，记录首次输入到 `before_agent_start`、`agent_start`、首个 Provider 请求、首个 assistant 输出和最终 `agent_settled` 的耗时，写入已有 `pi-init-run-timing` 报告；`npm test` 156 项通过、3 项跳过。
+- 2026-09-20：扩展普通外部执行阶段诊断，增加 `message_end`、`agent_end`、Provider 请求次数、工具执行次数/名称/耗时和 Agent run 次数，进一步区分模型生成、工具调用、重试和 settled 收尾；`npm test` 156 项通过、3 项跳过。
 - 2026-09-20：从 npm registry 确认 `@earendil-works/pi-coding-agent` 最新版为 `0.86.0`；`@earendil-works/pi-ai`、`@earendil-works/pi-tui` 和 `typebox` peer 范围同步到 Pi 0.86 兼容线，Node 最低版本同步为 `22.19.0`，依赖锁定并完成 `npm test`（153 项通过、3 项跳过）。
 - 2026-09-18：修复 Local executor 任务交接假死：同角色任务跳过主动边界压缩，压缩生命周期改为幂等收敛并增加只告警 watchdog；状态展示改用 `executionStartedAt` 区分交接和真实执行，running 工作流支持安全 resume，`npm test` 156 项通过。
 - 2026-09-17：修复控制中心首次同步 reload 后继续使用旧 `ctx` 的问题；同步结果显式返回 `reloaded`，当前项目变更后退出旧菜单，`npm test` 149 项通过。
