@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-20：简单无工具问答采用运行状态快速通道
+
+- 决定：`before_agent_start` 仅通过 `systemPromptOptions.sections.pi_init_runtime` 注入真实运行状态；职责已确认且无活动工作流时，简单无工具问答不调用 `task_workflow(status)` 或重复 `switch_role`。`roleRecoveryPending` 且无活动工作流时允许直接回答无需工具/新证据的问题，但回答不写入 acknowledged；需要执行时仍先 `switch_role`。
+- 原因：一次简单问题触发 `task_workflow`、`switch_role` 会增加多次 Provider 回合，而当前职责、工作流和恢复状态已由扩展掌握；结构化 section 可以减少模型猜测，同时保持 Prompt Cache 和执行硬守卫。
+- 约束：不根据用户文本启发式分类，不自动切换模型或确认职责；活动工作流的恢复 pending 仍先执行 `task_workflow(status)`；`tool_call` 恢复门和 architect fail-closed 边界不放宽。
+
 ### 2026-09-20：普通执行增加阶段耗时诊断
 
 - 决定：沿用已有 `pi-init-run-timing` custom entry，在不进入 LLM 上下文的报告数据中增加 `input`、`before_agent_start`、`agent_start`、Provider 请求、首个 assistant `message_update`、`message_end`、`agent_end`、工具执行和 `agent_settled` 时间点，并记录每次 Provider/工具耗时、请求、Agent run 和工具次数。

@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-20：增加简单无工具问答快速通道
+
+- 完成内容：新增 `extensions/runtime-routing-context.ts`，在 `before_agent_start` 的 `sections.pi_init_runtime` 注入当前有效职责、Provider/模型/推理强度、恢复门和活动工作流摘要；同步调整职责恢复提示，区分无活动工作流与活动工作流。
+- 完成内容：无活动工作流且 `roleRecoveryPending` 时允许无需工具或新证据的简单回答，但不自动写入 acknowledged；活动工作流仍要求先查看状态，执行类工具继续受原有恢复门和 architect 守卫保护。
+- 约束落实：不做用户文本启发式分类、不自动切换模型、不自动确认职责、不修改 `selectedTools`，不替代 `tool_call` 硬守卫。
+- 验证：`node --test test/role-recovery.test.js`，11 项通过；`npm test`，158 项中 155 项通过、3 项跳过；`node scripts/check-line-count.js` 和 `git diff --check` 通过。
+- 遗留问题：尚未在真实压缩恢复后的 Pi 会话中确认简单问答是否减少 Provider 回合；未提交、未推送。
+
 ### 2026-09-20：增加首次执行阶段耗时诊断
 
 - 完成内容：新增 `extensions/run-timing-diagnostics.ts`，在不改变 Agent 生命周期的前提下记录外部执行的 `input`、`before_agent_start`、`agent_start`、Provider 请求、首个 assistant `message_update`、`message_end`、`agent_end`、工具执行和 `agent_settled` 时间点，并记录每次 Provider/工具耗时、Provider 请求、Agent run、工具次数及工具名称。

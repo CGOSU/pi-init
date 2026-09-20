@@ -4,6 +4,7 @@ import { ROLE_RECOVERY_ENTRY_TYPE } from "../extensions/role-recovery.ts";
 import {
   DEFAULT_ROLE_CONFIG,
   createExtensionHarness,
+  createWorkflowState,
   emitExtensionEvent,
   mkdir,
   path,
@@ -25,6 +26,19 @@ function recoveryBranch(status = "pending") {
   }];
 }
 
+async function beforeAgentStart(harness) {
+  const event = {
+    type: "before_agent_start",
+    prompt: "简单问题",
+    systemPrompt: "",
+    systemPromptOptions: { sections: {} },
+  };
+  for (const handler of harness.handlers.get("before_agent_start") ?? []) {
+    await handler(event, harness.context);
+  }
+  return event;
+}
+
 async function withConfiguredHarness(mode, branch, options, run) {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
@@ -39,6 +53,65 @@ async function withConfiguredHarness(mode, branch, options, run) {
     await run(createExtensionHarness(branch, { ...options, cwd: directory, trusted: true }));
   });
 }
+
+test("before_agent_start 为无活动工作流的恢复门提供简单问答快速通道", async () => {
+  const harness = createExtensionHarness(recoveryBranch());
+  await emitExtensionEvent(harness, "session_start", { reason: "new" });
+
+  const event = await beforeAgentStart(harness);
+  const section = event.systemPromptOptions.sections.pi_init_runtime;
+  assert.match(section, /无活动工作流/);
+  assert.match(section, /简单问答可以直接回答/);
+  assert.match(section, /不要调用 task_workflow\(status\)/);
+  assert.equal(harness.branch.at(-1).data.status, "pending");
+  assert.equal(
+    harness.handlers.get("tool_call")[0]({ toolName: "edit", input: {} }, harness.context).block,
+    true,
+  );
+});
+
+test("before_agent_start 在活动工作流恢复时仍要求先查看状态", async () => {
+  const workflow = createWorkflowState({
+    executor: "runtime",
+    summary: "恢复状态测试",
+    tasks: [{ id: "task", role: "developer-test", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+  });
+  workflow.status = "running";
+  workflow.currentTaskId = "task";
+  const harness = createExtensionHarness([
+    ...recoveryBranch(),
+    { type: "custom", customType: "pi-init-workflow", data: workflow },
+  ]);
+  await emitExtensionEvent(harness, "session_start", { reason: "new" });
+
+  const event = await beforeAgentStart(harness);
+  const section = event.systemPromptOptions.sections.pi_init_runtime;
+  assert.match(section, /活动工作流：runtime\/running/);
+  assert.match(section, /先调用 task_workflow\(action="status"\)/);
+  assert.doesNotMatch(section, /无活动工作流且无需工具/);
+  assert.equal(harness.branch.findLast((entry) => entry.customType === ROLE_RECOVERY_ENTRY_TYPE).data.status, "pending");
+});
+
+test("before_agent_start 注入已确认角色和快速路由规则", async () => {
+  const model = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  await withConfiguredHarness("auto", recoveryBranch("acknowledged"), {
+    model,
+    availableModels: [model],
+    thinkingLevel: "max",
+    roleModels: {
+      "developer-test": { provider: model.provider, model: model.id, thinkingLevel: "max" },
+    },
+  }, async (harness) => {
+    await emitExtensionEvent(harness, "session_start", { reason: "new" });
+    const event = await beforeAgentStart(harness);
+    const section = event.systemPromptOptions.sections.pi_init_runtime;
+    assert.match(section, /当前职责：开发测试/);
+    assert.match(section, /当前模型：openai-codex\/gpt-5\.6-luna/);
+    assert.match(section, /职责恢复：已确认/);
+    assert.match(section, /不要调用 task_workflow\(status\)/);
+    assert.equal(harness.branch.some((entry) => entry.customType === ROLE_RECOVERY_ENTRY_TYPE && entry.data.status === "pending"), false);
+  });
+});
 
 test("架构师恢复门只允许工作流状态和职责切换", async () => {
   const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };

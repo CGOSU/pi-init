@@ -1,4 +1,5 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isWorkflowActive } from "../src/workflow.js";
 import { roleLabel } from "../src/roles.js";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
@@ -55,9 +56,10 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
       return candidate.customType !== ROLE_RECOVERY_MESSAGE_TYPE;
     });
     const activeRole = state.activeRole?.role ? roleLabel(state.activeRole.role) : "未知";
+    const activeWorkflow = Boolean(state.workflowState && isWorkflowActive(state.workflowState));
     const recoveryToolGuidance = state.activeRole?.role === "architect"
-      ? "当前角色为 architect；在 switch_role 成功前，仅允许查看工作流状态（task_workflow(action=\"status\")）或调用 switch_role；不得读取文件、搜索、浏览、编辑、写入、执行 shell/test、初始化项目、协作或提交完成结果。"
-      : "在 switch_role 成功前，只允许读取文件、查看工作流状态或调用 switch_role；不得编辑、写入、执行 shell/test、初始化项目或提交完成结果。";
+      ? "当前角色为 architect；在 switch_role 成功前，不得读取文件、搜索、浏览、编辑、写入、执行 shell/test、初始化项目、协作或提交完成结果；无活动工作流且无需工具或新证据的简单问答可以直接回答，但不得把回答视为职责确认。"
+      : "在 switch_role 成功前，执行类工具仍被阻断；无活动工作流且无需工具或新证据的简单问答可以直接回答，但不得把回答视为职责确认。";
     messages.push({
       role: "custom",
       customType: ROLE_RECOVERY_MESSAGE_TYPE,
@@ -65,7 +67,9 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
         "[PI-INIT 职责恢复门]",
         "检测到上下文刚完成压缩。压缩恢复了任务内容，但不代表职责边界已经恢复。",
         `扩展记录的上一个角色：${activeRole}（仅供参考，不要直接沿用）。`,
-        "恢复顺序：如存在活动工作流，先调用 task_workflow(action=\"status\")；然后根据用户目标和公共 pi-init-role-routing Skill 重新判断职责；最后必须调用 switch_role(role=...)。",
+        activeWorkflow
+          ? "恢复顺序：存在活动工作流，先调用 task_workflow(action=\"status\")；然后根据用户目标和公共 pi-init-role-routing Skill 重新判断职责；需要执行任务前必须调用 switch_role(role=...)。"
+          : "当前没有活动工作流；无需工具或新证据的简单问答可以直接回答，不要调用 task_workflow(action=\"status\")，也不要把回答视为职责确认；需要执行任务前必须调用 switch_role(role=...)。",
         recoveryToolGuidance,
       ].join("\n"),
       display: false,

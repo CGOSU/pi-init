@@ -32,6 +32,7 @@ import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
 import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
+import { createRuntimeRoutingContext } from "./runtime-routing-context.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -73,6 +74,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
+  const runtimeRoutingContext = createRuntimeRoutingContext(runtimeState, {
+    getActiveRole: roleRuntime.activeRoleFor,
+    getThinkingLevel: () => pi.getThinkingLevel(),
+  });
+  pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
   pi.on("session_compact", (event, ctx) => roleRuntime.handleSessionCompact(event, ctx));
   pi.on("session_compact_failed", (event, ctx) => roleRuntime.handleSessionCompactFailed(event, ctx));
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
