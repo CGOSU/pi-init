@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-09-20：普通执行增加阶段耗时诊断
+
+- 决定：沿用已有 `pi-init-run-timing` custom entry，在不进入 LLM 上下文的报告数据中增加 `input`、`before_agent_start`、`agent_start`、首次 `before_provider_request`、首个 assistant `message_update` 和 `agent_settled` 时间点，并在报告中显示阶段耗时。
+- 原因：首次消息延迟可能来自扩展前置处理、Prompt/工具准备、Provider 请求或首个输出等待；只记录总 Agent 时长无法区分这些阶段。诊断钩子只记录时间，不阻断、改写或额外触发 Agent 回合。
+- 约束：工作流活动期间仍不生成普通外部执行报告；旧 entry 没有诊断字段时保持原报告格式；计时起点仍是首次 `agent_start`，不把 `before_agent_start` 到实际启动之间的等待误算为 Agent 执行时间。
+
 ### 2026-09-20：Pi peer 依赖对齐 0.86.0
 
 - 决定：将 `@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 的 peer 范围统一为 `^0.86.0`，将 `typebox` 对齐到 `^1.3.27`，并将 Node 最低版本提升到 `22.19.0`；同步刷新 `package-lock.json`。

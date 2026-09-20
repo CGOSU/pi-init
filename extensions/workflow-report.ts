@@ -13,6 +13,7 @@ import {
 } from "../src/workflow.js";
 import { roleLabel } from "../src/roles.js";
 import { getRunTimingDuration } from "../src/run-timing.js";
+import { formatRunTimingDiagnostics } from "./run-timing-report.ts";
 import type { ReportTheme, RunTimingEntryData } from "./contracts.ts";
 import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
 import { workflowExecutorLabel } from "./role-runtime.ts";
@@ -389,6 +390,7 @@ export function createWorkflowReport(
       `结束时间：${formatWorkflowTimestamp(data.completedAt, "不可用（无效的结束时间）")}`,
       `总耗时：${formatRunTimingDuration(getRunTimingDuration(data))}`,
       "计时口径：从本次外部输入触发的首次 agent_start 到最终 agent_settled；仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成。",
+      ...formatRunTimingDiagnostics(data, formatRunTimingDuration),
     ].join("\n");
   }
 

@@ -319,6 +319,8 @@ async function runExternalAgent(harness, source) {
   await emitExtensionEvent(harness, "input", { source });
   await emitExtensionEvent(harness, "before_agent_start");
   await emitExtensionEvent(harness, "agent_start");
+  await emitExtensionEvent(harness, "before_provider_request");
+  await emitExtensionEvent(harness, "message_update", { message: { role: "assistant" } });
   await emitExtensionEvent(harness, "agent_start");
   await emitExtensionEvent(harness, "agent_settled");
 }

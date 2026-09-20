@@ -11,8 +11,13 @@ export type RoleModelConfig = {
 
 export type RunTimingEntryData = {
   source?: unknown;
+  inputAt?: unknown;
+  beforeAgentStartAt?: unknown;
   startedAt?: unknown;
+  beforeProviderRequestAt?: unknown;
+  firstMessageUpdateAt?: unknown;
   completedAt?: unknown;
+  settledAt?: unknown;
 };
 
 export type ReportTheme = {

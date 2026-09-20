@@ -18,8 +18,8 @@ import {
   requestWorkflowReplan,
   workflowProgress,
 } from "../src/workflow.js";
-import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/run-timing.js";
 import { Text } from "@earendil-works/pi-tui";
+import { isExternalRunSource } from "../src/run-timing.js";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { createCacheStatus } from "./cache-status.ts";
 import { registerSessionWorkTime } from "./session-work-time.ts";
@@ -31,6 +31,7 @@ import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
+import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
 import {
   initProjectParameters,
   switchRoleParameters,
@@ -47,10 +48,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
   createCacheStatus(pi);
   const roleRecovery = createRoleRecovery(pi, runtimeState);
+  const runTimingDiagnostics = createRunTimingDiagnostics(
+    pi,
+    () => Boolean(runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)),
+  );
   pi.registerTool(createEditGuardTool());
-  let pendingExternalRunSource: string | undefined;
-  let acceptedExternalRunSource: string | undefined;
-  let externalRunTiming: ReturnType<typeof createRunTiming>;
   let workflowDispatch: WorkflowDispatch;
   const workflowMessages = createWorkflowMessages(runtimeState, {
     pi,
@@ -107,13 +109,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     );
   }
   function settleExternalRunTiming() {
-    const timing = externalRunTiming;
-    externalRunTiming = undefined;
-    pendingExternalRunSource = undefined;
-    acceptedExternalRunSource = undefined;
-    if (!timing || (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState))) return;
-    const completed = completeRunTiming(timing);
-    if (completed) pi.appendEntry(RUN_TIMING_ENTRY_TYPE, completed);
+    runTimingDiagnostics.settle();
   }
   pi.registerEntryRenderer<RunTimingEntryData>(RUN_TIMING_ENTRY_TYPE, (entry, _options, theme) => {
     const data = entry.data && typeof entry.data === "object"
@@ -187,30 +183,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return { action: "continue" };
     }
     if (captureWorkflowRevisionInput(event, ctx)) return { action: "handled" };
-    if (!isExternalRunSource(event.source)) return { action: "continue" };
-    if (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)) {
-      pendingExternalRunSource = undefined;
-      acceptedExternalRunSource = undefined;
-      return { action: "continue" };
-    }
-    if (!externalRunTiming) pendingExternalRunSource = event.source;
+    if (!runTimingDiagnostics.captureInput(event.source)) return { action: "continue" };
     return { action: "continue" };
   });
 
-  pi.on("before_agent_start", async (_event, ctx) => {
-    if (runtimeState.internalContinuationPending) {
-      runtimeState.internalContinuationPending = false;
-      pendingExternalRunSource = undefined;
-      acceptedExternalRunSource = undefined;
-    } else if (pendingExternalRunSource) {
-      if (externalRunTiming || (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState))) {
-        pendingExternalRunSource = undefined;
-        acceptedExternalRunSource = undefined;
-      } else {
-        acceptedExternalRunSource = pendingExternalRunSource;
-        pendingExternalRunSource = undefined;
-      }
-    }
+  pi.on("before_agent_start", (_event) => {
+    runTimingDiagnostics.beforeAgentStart(runtimeState.internalContinuationPending);
+    runtimeState.internalContinuationPending = false;
   });
 
   pi.on("context", (event) => roleRecovery.context(event));
@@ -219,14 +198,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     runtimeState.internalContinuationPending = false;
-    const source = acceptedExternalRunSource;
-    acceptedExternalRunSource = undefined;
-    pendingExternalRunSource = undefined;
-    if (runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)) {
-      externalRunTiming = undefined;
-    } else if (!externalRunTiming && source) {
-      externalRunTiming = createRunTiming(source);
-    }
+    runTimingDiagnostics.agentStart();
 
     if (
       !runtimeState.workflowState ||
@@ -251,9 +223,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.runtimeBackend?.dispose();
     workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;
-    pendingExternalRunSource = undefined;
-    acceptedExternalRunSource = undefined;
-    externalRunTiming = undefined;
+    runTimingDiagnostics.reset();
     runtimeState.internalContinuationPending = false;
     roleRecovery.reset();
     runtimeState.configuredRoleNames = [];

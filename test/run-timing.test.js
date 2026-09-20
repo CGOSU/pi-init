@@ -105,8 +105,13 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
     { type: "pi-init-run-timing", source: "rpc" },
   ]);
   for (const entry of runEntries) {
+    assert.equal(typeof entry.data.inputAt, "number");
+    assert.equal(typeof entry.data.beforeAgentStartAt, "number");
     assert.equal(typeof entry.data.startedAt, "number");
+    assert.equal(typeof entry.data.beforeProviderRequestAt, "number");
+    assert.equal(typeof entry.data.firstMessageUpdateAt, "number");
     assert.equal(typeof entry.data.completedAt, "number");
+    assert.equal(typeof entry.data.settledAt, "number");
     assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
   }
 
@@ -126,6 +131,9 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   assert.match(rendered, /开始时间：/);
   assert.match(rendered, /结束时间：/);
   assert.match(rendered, /总耗时：/);
+  assert.match(rendered, /阶段耗时：/);
+  assert.match(rendered, /input → before_agent_start：/);
+  assert.match(rendered, /before_provider_request → 首个 assistant 更新：/);
   assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
 });
 

@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-20：增加首次执行阶段耗时诊断
+
+- 完成内容：新增 `extensions/run-timing-diagnostics.ts`，在不改变 Agent 生命周期的前提下记录外部执行的 `input`、`before_agent_start`、`agent_start`、首次 `before_provider_request`、首个 assistant `message_update` 和 `agent_settled` 时间点；普通执行报告增加阶段耗时，旧报告保持兼容。
+- 完成内容：将诊断状态从 `extensions/index.ts` 拆出，并补充运行计时测试，避免主扩展和报告文件超过项目 500 行代码限制。
+- 验证：`node scripts/check-line-count.js` 通过；`npm test` 通过 153 项、跳过 3 项；`git diff --check` 通过。
+- 遗留问题：尚未在真实交互式 Pi 中收集首次消息的实际阶段数据；未提交、未推送。
+
 ### 2026-09-20：对齐 Pi 0.86.0 依赖
 
 - 完成内容：从 npm registry 确认 `@earendil-works/pi-coding-agent` 最新版为 `0.86.0`；将 Pi 相关 peer 依赖对齐到 `^0.86.0`，`typebox` 对齐到 `^1.3.27`，Node 最低版本提升到 `22.19.0`，并刷新 `package-lock.json`。本地依赖已安装为 `pi-coding-agent/pi-ai/pi-tui 0.86.0`、`typebox 1.3.34`。
