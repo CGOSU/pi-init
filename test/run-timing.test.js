@@ -142,6 +142,6 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
   assert.doesNotMatch(rendered, /阶段耗时：/);
   assert.doesNotMatch(rendered, /Provider 请求次数：/);
   assert.doesNotMatch(rendered, /工具执行次数：/);
-  assert.match(rendered, /仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成/);
+  assert.doesNotMatch(rendered, /计时口径：/);
 });
 

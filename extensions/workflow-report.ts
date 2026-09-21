@@ -388,7 +388,6 @@ export function createWorkflowReport(
       `开始时间：${formatWorkflowTimestamp(data.startedAt, "不可用（无效的开始时间）")}`,
       `结束时间：${formatWorkflowTimestamp(data.completedAt, "不可用（无效的结束时间）")}`,
       `总耗时：${formatRunTimingDuration(getRunTimingDuration(data))}`,
-      "计时口径：从本次外部输入触发的首次 agent_start 到最终 agent_settled；仅表示本次 Agent 执行，不代表工作流任务或业务任务已完成。",
     ].join("\n");
   }
 
@@ -417,7 +416,6 @@ export function createWorkflowReport(
         line.startsWith("结束时间：") ||
         line.startsWith("实际开始时间：")
       ) return theme.fg("accent", line);
-      if (line.startsWith("计时口径：")) return theme.fg("dim", line);
       return theme.fg("text", line);
     }).join("\n");
   }
