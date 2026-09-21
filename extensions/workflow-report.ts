@@ -394,28 +394,20 @@ export function createWorkflowReport(
   function styleReportText(report: string, theme: ReportTheme) {
     return report.split("\n").map((line, index) => {
       if (index === 0) return theme.fg("accent", theme.bold(`◆ ${line}`));
-      if (line.startsWith("总耗时：") || line.startsWith("整体总耗时：")) return theme.fg("warning", theme.bold(line));
-      if (
-        line.startsWith("摘要：") ||
-        line.startsWith("实现原因：") ||
-        line.startsWith("目标：") ||
-        line.startsWith("进度：") ||
-        line.startsWith("任务摘要：")
-      ) return theme.fg("success", theme.bold(line));
-      if (line.startsWith("验证：")) {
+      const normalized = line.trim().replace(/^-\s+/, "");
+      const hasPrefix = (...prefixes: string[]) => prefixes.some((prefix) => normalized.startsWith(prefix));
+      if (/^\d+\.\s/.test(normalized)) return theme.fg("accent", theme.bold(line));
+      if (hasPrefix("耗时：", "总耗时：", "整体总耗时：")) return theme.fg("warning", theme.bold(line));
+      if (hasPrefix("摘要：", "实现原因：", "目标：", "进度：", "任务摘要：")) return theme.fg("success", theme.bold(line));
+      if (hasPrefix("验证：")) {
         return isVerificationFailure(line)
           ? theme.fg("error", theme.bold(line))
           : theme.fg("success", theme.bold(line));
       }
-      if (line.startsWith("验证结果：") || line.startsWith("汇总验证：")) {
+      if (hasPrefix("验证结果：", "汇总验证：")) {
         return theme.fg("success", theme.bold(line));
       }
-      if (
-        line.startsWith("冻结时间：") ||
-        line.startsWith("开始时间：") ||
-        line.startsWith("结束时间：") ||
-        line.startsWith("实际开始时间：")
-      ) return theme.fg("accent", line);
+      if (hasPrefix("冻结时间：", "开始时间：", "结束时间：", "实际开始时间：")) return theme.fg("accent", line);
       return theme.fg("text", line);
     }).join("\n");
   }
@@ -425,11 +417,18 @@ export function createWorkflowReport(
     const verification = formatVerification(task.verification);
     return [
       "任务完成报告",
-      `任务：${task.id} · ${task.task}`,
-      `摘要：${task.completionSummary ?? "无"}`,
-      `实现原因：${task.implementationRationale ?? "无"}`,
-      `耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
-      ...(verification ? [verification] : []),
+      "",
+      "1. 任务",
+      `   - ID：${task.id}`,
+      `   - 内容：${task.task}`,
+      "",
+      "2. 完成情况",
+      `   - 摘要：${task.completionSummary ?? "无"}`,
+      `   - 实现原因：${task.implementationRationale ?? "无"}`,
+      "",
+      "3. 执行结果",
+      `   - 耗时：${formatWorkflowDuration(getWorkflowTaskDuration(task))}`,
+      ...(verification ? [`   - ${verification}`] : []),
     ].join("\n");
   }
 
@@ -450,21 +449,28 @@ export function createWorkflowReport(
     const verification = completedTask ? formatVerification(completedTask.verification) : undefined;
     const taskLines = completedTask
       ? [
-          `最终任务：${completedTask.id} · ${completedTask.task}`,
+          `ID：${completedTask.id}`,
+          `内容：${completedTask.task}`,
           `摘要：${completedTask.completionSummary ?? "无"}`,
           `实现原因：${completedTask.implementationRationale ?? "无"}`,
           ...(verification ? [verification] : []),
         ]
-      : ["最终任务：无"];
+      : ["内容：无"];
 
     return [
       "工作流完成报告",
-      `目标：${workflowState.plan.summary}`,
-      `进度：${progress.completed}/${progress.total}`,
-      ...taskLines,
-      `开始时间：${formatWorkflowTimestamp(bounds.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
-      `结束时间：${formatWorkflowTimestamp(bounds.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
-      `总耗时：${formatWorkflowExecutionDuration(workflowState)}`,
+      "",
+      "1. 总览",
+      `   - 目标：${workflowState.plan.summary}`,
+      `   - 进度：${progress.completed}/${progress.total}`,
+      "",
+      "2. 最终任务",
+      ...taskLines.map((line) => `   - ${line}`),
+      "",
+      "3. 时间",
+      `   - 开始时间：${formatWorkflowTimestamp(bounds.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
+      `   - 结束时间：${formatWorkflowTimestamp(bounds.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
+      `   - 总耗时：${formatWorkflowExecutionDuration(workflowState)}`,
     ].join("\n");
   }
 
