@@ -5,13 +5,10 @@ import * as helpers from "./helpers.js";
 const {
   PI_USAGE_VERSION,
   dateRange,
-  formatDateMinute,
-  formatReport,
   queryUsage,
   shouldRefreshUsage,
   summarizeUsage,
   installLaunchers,
-  formatEnvironmentInstructions,
   withTempDirectory,
   mkdir,
   readFile,
@@ -19,19 +16,6 @@ const {
   writeFile,
   path,
 } = helpers;
-
-test("运行环境说明按平台生成", () => {
-  const windows = formatEnvironmentInstructions("zh-CN", { platform: "win32", arch: "arm64" });
-  assert.match(windows, /Windows \(`win32`\)，CPU 架构：`arm64`/);
-  assert.match(windows, /`where\.exe`/);
-  assert.match(windows, /`.cmd` shim/);
-  assert.match(windows, /Linux-only 的 `which`/);
-
-  const linux = formatEnvironmentInstructions("en", { platform: "linux", arch: "x64" });
-  assert.match(linux, /Linux \(`linux`\), CPU architecture: `x64`/);
-  assert.match(linux, /POSIX shells/);
-  assert.doesNotMatch(linux, /where\.exe/);
-});
 
 test("跨平台 Pi 用量统计启动器指向共享脚本", async () => {
   const files = {
@@ -43,11 +27,9 @@ test("跨平台 Pi 用量统计启动器指向共享脚本", async () => {
   assert.match(files.posixUsage, /pi-usage\.js/);
 });
 
-test("pi-init 与 pi-usage 共用版本并在报告中输出", async () => {
+test("pi-init 与 pi-usage 共用版本号", async () => {
   const packageManifest = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
   assert.equal(PI_USAGE_VERSION, packageManifest.version);
-  const report = formatReport({ date: "2026-08-15", sessions: 0, rows: [] });
-  assert.ok(report.includes(`Pi usage · 2026-08-15 · v${packageManifest.version}`));
 });
 
 test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
@@ -127,20 +109,6 @@ test("pi-usage 默认日期范围从本地午夜开始", () => {
   assert.equal(range.end.getTime() - range.start.getTime(), 24 * 60 * 60 * 1000);
 });
 
-test("pi-usage 最新更新日期显示到分钟", () => {
-  assert.equal(formatDateMinute(new Date(2026, 7, 31, 15, 29, 47)), "2026-08-31 15:29");
-  assert.equal(formatDateMinute("not-a-date"), "未知");
-});
-
-test("pi-usage 报告显示缓存更新时间", () => {
-  const report = formatReport({
-    date: "2026-08-31",
-    rows: [],
-    updatedAt: new Date(2026, 7, 31, 15, 29, 47).toISOString(),
-  });
-  assert.match(report, /Cache updated: 2026-08-31 15:29/);
-});
-
 test("pi-usage 仅在超过一小时或跨自然日时自动检查", () => {
   const now = new Date(2026, 7, 9, 12, 0, 0, 0);
   const sameDay = now.toLocaleDateString("sv-SE");
@@ -210,28 +178,11 @@ test("pi-usage 汇总指定日期的 session 用量并按模型分组", async ()
     );
 
     const summary = await summarizeUsage(sessions, date, path.join(directory, "usage.duckdb"));
-    const report = formatReport(summary);
     assert.equal(summary.sessions, 2);
     assert.ok(Number.isFinite(Date.parse(summary.updatedAt)));
-    assert.match(report, new RegExp(`Pi usage · ${date}`));
-    assert.match(report, /Cache updated: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
-    assert.match(report, /provider\/response-model/);
-    assert.match(report, /Tools\/summaries/);
-    assert.match(report, /Total/);
-    assert.match(report, /40/);
-    assert.match(report, /Cache ratio\s+│\s+25 \/ 45 \(55\.6%\)/);
-    assert.match(report, /Model usage \(tokens\)/);
-    assert.match(report, /provider\/response-model\s+█+\s+40/);
-    assert.doesNotMatch(report, /Git changes/);
-    assert.match(report, /Active\s+│\s+0s/);
-    assert.match(report, /Metric\s+│\s+Duration/);
-    assert.equal((report.match(/┌/g) ?? []).length, 3);
-    assert.equal((report.match(/└/g) ?? []).length, 3);
-    assert.doesNotMatch(report, /\u001b\[/);
-    const coloredReport = formatReport(summary, { color: true });
-    assert.match(coloredReport, /\u001b\[36;1m│ Metric/);
-    assert.match(coloredReport, /\u001b\[33;1m│ Total/);
-    assert.doesNotMatch(report, /old\/model/);
+    assert.equal(summary.rows.find((row) => row.model === "provider/response-model").tokens, 40);
+    assert.equal(summary.rows.find((row) => row.model === "Tools/summaries").calls, 1);
+    assert.equal(summary.rows.find((row) => row.model === "old/model"), undefined);
     const changedFile = path.join(sessions, "project-a", "a.jsonl");
     await writeFile(
       changedFile,
@@ -333,38 +284,6 @@ test("pi-usage 流式 checkpoint 处理不完整尾部和同尺寸改写", async
   });
 });
 
-test("pi-usage 柱状图使用分数块区分接近的 token 数", () => {
-  const report = formatReport({
-    date: "2026-08-10",
-    sessions: 2,
-    rows: [
-      {
-        model: "model-large",
-        calls: 1,
-        input: 0,
-        output: 100,
-        cacheRead: 0,
-        cacheWrite: 0,
-        tokens: 100,
-        cost: 0,
-      },
-      {
-        model: "model-close",
-        calls: 1,
-        input: 0,
-        output: 99,
-        cacheRead: 0,
-        cacheWrite: 0,
-        tokens: 99,
-        cost: 0,
-      },
-    ],
-  });
-
-  assert.match(report, /model-large\s+█{24}\s+100/);
-  assert.match(report, /model-close\s+█{23}▊\s+99/);
-});
-
 test("pi-usage 按模型汇总加权平均 token 速度", async () => {
   await withTempDirectory(async (directory) => {
     const sessions = path.join(directory, "sessions");
@@ -420,10 +339,6 @@ test("pi-usage 按模型汇总加权平均 token 速度", async () => {
     assert.equal(summary.rows.find((row) => row.model === "provider-c/invalid"), undefined);
     assert.ok(Math.abs(summary.speed.avgTps - 130 / 14) < 0.000001);
 
-    const report = formatReport(summary);
-    assert.match(report, /Avg TPS/);
-    assert.match(report, /9\.2/);
-    assert.match(report, /10\.0/);
   });
 });
 

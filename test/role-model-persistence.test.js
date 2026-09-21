@@ -44,6 +44,5 @@ test("手动模式内部角色切换不会把目标模型写回旧角色", async
       model: developer.id,
       thinkingLevel: "max",
     });
-    assert.match(harness.notifications.at(-1)?.message ?? "", /已切换到/);
   });
 });

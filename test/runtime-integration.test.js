@@ -299,7 +299,6 @@ test("the same plan preserves local authority while Runtime drives the model-fre
       assert.equal(completed.tasks[0].status, "completed");
       assert.equal(completed.runtimeAuthority.eventCursor > 0, true);
       assert.equal(harness.sentMessages.some(({ message }) => message?.customType === "pi-init-workflow-task"), false);
-      assert.ok(harness.notifications.every(({ message }) => !message.includes("本地")));
       await emitExtensionEvent(harness, "session_shutdown");
       await emitExtensionEvent(localHarness, "session_shutdown");
     } finally {

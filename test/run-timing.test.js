@@ -3,69 +3,11 @@ import test from "node:test";
 import * as helpers from "./helpers.js";
 
 const {
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  writeFile,
-  os,
-  path,
-  initProjectExtension,
-  installLaunchers,
-  dateRange,
-  formatReport,
-  PI_USAGE_VERSION,
-  queryUsage,
-  shouldRefreshUsage,
-  summarizeUsage,
-  createScaffold,
-  formatEnvironmentInstructions,
-  DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_MODELS,
-  DEFAULT_WORKFLOW_EXECUTOR,
-  DEFAULT_WORKFLOW_MODE,
-  ROLE_LABELS,
-  ROLE_MODE_LABELS,
-  ROLE_SWITCH_COMPACTION_THRESHOLD,
-  THINKING_LEVELS,
-  filterRoleModels,
-  findMatchingRole,
-  normalizeModelReference,
-  resolveRoleConfig,
-  resolveRoleMode,
-  resolveWorkflowExecutor,
-  resolveWorkflowMode,
-  resolveRoleModel,
-  shouldOrchestrateWorkflow,
-  shouldCompactOnRoleSwitch,
-  WORKFLOW_MAX_NUDGES,
-  WORKFLOW_MAX_TASKS,
-  blockWorkflowTask,
-  cancelWorkflow,
-  completeWorkflowTask,
-  createWorkflowState,
-  getNextWorkflowTask,
-  getWorkflowTask,
-  getWorkflowTaskDuration,
-  getWorkflowExecutionBounds,
-  getWorkflowExecutionDuration,
-  hydrateWorkflowState,
-  markWorkflowTaskStarted,
-  recordWorkflowNudge,
-  requestWorkflowReplan,
-  applyWorkflowReplan,
-  resumeWorkflow,
-  retryWorkflowTask,
-  startWorkflowTask,
-  validateWorkflowPlan,
-  workflowProgress,
   completeRunTiming,
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-  withTempDirectory,
   createExtensionHarness,
-  emitExtensionEvent,
   runExternalAgent,
 } = helpers;
 
@@ -92,7 +34,7 @@ test("普通执行计时限定外部来源并拒绝无效时间边界", () => {
   assert.equal(getRunTimingDuration({ ...completed, completedAt: Number.POSITIVE_INFINITY }), undefined);
 });
 
-test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告", async () => {
+test("普通执行扩展按首次开始和最终 settled 写入普通计时条目", async () => {
   const harness = createExtensionHarness();
   await runExternalAgent(harness, "interactive");
   await runExternalAgent(harness, "rpc", { toolName: "read" });
@@ -105,43 +47,9 @@ test("普通执行扩展按首次开始和最终 settled 写入 TUI 时间报告
     { type: "pi-init-run-timing", source: "rpc" },
   ]);
   for (const entry of runEntries) {
-    assert.equal(entry.data.inputAt, undefined);
-    assert.equal(entry.data.beforeAgentStartAt, undefined);
     assert.equal(typeof entry.data.startedAt, "number");
-    assert.equal(entry.data.beforeProviderRequestAt, undefined);
-    assert.equal(entry.data.firstMessageUpdateAt, undefined);
-    assert.equal(entry.data.assistantMessageEndAt, undefined);
-    assert.equal(entry.data.agentEndAt, undefined);
     assert.equal(typeof entry.data.completedAt, "number");
-    assert.equal(entry.data.settledAt, undefined);
-    assert.equal(entry.data.providerRequestCount, undefined);
-    assert.equal(entry.data.agentStartCount, undefined);
-    assert.equal(entry.data.agentEndCount, undefined);
     assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
   }
-  assert.equal(runEntries[1].data.toolExecutionCount, undefined);
-  assert.equal(runEntries[1].data.toolNames, undefined);
-  assert.equal(runEntries[1].data.toolDurations, undefined);
-
-  const renderer = harness.renderers.get("pi-init-run-timing");
-  assert.equal(typeof renderer, "function");
-  const component = renderer(
-    { data: runEntries[0].data },
-    { expanded: false },
-    {
-      fg: (color, text) => `<${color}>${text}</${color}>`,
-      bold: (text) => `<bold>${text}</bold>`,
-    },
-  );
-  const rendered = component.render(240).join("\n");
-  assert.match(rendered, /<accent><bold>◆ 普通执行时间报告<\/bold><\/accent>/);
-  assert.match(rendered, /<warning><bold>总耗时：/);
-  assert.match(rendered, /开始时间：/);
-  assert.match(rendered, /结束时间：/);
-  assert.match(rendered, /总耗时：/);
-  assert.doesNotMatch(rendered, /阶段耗时：/);
-  assert.doesNotMatch(rendered, /Provider 请求次数：/);
-  assert.doesNotMatch(rendered, /工具执行次数：/);
-  assert.doesNotMatch(rendered, /计时口径：/);
 });
 

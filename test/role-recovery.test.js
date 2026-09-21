@@ -58,11 +58,7 @@ test("before_agent_start 为无活动工作流的恢复门提供简单问答快�
   const harness = createExtensionHarness(recoveryBranch());
   await emitExtensionEvent(harness, "session_start", { reason: "new" });
 
-  const event = await beforeAgentStart(harness);
-  const section = event.systemPromptOptions.sections.pi_init_runtime;
-  assert.match(section, /无活动工作流/);
-  assert.match(section, /简单问答可以直接回答/);
-  assert.match(section, /不要调用 task_workflow\(status\)/);
+  await beforeAgentStart(harness);
   assert.equal(harness.branch.at(-1).data.status, "pending");
   assert.equal(
     harness.handlers.get("tool_call")[0]({ toolName: "edit", input: {} }, harness.context).block,
@@ -84,11 +80,7 @@ test("before_agent_start 在活动工作流恢复时仍要求先查看状态", a
   ]);
   await emitExtensionEvent(harness, "session_start", { reason: "new" });
 
-  const event = await beforeAgentStart(harness);
-  const section = event.systemPromptOptions.sections.pi_init_runtime;
-  assert.match(section, /活动工作流：runtime\/running/);
-  assert.match(section, /先调用 task_workflow\(action="status"\)/);
-  assert.doesNotMatch(section, /无活动工作流且无需工具/);
+  await beforeAgentStart(harness);
   assert.equal(harness.branch.findLast((entry) => entry.customType === ROLE_RECOVERY_ENTRY_TYPE).data.status, "pending");
 });
 
@@ -103,12 +95,7 @@ test("before_agent_start 注入已确认角色和快速路由规则", async () =
     },
   }, async (harness) => {
     await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const event = await beforeAgentStart(harness);
-    const section = event.systemPromptOptions.sections.pi_init_runtime;
-    assert.match(section, /当前职责：开发测试/);
-    assert.match(section, /当前模型：openai-codex\/gpt-5\.6-luna/);
-    assert.match(section, /职责恢复：已确认/);
-    assert.match(section, /不要调用 task_workflow\(status\)/);
+    await beforeAgentStart(harness);
     assert.equal(harness.branch.some((entry) => entry.customType === ROLE_RECOVERY_ENTRY_TYPE && entry.data.status === "pending"), false);
   });
 });
@@ -121,14 +108,6 @@ test("架构师恢复门只允许工作流状态和职责切换", async () => {
     availableModels: [architect, developer],
   });
   await emitExtensionEvent(harness, "session_start");
-
-  const context = getHandler(harness, "context");
-  const recoveryContext = context({
-    messages: [{ role: "user", content: "继续任务", timestamp: Date.now() }],
-  }, harness.context);
-  const recoveryMessage = recoveryContext.messages.at(-1);
-  assert.match(recoveryMessage.content, /当前角色为 architect/);
-  assert.match(recoveryMessage.content, /不得读取文件/);
 
   const callTool = async (toolName, input = {}) => {
     let blocked;
@@ -159,8 +138,6 @@ test("上下文压缩后必须恢复职责才能执行写入工具", async () =>
   }, harness.context);
   const recoveryMessage = recoveryContext.messages.at(-1);
   assert.equal(recoveryMessage.customType, ROLE_RECOVERY_ENTRY_TYPE);
-  assert.match(recoveryMessage.content, /task_workflow\(action="status"\)/);
-  assert.match(recoveryMessage.content, /switch_role\(role=\.\.\.\)/);
   const repeated = context(recoveryContext, harness.context);
   assert.equal(
     repeated.messages.filter((message) => message.customType === ROLE_RECOVERY_ENTRY_TYPE).length,
@@ -171,7 +148,6 @@ test("上下文压缩后必须恢复职责才能执行写入工具", async () =>
   const blocked = toolCall({ toolName: "edit", input: { path: "src/feature.js" } }, harness.context);
   assert.equal(blocked.block, true);
   assert.equal(blocked.terminate, undefined);
-  assert.match(blocked.reason, /职责尚未重新确认/);
   assert.equal(toolCall({ toolName: "read", input: { path: "src/feature.js" } }, harness.context), undefined);
   assert.equal(toolCall({ toolName: "task_workflow", input: { action: "status" } }, harness.context), undefined);
   assert.equal(toolCall({ toolName: "task_workflow", input: { action: "complete" } }, harness.context).block, true);

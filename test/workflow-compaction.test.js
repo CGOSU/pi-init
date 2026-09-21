@@ -126,7 +126,6 @@ test("实际角色切换的压缩信号只派发一次下一任务", async () =>
 
     assert.equal(compactCalls, 1);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
-    assert.equal(harness.statusCalls.filter(({ text }) => text?.includes("role-compaction-")).length >= 1, true);
   });
 });
 
@@ -153,7 +152,6 @@ test("session_compact 信号可以独立收敛主动压缩", async () => {
     await workflow.execute("complete-first", completeParams("first", "第一项完成"), undefined, undefined, harness.context);
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
-    assert.equal(harness.statusCalls.some(({ name, text }) => name === "pi-init-workflow" && text?.includes("正在压缩上下文")), true);
 
     await harness.completeCompaction();
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
@@ -187,8 +185,7 @@ test("主动压缩同步异常和 onError 都释放交接并继续任务", async
       await emitExtensionEvent(harness, "agent_settled");
 
       assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
-      assert.equal(harness.notifications.some(({ message }) => message.includes("压缩")), true);
-      assert.notEqual(harness.statusCalls.at(-1)?.text?.includes("正在压缩"), true);
+      assert.equal(harness.notifications.length > 0, true);
     });
   }
 });
@@ -201,11 +198,10 @@ test("压缩 watchdog 只告警且 dispose 清理瞬态锁", async () => {
     continuation: { kind: "workflow-task", taskId: "second" },
   };
   const notifications = [];
-  const statuses = [];
   let sent = 0;
   const ctx = {
     ui: {
-      setStatus(name, text) { statuses.push({ name, text }); },
+      setStatus() {},
       notify(message, level) { notifications.push({ message, level }); },
     },
     sessionManager: { getBranch: () => [{ type: "user" }] },
@@ -226,34 +222,10 @@ test("压缩 watchdog 只告警且 dispose 清理瞬态锁", async () => {
   assert.equal(state.roleCompactionInFlight, true);
   assert.equal(sent, 0);
   assert.equal(notifications.length, 1);
-  assert.equal(statuses.at(-1)?.text?.includes("未自动启动下一任务"), true);
-
   controller.dispose();
   assert.equal(state.roleCompactionPhase, "idle");
   assert.equal(state.roleCompactionInFlight, false);
   assert.equal(state.roleCompactionOperationId, undefined);
-});
-
-test("Local UI 区分任务交接与真实 Agent 执行", async () => {
-  await withTempDirectory(async (directory) => {
-    await writeWorkflowConfig(directory, "local");
-    const branch = [{
-      type: "custom",
-      customType: "pi-init-workflow",
-      data: createWorkflowState({ summary: "交接状态", tasks: tasks(), executor: "local" }, 100),
-    }];
-    const harness = createExtensionHarness(branch, {
-      cwd: directory,
-      trusted: true,
-      model: developerModel,
-      availableModels: [developerModel],
-    });
-
-    await emitExtensionEvent(harness, "session_start");
-    assert.equal(harness.statusCalls.some(({ name, text }) => name === "pi-init-workflow" && text?.includes("正在交接任务")), true);
-    await emitExtensionEvent(harness, "agent_start");
-    assert.equal(harness.statusCalls.some(({ name, text }) => name === "pi-init-workflow" && text?.includes("任务执行中")), true);
-  });
 });
 
 test("Local running 工作流可安全恢复未启动任务且不重复真实执行", async () => {
@@ -274,12 +246,10 @@ test("Local running 工作流可安全恢复未启动任务且不重复真实执
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
     await emitExtensionEvent(harness, "before_agent_start");
     const recovered = await workflow.execute("resume-before-start", { action: "resume" }, undefined, undefined, harness.context);
-    assert.equal(recovered.content[0].text, "已安全重新调度 Local 工作流。");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
 
     await emitExtensionEvent(harness, "agent_start");
     const alreadyStarted = await workflow.execute("resume-after-start", { action: "resume" }, undefined, undefined, harness.context);
-    assert.equal(alreadyStarted.content[0].text, "当前任务已真实启动，未重复派发。");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
   });
 });
@@ -309,9 +279,8 @@ test("Local resume 在主动压缩期间不清锁也不重复派发", async () =
     const before = harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length;
     const resumed = await workflow.execute("resume-compacting", { action: "resume" }, undefined, undefined, harness.context);
 
-    assert.equal(resumed.content[0].text, "工作流仍在等待上下文压缩，不会并发启动任务。");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, before);
-    assert.equal(harness.notifications.some(({ message }) => message.includes("上下文压缩")), true);
+    assert.equal(harness.notifications.length > 0, true);
   });
 });
 

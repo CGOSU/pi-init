@@ -28,6 +28,7 @@
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计，重算日期取 session 文件最新修改时间并精确到分钟，另列受影响日期；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
 - package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 集中维护风险分级路由、自主决策边界和共享硬约束，角色说明只保留各自职责/边界/交接，运行时提示只保留当前任务硬约束，不嵌入具体模型值。`architect` 只负责思考、分析、决策、规划和安排；所有仓库、代码、测试、文档和外部事实取证由 `docs-commit` 结构化交接，architect 仅允许 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`，其他工具及 MCP 均由运行时 fail-closed 阻断。目标明确的低风险任务由适合的非 architect 角色调查、实现和验证；复杂/高风险任务仍要求新鲜结构化证据、角色边界、真实验证和授权。
+- 测试和断言遵循全局 Test Value Gate：默认不锁定纯文案、样式、布局、渲染结构、简单存在性和内部临时字段，优先保留权限安全、公共数据、状态流转、持久化、幂等、并发和历史缺陷回归；生成模板关键规则、工具元数据和状态语义仍按稳定契约保留。当前 `npm test` 为 141 项通过、3 项跳过。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；简单只读咨询和低风险开发由适合的非 architect 角色直接完成，凡需仓库、代码、测试、文档或外部事实取证均由 `docs-commit` 收集并交接包含事实、来源、相关符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只负责思考、分析、决策、规划和安排，不修改文件、不执行命令、不连接 MCP，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status` 外不调用工具。开发测试工程师负责自主实现/验证且不写项目 Markdown，文档与收尾工程师不写代码；仅遇到业务/契约冲突、权限/凭据、不可逆或外部状态、已有改动无法安全合并或真实验证阻塞时才暂停。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
 - `before_agent_start` 通过 `sections.pi_init_runtime` 注入当前有效角色、Provider/模型/推理强度、恢复门和活动工作流摘要；职责已确认且无活动工作流时，简单无工具问答不调用 `task_workflow(status)` 或重复 `switch_role`。恢复 pending 且无活动工作流时允许无需工具或新证据的简单回答，但不自动解除恢复门；需要执行时仍先切换职责。该快速通道不做文本启发式分类、不自动切模型、不削弱 `tool_call` 守卫。
@@ -56,6 +57,7 @@
 
 ## 最近一次更新
 
+- 2026-09-21：按 Test Value Gate 清理低收益测试和断言，移除纯展示/样式/Prompt/布局断言及重复内部字段检查；保留数据、状态、安全和持久化验证；`npm test` 141 项通过、3 项跳过。
 - 2026-09-20：关闭详细阶段耗时监控，仅保留普通执行总耗时和 `Worked for` 所需的基础计时；`npm test` 156 项通过、3 项跳过。
 - 2026-09-20：增加基于运行状态的简单问答快速通道；`before_agent_start` 注入职责/工作流 section，无活动工作流时不再为确认空状态调用 `task_workflow(status)`，恢复 pending 的无工具简单回答不解除恢复门；`npm test` 155 项通过、3 项跳过。
 - 2026-09-20：扩展普通外部执行阶段诊断，增加 `message_end`、`agent_end`、Provider 请求次数/逐次耗时、工具执行次数/名称/逐次耗时和 Agent run 次数，进一步区分模型生成、Provider 往返、工具调用、重试和 settled 收尾；`npm test` 156 项通过、3 项跳过。

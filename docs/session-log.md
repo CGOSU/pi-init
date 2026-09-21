@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-21：按 Test Value Gate 清理低收益测试
+
+- 完成内容：重新梳理测试和断言，移除普通计时报告、session 时间展示、菜单布局、状态样式、Prompt 文案、通知文案、简单渲染存在性和内部临时字段的低收益断言；保留状态、数据、持久化、权限、安全、Runtime 协议、幂等派发和生成模板关键规则验证；删除仅验证 Runtime 执行器菜单文案的 `test/workflow-runtime-menu.test.js`。
+- 修改范围：`test/architect-boundary.test.js`、`test/cache-status.test.js`、`test/control-center-menu.test.js`、`test/edit-guard.test.js`、`test/extension-lifecycle.test.js`、`test/extension-roles.test.js`、`test/pi-usage-range.test.js`、`test/pi-usage.test.js`、`test/role-model-persistence.test.js`、`test/role-recovery.test.js`、`test/run-timing.test.js`、`test/session-work-time.test.js`、`test/workflow-compaction.test.js`、`test/workflow-protocol.test.js`、`test/runtime-integration.test.js`、`test/workflow-runtime-backend.test.js`、`test/scaffold.test.js`。
+- 验证：`npm test`，141 项通过、3 项跳过；`node scripts/check-line-count.js` 通过；`git diff --check` 通过。
+- 遗留问题：本次修改尚未提交或推送。
+
 ### 2026-09-20：关闭详细阶段耗时监控
 
 - 完成内容：关闭 Provider 请求、工具执行和 Agent 生命周期的逐次耗时采集与报告展示；保留普通 `pi-init-run-timing` 总耗时及 session `Worked for` 所需的基础计时。

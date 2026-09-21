@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { listSessionFiles, scanSessionFile } from "../scripts/pi-usage/core.js";
 import * as helpers from "./helpers.js";
-import { formatReport, parseUsageRange, summarizeUsage } from "../scripts/pi-usage.js";
+import { parseUsageRange, summarizeUsage } from "../scripts/pi-usage.js";
 
 const { mkdir, path, withTempDirectory, writeFile } = helpers;
 
@@ -217,6 +217,5 @@ test("pi-usage 跨日汇总去重 session 并合计用量和时长", async () =>
     assert.equal(Number(model.cost.toFixed(4)), 0.3);
     assert.equal(summary.duration.activeSeconds, 240);
     assert.equal(summary.duration.sessionSpanSeconds, 240);
-    assert.match(formatReport(summary), /Pi usage · 2026-08-24 → 2026-08-25/);
-  });
+    });
 });
