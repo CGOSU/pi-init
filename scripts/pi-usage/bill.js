@@ -1,8 +1,8 @@
 import { calculateCacheRatio, formatNumber } from "./report.js";
 
-const RECEIPT_WIDTH = 750;
+const BILL_WIDTH = 750;
 const SIDE_PADDING = 54;
-const RIGHT_EDGE = RECEIPT_WIDTH - SIDE_PADDING;
+const RIGHT_EDGE = BILL_WIDTH - SIDE_PADDING;
 const FONT_FAMILY = "-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif";
 const MONO_FONT_FAMILY = "SFMono-Regular,Consolas,Liberation Mono,monospace";
 
@@ -47,7 +47,7 @@ function formatTotalCost(value) {
   return `US$${Math.round(numberValue(value))}`;
 }
 
-function formatReceiptDate(value) {
+function formatBillDate(value) {
   const match = String(value ?? "未知").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return String(value ?? "未知").replaceAll(" → ", " 至 ");
   return `${match[1]}年${Number(match[2])}月${Number(match[3])}日`;
@@ -144,16 +144,11 @@ function renderStats(summary, total, startY) {
     .join("");
 }
 
-export function receiptFileName(date) {
-  const safeDate = String(date ?? "unknown").replaceAll(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return `pi-usage-receipt-${safeDate || "unknown"}.svg`;
-}
-
-export function createReceiptSvg(summary, options = {}) {
+export function createBillSvg(summary, options = {}) {
   const rows = Array.isArray(summary?.rows) ? summary.rows : [];
   const total = calculateTotal(rows);
   const issuedAt = formatDateTime(options.generatedAt ?? new Date());
-  const dateLabel = formatReceiptDate(summary?.date);
+  const dateLabel = formatBillDate(summary?.date);
   const modelItems = modelRows(summary ?? {}, total);
   const modelStartY = 650;
   const modelEndY = modelStartY + modelItems.length * 76 + 10;
@@ -163,7 +158,7 @@ export function createReceiptSvg(summary, options = {}) {
   const height = footerStartY + 178;
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${RECEIPT_WIDTH}" height="${height}" viewBox="0 0 ${RECEIPT_WIDTH} ${height}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${BILL_WIDTH}" height="${height}" viewBox="0 0 ${BILL_WIDTH} ${height}">`,
     `<rect width="100%" height="100%" fill="#f7f4ed" />`,
     `<style>
       .title { font: 800 52px ${FONT_FAMILY}; fill: #1f2022; letter-spacing: 3px; }
@@ -183,16 +178,16 @@ export function createReceiptSvg(summary, options = {}) {
       .footer-strong { font: 800 20px ${MONO_FONT_FAMILY}; fill: #292b2d; letter-spacing: 1px; }
       .separator { stroke: #8f908d; stroke-width: 3; stroke-dasharray: 11 10; }
     </style>`,
-    text("每日 AI 对账单", RECEIPT_WIDTH / 2, 96, 'class="title" text-anchor="middle"'),
-    text("Vibe something wonderful.", RECEIPT_WIDTH / 2, 133, 'class="subtitle" text-anchor="middle"'),
+    text("每日 AI 对账单", BILL_WIDTH / 2, 96, 'class="title" text-anchor="middle"'),
+    text("Vibe something wonderful.", BILL_WIDTH / 2, 133, 'class="subtitle" text-anchor="middle"'),
     text("日期", SIDE_PADDING, 206, 'class="label"'),
     text(dateLabel, RIGHT_EDGE, 206, 'class="meta" text-anchor="end"'),
     text("出单时间", SIDE_PADDING, 253, 'class="label"'),
     text(`${issuedAt.date} ${issuedAt.time}`, RIGHT_EDGE, 253, 'class="meta" text-anchor="end"'),
     line(305),
-    text("API 总费用", RECEIPT_WIDTH / 2, 371, 'class="section" text-anchor="middle"'),
-    text(formatTotalCost(total.cost), RECEIPT_WIDTH / 2, 462, 'class="amount" text-anchor="middle"'),
-    text("API 等值估算 · 非实际账单", RECEIPT_WIDTH / 2, 501, 'class="note" text-anchor="middle"'),
+    text("API 总费用", BILL_WIDTH / 2, 371, 'class="section" text-anchor="middle"'),
+    text(formatTotalCost(total.cost), BILL_WIDTH / 2, 462, 'class="amount" text-anchor="middle"'),
+    text("API 等值估算 · 非实际账单", BILL_WIDTH / 2, 501, 'class="note" text-anchor="middle"'),
     line(552),
     text("客户端 / 模型", SIDE_PADDING, 598, 'class="column"'),
     text("费用", RIGHT_EDGE, 598, 'class="column" text-anchor="end"'),
@@ -200,9 +195,9 @@ export function createReceiptSvg(summary, options = {}) {
     line(modelEndY),
     renderStats(summary ?? {}, total, statsStartY),
     line(statsEndY),
-    text("由 Pi usage 生成 · AI 用量记录", RECEIPT_WIDTH / 2, footerStartY + 44, 'class="footer" text-anchor="middle"'),
-    text("持续创造，留下凭证。", RECEIPT_WIDTH / 2, footerStartY + 92, 'class="footer-strong" text-anchor="middle"'),
-    text("— 每日用量对账 —", RECEIPT_WIDTH / 2, footerStartY + 137, 'class="footer" text-anchor="middle"'),
+    text("由 CGOSU 依法消费", BILL_WIDTH / 2, footerStartY + 44, 'class="footer" text-anchor="middle"'),
+    text("持续创造，留下凭证。", BILL_WIDTH / 2, footerStartY + 92, 'class="footer-strong" text-anchor="middle"'),
+    text("— 每日用量对账 —", BILL_WIDTH / 2, footerStartY + 137, 'class="footer" text-anchor="middle"'),
     "</svg>",
   ].join("\n");
 }

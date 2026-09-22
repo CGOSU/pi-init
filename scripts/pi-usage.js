@@ -6,7 +6,7 @@ export * from "./pi-usage/version.js";
 export * from "./pi-usage/core.js";
 export * from "./pi-usage/refresh.js";
 export * from "./pi-usage/report.js";
-export * from "./pi-usage/receipt.js";
+export * from "./pi-usage/bill.js";
 export { parseArguments } from "./pi-usage/cli.js";
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {

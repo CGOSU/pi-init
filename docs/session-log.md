@@ -4,10 +4,10 @@
 
 ### 2026-09-22：为 pi-usage 增加 SVG 对账单生成
 
-- 完成内容：新增 `scripts/pi-usage/receipt.js`，按现有用量 summary 生成参照示例风格的中文纵向 SVG；`pi-usage` 增加 `--receipt` 和 `--receipt-output <路径>`，默认写入当前目录下可预测的 `pi-usage-receipt-<日期>.svg`，原有文本报表保持不变。
-- 完成内容：对账单展示真实费用、模型明细、Token、输入/输出、缓存命中率和会话数，加入 API 等值估算/非实际账单说明；新增动态文本 XML 转义、空数据、CLI 参数和安装器支持文件回归测试。
-- 修改范围：`README.md`、`scripts/pi-usage.js`、`scripts/pi-usage/cli.js`、`scripts/pi-usage/receipt.js`、`test/helpers.js`、`test/pi-usage.test.js`、`docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md`。
-- 验证：`node --check scripts/pi-usage/receipt.js`、`node --check scripts/pi-usage/cli.js`、`node --check scripts/pi-usage.js`；`node --test test/pi-usage.test.js`，13 项通过；`npm test`，147 项中 144 项通过、3 项跳过；`node scripts/check-line-count.js` 和 `git diff --check` 通过。
+- 完成内容：新增 `scripts/pi-usage/bill.js`，按现有查询 summary 生成参照示例风格的中文纵向 SVG；`pi-usage` 使用通用的 `--output <路径>` 导出 SVG，不增加独立账单模式参数，原有文本报表保持不变。
+- 完成内容：对账单时间范围完全复用普通查询参数，展示真实费用、模型明细、Token、输入/输出、缓存命中率和会话数，加入 API 等值估算/非实际账单说明；新增动态文本 XML 转义、空数据、时间范围、输出路径和安装器支持文件回归测试。
+- 修改范围：`README.md`、`scripts/pi-usage.js`、`scripts/pi-usage/cli.js`、`scripts/pi-usage/bill.js`、`test/helpers.js`、`test/pi-usage.test.js`、`docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md`。
+- 验证：`node --check scripts/pi-usage/bill.js`、`node --check scripts/pi-usage/cli.js`、`node --check scripts/pi-usage.js`；`node --test test/pi-usage.test.js`，13 项通过；`npm test`，147 项中 144 项通过、3 项跳过；`node scripts/check-line-count.js` 和 `git diff --check` 通过。
 - 遗留问题：当前输出为无新增依赖的 SVG，不直接生成 PNG；尚未执行 package 安装或 reload。
 
 ### 2026-09-21：按 Test Value Gate 清理低收益测试

@@ -1,26 +1,25 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createReceiptSvg, receiptFileName } from "./receipt.js";
+import { createBillSvg } from "./bill.js";
 import { queryUsage, summarizeUsage } from "./refresh.js";
 import { formatDateMinute, formatNumber, formatReport, supportsColor } from "./report.js";
 
 export function parseArguments(args, agentDir) {
   const rangeArguments = [];
   let update = false;
-  let receipt = false;
-  let receiptOutput;
+  let outputPath;
   let databasePath = process.env.PI_USAGE_DB || path.join(agentDir, "pi-usage.duckdb");
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--update") {
       update = true;
-    } else if (argument === "--receipt") {
-      receipt = true;
-    } else if (argument === "--receipt-output") {
-      receiptOutput = args[++index];
-      if (!receiptOutput || receiptOutput.startsWith("--")) throw new Error("--receipt-output 需要输出路径");
-      receipt = true;
+    } else if (argument === "--output") {
+      outputPath = args[++index];
+      if (!outputPath || outputPath.startsWith("--")) throw new Error("--output 需要输出路径");
+      if (path.extname(outputPath).toLowerCase() !== ".svg") {
+        throw new Error("--output 目前仅支持 .svg 文件");
+      }
     } else if (argument === "--db") {
       databasePath = args[++index];
       if (!databasePath || databasePath.startsWith("--")) throw new Error("--db 需要数据库路径");
@@ -32,7 +31,7 @@ export function parseArguments(args, agentDir) {
       rangeArguments.push(argument);
     }
   }
-  return { rangeArguments, databasePath, update, receipt, receiptOutput };
+  return { rangeArguments, databasePath, update, outputPath };
 }
 
 function createRefreshProgressReporter() {
@@ -56,7 +55,7 @@ function createRefreshProgressReporter() {
 
 export async function runCli() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  const { rangeArguments, databasePath, update, receipt, receiptOutput } = parseArguments(
+  const { rangeArguments, databasePath, update, outputPath } = parseArguments(
     process.argv.slice(2),
     agentDir,
   );
@@ -66,10 +65,10 @@ export async function runCli() {
   const summary = update
     ? await summarizeUsage(sessionsDirectory, rangeArguments, databasePath, runtimeDirectory, options)
     : await queryUsage(rangeArguments, databasePath, runtimeDirectory, sessionsDirectory, options);
-  if (receipt) {
-    const outputPath = path.resolve(receiptOutput ?? receiptFileName(summary.date));
-    await writeFile(outputPath, createReceiptSvg(summary), "utf8");
-    console.log(`对账单已生成：${outputPath}`);
+  if (outputPath) {
+    const resolvedOutputPath = path.resolve(outputPath);
+    await writeFile(resolvedOutputPath, createBillSvg(summary), "utf8");
+    console.log(`SVG 已生成：${resolvedOutputPath}`);
     return;
   }
   console.log(formatReport(summary, { color: supportsColor() }));
