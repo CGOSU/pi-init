@@ -6,11 +6,14 @@ import test from "node:test";
 import initProjectExtension from "../extensions/index.ts";
 import { installLaunchers } from "../scripts/install-launchers.js";
 import {
+  createReceiptSvg,
   dateRange,
   formatDateMinute,
   formatReport,
+  parseArguments,
   PI_USAGE_VERSION,
   queryUsage,
+  receiptFileName,
   shouldRefreshUsage,
   summarizeUsage,
 } from "../scripts/pi-usage.js";
@@ -352,11 +355,14 @@ export {
   path,
   initProjectExtension,
   installLaunchers,
+  createReceiptSvg,
   dateRange,
   formatDateMinute,
   formatReport,
+  parseArguments,
   PI_USAGE_VERSION,
   queryUsage,
+  receiptFileName,
   shouldRefreshUsage,
   summarizeUsage,
   createScaffold,

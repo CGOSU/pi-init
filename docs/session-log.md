@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-22：为 pi-usage 增加 SVG 对账单生成
+
+- 完成内容：新增 `scripts/pi-usage/receipt.js`，按现有用量 summary 生成参照示例风格的中文纵向 SVG；`pi-usage` 增加 `--receipt` 和 `--receipt-output <路径>`，默认写入当前目录下可预测的 `pi-usage-receipt-<日期>.svg`，原有文本报表保持不变。
+- 完成内容：对账单展示真实费用、模型明细、Token、输入/输出、缓存命中率和会话数，加入 API 等值估算/非实际账单说明；新增动态文本 XML 转义、空数据、CLI 参数和安装器支持文件回归测试。
+- 修改范围：`README.md`、`scripts/pi-usage.js`、`scripts/pi-usage/cli.js`、`scripts/pi-usage/receipt.js`、`test/helpers.js`、`test/pi-usage.test.js`、`docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md`。
+- 验证：`node --check scripts/pi-usage/receipt.js`、`node --check scripts/pi-usage/cli.js`、`node --check scripts/pi-usage.js`；`node --test test/pi-usage.test.js`，13 项通过；`npm test`，147 项中 144 项通过、3 项跳过；`node scripts/check-line-count.js` 和 `git diff --check` 通过。
+- 遗留问题：当前输出为无新增依赖的 SVG，不直接生成 PNG；尚未执行 package 安装或 reload。
+
 ### 2026-09-21：按 Test Value Gate 清理低收益测试
 
 - 完成内容：重新梳理测试和断言，移除普通计时报告、session 时间展示、菜单布局、状态样式、Prompt 文案、通知文案、简单渲染存在性和内部临时字段的低收益断言；保留状态、数据、持久化、权限、安全、Runtime 协议、幂等派发和生成模板关键规则验证；删除仅验证 Runtime 执行器菜单文案的 `test/workflow-runtime-menu.test.js`。

@@ -1,16 +1,26 @@
+import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createReceiptSvg, receiptFileName } from "./receipt.js";
 import { queryUsage, summarizeUsage } from "./refresh.js";
 import { formatDateMinute, formatNumber, formatReport, supportsColor } from "./report.js";
 
-function parseArguments(args, agentDir) {
+export function parseArguments(args, agentDir) {
   const rangeArguments = [];
   let update = false;
+  let receipt = false;
+  let receiptOutput;
   let databasePath = process.env.PI_USAGE_DB || path.join(agentDir, "pi-usage.duckdb");
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--update") {
       update = true;
+    } else if (argument === "--receipt") {
+      receipt = true;
+    } else if (argument === "--receipt-output") {
+      receiptOutput = args[++index];
+      if (!receiptOutput || receiptOutput.startsWith("--")) throw new Error("--receipt-output 需要输出路径");
+      receipt = true;
     } else if (argument === "--db") {
       databasePath = args[++index];
       if (!databasePath || databasePath.startsWith("--")) throw new Error("--db 需要数据库路径");
@@ -22,7 +32,7 @@ function parseArguments(args, agentDir) {
       rangeArguments.push(argument);
     }
   }
-  return { rangeArguments, databasePath, update };
+  return { rangeArguments, databasePath, update, receipt, receiptOutput };
 }
 
 function createRefreshProgressReporter() {
@@ -46,12 +56,21 @@ function createRefreshProgressReporter() {
 
 export async function runCli() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  const { rangeArguments, databasePath, update } = parseArguments(process.argv.slice(2), agentDir);
+  const { rangeArguments, databasePath, update, receipt, receiptOutput } = parseArguments(
+    process.argv.slice(2),
+    agentDir,
+  );
   const sessionsDirectory = process.env.PI_CODING_AGENT_SESSION_DIR || path.join(agentDir, "sessions");
   const runtimeDirectory = path.join(agentDir, "pi-usage-runtime");
   const options = process.stderr.isTTY ? { onProgress: createRefreshProgressReporter() } : {};
   const summary = update
     ? await summarizeUsage(sessionsDirectory, rangeArguments, databasePath, runtimeDirectory, options)
     : await queryUsage(rangeArguments, databasePath, runtimeDirectory, sessionsDirectory, options);
+  if (receipt) {
+    const outputPath = path.resolve(receiptOutput ?? receiptFileName(summary.date));
+    await writeFile(outputPath, createReceiptSvg(summary), "utf8");
+    console.log(`对账单已生成：${outputPath}`);
+    return;
+  }
   console.log(formatReport(summary, { color: supportsColor() }));
 }

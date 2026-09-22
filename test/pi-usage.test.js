@@ -3,7 +3,10 @@ import test from "node:test";
 import * as helpers from "./helpers.js";
 
 const {
+  createReceiptSvg,
+  parseArguments,
   PI_USAGE_VERSION,
+  receiptFileName,
   dateRange,
   queryUsage,
   shouldRefreshUsage,
@@ -75,7 +78,15 @@ test("npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录", 
     const supportSourceDir = path.join(process.cwd(), "scripts", "pi-usage");
     const supportTargetDir = path.join(sourceDir, "pi-usage");
     await mkdir(supportTargetDir, { recursive: true });
-    for (const supportFile of ["version.js", "core.js", "database.js", "refresh.js", "report.js", "cli.js"]) {
+    for (const supportFile of [
+      "version.js",
+      "core.js",
+      "database.js",
+      "refresh.js",
+      "report.js",
+      "receipt.js",
+      "cli.js",
+    ]) {
       await writeFile(
         path.join(supportTargetDir, supportFile),
         await readFile(path.join(supportSourceDir, supportFile), "utf8"),
@@ -399,5 +410,53 @@ test("pi-usage schema migration rebuilds usage and speed data", async () => {
     assert.equal(completeRefresh.stats.schemaMigrated, true);
     assert.equal(completeRefresh.stats.filesRebuilt, 1);
   });
+});
+
+test("pi-usage 对账单 SVG 汇总费用并转义动态文本", () => {
+  const svg = createReceiptSvg(
+    {
+      date: "2026-09-22",
+      sessions: 8,
+      rows: [
+        {
+          model: 'provider/<model>&"',
+          calls: 2,
+          input: 2_549_990,
+          output: 16_310,
+          cacheRead: 2_490_000,
+          cacheWrite: 0,
+          tokens: 2_566_300,
+          cost: 77.69,
+        },
+      ],
+    },
+    { generatedAt: new Date(2026, 8, 22, 20, 18) },
+  );
+
+  assert.match(svg, /每日 AI 对账单/);
+  assert.match(svg, /2026年9月22日/);
+  assert.match(svg, /20:18/);
+  assert.match(svg, /US\$78/);
+  assert.match(svg, /US\$77\.69/);
+  assert.match(svg, /&lt;model&gt;&amp;&quot;/);
+  assert.match(svg, /缓存命中率/);
+  assert.match(svg, /会话数/);
+  assert.doesNotMatch(svg, /<model>/);
+});
+
+test("pi-usage 对账单参数和默认文件名可预测", () => {
+  const parsed = parseArguments(["--receipt", "--receipt-output", "receipt.svg", "2026-09-22"], "agent");
+  assert.equal(parsed.receipt, true);
+  assert.equal(parsed.receiptOutput, "receipt.svg");
+  assert.deepEqual(parsed.rangeArguments, ["2026-09-22"]);
+  assert.equal(parsed.databasePath, path.join("agent", "pi-usage.duckdb"));
+  assert.equal(receiptFileName("2026-08-01 → 2026-08-25"), "pi-usage-receipt-2026-08-01-2026-08-25.svg");
+  assert.throws(() => parseArguments(["--receipt-output"], "agent"), /--receipt-output 需要输出路径/);
+});
+
+test("pi-usage 空数据对账单明确显示无记录", () => {
+  const svg = createReceiptSvg({ date: "2026-09-22", sessions: 0, rows: [] });
+  assert.match(svg, /暂无模型用量记录/);
+  assert.match(svg, /US\$0/);
 });
 
