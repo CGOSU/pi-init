@@ -105,7 +105,12 @@ test("TUI 菜单在当前界面显示保存失败", async () => {
 });
 
 test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async () => {
-  const model = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const model = {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    reasoning: true,
+    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+  };
   let saveCalls = 0;
   let savedSelection;
   let modelPickerScreen = "";
@@ -121,6 +126,7 @@ test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async (
         call.component.handleInput("\n");
         return;
       }
+      for (let index = 0; index < 5; index += 1) call.component.handleInput("\u001b[B");
       call.component.handleInput("\u0013");
       await new Promise((resolve) => setTimeout(resolve, 0));
       savedScreen = call.component.render(80).join("\n");
@@ -138,6 +144,7 @@ test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async (
 
   assert.equal(result.provider, model.provider);
   assert.equal(result.model, model.id);
+  assert.equal(result.thinkingLevel, "xhigh");
   assert.equal(saveCalls, 1);
   assert.deepEqual(savedSelection, result);
   assert.doesNotMatch(modelPickerScreen, /Ctrl\+S 保存/);
@@ -155,7 +162,12 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
       },
     }));
 
-    const model = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    const model = {
+      provider: "openai-codex",
+      id: "gpt-6-sol",
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    };
     let customCall = 0;
     let savedScreen = "";
     const harness = createExtensionHarness([], {
@@ -169,6 +181,7 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
           call.component.handleInput("\n");
           return;
         }
+        for (let index = 0; index < 5; index += 1) call.component.handleInput("\u001b[B");
         call.component.handleInput("\u0013");
         for (let attempt = 0; attempt < 50; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 2));
@@ -183,6 +196,7 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.equal(persisted.roleModels.architect.model, model.id);
+    assert.equal(persisted.roleModels.architect.thinkingLevel, "xhigh");
     assert.match(savedScreen, /角色配置已保存/);
     assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
     assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
