@@ -67,7 +67,7 @@ export type MenuSaveResult =
   | { ok: true; message: string }
   | { ok: false; message: string };
 
-export type MenuSaveHandler = () => Promise<MenuSaveResult | void> | MenuSaveResult | void;
+export type MenuSaveHandler = (selection?: string | RoleModelConfig) => Promise<MenuSaveResult | void> | MenuSaveResult | void;
 
 export type MenuOptions = {
   summary?: string[];

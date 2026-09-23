@@ -11,7 +11,7 @@ import {
   filterRoleModels,
   roleLabel,
 } from "../src/roles.js";
-import type { MenuItem, MenuOptions, MenuSaveHandler, MenuSaveResult, RoleModelConfig } from "./contracts.ts";
+import type { MenuItem, MenuOptions, RoleModelConfig } from "./contracts.ts";
 
 export const MENU_BACK = "__pi_init_back__" as const;
 
@@ -121,7 +121,7 @@ export async function showMenu(
             saveInFlight = true;
             saveStatus.setText(theme.fg("warning", "正在保存…"));
             Promise.resolve()
-              .then(() => options.onSave?.())
+              .then(() => options.onSave?.(list.getSelectedItem()?.value))
               .then((result) => {
                 const success = result === undefined || result.ok;
                 saveStatus.setText(theme.fg(
@@ -180,7 +180,6 @@ async function selectModelWithSearch(
   role: string,
   models: any[],
   selectedModel?: any,
-  onSave?: MenuSaveHandler,
 ) {
   if (ctx.mode !== "tui") {
     const query = await ctx.ui.input(
@@ -203,8 +202,6 @@ async function selectModelWithSearch(
 
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
     let filteredModels = models;
-    let saveInFlight = false;
-    let saveStatus = "";
     let list: SelectList;
     const search = new Input();
     const selectedValue = selectedModel
@@ -248,10 +245,9 @@ async function selectModelWithSearch(
       return [
         ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
         ...new Text(theme.fg("accent", theme.bold(`选择 ${roleLabel(role)} 模型`)), 1, 0).render(width),
-        new Text(theme.fg("dim", `输入关键词即时筛选 · ↑↓ 选择 · Enter 确认${onSave ? " · Ctrl+S 保存" : ""} · Esc 返回`), 1, 0).render(width)[0] ?? "",
+        new Text(theme.fg("dim", "输入关键词即时筛选 · ↑↓ 选择 · Enter 确认 · Esc 返回"), 1, 0).render(width)[0] ?? "",
         ...search.render(innerWidth).map((line) => ` ${line}`),
         ...list.render(innerWidth).map((line) => ` ${line}`),
-        ...(saveStatus ? new Text(saveStatus, 1, 0).render(width) : []),
         ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
       ];
     };
@@ -271,36 +267,10 @@ async function selectModelWithSearch(
         list.invalidate();
       },
       handleInput: (data: string) => {
-        if (saveInFlight) {
-          tui.requestRender();
-          return;
-        }
         if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
           list.handleInput(data);
         } else if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
-        } else if (onSave && matchesKey(data, Key.ctrl("s"))) {
-          if (!saveInFlight) {
-            saveInFlight = true;
-            saveStatus = theme.fg("warning", "正在保存…");
-            Promise.resolve()
-              .then(() => onSave())
-              .then((result: MenuSaveResult | void) => {
-                const success = result === undefined || result.ok;
-                saveStatus = theme.fg(
-                  success ? "success" : "error",
-                  result === undefined ? "保存操作已完成。" : result.message,
-                );
-              })
-              .catch((error) => {
-                const message = error instanceof Error ? error.message : String(error);
-                saveStatus = theme.fg("error", `保存失败：${message}`);
-              })
-              .finally(() => {
-                saveInFlight = false;
-                tui.requestRender();
-              });
-          }
         } else if (matchesKey(data, Key.ctrl("c"))) {
           done(null);
         } else {
@@ -333,7 +303,7 @@ export async function selectRoleModel(
     ? models.find((model) => model.provider === initialConfig.provider && model.id === initialConfig.model)
     : undefined;
   while (true) {
-    const model = await selectModelWithSearch(ctx, role, models, selectedModel, options.onSave);
+    const model = await selectModelWithSearch(ctx, role, models, selectedModel);
     if (isMenuBack(model)) return MENU_BACK;
     if (!model) return undefined;
     const selectedModelLabel = `${model.provider}/${model.id}`;
@@ -352,7 +322,18 @@ export async function selectRoleModel(
       })),
       {
         selectedValue: selectedModel === model ? initialConfig?.thinkingLevel : undefined,
-        onSave: options.onSave,
+        onSave: options.onSave
+          ? (thinkingLevel) => {
+              if (typeof thinkingLevel !== "string") {
+                return { ok: false as const, message: "请选择推理强度后再保存。" };
+              }
+              return options.onSave?.({
+                provider: model.provider,
+                model: model.id,
+                thinkingLevel,
+              });
+            }
+          : undefined,
       },
     );
     if (isMenuBack(thinkingLevel)) {

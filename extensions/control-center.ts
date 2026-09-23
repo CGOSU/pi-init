@@ -4,7 +4,7 @@ import {
   roleLabel,
   roleModeLabel,
 } from "../src/roles.js";
-import type { ResolvedRoleConfig } from "./contracts.ts";
+import type { ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import {
   workflowExecutorLabel,
@@ -202,16 +202,33 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     }
 
     try {
-      const selection = await selectRoleModel(ctx, role, config.roleModels[role], saveMenuOptions(ctx));
+      let savedSelection: RoleModelConfig | undefined;
+      const selection = await selectRoleModel(ctx, role, config.roleModels[role], {
+        onSave: async (draft) => {
+          if (!draft || typeof draft === "string") {
+            return { ok: false as const, message: "请先选择模型和推理强度，再保存角色配置。" };
+          }
+          roleRuntime.stageRoleConfig({ roleModels: { [role]: draft } });
+          const saveResult = await roleRuntime.saveRoleConfig(ctx);
+          if (saveResult.ok) savedSelection = draft;
+          return saveResult;
+        },
+      });
       if (isMenuBack(selection)) return;
       if (!selection) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
       }
-      roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
+      const alreadySaved = savedSelection !== undefined
+        && savedSelection.provider === selection.provider
+        && savedSelection.model === selection.model
+        && savedSelection.thinkingLevel === selection.thinkingLevel;
+      if (!alreadySaved) roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
       const result = await roleRuntime.applyRole(role, ctx);
       ctx.ui.notify(
-        `角色配置已修改，尚未保存。已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
+        alreadySaved
+          ? `角色配置已保存并应用：${roleLabel(result.role)} · ${shortModelName(result.model)}/${result.thinkingLevel}。`
+          : `角色配置已修改，尚未保存。已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
         "info",
       );
     } catch (error) {
