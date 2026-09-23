@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "./helpers.js";
 
-test("TUI 启动时提示当前模型对应的角色和配置，非 TUI 不提示", async () => {
+test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
@@ -30,7 +30,7 @@ test("TUI 启动时提示当前模型对应的角色和配置，非 TUI 不提�
     const tuiHarness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(tuiHarness, "session_start");
     assert.deepEqual(tuiHarness.notifications.at(-1), {
-      message: "Pi Init 已就绪 · 当前模型匹配角色：架构设计 → openai-codex/gpt-5.6-luna/max",
+      message: "Pi Init 已就绪 · 角色模型配置：架构设计 → openai-codex/gpt-5.6-luna/max",
       level: "info",
     });
 
@@ -40,21 +40,22 @@ test("TUI 启动时提示当前模型对应的角色和配置，非 TUI 不提�
   });
 });
 
-test("多个角色共用当前模型时，启动提示列出全部匹配角色及模型配置", async () => {
+test("启动提示输出未匹配当前模型的角色配置", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
       schemaVersion: 2,
       roleModels: {
-        architect: { provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "max" },
+        architect: { provider: "openai-codex", model: "gpt-5.6-sol", thinkingLevel: "max" },
         "developer-test": { provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "max" },
+        "docs-commit": { provider: "openai-codex", model: "gpt-5.6-astra", thinkingLevel: "high" },
       },
     }));
 
     const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(harness, "session_start");
     assert.deepEqual(harness.notifications.at(-1), {
-      message: "Pi Init 已就绪 · 当前模型匹配角色：架构设计、开发测试 → openai-codex/gpt-5.6-luna/max",
+      message: "Pi Init 已就绪 · 角色模型配置：架构设计 → openai-codex/gpt-5.6-sol/max；开发测试 → openai-codex/gpt-5.6-luna/max；文档收尾 → openai-codex/gpt-5.6-astra/high",
       level: "info",
     });
   });

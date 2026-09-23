@@ -6,7 +6,7 @@ import {
 export * from "./runtime-client.ts";
 import {
   ROLE_MODES,
-  findMatchingRoles,
+  findMatchingRole,
   roleLabel,
 } from "../src/roles.js";
 import {
@@ -248,10 +248,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.workflowModeStatus = config.workflowMode;
       runtimeState.workflowExecutorStatus = config.workflowExecutor;
       const thinkingLevel = pi.getThinkingLevel();
-      const matchingRoles = findMatchingRoles(config, ctx.model, thinkingLevel);
-      runtimeState.activeRole = matchingRoles.length === 1 && ctx.model
+      const role = findMatchingRole(config, ctx.model, thinkingLevel);
+      runtimeState.activeRole = role && ctx.model
         ? {
-            role: matchingRoles[0],
+            role,
             provider: ctx.model.provider,
             model: ctx.model.id,
             thinkingLevel,
@@ -259,9 +259,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         : undefined;
       workflowDispatch.restoreWorkflowState(ctx);
       roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
-      if (ctx.mode === "tui" && ctx.model && matchingRoles.length > 0) {
+      const roleModelConfigs = Object.entries(config.roleModels).map(([configuredRole, model]) =>
+        `${roleLabel(configuredRole)} → ${model.provider}/${model.model}/${model.thinkingLevel}`,
+      );
+      if (ctx.mode === "tui" && roleModelConfigs.length > 0) {
         ctx.ui.notify(
-          `Pi Init 已就绪 · 当前模型匹配角色：${matchingRoles.map(roleLabel).join("、")} → ${ctx.model.provider}/${ctx.model.id}/${thinkingLevel}`,
+          `Pi Init 已就绪 · 角色模型配置：${roleModelConfigs.join("；")}`,
           "info",
         );
       }
