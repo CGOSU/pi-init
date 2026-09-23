@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-23：让 Ctrl+S 保存反馈留在菜单内
+
+- 完成内容：控制中心各级菜单和角色模型搜索/推理强度菜单在 Ctrl+S 后立即显示保存中状态，并在操作完成后展示成功或失败结果；角色配置保存统一返回结构化结果，`/pi-init save` 命令仍通过通知反馈。
+- 修改范围：`extensions/contracts.ts`、`extensions/index.ts`、`extensions/role-runtime.ts`、`extensions/ui.ts`、`test/control-center-menu.test.js`、`test/role-model-persistence.test.js`、`docs/current-state.md`、`docs/session-log.md`。
+- 验证：`node --test test/control-center-menu.test.js test/role-model-persistence.test.js`，8 项通过；`npm test`，146 项通过、3 项跳过。
+- 遗留问题：未在真实交互式 Pi TUI 会话中人工确认；未提交或推送。
+
 ### 2026-09-22：为 pi-usage 增加 SVG 对账单生成
 
 - 完成内容：新增 `scripts/pi-usage/bill.js`，按现有查询 summary 生成参照示例风格的中文纵向 SVG；`pi-usage` 使用通用的 `--output <路径>` 导出 SVG，不增加独立账单模式参数，原有文本报表保持不变。

@@ -20,7 +20,7 @@ import {
 import {
   workflowProgress,
 } from "../src/workflow.js";
-import type { ResolvedRoleConfig } from "./contracts.ts";
+import type { MenuSaveResult, ResolvedRoleConfig } from "./contracts.ts";
 import { activeRoleMatches, textOf, type ExtensionRuntimeState, type WorkflowState } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
@@ -191,10 +191,12 @@ export function createRoleRuntime(
     }
   }
 
-  async function saveRoleConfig(ctx: ExtensionCommandContext) {
+  async function saveRoleConfig(ctx: ExtensionCommandContext): Promise<MenuSaveResult> {
     if (!ctx.isProjectTrusted()) {
-      ctx.ui.notify("保存角色配置仅允许在受信任项目中运行；请先信任当前项目", "error");
-      return;
+      return {
+        ok: false as const,
+        message: "保存角色配置仅允许在受信任项目中运行；请先信任当前项目",
+      };
     }
 
     const hasPendingChanges = hasPendingRoleConfigChanges();
@@ -216,22 +218,21 @@ export function createRoleRuntime(
         return { resolved, changed: true };
       });
       if (!outcome.changed) {
-        ctx.ui.notify("角色配置已保存。", "info");
-        return;
+        return { ok: true as const, message: "角色配置已保存。" };
       }
       state.sessionRoleConfigOverrides = {};
       state.configuredRoleNames = Object.keys(outcome.resolved.roleModels);
       state.workflowModeStatus = outcome.resolved.workflowMode;
       state.workflowExecutorStatus = outcome.resolved.workflowExecutor;
       refreshRoleStatus(ctx, state.sessionModeOverride ?? outcome.resolved.mode);
-      ctx.ui.notify(
-        hasPendingChanges
+      return {
+        ok: true as const,
+        message: hasPendingChanges
           ? "角色配置已保存。"
           : "角色配置已保存（旧版配置已迁移为 roleModels 结构）。",
-        "info",
-      );
+      };
     } catch (error) {
-      ctx.ui.notify(`保存角色配置失败：${textOf(error)}`, "error");
+      return { ok: false as const, message: `保存角色配置失败：${textOf(error)}` };
     }
   }
 

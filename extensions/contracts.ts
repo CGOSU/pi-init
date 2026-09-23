@@ -63,7 +63,11 @@ export type MenuItem = {
   description?: string;
 };
 
-export type MenuSaveHandler = () => Promise<void> | void;
+export type MenuSaveResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string };
+
+export type MenuSaveHandler = () => Promise<MenuSaveResult | void> | MenuSaveResult | void;
 
 export type MenuOptions = {
   summary?: string[];

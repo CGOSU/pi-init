@@ -302,7 +302,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (action === "advanced") return (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx);
         if (action === "sync") return (await loadScaffoldRuntime()).syncProject(tokens.join(" ") || ".", ctx);
         if (action === "config") return (await loadControlCenter()).configureRole(tokens[0], ctx);
-        if (action === "save") return roleRuntime.saveRoleConfig(ctx);
+        if (action === "save") {
+          const result = await roleRuntime.saveRoleConfig(ctx);
+          ctx.ui.notify(result.message, result.ok ? "info" : "error");
+          return;
+        }
         if (action === "role") return (await loadControlCenter()).switchRole(tokens[0], ctx);
         if (action === "mode") return (await loadControlCenter()).setSessionMode(tokens[0], ctx);
         if (action === "workflow") return workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx);

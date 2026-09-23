@@ -11,7 +11,7 @@ import {
   filterRoleModels,
   roleLabel,
 } from "../src/roles.js";
-import type { MenuItem, MenuOptions, MenuSaveHandler, RoleModelConfig } from "./contracts.ts";
+import type { MenuItem, MenuOptions, MenuSaveHandler, MenuSaveResult, RoleModelConfig } from "./contracts.ts";
 
 export const MENU_BACK = "__pi_init_back__" as const;
 
@@ -66,6 +66,7 @@ export async function showMenu(
     });
     const descriptionByValue = new Map(items.map((item) => [item.value, item.description]));
     const selectedDescription = new Text("", 2, 0);
+    const saveStatus = new Text("", 1, 0);
     const updateSelectedDescription = () => {
       const description = descriptionByValue.get(list.getSelectedItem()?.value ?? "");
       selectedDescription.setText(description ? theme.fg("muted", `↳ ${description}`) : "");
@@ -99,6 +100,7 @@ export async function showMenu(
     ));
     content.addChild(list);
     content.addChild(selectedDescription);
+    if (hasSaveAction) content.addChild(saveStatus);
 
     container.addChild(new DynamicBorder((text: string) => theme.fg("borderAccent", text)));
     container.addChild(content);
@@ -117,11 +119,19 @@ export async function showMenu(
         } else if (hasSaveAction && matchesKey(data, Key.ctrl("s"))) {
           if (!saveInFlight) {
             saveInFlight = true;
+            saveStatus.setText(theme.fg("warning", "正在保存…"));
             Promise.resolve()
               .then(() => options.onSave?.())
+              .then((result) => {
+                const success = result === undefined || result.ok;
+                saveStatus.setText(theme.fg(
+                  success ? "success" : "error",
+                  result === undefined ? "保存操作已完成。" : result.message,
+                ));
+              })
               .catch((error) => {
                 const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`保存失败：${message}`, "error");
+                saveStatus.setText(theme.fg("error", `保存失败：${message}`));
               })
               .finally(() => {
                 saveInFlight = false;
@@ -194,6 +204,7 @@ async function selectModelWithSearch(
   const result = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
     let filteredModels = models;
     let saveInFlight = false;
+    let saveStatus = "";
     let list: SelectList;
     const search = new Input();
     const selectedValue = selectedModel
@@ -240,6 +251,7 @@ async function selectModelWithSearch(
         new Text(theme.fg("dim", `输入关键词即时筛选 · ↑↓ 选择 · Enter 确认${onSave ? " · Ctrl+S 保存" : ""} · Esc 返回`), 1, 0).render(width)[0] ?? "",
         ...search.render(innerWidth).map((line) => ` ${line}`),
         ...list.render(innerWidth).map((line) => ` ${line}`),
+        ...(saveStatus ? new Text(saveStatus, 1, 0).render(width) : []),
         ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
       ];
     };
@@ -270,11 +282,19 @@ async function selectModelWithSearch(
         } else if (onSave && matchesKey(data, Key.ctrl("s"))) {
           if (!saveInFlight) {
             saveInFlight = true;
+            saveStatus = theme.fg("warning", "正在保存…");
             Promise.resolve()
               .then(() => onSave())
+              .then((result: MenuSaveResult | void) => {
+                const success = result === undefined || result.ok;
+                saveStatus = theme.fg(
+                  success ? "success" : "error",
+                  result === undefined ? "保存操作已完成。" : result.message,
+                );
+              })
               .catch((error) => {
                 const message = error instanceof Error ? error.message : String(error);
-                ctx.ui.notify(`保存失败：${message}`, "error");
+                saveStatus = theme.fg("error", `保存失败：${message}`);
               })
               .finally(() => {
                 saveInFlight = false;
