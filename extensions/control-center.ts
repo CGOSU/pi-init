@@ -219,11 +219,14 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         ctx.ui.notify("已取消角色配置，没有写入文件。", "warning");
         return;
       }
-      const alreadySaved = savedSelection !== undefined
+      const alreadySavedInMenu = savedSelection !== undefined
         && savedSelection.provider === selection.provider
         && savedSelection.model === selection.model
         && savedSelection.thinkingLevel === selection.thinkingLevel;
-      if (!alreadySaved) roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
+      const alreadySaved = alreadySavedInMenu
+        || await roleRuntime.isRoleModelConfigPersisted(role, selection, ctx);
+      if (alreadySaved) roleRuntime.clearStagedRoleConfig(role);
+      else roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
       const result = await roleRuntime.applyRole(role, ctx);
       ctx.ui.notify(
         alreadySaved

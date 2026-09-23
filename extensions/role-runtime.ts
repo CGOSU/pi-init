@@ -20,7 +20,7 @@ import {
 import {
   workflowProgress,
 } from "../src/workflow.js";
-import type { MenuSaveResult, ResolvedRoleConfig } from "./contracts.ts";
+import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import { activeRoleMatches, textOf, type ExtensionRuntimeState, type WorkflowState } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
@@ -85,6 +85,16 @@ export function createRoleRuntime(
 
   function hasPendingRoleConfigChanges() {
     return Object.keys(state.sessionRoleConfigOverrides).length > 0;
+  }
+
+  async function isRoleModelConfigPersisted(role: string, expected: RoleModelConfig, ctx: ExtensionContext) {
+    const persisted = await readRoleConfig(ctx);
+    if (!persisted || typeof persisted !== "object") return false;
+    const config = resolveRoleConfig(persisted) as ResolvedRoleConfig;
+    const saved = config.roleModels[normalizeRoleId(role)];
+    return saved?.provider === expected.provider
+      && saved.model === expected.model
+      && saved.thinkingLevel === expected.thinkingLevel;
   }
 
   function effectiveRoleMode(config: Pick<ResolvedRoleConfig, "mode">) {
@@ -416,6 +426,8 @@ export function createRoleRuntime(
     activeRoleFor,
     readSessionRoleConfig,
     hasPendingRoleConfigChanges,
+    isRoleModelConfigPersisted,
+    clearStagedRoleConfig,
     effectiveRoleMode,
     isManualRoleMode,
     stageRoleConfig,

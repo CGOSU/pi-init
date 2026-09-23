@@ -203,6 +203,40 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
   });
 });
 
+test("选择已持久化的角色模型不会误报尚未保存", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 2,
+      mode: "auto",
+      roleModels: {
+        architect: { provider: "openai-codex", model: "gpt-6-sol", thinkingLevel: "max" },
+      },
+    }));
+
+    const model = {
+      provider: "openai-codex",
+      id: "gpt-6-sol",
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    };
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      mode: "tui",
+      trusted: true,
+      availableModels: [model],
+      custom: async (call) => {
+        call.component.handleInput("\n");
+      },
+    });
+
+    await harness.commands.get("pi-init").handler("config architect", harness.context);
+
+    assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
+    assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
+  });
+});
+
 test("没有保存能力的 TUI 菜单不拦截 Ctrl+S", async () => {
   const harness = createExtensionHarness([], {
     mode: "tui",
