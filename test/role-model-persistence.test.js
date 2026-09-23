@@ -30,7 +30,7 @@ test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", as
     const tuiHarness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(tuiHarness, "session_start");
     assert.deepEqual(tuiHarness.notifications.at(-1), {
-      message: "Pi Init 已就绪 · 角色模型配置：架构设计 → openai-codex/gpt-5.6-luna/max",
+      message: "📌 Pi Init · 角色模型配置\n\n◆ 架构设计\n  模型：openai-codex/gpt-5.6-luna\n  推理强度：max",
       level: "info",
     });
 
@@ -55,7 +55,7 @@ test("启动提示输出未匹配当前模型的角色配置", async () => {
     const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(harness, "session_start");
     assert.deepEqual(harness.notifications.at(-1), {
-      message: "Pi Init 已就绪 · 角色模型配置：架构设计 → openai-codex/gpt-5.6-sol/max；开发测试 → openai-codex/gpt-5.6-luna/max；文档收尾 → openai-codex/gpt-5.6-astra/high",
+      message: "📌 Pi Init · 角色模型配置\n\n◆ 架构设计\n  模型：openai-codex/gpt-5.6-sol\n  推理强度：max\n\n◆ 开发测试\n  模型：openai-codex/gpt-5.6-luna\n  推理强度：max\n\n◆ 文档收尾\n  模型：openai-codex/gpt-5.6-astra\n  推理强度：high",
       level: "info",
     });
   });

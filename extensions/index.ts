@@ -260,11 +260,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       workflowDispatch.restoreWorkflowState(ctx);
       roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
       const roleModelConfigs = Object.entries(config.roleModels).map(([configuredRole, model]) =>
-        `${roleLabel(configuredRole)} → ${model.provider}/${model.model}/${model.thinkingLevel}`,
+        `◆ ${roleLabel(configuredRole)}\n  模型：${model.provider}/${model.model}\n  推理强度：${model.thinkingLevel}`,
       );
       if (ctx.mode === "tui" && roleModelConfigs.length > 0) {
         ctx.ui.notify(
-          `Pi Init 已就绪 · 角色模型配置：${roleModelConfigs.join("；")}`,
+          `📌 Pi Init · 角色模型配置\n\n${roleModelConfigs.join("\n\n")}`,
           "info",
         );
       }
