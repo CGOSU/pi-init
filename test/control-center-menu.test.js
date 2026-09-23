@@ -104,7 +104,7 @@ test("TUI 菜单在当前界面显示保存失败", async () => {
   assert.match(savedText, /项目未受信任/);
 });
 
-test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async () => {
+test("角色模型搜索和推理强度菜单都支持 Ctrl+S 保存完整配置", async () => {
   const model = {
     provider: "openai-codex",
     id: "gpt-5.6-luna",
@@ -113,7 +113,9 @@ test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async (
   };
   let saveCalls = 0;
   let savedSelection;
+  const savedSelections = [];
   let modelPickerScreen = "";
+  let modelPickerSavedScreen = "";
   let savedScreen = "";
   let customCall = 0;
   const harness = createExtensionHarness([], {
@@ -123,6 +125,9 @@ test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async (
       customCall += 1;
       if (customCall === 1) {
         modelPickerScreen = call.component.render(80).join("\n");
+        call.component.handleInput("\u0013");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        modelPickerSavedScreen = call.component.render(80).join("\n");
         call.component.handleInput("\n");
         return;
       }
@@ -138,6 +143,7 @@ test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async (
     onSave: async (selection) => {
       saveCalls += 1;
       savedSelection = selection;
+      savedSelections.push(selection);
       return { ok: true, message: "角色配置已保存。" };
     },
   });
@@ -145,9 +151,15 @@ test("Ctrl+S 在推理强度菜单保存当前完整角色模型配置", async (
   assert.equal(result.provider, model.provider);
   assert.equal(result.model, model.id);
   assert.equal(result.thinkingLevel, "xhigh");
-  assert.equal(saveCalls, 1);
+  assert.equal(saveCalls, 2);
+  assert.deepEqual(savedSelections[0], {
+    provider: model.provider,
+    model: model.id,
+    thinkingLevel: savedSelections[0].thinkingLevel,
+  });
   assert.deepEqual(savedSelection, result);
-  assert.doesNotMatch(modelPickerScreen, /Ctrl\+S 保存/);
+  assert.match(modelPickerScreen, /Ctrl\+S 保存/);
+  assert.match(modelPickerSavedScreen, /角色配置已保存/);
   assert.match(savedScreen, /角色配置已保存/);
 });
 
@@ -197,6 +209,57 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.equal(persisted.roleModels.architect.model, model.id);
     assert.equal(persisted.roleModels.architect.thinkingLevel, "xhigh");
+    assert.match(savedScreen, /角色配置已保存/);
+    assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
+    assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
+  });
+});
+
+test("角色模型搜索菜单按 Ctrl+S 持久化完整角色模型配置", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 2,
+      mode: "auto",
+      roleModels: {
+        architect: { provider: "openai-codex", model: "gpt-5.6-sol", thinkingLevel: "max" },
+      },
+    }));
+
+    const model = {
+      provider: "openai-codex",
+      id: "gpt-6-sol",
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    };
+    let customCall = 0;
+    let savedScreen = "";
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      mode: "tui",
+      trusted: true,
+      availableModels: [model],
+      custom: async (call) => {
+        customCall += 1;
+        if (customCall === 1) {
+          call.component.handleInput("\u0013");
+          for (let attempt = 0; attempt < 50; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 2));
+            savedScreen = call.component.render(80).join("\n");
+            if (savedScreen.includes("角色配置已保存")) break;
+          }
+          call.component.handleInput("\n");
+          return;
+        }
+        call.component.handleInput("\n");
+      },
+    });
+
+    await harness.commands.get("pi-init").handler("config architect", harness.context);
+
+    const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.equal(persisted.roleModels.architect.model, model.id);
+    assert.equal(typeof persisted.roleModels.architect.thinkingLevel, "string");
     assert.match(savedScreen, /角色配置已保存/);
     assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
     assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
