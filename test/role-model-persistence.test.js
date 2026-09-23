@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "./helpers.js";
 
-test("TUI 启动时提示当前匹配角色及其模型，非 TUI 不提示", async () => {
+test("TUI 启动时提示当前模型对应的角色和配置，非 TUI 不提示", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
@@ -30,13 +30,33 @@ test("TUI 启动时提示当前匹配角色及其模型，非 TUI 不提示", as
     const tuiHarness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(tuiHarness, "session_start");
     assert.deepEqual(tuiHarness.notifications.at(-1), {
-      message: "Pi Init 已就绪 · 架构设计 → openai-codex/gpt-5.6-luna",
+      message: "Pi Init 已就绪 · 当前模型匹配角色：架构设计 → openai-codex/gpt-5.6-luna/max",
       level: "info",
     });
 
     const rpcHarness = createExtensionHarness([], { cwd: directory, mode: "rpc", trusted: true });
     await emitExtensionEvent(rpcHarness, "session_start");
     assert.equal(rpcHarness.notifications.some(({ message }) => message.startsWith("Pi Init 已就绪")), false);
+  });
+});
+
+test("多个角色共用当前模型时，启动提示列出全部匹配角色及模型配置", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 2,
+      roleModels: {
+        architect: { provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "max" },
+        "developer-test": { provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "max" },
+      },
+    }));
+
+    const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
+    await emitExtensionEvent(harness, "session_start");
+    assert.deepEqual(harness.notifications.at(-1), {
+      message: "Pi Init 已就绪 · 当前模型匹配角色：架构设计、开发测试 → openai-codex/gpt-5.6-luna/max",
+      level: "info",
+    });
   });
 });
 

@@ -113,11 +113,11 @@ export function shouldCompactAfterWorkflowTask({ mode, contextUsage }) {
   );
 }
 
-export function findMatchingRole(config, model, thinkingLevel) {
-  if (!model) return undefined;
+export function findMatchingRoles(config, model, thinkingLevel) {
+  if (!model) return [];
 
   const roleModels = normalizeRoleModels(config);
-  const matches = Object.keys(roleModels).filter((role) => {
+  return Object.keys(roleModels).filter((role) => {
     const value = roleModels[role];
     return (
       value.provider === model.provider &&
@@ -125,6 +125,10 @@ export function findMatchingRole(config, model, thinkingLevel) {
       value.thinkingLevel === thinkingLevel
     );
   });
+}
+
+export function findMatchingRole(config, model, thinkingLevel) {
+  const matches = findMatchingRoles(config, model, thinkingLevel);
   return matches.length === 1 ? matches[0] : undefined;
 }
 
