@@ -13,7 +13,7 @@
 
 ## 当前已确认事实
 
-- 项目脚手架生成的中英文 `AGENTS.md` 包含带标记的 Fast Path 收尾约束；`/pi-init sync [目录]` 只更新托管区块、创建缺失的项目记忆文档并保留已有记录，冲突时不写入。控制中心各级角色配置菜单统一使用 `Ctrl+S` 保存，保存中、成功或失败会在当前菜单内即时反馈；显式保存列表项已移除，非 TUI 和兼容场景保留 `/pi-init save`。具体取舍见 [`docs/decisions.md`](decisions.md)。
+- 项目脚手架生成的中英文 `AGENTS.md` 包含带标记的 Fast Path 收尾约束；`/pi-init sync [目录]` 只更新托管区块、创建缺失的项目记忆文档并保留已有记录，冲突时不写入。控制中心各级角色配置菜单统一使用 `Ctrl+S` 保存，保存中、成功或失败会在当前菜单内即时反馈；显式保存列表项已移除，非 TUI 和兼容场景保留 `/pi-init save`。TUI session 启动时，若当前模型匹配已配置角色，会显示一条包含角色和精确 provider/model 的就绪通知；非 TUI 和未匹配角色不提示。具体取舍见 [`docs/decisions.md`](decisions.md)。
 
 - 控制中心同步当前项目发生实际变更并执行 `ctx.reload()` 后立即结束旧控制中心调用；同步结果通过 `reloaded` 标记向调用方表达，避免 reload 后继续使用失效的旧 `ctx`。无变更或有冲突时不 reload，菜单仍可继续。具体决策与验证见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留。
@@ -57,6 +57,7 @@
 
 ## 最近一次更新
 
+- 2026-09-23：TUI session 启动时新增当前匹配角色及精确 provider/model 的单条就绪通知；非 TUI 或未匹配角色时静默，相关测试 14 项通过。
 - 2026-09-23：控制中心和角色模型配置菜单在 `Ctrl+S` 后即时显示保存进度及成功/失败结果；`/pi-init save` 保留命令通知，`npm test` 146 项通过、3 项跳过。
 - 2026-09-22：`pi-usage` 支持通过 `--output <路径>` 将查询结果输出为参照示例样式的中文纵向 SVG；输出复用 `yesterday`、`Nd`、`YYYY-MM`、单日和闭区间查询时间参数；新增费用汇总、动态文本 XML 转义、空数据和 CLI 参数测试；`npm test` 144 项通过、3 项跳过。
 - 2026-09-21：按 Test Value Gate 清理低收益测试和断言，移除纯展示/样式/Prompt/布局断言及重复内部字段检查；保留数据、状态、安全和持久化验证；`npm test` 141 项通过、3 项跳过。

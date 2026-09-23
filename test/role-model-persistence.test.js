@@ -10,6 +10,36 @@ import {
   writeFile,
 } from "./helpers.js";
 
+test("TUI 启动时提示当前匹配角色及其模型，非 TUI 不提示", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 2,
+      mode: "auto",
+      workflowMode: "auto",
+      workflowExecutor: "local",
+      roleModels: {
+        architect: {
+          provider: "openai-codex",
+          model: "gpt-5.6-luna",
+          thinkingLevel: "max",
+        },
+      },
+    }));
+
+    const tuiHarness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
+    await emitExtensionEvent(tuiHarness, "session_start");
+    assert.deepEqual(tuiHarness.notifications.at(-1), {
+      message: "Pi Init 已就绪 · 架构设计 → openai-codex/gpt-5.6-luna",
+      level: "info",
+    });
+
+    const rpcHarness = createExtensionHarness([], { cwd: directory, mode: "rpc", trusted: true });
+    await emitExtensionEvent(rpcHarness, "session_start");
+    assert.equal(rpcHarness.notifications.some(({ message }) => message.startsWith("Pi Init 已就绪")), false);
+  });
+});
+
 test("/pi-init save 在命令面板中反馈保存成功与信任校验失败", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });

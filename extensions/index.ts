@@ -258,6 +258,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         : undefined;
       workflowDispatch.restoreWorkflowState(ctx);
       roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
+      const activeRole = runtimeState.activeRole;
+      if (ctx.mode === "tui" && activeRole) {
+        ctx.ui.notify(
+          `Pi Init 已就绪 · ${roleLabel(activeRole.role)} → ${activeRole.provider}/${activeRole.model}`,
+          "info",
+        );
+      }
       await workflowDispatch.scheduleWorkflow(ctx);
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
