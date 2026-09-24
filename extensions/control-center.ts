@@ -54,7 +54,13 @@ export function createControlCenter(deps: ControlCenterDependencies) {
   const { state, roleRuntime } = deps;
 
   function saveMenuOptions(ctx: ExtensionCommandContext) {
-    return { onSave: () => roleRuntime.saveRoleConfig(ctx) };
+    return {
+      onSave: async () => {
+        const result = await roleRuntime.saveRoleConfig(ctx);
+        ctx.ui.notify(result.message, result.ok ? "info" : "error");
+        return result;
+      },
+    };
   }
 
   async function setSessionMode(requested: string | undefined, ctx: ExtensionCommandContext) {

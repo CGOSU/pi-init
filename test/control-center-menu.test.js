@@ -215,6 +215,90 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
   });
 });
 
+test("上一级菜单按 Ctrl+S 后覆盖此前的未保存提示", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 2,
+      mode: "auto",
+      roleModels: {
+        architect: { provider: "openai-codex", model: "gpt-5.6-sol", thinkingLevel: "max" },
+      },
+    }));
+
+    const model = {
+      provider: "openai-codex",
+      id: "gpt-6-luna",
+      reasoning: true,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    };
+    let savedScreen = "";
+    let rootVisited = false;
+    let changeVisited = false;
+    let roleCenterVisits = 0;
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      mode: "tui",
+      trusted: true,
+      availableModels: [model],
+      custom: async (call) => {
+        const render = () => call.component.render(80).join("\n");
+        const choose = async (label) => {
+          for (let attempt = 0; attempt < 8; attempt += 1) {
+            if (render().includes(`→ ${label}`)) break;
+            call.component.handleInput("\u001b[B");
+          }
+          call.component.handleInput("\n");
+        };
+        const screen = render();
+        if (screen.includes("Pi Init 控制中心")) {
+          if (!rootVisited) {
+            rootVisited = true;
+            await choose("变更");
+          } else {
+            call.component.handleInput("\u001b");
+          }
+        } else if (screen.includes(" 变更")) {
+          if (!changeVisited) {
+            changeVisited = true;
+            await choose("角色与模型");
+          } else {
+            call.component.handleInput("\u001b");
+          }
+        } else if (screen.includes("角色与模型")) {
+          roleCenterVisits += 1;
+          if (roleCenterVisits === 1) {
+            await choose("● 架构设计");
+          } else {
+            call.component.handleInput("\u0013");
+            for (let attempt = 0; attempt < 50; attempt += 1) {
+              await new Promise((resolve) => setTimeout(resolve, 2));
+              savedScreen = render();
+              if (savedScreen.includes("角色配置已保存")) break;
+            }
+            call.component.handleInput("\u001b");
+          }
+        } else if (screen.includes("选择 架构设计 模型")) {
+          call.component.handleInput("\n");
+        } else if (screen.includes("推理强度")) {
+          await choose("max");
+        } else {
+          call.component.handleInput("\u001b");
+        }
+      },
+    });
+
+    await harness.commands.get("pi-init").handler("", harness.context);
+
+    const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.equal(persisted.roleModels.architect.model, model.id);
+    assert.equal(persisted.roleModels.architect.thinkingLevel, "max");
+    assert.match(savedScreen, /角色配置已保存/);
+    assert.match(harness.notifications.at(-1).message, /角色配置已保存/);
+    assert.doesNotMatch(harness.notifications.at(-1).message, /尚未保存/);
+  });
+});
+
 test("角色模型搜索菜单按 Ctrl+S 持久化完整角色模型配置", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
