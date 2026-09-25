@@ -29,7 +29,12 @@ For a clear, low-risk goal, make ordinary implementation choices and proceed wit
 
 - Test: `{{TEST_COMMAND}}`
 
+## Validation Requirements
 
+- For new or fixed behavior, add focused tests when appropriate; start with the smallest relevant test set and use file or change-range filters when supported instead of defaulting to the full suite.
+- Within the same workspace, reuse a passing validation result when the relevant implementation, tests, dependencies, and test configuration have not changed since it ran; rerun affected checks after relevant changes.
+- Run the full suite only when explicitly requested, changes span multiple modules or affect test infrastructure or dependency configuration, the relevant scope cannot be determined, or the project is being prepared for delivery or release.
+- Record only validations actually run and their real results; when reusing a result, state the basis rather than describing an unrun check as passed.
 
 <!-- pi-init:managed:start fast-path-wrap-up -->
 ## Fast Path Wrap-up Priority

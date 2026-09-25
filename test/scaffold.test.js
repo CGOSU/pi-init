@@ -101,6 +101,8 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     }
     assert.match(agents, /git config user\.name CGOSU/);
     assert.match(agents, /git config user\.email dev@cgosu\.com/);
+    assert.match(agents, /## 验证要求/);
+    assert.match(agents, /可复用已通过的验证结果/);
     assert.match(agents, /docs\/clean-code\.md/);
     assert.match(agents, /pi-init-role-routing/);
     assert.match(agents, /通用任务执行流程、证据门控、工具调用和角色交接规则/);
@@ -393,6 +395,8 @@ test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async (
     assert.match(agents, /## Runtime Environment and Command Conventions/);
     assert.match(agents, new RegExp("`" + process.platform + "`"));
     assert.match(agents, /- Test: `npm test`/);
+    assert.match(agents, /## Validation Requirements/);
+    assert.match(agents, /reuse a passing validation result/);
     assert.match(agents, /docs\/clean-code\.md/);
     assert.match(agents, /pi-init-role-routing/);
     assert.match(agents, /single source for the general task workflow, evidence gating, `read`\/`edit` invocation/);
