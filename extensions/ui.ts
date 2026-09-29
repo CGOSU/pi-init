@@ -151,6 +151,7 @@ export async function showMenu(
   }, {
     overlay: true,
     overlayOptions: {
+      anchor: "top-center",
       width: "100%",
       minWidth: 72,
       maxHeight: "90%",
