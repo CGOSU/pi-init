@@ -83,6 +83,30 @@ test("TUI 菜单按 Ctrl+S 显示保存进度和结果并保持菜单", async ()
   assert.match(savedText, /角色配置已保存/);
 });
 
+test("TUI 菜单支持 F2 作为 Ctrl+S 的兼容保存快捷键", async () => {
+  let saveCalls = 0;
+  const harness = createExtensionHarness([], {
+    mode: "tui",
+    custom: async (call) => {
+      call.component.handleInput("\u001bOQ");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      call.component.handleInput("\u001b");
+    },
+  });
+
+  const result = await showMenu(harness.context, "测试菜单", [
+    { value: "item", label: "菜单项" },
+  ], {
+    onSave: async () => {
+      saveCalls += 1;
+      return { ok: true, message: "角色配置已保存。" };
+    },
+  });
+
+  assert.equal(result, MENU_BACK);
+  assert.equal(saveCalls, 1);
+});
+
 test("TUI 菜单在当前界面显示保存失败", async () => {
   let savedText = "";
   const harness = createExtensionHarness([], {
@@ -158,7 +182,7 @@ test("角色模型搜索和推理强度菜单都支持 Ctrl+S 保存完整配置
     thinkingLevel: savedSelections[0].thinkingLevel,
   });
   assert.deepEqual(savedSelection, result);
-  assert.match(modelPickerScreen, /Ctrl\+S 保存/);
+  assert.match(modelPickerScreen, /Ctrl\+S\/F2 保存/);
   assert.match(modelPickerSavedScreen, /角色配置已保存/);
   assert.match(savedScreen, /角色配置已保存/);
 });

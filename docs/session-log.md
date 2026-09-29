@@ -126,6 +126,12 @@
 - 验证：`node --test test/extension-roles.test.js`，16 项全部通过。
 - 遗留：未执行 Git commit、push、安装 package 或 reload。
 
+### 2026-09-14：为 Windows 终端补充保存快捷键
+
+- 完成内容：部分 Windows 终端可能拦截 `Ctrl+S`，角色配置菜单新增 `F2` 保存回退方式，并更新菜单提示和 README；`/pi-init save` 命令保持不变。
+- 验证：`node --test test/control-center-menu.test.js`，11 项全部通过。
+- 遗留：未在用户实际 PowerShell/Pi TUI 终端复现或端到端确认按键传递；未安装 package、reload、提交或推送。
+
 ### 2026-09-13：确认第二 Provider 的安全边界并完成 Runtime 回归
 
 - 完成内容：确认 Codex CLI 取证尚不足以实现 Runtime `AgentProvider` 生命周期，保持真实 adapter blocked；agent-runtime 只提供无模型 `command-fixture`，pi-init Runtime client 保持 backend-agnostic，不猜测 CLI 参数或增加本地 fallback。Runtime 双轨迁移的 `cutover-ready` 仍为否。

@@ -39,6 +39,10 @@ export function shortModelName(model: string) {
   return parts.at(-1) ?? model;
 }
 
+function isSaveShortcut(data: string) {
+  return matchesKey(data, Key.ctrl("s")) || matchesKey(data, Key.f2);
+}
+
 export async function showMenu(
   ctx: ExtensionContext,
   title: string,
@@ -93,7 +97,7 @@ export async function showMenu(
     }
     content.addChild(new Text(
       theme.fg("dim", hasSaveAction
-        ? "↑↓ 选择 · Enter 确认 · Ctrl+S 保存 · Esc 返回"
+        ? "↑↓ 选择 · Enter 确认 · Ctrl+S/F2 保存 · Esc 返回"
         : "↑↓ 选择 · Enter 确认 · Esc 返回"),
       0,
       0,
@@ -116,7 +120,7 @@ export async function showMenu(
         }
         if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
-        } else if (hasSaveAction && matchesKey(data, Key.ctrl("s"))) {
+        } else if (hasSaveAction && isSaveShortcut(data)) {
           if (!saveInFlight) {
             saveInFlight = true;
             saveStatus.setText(theme.fg("warning", "正在保存…"));
@@ -248,7 +252,7 @@ async function selectModelWithSearch(
       return [
         ...new DynamicBorder((text: string) => theme.fg("borderAccent", text)).render(width),
         ...new Text(theme.fg("accent", theme.bold(`选择 ${roleLabel(role)} 模型`)), 1, 0).render(width),
-        new Text(theme.fg("dim", `输入关键词即时筛选 · ↑↓ 选择 · Enter 确认${onSave ? " · Ctrl+S 保存" : ""} · Esc 返回`), 1, 0).render(width)[0] ?? "",
+        new Text(theme.fg("dim", `输入关键词即时筛选 · ↑↓ 选择 · Enter 确认${onSave ? " · Ctrl+S/F2 保存" : ""} · Esc 返回`), 1, 0).render(width)[0] ?? "",
         ...search.render(innerWidth).map((line) => ` ${line}`),
         ...list.render(innerWidth).map((line) => ` ${line}`),
         ...(saveStatus ? new Text(saveStatus, 1, 0).render(width) : []),
@@ -279,7 +283,7 @@ async function selectModelWithSearch(
           list.handleInput(data);
         } else if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
-        } else if (onSave && matchesKey(data, Key.ctrl("s"))) {
+        } else if (onSave && isSaveShortcut(data)) {
           saveInFlight = true;
           saveStatus = theme.fg("warning", "正在保存…");
           Promise.resolve()
