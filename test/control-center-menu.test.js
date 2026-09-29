@@ -107,6 +107,35 @@ test("TUI 菜单支持 F2 作为 Ctrl+S 的兼容保存快捷键", async () => {
   assert.equal(saveCalls, 1);
 });
 
+test("角色模型选择器在首项按上键不会跳到列表末尾", async () => {
+  const first = {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    reasoning: true,
+    thinkingLevelMap: { max: "max" },
+  };
+  const second = {
+    provider: "openrouter",
+    id: "anthropic/claude-sonnet-4",
+    reasoning: true,
+    thinkingLevelMap: { max: "max" },
+  };
+  const harness = createExtensionHarness([], {
+    mode: "tui",
+    availableModels: [first, second],
+    custom: async (call) => {
+      if (harness.customCalls.length === 1) {
+        call.component.handleInput("\u001b[A");
+      }
+      call.component.handleInput("\n");
+    },
+  });
+
+  const result = await selectRoleModel(harness.context, "architect");
+
+  assert.equal(result.model, first.id);
+});
+
 test("TUI 菜单在当前界面显示保存失败", async () => {
   let savedText = "";
   const harness = createExtensionHarness([], {

@@ -151,7 +151,7 @@ export async function showMenu(
   }, {
     overlay: true,
     overlayOptions: {
-      anchor: "top-center",
+      anchor: "bottom-center",
       width: "100%",
       minWidth: 72,
       maxHeight: "90%",
@@ -281,7 +281,14 @@ async function selectModelWithSearch(
           return;
         }
         if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
-          list.handleInput(data);
+          const selectedValue = list.getSelectedItem()?.value;
+          const selectedIndex = filteredModels.findIndex(
+            (model) => `${model.provider}/${model.id}` === selectedValue,
+          );
+          if (selectedIndex >= 0) {
+            const delta = matchesKey(data, Key.up) ? -1 : 1;
+            list.setSelectedIndex(Math.max(0, Math.min(filteredModels.length - 1, selectedIndex + delta)));
+          }
         } else if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
         } else if (onSave && isSaveShortcut(data)) {
