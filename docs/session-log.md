@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-30：角色模型配置升级为 v3 分层结构
+
+- 完成内容：将持久化权威源升级为 `roleTiers → tiers → models`，解析后的 `roleModels` 继续提供实际模型视图。运行时显式保存和手动模式写回才持久化 v3；兼容扁平初始化和旧格式迁移。控制中心共享档位编辑预览影响角色并确认，单角色变更保持隔离。
+- 完成内容：将配置核心拆分至 `src/role-config.js`、共享定义拆分至 `src/role-config-definitions.js`；`src/roles.js` 保留兼容导出。将分层配置测试拆至 `test/role-config.test.js`，并更新控制中心保存测试以验证 v3 持久化结构及解析投影。
+- 修改范围：`extensions/contracts.ts`、`extensions/control-center.ts`、`extensions/role-runtime.ts`、`src/roles.js`、`src/role-config.js`、`src/role-config-definitions.js`、`src/scaffold.js`、`test/control-center-menu.test.js`、`test/extension-lifecycle.test.js`、`test/extension-roles.test.js`、`test/role-model-persistence.test.js`、`test/role-config.test.js`、`test/scaffold.test.js`、本记录及 `docs/current-state.md`、`docs/decisions.md`。未触碰工作区既有的 `AGENTS.md` 修改。
+- 验证：迁移相关针对性测试 45 项通过；`node --test test/control-center-menu.test.js` 12 项通过；最终 `npm test` 162 项中 159 项通过、0 项失败、3 项跳过（需要先构建 runtime-daemon 或设置 `AGENT_RUNTIME_DAEMON`）；`node scripts/check-line-count.js` 和 `git diff --check` 通过。首次全量测试发现 3 个保存测试仍断言旧的持久化 `roleModels` 投影，按 v3 契约更新断言后复跑通过。
+- 遗留问题：3 项真实 Runtime daemon 测试未执行；本次尚未推送。
+
 ### 2026-09-24：修复上一级菜单 Ctrl+S 后的未保存提示
 
 - 完成内容：上一级控制中心菜单按 `Ctrl+S` 保存后，通过全局通知同步报告成功或失败，避免角色配置已写入项目文件后仍留下此前的“尚未保存”提示；新增从角色配置菜单返回上一级再保存的回归测试。

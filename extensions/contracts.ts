@@ -9,6 +9,13 @@ export type RoleModelConfig = {
   thinkingLevel: string;
 };
 
+type RoleModelEntity = Pick<RoleModelConfig, "provider" | "model">;
+
+type RoleTierConfig = {
+  modelRef: string;
+  thinkingLevel: string;
+};
+
 export type RunTimingEntryData = {
   source?: unknown;
   inputAt?: unknown;
@@ -53,6 +60,9 @@ export type ResolvedRoleConfig = {
   mode: string;
   workflowMode: string;
   workflowExecutor: string;
+  roleTiers: Record<string, string>;
+  tiers: Record<string, RoleTierConfig>;
+  models: Record<string, RoleModelEntity>;
   roleModels: Record<string, RoleModelConfig>;
   runtime?: RuntimeConfig;
 };
@@ -102,11 +112,40 @@ export const roleModelsMapSchema = Type.Record(
   { description: "项目启用的角色及其模型映射" },
 );
 
+const configReferenceSchema = Type.String({
+  pattern: ROLE_ID_PATTERN.source,
+  description: "角色、档位或模型引用 ID",
+});
+
+const roleTierAssignmentsSchema = Type.Record(
+  Type.String({ pattern: ROLE_ID_PATTERN.source }),
+  configReferenceSchema,
+  { description: "角色到档位的映射" },
+);
+
+const roleTierRegistrySchema = Type.Record(
+  configReferenceSchema,
+  Type.Object({
+    modelRef: configReferenceSchema,
+    thinkingLevel: StringEnum(THINKING_LEVELS, { description: "Pi 推理强度" }),
+  }, { additionalProperties: false }),
+  { description: "档位到模型引用和推理强度的映射" },
+);
+
+const roleModelRegistrySchema = Type.Record(
+  configReferenceSchema,
+  Type.Object({
+    provider: Type.String({ description: "模型提供商 ID" }),
+    model: Type.String({ description: "模型 ID" }),
+  }, { additionalProperties: false }),
+  { description: "模型引用到 provider/model 实体的映射" },
+);
+
 export const roleModelsSchema = Type.Object({
   schemaVersion: Type.Optional(Type.Integer({
     minimum: 1,
-    maximum: 2,
-    description: "角色模型配置版本；当前保存版本为 2",
+    maximum: 3,
+    description: "角色模型配置版本；当前保存版本为 3",
   })),
   workflowMode: Type.Optional(StringEnum(WORKFLOW_MODES, {
     description: "任务工作流策略：off、on 或 auto（auto 在不超过 2 个任务时跳过编排）",
@@ -119,6 +158,9 @@ export const roleModelsSchema = Type.Object({
   })),
   runtime: Type.Optional(runtimeConfigSchema),
   roleModels: Type.Optional(roleModelsMapSchema),
+  roleTiers: Type.Optional(roleTierAssignmentsSchema),
+  tiers: Type.Optional(roleTierRegistrySchema),
+  models: Type.Optional(roleModelRegistrySchema),
 }, { additionalProperties: true });
 
 export const initProjectParameters = Type.Object({

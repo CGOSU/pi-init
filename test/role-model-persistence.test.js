@@ -6,6 +6,7 @@ import {
   mkdir,
   path,
   readFile,
+  resolveRoleConfig,
   withTempDirectory,
   writeFile,
 } from "./helpers.js";
@@ -13,7 +14,8 @@ import {
 test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
-    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+    const configPath = path.join(directory, ".pi", "role-models.json");
+    const original = JSON.stringify({
       schemaVersion: 2,
       mode: "auto",
       workflowMode: "auto",
@@ -25,7 +27,8 @@ test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", as
           thinkingLevel: "max",
         },
       },
-    }));
+    });
+    await writeFile(configPath, original);
 
     const tuiHarness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(tuiHarness, "session_start");
@@ -33,10 +36,12 @@ test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", as
       message: "📌 Pi Init · 角色模型配置\n\n◆ 架构设计\n  模型：openai-codex/gpt-5.6-luna\n  推理强度：max",
       level: "info",
     });
+    assert.equal(await readFile(configPath, "utf8"), original);
 
     const rpcHarness = createExtensionHarness([], { cwd: directory, mode: "rpc", trusted: true });
     await emitExtensionEvent(rpcHarness, "session_start");
     assert.equal(rpcHarness.notifications.some(({ message }) => message.startsWith("Pi Init 已就绪")), false);
+    assert.equal(await readFile(configPath, "utf8"), original);
   });
 });
 
@@ -75,9 +80,16 @@ test("/pi-init save 在命令面板中反馈保存成功与信任校验失败", 
     const trustedHarness = createExtensionHarness([], { cwd: directory, trusted: true });
     await trustedHarness.commands.get("pi-init").handler("save", trustedHarness.context);
     assert.deepEqual(trustedHarness.notifications.at(-1), {
-      message: "角色配置已保存。",
+      message: "角色配置已保存（已规范化为 v3 分层结构）。",
       level: "info",
     });
+    const saved = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
+    assert.equal(saved.schemaVersion, 3);
+    assert.equal(saved.roleModels, undefined);
+    assert.deepEqual(saved.roleTiers, {});
+    assert.deepEqual(saved.tiers, {});
+    assert.deepEqual(saved.models, {});
+    assert.deepEqual(resolveRoleConfig(saved).roleModels, {});
 
     const untrustedHarness = createExtensionHarness([], { cwd: directory, trusted: false });
     await untrustedHarness.commands.get("pi-init").handler("save", untrustedHarness.context);

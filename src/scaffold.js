@@ -2,7 +2,7 @@ import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolveRoleConfig } from "./roles.js";
+import { serializeRoleConfig } from "./roles.js";
 import {
   createTemplateState,
   FAST_PATH_BLOCK,
@@ -216,7 +216,7 @@ export async function createScaffold(targetDir, options = {}) {
     : language === "en"
       ? "To be completed by the project maintainer."
       : "待项目维护者补充。";
-  const roleConfig = resolveRoleConfig(options.roleModels);
+  const roleConfig = serializeRoleConfig(options.roleModels);
   const variables = {
     PROJECT_NAME: projectName,
     PROJECT_DESCRIPTION: projectDescription,

@@ -13,6 +13,7 @@ import {
   normalizeModelReference,
   normalizeRoleId,
   resolveRoleConfig,
+  serializeRoleConfig,
   roleLabel,
   roleModeLabel,
   shouldCompactOnRoleSwitch,
@@ -117,8 +118,17 @@ export function createRoleRuntime(
       Object.assign(roleModels, changes.roleModels);
       hasRoleModels = true;
     }
+    for (const field of ["roleTiers", "tiers", "models"]) {
+      const update = changes[field];
+      if (!update || typeof update !== "object" || Array.isArray(update)) continue;
+      const existing = state.sessionRoleConfigOverrides[field];
+      const previous = existing && typeof existing === "object" && !Array.isArray(existing)
+        ? existing as Record<string, unknown>
+        : {};
+      next[field] = { ...previous, ...(update as Record<string, unknown>) };
+    }
     for (const [role, value] of Object.entries(changes)) {
-      if (!["schemaVersion", "mode", "workflowMode", "workflowEnabled", "workflowExecutor", "roleModels", "providerPolicy"].includes(role)
+      if (!["schemaVersion", "mode", "workflowMode", "workflowEnabled", "workflowExecutor", "roleModels", "roleTiers", "tiers", "models", "providerPolicy"].includes(role)
         && value && typeof value === "object" && !Array.isArray(value)) {
         roleModels[role] = value;
         delete next[role];
@@ -130,13 +140,15 @@ export function createRoleRuntime(
   }
 
   function clearStagedRoleConfig(role: string) {
-    const roleModels = state.sessionRoleConfigOverrides.roleModels;
-    if (!roleModels || typeof roleModels !== "object" || Array.isArray(roleModels)) return;
-    const remaining = { ...(roleModels as Record<string, unknown>) };
-    delete remaining[role];
     const next = { ...state.sessionRoleConfigOverrides };
-    if (Object.keys(remaining).length > 0) next.roleModels = remaining;
-    else delete next.roleModels;
+    for (const field of ["roleModels", "roleTiers"]) {
+      const staged = next[field];
+      if (!staged || typeof staged !== "object" || Array.isArray(staged)) continue;
+      const remaining = { ...(staged as Record<string, unknown>) };
+      delete remaining[role];
+      if (Object.keys(remaining).length > 0) next[field] = remaining;
+      else delete next[field];
+    }
     state.sessionRoleConfigOverrides = next;
   }
   async function writeBackManualModelSelection(
@@ -185,9 +197,10 @@ export function createRoleRuntime(
       await withFileMutationQueue(configPath, async () => {
         const persisted = await readRoleConfig(ctx);
         const persistedBase = persisted && typeof persisted === "object" ? persisted : {};
-        const resolved = resolveRoleConfig(mergeRoleConfig(persistedBase, changes));
+        const updated = mergeRoleConfig(persistedBase, changes);
+        const serialized = serializeRoleConfig(updated);
         await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
+        await writeFile(configPath, `${JSON.stringify(serialized, null, 2)}\n`, "utf8");
       });
       clearStagedRoleConfig(role);
       state.configuredRoleNames = Object.keys((await readSessionRoleConfig(ctx)).roleModels);
@@ -216,15 +229,17 @@ export function createRoleRuntime(
       const outcome = await withFileMutationQueue(configPath, async () => {
         const persisted = await readRoleConfig(ctx);
         const current = persisted && typeof persisted === "object" ? persisted : {};
-        const resolved = resolveRoleConfig(mergeRoleConfig(current, changes)) as ResolvedRoleConfig;
+        const updated = mergeRoleConfig(current, changes);
+        const resolved = resolveRoleConfig(updated) as ResolvedRoleConfig;
         const canonical = persisted && typeof persisted === "object"
           && persisted.schemaVersion === resolved.schemaVersion
-          && Object.prototype.hasOwnProperty.call(persisted, "roleModels");
+          && ["roleTiers", "tiers", "models"].every((field) => Object.prototype.hasOwnProperty.call(persisted, field))
+          && !Object.prototype.hasOwnProperty.call(persisted, "roleModels");
         if (!hasPendingChanges && (!persisted || canonical)) {
           return { resolved, changed: false };
         }
         await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
+        await writeFile(configPath, `${JSON.stringify(serializeRoleConfig(updated), null, 2)}\n`, "utf8");
         return { resolved, changed: true };
       });
       if (!outcome.changed) {
@@ -239,7 +254,7 @@ export function createRoleRuntime(
         ok: true as const,
         message: hasPendingChanges
           ? "角色配置已保存。"
-          : "角色配置已保存（旧版配置已迁移为 roleModels 结构）。",
+          : "角色配置已保存（已规范化为 v3 分层结构）。",
       };
     } catch (error) {
       return { ok: false as const, message: `保存角色配置失败：${textOf(error)}` };

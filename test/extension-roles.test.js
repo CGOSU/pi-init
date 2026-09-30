@@ -137,13 +137,19 @@ test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async (
 
 });
 
-test("手动模式原生模型切换写回配置且不重复写入", async () => {
+test("手动模式原生模型切换写回 v3 并隔离共享档位，且不重复写入", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
-    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ mode: "manual" }));
-
+    const configPath = path.join(directory, ".pi", "role-models.json");
     const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
     const unsafe = { provider: "openrouter", id: "anthropic/claude-haiku-4.5" };
+    await writeFile(configPath, JSON.stringify({
+      mode: "manual",
+      roleModels: {
+        "developer-test": { provider: safe.provider, model: safe.id, thinkingLevel: "max" },
+        "docs-commit": { provider: safe.provider, model: safe.id, thinkingLevel: "medium" },
+      },
+    }));
     const harness = createExtensionHarness([], {
       cwd: directory,
       model: safe,
@@ -153,22 +159,38 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
     await emitExtensionEvent(harness, "session_start");
     assert.deepEqual(harness.context.model, safe);
 
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 3,
+      mode: "manual",
+      roleTiers: { "developer-test": "shared-tier", "docs-commit": "shared-tier" },
+      tiers: { "shared-tier": { modelRef: "safe-model", thinkingLevel: "max" } },
+      models: { "safe-model": { provider: safe.provider, model: safe.id } },
+    }));
     harness.context.model = unsafe;
     await emitExtensionEvent(harness, "model_select", { model: unsafe, previousModel: safe, source: "user" });
     assert.deepEqual(harness.context.model, unsafe);
 
-    const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    assert.deepEqual(persisted.roleModels["developer-test"], {
+    const persisted = JSON.parse(await readFile(configPath, "utf8"));
+    assert.equal(persisted.schemaVersion, 3);
+    assert.equal(persisted.roleModels, undefined);
+    assert.notEqual(persisted.roleTiers["developer-test"], persisted.roleTiers["docs-commit"]);
+    const resolved = helpers.resolveRoleConfig(persisted);
+    assert.deepEqual(resolved.roleModels["developer-test"], {
       provider: "openrouter",
       model: "anthropic/claude-haiku-4.5",
       thinkingLevel: "max",
     });
+    assert.deepEqual(resolved.roleModels["docs-commit"], {
+      provider: safe.provider,
+      model: safe.id,
+      thinkingLevel: "max",
+    });
     assert.equal(persisted.providerPolicy, undefined);
     const notificationsBefore = harness.notifications.length;
-    const fileBefore = await readFile(path.join(directory, ".pi", "role-models.json"), "utf8");
+    const fileBefore = await readFile(configPath, "utf8");
     await emitExtensionEvent(harness, "model_select", { model: unsafe, previousModel: unsafe, source: "user" });
     assert.equal(harness.notifications.length, notificationsBefore);
-    assert.equal(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"), fileBefore);
+    assert.equal(await readFile(configPath, "utf8"), fileBefore);
 
     const inputHandler = (harness.handlers.get("input") ?? [])[0];
     assert.deepEqual(
@@ -211,17 +233,95 @@ test("角色模型选择器展示全部已注册模型并可暂存跨 Provider �
     availableModels: [safe, other],
     trusted: true,
     input: async () => "",
-    select: async (title, items) => title.startsWith("选择 架构设计 模型")
-      ? items.find((item) => item.includes("openrouter")) ?? items[0]
-      : title.startsWith("推理强度")
-        ? items[0]
-        : undefined,
+    select: async (title, items) => title.includes("共用档位")
+      ? items.find((item) => item.startsWith("仅更改"))
+      : title.startsWith("选择 架构设计 模型")
+        ? items.find((item) => item.includes("openrouter")) ?? items[0]
+        : title.startsWith("推理强度")
+          ? items[0]
+          : undefined,
   });
   const command = harness.commands.get("pi-init");
   await command.handler("config architect", harness.context);
 
-  const selectedItems = harness.selectCalls[0]?.items ?? [];
+  const selectedItems = harness.selectCalls.find((call) => call.title.startsWith("选择 架构设计 模型"))?.items ?? [];
   assert.ok(selectedItems.some((item) => item.includes("openrouter")));
+});
+
+test("共享档位编辑预览并确认影响范围，单角色编辑隔离同档位成员", async () => {
+  const safe = { provider: "openai-codex", id: "gpt-5.6-luna", name: "Luna" };
+  const other = { provider: "openrouter", id: "anthropic/claude-sonnet-4", name: "Sonnet" };
+
+  async function configureSharedTier(scope) {
+    await withTempDirectory(async (directory) => {
+      const configPath = path.join(directory, ".pi", "role-models.json");
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await writeFile(configPath, JSON.stringify({
+        schemaVersion: 3,
+        mode: "auto",
+        roleTiers: { "developer-test": "shared-tier", "docs-commit": "shared-tier" },
+        tiers: { "shared-tier": { modelRef: "safe-model", thinkingLevel: "max" } },
+        models: { "safe-model": { provider: safe.provider, model: safe.id } },
+      }));
+
+      const harness = createExtensionHarness([], {
+        cwd: directory,
+        model: safe,
+        availableModels: [safe, other],
+        trusted: true,
+        input: async () => "",
+        select: async (title, items) => {
+          if (title.includes("共用档位")) {
+            return items.find((item) => scope === "tier"
+              ? item.startsWith("更改整个共享档位")
+              : item.startsWith("仅更改"));
+          }
+          if (title.startsWith("确认更改共享档位")) return items[0];
+          if (title.startsWith("选择 开发测试 模型")) return items.find((item) => item.includes(other.id));
+          if (title.startsWith("推理强度")) return items[0];
+          return undefined;
+        },
+      });
+      await harness.commands.get("pi-init").handler("config developer-test", harness.context);
+
+      const scopeCall = harness.selectCalls.find((call) => call.title.includes("共用档位"));
+      assert.ok(scopeCall);
+      assert.match(scopeCall.title, /开发测试/);
+      assert.match(scopeCall.title, /文档收尾/);
+      assert.match(scopeCall.title, /openai-codex\/gpt-5\.6-luna/);
+      const confirmationIndex = harness.selectCalls.findIndex((call) => call.title.startsWith("确认更改共享档位"));
+      const modelIndex = harness.selectCalls.findIndex((call) => call.title.startsWith("选择 开发测试 模型"));
+      if (scope === "tier") {
+        assert.ok(confirmationIndex > harness.selectCalls.indexOf(scopeCall));
+        assert.ok(modelIndex > confirmationIndex);
+      } else {
+        assert.equal(confirmationIndex, -1);
+      }
+
+      await harness.commands.get("pi-init").handler("save", harness.context);
+      const saved = JSON.parse(await readFile(configPath, "utf8"));
+      const resolved = helpers.resolveRoleConfig(saved);
+      assert.deepEqual(resolved.roleModels["developer-test"], {
+        provider: other.provider,
+        model: other.id,
+        thinkingLevel: resolved.roleModels["developer-test"].thinkingLevel,
+      });
+      if (scope === "tier") {
+        assert.equal(saved.roleTiers["developer-test"], saved.roleTiers["docs-commit"]);
+        assert.deepEqual(resolved.roleModels["docs-commit"], resolved.roleModels["developer-test"]);
+      } else {
+        assert.notEqual(saved.roleTiers["developer-test"], saved.roleTiers["docs-commit"]);
+        assert.deepEqual(resolved.roleModels["docs-commit"], {
+          provider: safe.provider,
+          model: safe.id,
+          thinkingLevel: "max",
+        });
+      }
+    });
+  }
+
+  await configureSharedTier("tier");
+  await configureSharedTier("role");
 });
 
 test("非 TUI 工作流状态继续使用通知文本", async () => {
