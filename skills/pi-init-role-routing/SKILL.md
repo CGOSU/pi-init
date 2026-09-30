@@ -2,7 +2,7 @@
 name: pi-init-role-routing
 description: >
   处理使用 pi-init 初始化项目、执行代码和测试、维护项目文档或完成交付收尾时使用；
-  根据项目分层角色模型配置选择已启用角色，在角色边界调用 switch_role，并按需使用 task_workflow 顺序推进工作流。
+  根据项目 roleModels 映射选择已启用角色，在角色边界调用 switch_role，并按需使用 task_workflow 顺序推进工作流。
 metadata:
   primary-category: workflow
   related-categories: coding, documentation, project-management
@@ -27,9 +27,9 @@ metadata:
 
 ## 角色和模型来源
 
-- `.pi/role-models.json` 的 schema v3 `roleTiers → tiers → models` 是角色配置持久化权威源；解析后的 `roleModels` 是角色→实际 provider/model/thinkingLevel 的运行时视图。只有 `roleTiers` 中已配置的角色才能被请求。
-- 内置角色 ID 为 `architect`、`developer-test`、`docs-commit`；解析后的角色模型值包含 `provider`、`model` 和 `thinkingLevel`。不为缺失角色或不可用模型借用模型或自动 fallback。
-- 扁平 `roleModels` 输入、v1/v2 和旧版顶层角色字段保持兼容；读取、启动和运行时查询不写回迁移。仅显式 `/pi-init save` 或用户触发的手动模式原生模型写回可持久化 v3。Skill 不写入具体 provider、model 或 thinkingLevel。
+- `.pi/role-models.json` 的 `roleModels` 是唯一启用角色和模型的项目级来源；只有其中已配置的角色才能被请求。
+- 内置角色 ID 为 `architect`、`developer-test`、`docs-commit`；角色值必须包含 `provider`、`model` 和 `thinkingLevel`。不为缺失角色借用模型或自动 fallback。
+- `schemaVersion: 2` 和旧版顶层角色字段按现有兼容规则读取；只有用户明确执行 `/pi-init save` 才持久化迁移。Skill 不写入具体 provider、model 或 thinkingLevel。
 
 ## 共享硬约束
 

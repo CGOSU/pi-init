@@ -43,51 +43,11 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
     },
     ...Object.keys(config.roleModels).map((role) => ({
       value: role,
-      label: `● ${roleLabel(role)} · ${formatRoleModel(config.roleModels[role])}`,
+      label: `● ${roleLabel(role)} · ${shortModelName(config.roleModels[role].model)}/${config.roleModels[role].thinkingLevel}`,
       description: formatRoleModel(config.roleModels[role]),
     })),
     { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
   ];
-}
-
-async function chooseRoleConfigTargets(
-  ctx: ExtensionCommandContext,
-  config: ResolvedRoleConfig,
-  role: string,
-) {
-  const tierRef = config.roleTiers[role];
-  const affectedRoles = Object.entries(config.roleTiers).flatMap(([affectedRole, assignedTier]) =>
-    assignedTier === tierRef ? [affectedRole] : [],
-  );
-  if (!tierRef || affectedRoles.length < 2) return { roles: [role] };
-
-  const impact = affectedRoles.map((affectedRole) =>
-    `${roleLabel(affectedRole)} → ${formatRoleModel(config.roleModels[affectedRole])}`,
-  );
-  const scope = await showMenu(
-    ctx,
-    `角色 ${roleLabel(role)} 共用档位 ${tierRef}；受影响角色：${impact.join("；")}`,
-    [
-      { value: "role", label: `仅更改 ${roleLabel(role)}`, description: "其他共享角色保持不变" },
-      { value: "tier", label: `更改整个共享档位（${affectedRoles.length} 个角色）` },
-      { value: MENU_BACK, label: "← 返回上一级" },
-    ],
-    { summary: impact },
-  );
-  if (!scope || isMenuBack(scope)) return undefined;
-  if (scope === "role") return { roles: [role] };
-  if (scope !== "tier") return undefined;
-
-  const confirmed = await showMenu(
-    ctx,
-    `确认更改共享档位 ${tierRef}？将同步影响：${impact.join("；")}`,
-    [
-      { value: "confirm", label: `确认影响 ${affectedRoles.length} 个角色` },
-      { value: "cancel", label: "取消" },
-    ],
-    { summary: impact },
-  );
-  return confirmed === "confirm" ? { roles: affectedRoles, sharedTierRef: tierRef } : undefined;
 }
 
 export function createControlCenter(deps: ControlCenterDependencies) {
@@ -138,10 +98,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     const role = requested || await showMenu(
       ctx,
       "切换角色",
-      roleNames.map((value) => ({
-        value,
-        label: `${roleLabel(value)} · ${formatRoleModel(config.roleModels[value])}`,
-      })),
+      roleNames.map((value) => ({ value, label: roleLabel(value) })),
       saveMenuOptions(ctx),
     );
     if (!role || isMenuBack(role)) return;
@@ -152,7 +109,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     try {
       const result = await roleRuntime.applyRole(role, ctx);
       ctx.ui.notify(
-        `已切换到 ${roleLabel(result.role)}：${formatRoleModel(result)}`,
+        `已切换到 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}`,
         "info",
       );
     } catch (error) {
@@ -237,10 +194,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     const role = requested || await showMenu(
       ctx,
       "配置角色模型",
-      roleNames.map((value) => ({
-        value,
-        label: `${roleLabel(value)} · ${formatRoleModel(config.roleModels[value])}`,
-      })),
+      roleNames.map((value) => ({ value, label: roleLabel(value) })),
       saveMenuOptions(ctx),
     );
     if (!role || isMenuBack(role)) return;
@@ -253,48 +207,14 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       return;
     }
 
-    const target = await chooseRoleConfigTargets(ctx, config, role);
-    if (!target) return;
-    const targetRoles = target.roles;
-
     try {
-      const roleChanges = (selection: RoleModelConfig) =>
-        Object.fromEntries(targetRoles.map((targetRole) => [targetRole, selection]));
-      const stageSelection = (selection: RoleModelConfig) => {
-        if (!target.sharedTierRef) {
-          roleRuntime.stageRoleConfig({ roleModels: roleChanges(selection) });
-          return;
-        }
-        const existingModel = Object.entries(config.models).find(([, model]) =>
-          model.provider === selection.provider && model.model === selection.model,
-        );
-        let modelRef = existingModel?.[0];
-        if (!modelRef) {
-          let index = 1;
-          while (Object.prototype.hasOwnProperty.call(config.models, `model-${index}`)) index += 1;
-          modelRef = `model-${index}`;
-        }
-        const tierChanges = {
-          tiers: {
-            [target.sharedTierRef]: { modelRef, thinkingLevel: selection.thinkingLevel },
-          },
-        };
-        if (existingModel) {
-          roleRuntime.stageRoleConfig(tierChanges);
-        } else {
-          roleRuntime.stageRoleConfig({
-            ...tierChanges,
-            models: { [modelRef]: { provider: selection.provider, model: selection.model } },
-          });
-        }
-      };
       let savedSelection: RoleModelConfig | undefined;
       const selection = await selectRoleModel(ctx, role, config.roleModels[role], {
         onSave: async (draft) => {
           if (!draft || typeof draft === "string") {
             return { ok: false as const, message: "请先选择模型和推理强度，再保存角色配置。" };
           }
-          stageSelection(draft);
+          roleRuntime.stageRoleConfig({ roleModels: { [role]: draft } });
           const saveResult = await roleRuntime.saveRoleConfig(ctx);
           if (saveResult.ok) savedSelection = draft;
           return saveResult;
@@ -309,27 +229,15 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         && savedSelection.provider === selection.provider
         && savedSelection.model === selection.model
         && savedSelection.thinkingLevel === selection.thinkingLevel;
-      let alreadySaved = alreadySavedInMenu;
-      if (!alreadySaved) {
-        const persistedTargets = await Promise.all(targetRoles.map((targetRole) =>
-          roleRuntime.isRoleModelConfigPersisted(targetRole, selection, ctx),
-        ));
-        alreadySaved = persistedTargets.every(Boolean);
-      }
-      if (alreadySaved) {
-        for (const targetRole of targetRoles) roleRuntime.clearStagedRoleConfig(targetRole);
-      } else {
-        stageSelection(selection);
-      }
+      const alreadySaved = alreadySavedInMenu
+        || await roleRuntime.isRoleModelConfigPersisted(role, selection, ctx);
+      if (alreadySaved) roleRuntime.clearStagedRoleConfig(role);
+      else roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
       const result = await roleRuntime.applyRole(role, ctx);
-      const sharedUpdateStatus = alreadySaved ? "已保存" : "已暂存";
-      const sharedUpdate = targetRoles.length > 1
-        ? `共享档位${sharedUpdateStatus}，影响角色：${targetRoles.map(roleLabel).join("、")}。`
-        : "";
       ctx.ui.notify(
         alreadySaved
-          ? `${sharedUpdate}角色配置已保存并应用：${roleLabel(result.role)} · ${formatRoleModel(result)}。`
-          : `${sharedUpdate}角色配置已修改，尚未保存。已暂存 ${roleLabel(result.role)}：${formatRoleModel(result)}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
+          ? `角色配置已保存并应用：${roleLabel(result.role)} · ${shortModelName(result.model)}/${result.thinkingLevel}。`
+          : `角色配置已修改，尚未保存。已暂存 ${roleLabel(result.role)}：${shortModelName(result.model)}/${result.thinkingLevel}；仅当前会话生效，执行 /pi-init save 才写入项目文件。`,
         "info",
       );
     } catch (error) {

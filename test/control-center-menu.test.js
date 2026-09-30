@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
 import { MENU_BACK, selectRoleModel, showMenu } from "../extensions/ui.ts";
-import { resolveRoleConfig } from "../src/roles.js";
 
 const {
   createExtensionHarness,
@@ -261,11 +260,8 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
     await harness.commands.get("pi-init").handler("config architect", harness.context);
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    const resolved = resolveRoleConfig(persisted);
-    assert.equal(persisted.schemaVersion, 3);
-    assert.equal(persisted.roleModels, undefined);
-    assert.equal(resolved.roleModels.architect.model, model.id);
-    assert.equal(resolved.roleModels.architect.thinkingLevel, "xhigh");
+    assert.equal(persisted.roleModels.architect.model, model.id);
+    assert.equal(persisted.roleModels.architect.thinkingLevel, "xhigh");
     assert.match(savedScreen, /角色配置已保存/);
     assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
     assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
@@ -348,11 +344,8 @@ test("上一级菜单按 Ctrl+S 后覆盖此前的未保存提示", async () => 
     await harness.commands.get("pi-init").handler("", harness.context);
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    const resolved = resolveRoleConfig(persisted);
-    assert.equal(persisted.schemaVersion, 3);
-    assert.equal(persisted.roleModels, undefined);
-    assert.equal(resolved.roleModels.architect.model, model.id);
-    assert.equal(resolved.roleModels.architect.thinkingLevel, "max");
+    assert.equal(persisted.roleModels.architect.model, model.id);
+    assert.equal(persisted.roleModels.architect.thinkingLevel, "max");
     assert.match(savedScreen, /角色配置已保存/);
     assert.match(harness.notifications.at(-1).message, /角色配置已保存/);
     assert.doesNotMatch(harness.notifications.at(-1).message, /尚未保存/);
@@ -402,11 +395,8 @@ test("角色模型搜索菜单按 Ctrl+S 持久化完整角色模型配置", asy
     await harness.commands.get("pi-init").handler("config architect", harness.context);
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    const resolved = resolveRoleConfig(persisted);
-    assert.equal(persisted.schemaVersion, 3);
-    assert.equal(persisted.roleModels, undefined);
-    assert.equal(resolved.roleModels.architect.model, model.id);
-    assert.equal(typeof resolved.roleModels.architect.thinkingLevel, "string");
+    assert.equal(persisted.roleModels.architect.model, model.id);
+    assert.equal(typeof persisted.roleModels.architect.thinkingLevel, "string");
     assert.match(savedScreen, /角色配置已保存/);
     assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
     assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));

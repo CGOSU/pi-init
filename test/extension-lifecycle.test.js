@@ -85,15 +85,12 @@ test("角色配置先写会话，显式保存才落盘", async () => {
     assert.equal(await readFile(configPath, "utf8"), original);
     await command.handler("save", harness.context);
     const saved = JSON.parse(await readFile(configPath, "utf8"));
-    assert.equal(saved.schemaVersion, 3);
-    assert.equal(saved.roleModels, undefined);
-    assert.deepEqual(helpers.resolveRoleConfig(saved).roleModels, DEFAULT_ROLE_MODELS);
     assert.equal(saved.workflowMode, "on");
     assert.equal(saved.workflowExecutor, "local");
   });
 });
 
-test("旧版顶层角色配置在显式保存时迁移为 v3 分层配置", async () => {
+test("旧版顶层角色配置在显式保存时迁移到 roleModels", async () => {
   await withTempDirectory(async (directory) => {
     const configPath = path.join(directory, ".pi", "role-models.json");
     const legacy = {
@@ -112,12 +109,8 @@ test("旧版顶层角色配置在显式保存时迁移为 v3 分层配置", asyn
     await command.handler("save", harness.context);
 
     const migrated = JSON.parse(await readFile(configPath, "utf8"));
-    assert.equal(migrated.schemaVersion, 3);
-    assert.equal(migrated.roleModels, undefined);
-    assert.deepEqual(helpers.resolveRoleConfig(migrated).roleModels, DEFAULT_ROLE_MODELS);
-    assert.equal(migrated.roleTiers.architect, "tier-1");
-    assert.equal(migrated.roleTiers["developer-test"], "tier-2");
-    assert.equal(migrated.roleTiers["docs-commit"], "tier-3");
+    assert.equal(migrated.schemaVersion, 2);
+    assert.deepEqual(migrated.roleModels, DEFAULT_ROLE_MODELS);
     assert.equal(migrated.architect, undefined);
     assert.equal(migrated["developer-test"], undefined);
   });
@@ -176,13 +169,10 @@ test("动态 roleModels 支持切换、暂存保存且不为缺失角色回退",
     assert.equal(harness.context.model.id, writerNext.id);
     await harness.commands.get("pi-init").handler("save", harness.context);
     const saved = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    assert.equal(saved.schemaVersion, 3);
-    assert.equal(saved.roleModels, undefined);
-    const resolved = helpers.resolveRoleConfig(saved).roleModels;
-    assert.equal(resolved.reviewer.model, reviewerNext.id);
-    assert.equal(resolved.writer.model, writerNext.id);
-    assert.deepEqual(resolved.architect, config.roleModels.architect);
-    assert.equal(resolved["developer-test"], undefined);
+    assert.equal(saved.roleModels.reviewer.model, reviewerNext.id);
+    assert.equal(saved.roleModels.writer.model, writerNext.id);
+    assert.deepEqual(saved.roleModels.architect, config.roleModels.architect);
+    assert.equal(saved.roleModels["developer-test"], undefined);
   });
 });
 
@@ -317,9 +307,6 @@ test("init_project 首次使用按需加载脚手架并支持 dryRun", async () 
     const harness = createExtensionHarness([], { cwd: directory, hasUI: false });
     const initProject = harness.tools.find((tool) => tool.name === "init_project");
     assert.equal(initProject.parameters.properties.slug, undefined);
-    const roleConfigSchema = initProject.parameters.properties.roleModels;
-    assert.equal(roleConfigSchema.properties.schemaVersion.maximum, 3);
-    assert.ok(["roleTiers", "tiers", "models"].every((field) => roleConfigSchema.properties[field]));
 
     const params = {
       targetDir: ".",
@@ -328,12 +315,6 @@ test("init_project 首次使用按需加载脚手架并支持 dryRun", async () 
       language: "zh-CN",
       testCommand: "npm test",
       dryRun: true,
-      roleModels: {
-        schemaVersion: 3,
-        roleTiers: { "developer-test": "coding" },
-        tiers: { coding: { modelRef: "model-one", thinkingLevel: "medium" } },
-        models: { "model-one": { provider: "provider-a", model: "model-one" } },
-      },
     };
     const first = await initProject.execute("first", params, undefined, undefined, harness.context);
     const second = await initProject.execute("second", params, undefined, undefined, harness.context);
