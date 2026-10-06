@@ -21,7 +21,7 @@ const {
   createScaffold,
   formatEnvironmentInstructions,
   DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_MODELS,
+  DEFAULT_ROLE_NAMES,
   DEFAULT_WORKFLOW_EXECUTOR,
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,
@@ -30,12 +30,15 @@ const {
   THINKING_LEVELS,
   filterRoleModels,
   findMatchingRole,
+  getRoleNames,
+  isRoleAvailable,
   normalizeModelReference,
   resolveRoleConfig,
   resolveRoleMode,
   resolveWorkflowExecutor,
   resolveWorkflowMode,
   resolveRoleModel,
+  unwrapRoleResult,
   shouldOrchestrateWorkflow,
   shouldCompactOnRoleSwitch,
   WORKFLOW_MAX_NUDGES,
@@ -98,7 +101,9 @@ test("旧版顶层角色配置在显式保存时迁移到 roleModels", async () 
       mode: "auto",
       workflowMode: "auto",
       workflowExecutor: "local",
-      ...DEFAULT_ROLE_MODELS,
+      architect: { provider: "test-provider", model: "legacy-architect", thinkingLevel: "high" },
+      "developer-test": { provider: "test-provider", model: "legacy-developer", thinkingLevel: "medium" },
+      "docs-commit": { provider: "test-provider", model: "legacy-docs", thinkingLevel: "low" },
     };
     const original = `${JSON.stringify(legacy, null, 2)}\n`;
     await mkdir(path.dirname(configPath), { recursive: true });
@@ -111,13 +116,17 @@ test("旧版顶层角色配置在显式保存时迁移到 roleModels", async () 
 
     const migrated = JSON.parse(await readFile(configPath, "utf8"));
     assert.equal(migrated.schemaVersion, 2);
-    assert.deepEqual(migrated.roleModels, DEFAULT_ROLE_MODELS);
+    assert.deepEqual(migrated.roleModels, {
+      architect: legacy.architect,
+      "developer-test": legacy["developer-test"],
+      "docs-commit": legacy["docs-commit"],
+    });
     assert.equal(migrated.architect, undefined);
     assert.equal(migrated["developer-test"], undefined);
   });
 });
 
-test("动态 roleModels 支持切换、暂存保存且不为缺失角色回退", async () => {
+test("动态 roleModels 支持切换、暂存保存且缺失标准角色沿用会话模型", async () => {
   await withTempDirectory(async (directory) => {
     const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
     const reviewer = { provider: "openai-codex", id: "gpt-reviewer" };
@@ -156,11 +165,10 @@ test("动态 roleModels 支持切换、暂存保存且不为缺失角色回退",
     const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
     await switchRole.execute("reviewer", { role: "reviewer" }, undefined, undefined, harness.context);
     assert.equal(harness.context.model.id, reviewer.id);
-    await assert.rejects(
-      switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context),
-      /未配置模型/,
-    );
+    const fallback = await switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
     assert.equal(harness.context.model.id, reviewer.id);
+    assert.equal(harness.context.model.provider, reviewer.provider);
+    assert.match(fallback.content[0].text, /推理强度 high/);
 
     await harness.commands.get("pi-init").handler("config reviewer", harness.context);
     await harness.commands.get("pi-init").handler("config writer", harness.context);
@@ -177,10 +185,9 @@ test("动态 roleModels 支持切换、暂存保存且不为缺失角色回退",
   });
 });
 
-test("工作流计划和重规划只接受项目已配置的角色", async () => {
+test("工作流允许未映射的标准角色并拒绝未启用的自定义角色", async () => {
   await withTempDirectory(async (directory) => {
     const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
-    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
     const reviewer = { provider: "openai-codex", id: "gpt-reviewer" };
     const configPath = path.join(directory, ".pi", "role-models.json");
     const config = {
@@ -188,7 +195,6 @@ test("工作流计划和重规划只接受项目已配置的角色", async () =>
       workflowMode: "on",
       roleModels: {
         architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
-        "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
       },
     };
     await mkdir(path.dirname(configPath), { recursive: true });
@@ -198,7 +204,7 @@ test("工作流计划和重规划只接受项目已配置的角色", async () =>
       cwd: directory,
       trusted: true,
       model: architect,
-      availableModels: [architect, developer, reviewer],
+      availableModels: [architect, reviewer],
     });
     await emitExtensionEvent(harness, "session_start");
     const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
@@ -222,7 +228,7 @@ test("工作流计划和重规划只接受项目已配置的角色", async () =>
         summary: "改用 reviewer",
         tasks: [{ id: "review", role: "reviewer", task: "执行评审", files: ["src/review.js"], acceptanceCriteria: ["评审完成"] }],
       }, undefined, undefined, harness.context),
-      /未配置模型/,
+      /未启用/,
     );
 
     config.roleModels.reviewer = { provider: reviewer.provider, model: reviewer.id, thinkingLevel: "high" };
@@ -238,11 +244,10 @@ test("工作流计划和重规划只接受项目已配置的角色", async () =>
 });
 
 test("角色切换压缩等待 agent 完全结束而不是回合结束", async () => {
-  const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
-  const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
+  const architectModel = { provider: "test-provider", id: "session-model" };
   const harness = createExtensionHarness([], {
     model: architectModel,
-    availableModels: [architectModel, developerModel],
+    availableModels: [architectModel],
   });
   let compactCalls = 0;
   harness.context.compact = (options) => { compactCalls++; harness.completeCompaction(options); };
@@ -259,12 +264,11 @@ test("角色切换压缩等待 agent 完全结束而不是回合结束", async (
   assert.equal(harness.entries.length, 0);
 });
 
-test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async () => {
-  const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
-  const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
+test("无映射角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async () => {
+  const architectModel = { provider: "test-provider", id: "session-model" };
   const harness = createExtensionHarness([], {
     model: architectModel,
-    availableModels: [architectModel, developerModel],
+    availableModels: [architectModel],
   });
   let compactCalls = 0;
   harness.context.compact = () => { compactCalls++; };
@@ -277,7 +281,7 @@ test("角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async (
   await emitExtensionEvent(harness, "agent_settled");
 
   assert.equal(compactCalls, 0);
-  assert.equal(harness.context.model.id, developerModel.id);
+  assert.equal(harness.context.model.id, architectModel.id);
   assert.equal(harness.branch.at(-1).type, "custom");
   assert.equal(harness.entries.at(-1).data.status, "acknowledged");
 });
@@ -409,13 +413,13 @@ test("精确模型引用拒绝模糊名称且不再依赖 Provider 白名单", (
   assert.throws(() => normalizeModelReference("/model"), /必须显式指定 provider\/model/);
   assert.throws(() => normalizeModelReference("provider/"), /必须显式指定 provider\/model/);
   assert.deepEqual(
-    resolveRoleConfig({
+    unwrapRoleResult(resolveRoleConfig({
       providerPolicy: { mode: "locked", allowedProviders: ["openai-codex"] },
       architect: { provider: "openrouter", model: "claude", thinkingLevel: "max" },
-    }).architect,
+    })).architect,
     { provider: "openrouter", model: "claude", thinkingLevel: "max" },
   );
-  assert.equal(resolveRoleConfig(undefined).providerPolicy, undefined);
+  assert.equal(unwrapRoleResult(resolveRoleConfig(undefined)).providerPolicy, undefined);
 });
 
 test("职责模型配置支持默认值、覆盖和校验", () => {
@@ -454,27 +458,39 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     () => shouldOrchestrateWorkflow({ mode: "auto", taskCount: 0 }),
     /工作流任务数无效/,
   );
-  assert.throws(
-    () => resolveRoleConfig({ workflowExecutor: "subagents" }),
-    /workflowExecutor 无效/,
-  );
-  assert.deepEqual(resolveRoleModel(undefined, "architect"), DEFAULT_ROLE_MODELS.architect);
+  assert.equal(resolveRoleConfig({ workflowExecutor: "subagents" }).code, "WORKFLOW_EXECUTOR_INVALID");
+  assert.deepEqual(unwrapRoleResult(resolveRoleConfig(undefined)).roleModels, {});
+  assert.deepEqual(unwrapRoleResult(getRoleNames(undefined)), DEFAULT_ROLE_NAMES);
   assert.deepEqual(
-    resolveRoleModel(
-      {
-        "docs-commit": {
-          provider: "custom",
-          model: "writer",
-          thinkingLevel: "low",
-        },
-      },
-      "docs-commit",
-    ),
+    unwrapRoleResult(getRoleNames({ roleModels: { reviewer: { provider: "test", model: "reviewer", thinkingLevel: "low" } } })),
+    [...DEFAULT_ROLE_NAMES, "reviewer"],
+  );
+  assert.deepEqual(isRoleAvailable(undefined, "architect"), { ok: true, value: true });
+  assert.deepEqual(isRoleAvailable(undefined, "reviewer"), { ok: true, value: false });
+  assert.deepEqual(
+    unwrapRoleResult(resolveRoleConfig({ schemaVersion: 2, roleModels: {} })).roleModels,
+    {},
+  );
+  const sessionDefault = { provider: "test-provider", id: "session-default", thinkingLevel: "high" };
+  assert.deepEqual(
+    unwrapRoleResult(resolveRoleModel(undefined, "architect", sessionDefault)),
+    { provider: "test-provider", model: "session-default", thinkingLevel: "high" },
+  );
+  assert.equal(resolveRoleModel(undefined, "architect").code, "SESSION_MODEL_UNAVAILABLE");
+  assert.equal(resolveRoleModel(undefined, "reviewer", sessionDefault).code, "ROLE_NOT_ENABLED");
+  const partial = { schemaVersion: 2, roleModels: { "docs-commit": { provider: "custom", model: "writer", thinkingLevel: "low" } } };
+  assert.deepEqual(
+    unwrapRoleResult(resolveRoleModel(partial, "docs-commit", sessionDefault)),
     { provider: "custom", model: "writer", thinkingLevel: "low" },
   );
-  assert.throws(
-    () => resolveRoleModel({ architect: { provider: "", model: "x", thinkingLevel: "max" } }, "architect"),
-    /provider 无效/,
+  assert.deepEqual(
+    unwrapRoleResult(resolveRoleModel(partial, "architect", sessionDefault)),
+    { provider: "test-provider", model: "session-default", thinkingLevel: "high" },
+  );
+  assert.equal(resolveRoleConfig({ schemaVersion: 3, roleModels: {} }).code, "ROLE_CONFIG_UNSUPPORTED_VERSION");
+  assert.equal(
+    resolveRoleModel({ architect: { provider: "", model: "x", thinkingLevel: "max" } }, "architect", sessionDefault).code,
+    "ROLE_MODEL_PROVIDER_INVALID",
   );
 });
 

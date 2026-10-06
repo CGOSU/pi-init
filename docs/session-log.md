@@ -2,6 +2,16 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-06：移除内置角色模型预设并精简工作流暂停输出
+
+- 完成内容：移除标准职责的固定 provider/model/thinkingLevel 预设。没有项目配置或没有任何显式角色映射（包括 schema v2 缺少 `roleModels`/映射为空且无兼容旧版顶层映射）时，标准职责使用当前 Pi 会话模型和推理强度；显式映射优先，未知自定义角色仍需配置。无会话模型、损坏/无效配置、显式模型不可用或凭据缺失保持真实错误，不静默 fallback。无映射标准职责的手动模型切换不生成映射；Runtime 创建时将实际模型和推理强度冻结到 `profile_snapshot`。
+- 完成内容：暂停通知和 `task_workflow block` 结果改用精简摘要，保留每项真实阻塞原因及 retry/replan 建议，避免原因/建议重复及把已完成任务的长描述、摘要重复倾倒到暂停输出。block 工具不再并行发送相同 toast；显式 status/TUI 查询及持久化状态仍保留完整详情。
+- 修改范围：`src/roles.js`、角色运行时/Runtime 快照调用、工作流报告与派发/工具动作、对应回归测试及 README、当前状态、决策和公共 Skill；未修改用户 `.pi/role-models.json`。
+- 决策：见 [`docs/decisions.md`](decisions.md)“工作流暂停输出采用精简摘要并避免重复通知”和“移除内置角色模型预设并回退到会话默认”。
+- 验证：`node --test test/extension-lifecycle.test.js test/session-model-fallback.test.js`，16 项通过；`node --test test/workflow-report.test.js test/workflow-protocol.test.js test/workflow-compaction.test.js`，最终 13 项通过。该工作流测试首次因 harness 未设为受信任而有 1 项失败，修正测试夹具后重跑通过。
+- 验证：`npm test`，167 项中 164 项通过、0 项失败、3 项跳过（需先构建 `runtime-daemon` 或设置 `AGENT_RUNTIME_DAEMON`）；`node scripts/check-line-count.js` 通过；`git diff --check` 通过，仅有 LF 将转为 CRLF 的提示。
+- 遗留：未安装/更新 package、未执行 `/reload`、未在真实 Pi 会话进行 E2E；3 项 Runtime daemon 测试未执行。未提交或推送。
+
 ### 2026-10-06：让 `/fast` 手动进入单次精简流程
 
 - 完成内容：`/fast` 现在表示用户为本次任务显式选择 Fast Path，不再重复检查自动资格中的任务类型、规模和修改范围；同步命令提示、中英文脚手架规则、公共角色路由 Skill、README 和项目当前状态。保留忙碌 Agent/未结束工作流保护，并明确安全、职责、上下文恢复和必要验证仍优先。

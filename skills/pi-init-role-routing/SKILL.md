@@ -2,7 +2,7 @@
 name: pi-init-role-routing
 description: >
   处理使用 pi-init 初始化项目、执行代码和测试、维护项目文档或完成交付收尾时使用；
-  根据项目 roleModels 映射选择已启用角色，在角色边界调用 switch_role，并按需使用 task_workflow 顺序推进工作流。
+  根据标准职责和项目自定义角色配置执行职责路由；有显式 roleModels 映射时按映射选模，否则标准职责沿用当前 Pi 会话模型。
 metadata:
   primary-category: workflow
   related-categories: coding, documentation, project-management
@@ -32,9 +32,9 @@ metadata:
 
 ## 角色和模型来源
 
-- `.pi/role-models.json` 的 `roleModels` 是唯一启用角色和模型的项目级来源；只有其中已配置的角色才能被请求。
-- 内置角色 ID 为 `architect`、`developer-test`、`docs-commit`；角色值必须包含 `provider`、`model` 和 `thinkingLevel`。不为缺失角色借用模型或自动 fallback。
-- `schemaVersion: 2` 和旧版顶层角色字段按现有兼容规则读取；只有用户明确执行 `/pi-init save` 才持久化迁移。Skill 不写入具体 provider、model 或 thinkingLevel。
+- `.pi/role-models.json` 的 `roleModels` 保存项目显式角色模型映射；其中的自定义角色用于启用对应角色模型。标准角色 ID `architect`、`developer-test`、`docs-commit` 不依赖映射文件即可使用。
+- 显式映射值必须包含 `provider`、`model` 和 `thinkingLevel`，并优先于 fallback。标准角色未显式映射时沿用当前 Pi 会话真实模型与推理强度；仅改变职责，不另选模型、不生成或持久化隐式映射。若当前模型不存在则报告错误。未知自定义角色仍需显式配置并具有对应职责说明；显式配置错误、模型不可用或凭据缺失不得静默 fallback。
+- `schemaVersion: 2` 的 `roleModels` 可缺失或为空；没有其他显式映射时按无映射处理。旧版顶层角色字段仍按兼容规则读取并优先作为显式映射。损坏 JSON、未知版本、`roleModels` 类型/字段无效、显式模型不可用或凭据缺失必须保留真实错误，不能 fallback 掩盖。只有用户明确执行 `/pi-init save` 才持久化迁移；会话默认不会自动写入配置。Skill 不写入具体 provider、model 或 thinkingLevel。
 
 ## 共享硬约束
 

@@ -140,9 +140,13 @@ test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async (
 test("手动模式原生模型切换写回配置且不重复写入", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
-    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ mode: "manual" }));
-
     const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      mode: "manual",
+      roleModels: {
+        "developer-test": { provider: safe.provider, model: safe.id, thinkingLevel: "max" },
+      },
+    }));
     const unsafe = { provider: "openrouter", id: "anthropic/claude-haiku-4.5" };
     const harness = createExtensionHarness([], {
       cwd: directory,

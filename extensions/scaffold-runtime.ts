@@ -299,8 +299,8 @@ async function collectOptions(
     }
 
     const value = await showMenu(ctx, "角色模型", [
-      { value: "default", label: "使用默认配置", description: "推荐，后续可在 /pi-init config 中修改" },
-      { value: "custom", label: "逐个配置", description: "为默认角色逐个选择模型和推理强度" },
+      { value: "default", label: "沿用会话默认模型", description: "不写入固定角色模型映射；后续可在 /pi-init config 中单独配置角色" },
+      { value: "custom", label: "逐个配置", description: "为标准角色逐个选择独立模型和推理强度" },
       { value: "cancel", label: "取消" },
     ], { selectedValue: roleConfiguration });
     if (isMenuBack(value)) {

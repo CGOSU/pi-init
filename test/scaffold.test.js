@@ -21,7 +21,6 @@ const {
   createScaffold,
   formatEnvironmentInstructions,
   DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_MODELS,
   DEFAULT_WORKFLOW_EXECUTOR,
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,
@@ -32,6 +31,7 @@ const {
   findMatchingRole,
   normalizeModelReference,
   resolveRoleConfig,
+  unwrapRoleResult,
   resolveRoleMode,
   resolveWorkflowExecutor,
   resolveWorkflowMode,
@@ -129,16 +129,12 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.match(cleanCode, /## Hard rules/);
     assert.doesNotMatch(agents, /知识库地址远程地址/);
     assert.deepEqual(roleModels, DEFAULT_ROLE_CONFIG);
-    assert.deepEqual(resolveRoleConfig(undefined), DEFAULT_ROLE_CONFIG);
+    assert.deepEqual(unwrapRoleResult(resolveRoleConfig(undefined)), DEFAULT_ROLE_CONFIG);
     assert.deepEqual(THINKING_LEVELS, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     assert.equal(roleModels.mode, "auto");
     assert.equal(roleModels.workflowMode, DEFAULT_WORKFLOW_MODE);
     assert.equal(roleModels.workflowExecutor, DEFAULT_WORKFLOW_EXECUTOR);
-    assert.deepEqual(DEFAULT_ROLE_MODELS["developer-test"], {
-      provider: "openai-codex",
-      model: "gpt-5.6-luna",
-      thinkingLevel: "max",
-    });
+    assert.deepEqual(roleModels.roleModels, {});
 
     for (const file of result.files) {
       assert.doesNotMatch(await readFile(path.join(target, file), "utf8"), /\{\{[A-Z_]+\}\}/);
@@ -179,13 +175,13 @@ test("自定义三职责配置会同步规范化 JSON 且不生成项目级 Skil
       readFile(path.join(target, ".pi/skills/custom-app/SKILL.md"), "utf8"),
       { code: "ENOENT" },
     );
-    assert.deepEqual(config, resolveRoleConfig(roleModels));
+    assert.deepEqual(config, unwrapRoleResult(resolveRoleConfig(roleModels)));
     assert.equal(config.workflowMode, "on");
     assert.equal(config.workflowExecutor, "local");
   });
 });
 
-test("部分职责配置回退默认值且不生成项目级 Skill", async () => {
+test("部分职责配置保持可选映射且不生成项目级 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "partial-app");
     const roleModels = {
@@ -209,9 +205,8 @@ test("部分职责配置回退默认值且不生成项目级 Skill", async () =>
       readFile(path.join(target, ".pi/skills/partial-app/SKILL.md"), "utf8"),
       { code: "ENOENT" },
     );
-    assert.deepEqual(config, resolveRoleConfig(roleModels));
-    assert.deepEqual(config.roleModels["developer-test"], DEFAULT_ROLE_MODELS["developer-test"]);
-    assert.deepEqual(config.roleModels["docs-commit"], DEFAULT_ROLE_MODELS["docs-commit"]);
+    assert.deepEqual(config, unwrapRoleResult(resolveRoleConfig(roleModels)));
+    assert.deepEqual(config.roleModels, { architect: roleModels.architect });
     assert.equal(config.workflowMode, DEFAULT_WORKFLOW_MODE);
   });
 });
@@ -227,7 +222,7 @@ test("无效职责配置会被拒绝", async () => {
       },
     };
 
-    assert.throws(() => resolveRoleConfig(roleModels), /thinkingLevel 无效/);
+    assert.equal(resolveRoleConfig(roleModels).code, "ROLE_MODEL_THINKING_LEVEL_INVALID");
     await assert.rejects(createScaffold(target, { roleModels }), /thinkingLevel 无效/);
     await assert.rejects(readFile(path.join(target, ".pi/role-models.json"), "utf8"), { code: "ENOENT" });
   });

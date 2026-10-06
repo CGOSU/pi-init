@@ -5,7 +5,6 @@ import { createWorkflowCompaction } from "../extensions/workflow-compaction.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 const {
-  DEFAULT_ROLE_MODELS,
   createExtensionHarness,
   createWorkflowState,
   emitExtensionEvent,
@@ -42,7 +41,7 @@ async function writeWorkflowConfig(directory, executor) {
       mode: "auto",
       workflowMode: "on",
       workflowExecutor: executor,
-      roleModels: DEFAULT_ROLE_MODELS,
+      roleModels: {},
     }, null, 2)}\n`,
   );
 }

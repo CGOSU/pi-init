@@ -9,7 +9,7 @@
 
 ## 当前目标
 
-- 维护随 package 发布的公共职责路由 Skill，并让项目 `roleModels` 映射成为启用角色和模型选择的唯一来源。
+- 维护随 package 发布的公共职责路由 Skill；`.pi/role-models.json` 的 `roleModels` 保存显式模型映射并启用自定义角色，内置标准职责无映射时沿用当前 Pi 会话模型和推理强度。
 
 ## 当前已确认事实
 
@@ -17,7 +17,8 @@
 - 项目脚手架生成的中英文 `AGENTS.md` 包含带标记的 Fast Path 收尾约束；`/pi-init sync [目录]` 只更新托管区块、创建缺失的项目记忆文档并保留已有记录，冲突时不写入。控制中心各级角色配置菜单统一支持 `Ctrl+S` 和 `F2` 保存（Windows 终端可能拦截 `Ctrl+S`），保存中、成功或失败会在当前菜单内即时反馈；上一级菜单保存完成后也会更新全局通知，避免残留的“尚未保存”提示；显式保存列表项已移除，非 TUI 和兼容场景保留 `/pi-init save`。TUI session 启动时，若当前模型匹配已配置角色，会显示一条包含角色和精确 provider/model 的就绪通知；非 TUI 和未匹配角色不提示。具体取舍见 [`docs/decisions.md`](decisions.md)。
 
 - 控制中心同步当前项目发生实际变更并执行 `ctx.reload()` 后立即结束旧控制中心调用；同步结果通过 `reloaded` 标记向调用方表达，避免 reload 后继续使用失效的旧 `ctx`。无变更或有冲突时不 reload，菜单仍可继续。具体决策与验证见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
-- `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留。
+- `workflowExecutor` 仅支持 `local`（默认，主会话顺序执行）和 `runtime`（冻结 Runtime authority）；`subagents`、`subtask`、`collaboration` 配置值均明确拒绝，不再兼容映射或注册委派执行器。`task_workflow` 的 local/runtime 状态、重规划、恢复、重试、取消和 Runtime 事件链路保留；Runtime 创建时把解析后的模型与推理强度冻结进 `profile_snapshot`。
+- 工作流暂停通知和 block 工具结果使用精简摘要，每条阻塞原因及 retry/replan 建议只展示一次；显式状态/TUI 查询和持久化状态继续保留完整任务详情，block 工具不另发重复通知。
 - `workflowExecutor: "runtime"` 会在 workflow 创建时冻结 Runtime Graph、ProfileSnapshot、endpoint、agent backend、permission profile 和事件 cursor；Runtime 是该 workflow 的唯一状态、Attempt、cancel/retry 和事件事实源。
 - pi-init Runtime backend 已通过模型无关 mock 与实际 `runtime-daemon` development direct-host fixture 的 submit、role execution、result/event ack、cancel/retry、context compaction、terminal daemon restart 和 client reconnect；worker reconnect 证据仍由 agent-runtime worker 层测试提供，真实 Pi 测试继续显式 ignored。
 
@@ -29,16 +30,16 @@
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计，重算日期取 session 文件最新修改时间并精确到分钟，另列受影响日期；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
 - package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 集中维护风险分级路由、自主决策边界和共享硬约束，角色说明只保留各自职责/边界/交接，运行时提示只保留当前任务硬约束，不嵌入具体模型值。`architect` 只负责思考、分析、决策、规划和安排；所有仓库、代码、测试、文档和外部事实取证由 `docs-commit` 结构化交接，architect 仅允许 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`，其他工具及 MCP 均由运行时 fail-closed 阻断。目标明确的低风险任务由适合的非 architect 角色调查、实现和验证；复杂/高风险任务仍要求新鲜结构化证据、角色边界、真实验证和授权。
-- 测试和断言遵循全局 Test Value Gate：默认不锁定纯文案、样式、布局、渲染结构、简单存在性和内部临时字段，优先保留权限安全、公共数据、状态流转、持久化、幂等、并发和历史缺陷回归；生成模板关键规则、工具元数据和状态语义仍按稳定契约保留。当前 `npm test` 为 155 项通过、0 项失败、3 项跳过。
+- 测试和断言遵循全局 Test Value Gate：默认不锁定纯文案、样式、布局、渲染结构、简单存在性和内部临时字段，优先保留权限安全、公共数据、状态流转、持久化、幂等、并发和历史缺陷回归；生成模板关键规则、工具元数据和状态语义仍按稳定契约保留。当前 `npm test` 为 167 项（164 项通过、0 项失败、3 项因 Runtime daemon 未构建或未设置 `AGENT_RUNTIME_DAEMON` 跳过）。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；简单只读咨询和低风险开发由适合的非 architect 角色直接完成，凡需仓库、代码、测试、文档或外部事实取证均由 `docs-commit` 收集并交接包含事实、来源、相关符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只负责思考、分析、决策、规划和安排，不修改文件、不执行命令、不连接 MCP，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status` 外不调用工具。开发测试工程师负责自主实现/验证且不写项目 Markdown，文档与收尾工程师不写代码；仅遇到业务/契约冲突、权限/凭据、不可逆或外部状态、已有改动无法安全合并或真实验证阻塞时才暂停。
-- `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
+- `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚；只有活动角色已有显式映射且项目受信任时才写回该映射。使用会话默认模型的标准职责不会生成固定映射；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色，无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
 - `before_agent_start` 通过 `sections.pi_init_runtime` 注入当前有效角色、Provider/模型/推理强度、恢复门和活动工作流摘要；职责已确认且无活动工作流时，简单无工具问答不调用 `task_workflow(status)` 或重复 `switch_role`。恢复 pending 且无活动工作流时允许无需工具或新证据的简单回答，但不自动解除恢复门；需要执行时仍先切换职责。该快速通道不做文本启发式分类、不自动切模型、不削弱 `tool_call` 守卫。
 - 自动模式在真实跨角色且上下文使用率达到 50% 时，于 agent 完全 settled 后触发一次定制上下文压缩；同角色连续 Local 任务不再触发 50% 的主动边界压缩，依赖 Pi 原生自动压缩。主动压缩通过 operationId 和 onComplete、onError、session_compact 收敛路径幂等交接；无取消能力的 compact 超时只告警，不并发续跑，session shutdown/reload 会清理 watchdog 和瞬态锁。
 - Local 工作流状态栏和进度摘要以任务的 `executionStartedAt` 作为真实 Agent 执行门槛，区分任务交接、等待启动、上下文压缩、压缩等待异常和任务执行中；`/pi-init workflow resume` 仅在没有真实执行、排队续跑或主动压缩时安全重新调度，不会重复已启动任务。Runtime executor 的调度和 authority 链路未改变。
 - 已增加架构驱动的 `task_workflow` 顺序任务编排：项目级 `workflowMode` 默认是 `auto`，`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过状态持久化、调度和角色切换，并要求各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现，超过 2 个任务才进入工作流；既有工作流仍可查看和收尾。工作流状态使用 session custom entry 持久化，支持恢复、重试、取消和有限次未完成提醒。旧项目缺失 `workflowMode` 时兼容 `workflowEnabled: true/false` 为 `on/off`。中间任务报告只显示当前任务的摘要、实现原因、耗时和明确失败的验证；最终报告只显示最终任务结果与整体进度/耗时，并同样只显示明确失败的最终验证，不重复前序任务。完整 verification 仍持久化，没有失败项时省略验证行。开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 - `task_workflow` 的 `plan`/`replan` 在工具调用入口即要求活动角色为 `architect`，非架构角色会在状态持久化前被阻断；调用摘要标记为“工作流请求”，失败结果保留具体原因，避免把调用预览误认为已创建工作流。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写用户提供的 task_workflow 输入顺序。低风险局部工作仍可在 `workflowMode: auto` 下绕过持久工作流，不改变既有任务数量阈值、配置或状态机。
-- 默认映射为 `gpt-5.6-sol/max`、`gpt-5.6-luna/max`、`gpt-5.6-luna/medium`，项目可通过 `.pi/role-models.json` 的 `roleModels` 映射覆盖或启用其他合法角色；保存配置使用 `schemaVersion: 2`，并保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。旧版顶层角色字段仅自动读取兼容，显式 `/pi-init save` 时才规范化；旧项目生成的角色 Skill 需人工确认后删除。回退后的旧实现不会自动迁移此前保存的 `schemaVersion: 3` 分层配置，使用前须由用户单独转换为扁平 `roleModels` 格式。
+- 内置标准角色不再绑定固定 provider/model/thinkingLevel。缺少配置文件或没有任何显式角色映射（包括 `schemaVersion: 2` 缺少 `roleModels`/映射为空且没有兼容的旧版顶层映射）时，标准职责沿用当前 Pi 会话模型和推理强度；部分映射只覆盖显式配置项，未知自定义角色仍需显式配置。无会话模型、损坏 JSON、未知 schema、无效映射、显式模型不可用或缺少凭据均保持真实错误，不静默 fallback；无映射标准职责在手动模式切换模型时也不会生成固定映射。保存配置使用 `schemaVersion: 2`，并保存默认 `workflowMode: "auto"` 和 `workflowExecutor: "local"`。旧版顶层角色字段仅自动读取兼容，显式 `/pi-init save` 时才规范化；旧项目生成的角色 Skill 需人工确认后删除。回退后的旧实现不会自动迁移此前保存的 `schemaVersion: 3` 分层配置，使用前须由用户单独转换为扁平 `roleModels` 格式。
 - 支持简体中文、英文、dry-run 和已有文件覆盖确认。
 - 初始化会在中英文 `AGENTS.md` 中记录当前 Pi 宿主系统、CPU 架构和平台相关命令约定；目标环境若不同，需以实际运行环境为准。通用任务执行流程、证据门控、`read`/`edit` 参数、角色交接和真实验证规则由 package 公共 Skill 维护，生成的 `AGENTS.md` 只保留项目特有规则并引用该 Skill。
 - 精确文件修改支持会话内逻辑快照：成功 `edit` 且没有其他写入来源时可复用确定的替换结果；每次调用 `edit` 前必须预检每个 `oldText` 并确认精确匹配 1 次、payload 只含 `path` 和 `edits` 且 edits 不重叠，出现 0 次或多次时不得调用；可能发生写入后必须重新读取。`oldText` 零匹配时只允许定向重读、重新确认唯一精确替换并最多重试一次；不生成缓存文件或持久状态。
@@ -59,6 +60,7 @@
 ## 最近一次更新
 
 - 2026-10-06：`/fast` 改为用户显式单次选择精简流程，不再按自动任务类型、规模和修改范围复核资格；安全、职责、工作流保护和必要验证仍优先。扩展生命周期与中英文脚手架定向测试 25 项通过；未运行全量测试，尚未在真实 Pi 会话确认模型遵循效果。
+- 2026-10-06：移除内置标准角色模型预设，允许 schema v2 缺少 `roleModels` 时沿用会话模型，并精简暂停报告；`npm test` 为 167 项（164 通过、3 项因 Runtime daemon 环境缺失跳过），详见 [`docs/session-log.md`](session-log.md)。未执行 package 安装或真实 Pi reload/E2E。
 - 2026-09-30：新增 `/fast <任务描述>` 一次性 Fast Path 请求命令；非强制、不持久更改配置，拒绝忙碌 Agent 与未结束工作流；扩展生命周期定向测试和 `npm test` 均通过（155 项通过、3 项因 runtime-daemon 未构建而跳过）。
 - 2026-09-30：按用户确认撤销角色模型 v3 分层改造，恢复扁平 `roleModels` / `schemaVersion: 2` 配置；此前保存的 v3 配置不自动迁移。针对性测试 52 项通过；`npm test` 154 项通过、0 项失败、3 项跳过。
 - 2026-09-24：修复角色配置变更后在上一级菜单按 `Ctrl+S` 保存时，旧“尚未保存”全局提示仍显示的问题；成功或失败都会发布保存结果通知。`npm test` 152 项通过、3 项跳过。

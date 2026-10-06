@@ -6,7 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import {
-  getRoleNames,
+  DEFAULT_ROLE_NAMES,
   THINKING_LEVELS,
   filterRoleModels,
   roleLabel,
@@ -418,7 +418,7 @@ export async function selectRoleModel(
 
 export async function collectRoleModels(
   ctx: ExtensionContext,
-  roles = getRoleNames(undefined),
+  roles = DEFAULT_ROLE_NAMES,
 ) {
   const roleModels: Record<string, RoleModelConfig> = {};
   let roleIndex = 0;

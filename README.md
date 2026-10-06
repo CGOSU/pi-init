@@ -8,7 +8,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 随 package 发布公共 `pi-init-role-routing` Skill，集中维护角色职责、路由、交接、证据门控和工作流规则；新项目不再生成项目级角色 Skill。
 - 按风险分级执行：只读咨询和目标明确的低风险开发直接自主推进，不为一般技术选择、排查顺序或恢复既定行为的 bug 反复询问或交接；用户要求简单任务只做实现时，不默认运行全量测试、类型检查或构建，只保留最小必要核对并说明未执行项；复杂/高风险任务仍保留结构化证据、角色边界、真实验证和授权。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
-- 根据任务在公共 Skill 定义的职责之间切换模型，项目通过 `roleModels` 映射启用角色。
+- 根据任务在公共 Skill 定义的职责之间切换模型；项目通过 `roleModels` 映射配置显式模型并启用自定义角色，内置标准职责无映射时沿用当前会话模型。
 - 支持 `auto`、`confirm`、`manual` 三种角色切换模式。
 - 提供项目级任务工作流策略，默认 `workflowMode: "auto"`：`off` 拒绝新规划，`on` 始终编排，`auto` 对不超过 2 个任务的规划跳过编排，由各任务指定角色切换后直接顺序执行，架构角色只负责规划、不直接实现；可通过 `/pi-init config workflow` 选择。兼容旧配置中的 `workflowEnabled`，缺失 `workflowMode` 时 `true/false` 映射为 `on/off`。
 - 任务规划排序采用软约束：先遵守用户明确的优先级、截止要求和硬依赖，再安排可能推翻方案的关键未知项的限时最小验证，其次考虑业务关键路径；只有同层且风险、价值相近时才先易后难。不新增 difficulty/risk 字段，也不自动改写 task_workflow 输入顺序。
@@ -128,9 +128,9 @@ pi-usage
 - Skill 只描述职责和流程，不保存具体 provider、model 或 thinkingLevel，也不会自行切换模型；`switch_role` 和扩展运行时负责按项目配置应用模型。
 - 它由 Pi 从已安装的 package 加载，不复制到 `~/.pi/agent/skills`；脚手架只生成对它的引用，不生成或覆盖 `.pi/skills/<slug>/SKILL.md`。
 
-因此，公共 Skill 负责“谁在什么边界做什么”，项目 `.pi/role-models.json` 负责“启用哪些角色以及使用什么模型”。既有项目的旧项目级 Skill 不会自动删除，确认内容后可手动迁移或删除。
+因此，公共 Skill 负责“谁在什么边界做什么”，项目 `.pi/role-models.json` 的 `roleModels` 负责保存显式角色模型映射。内置标准角色 `architect`、`developer-test`、`docs-commit` 无需映射即可使用；自定义角色仍需显式映射和对应职责说明。既有项目的旧项目级 Skill 不会自动删除，确认内容后可手动迁移或删除。
 
-项目角色和模型的唯一项目级来源是 `.pi/role-models.json` 的 `roleModels` 映射；映射中的键即启用的角色，值必须包含精确的 `provider`、`model` 和 `thinkingLevel`。保存结构使用 `schemaVersion: 2`，例如：
+`roleModels` 中的每个显式映射值必须包含精确的 `provider`、`model` 和 `thinkingLevel`，并优先于会话默认。保存结构使用 `schemaVersion: 2`；`roleModels` 可省略或为空，例如：
 
 ```json
 {
@@ -143,34 +143,28 @@ pi-usage
 }
 ```
 
+配置文件缺失或没有任何显式角色映射（包括 `schemaVersion: 2` 缺少 `roleModels`/映射为空且没有兼容的旧版顶层映射）时，标准职责沿用当前 Pi 会话的模型和推理强度；角色切换只改变职责，不另选模型、不生成或持久化 fallback 映射。没有当前会话模型时会报错。损坏 JSON、未知 schema、`roleModels: null`/数组、无效映射字段、显式模型不可用或凭据缺失也会如实失败，不会静默回退。
+
 添加新角色只需两步：
 
 1. 在项目 `.pi/role-models.json` 的 `roleModels` 中加入合法的小写角色 ID及其模型映射；
 2. 在公共 Skill package 的 `roles/<role-id>.md` 增加对应职责说明，并更新 package。
 
-运行时不维护独立角色注册表；已配置的新角色可用于菜单和工作流任务，未配置的角色不会 fallback 到其他模型。更新 package 后执行 `pi update --extensions`，再在当前会话执行 `/reload`；本地开发可重启 Pi 或重新加载本地扩展。
+运行时不维护独立角色注册表；已配置的新角色可用于菜单和工作流任务，未配置的未知自定义角色不会 fallback 到其他模型。更新 package 后执行 `pi update --extensions`，再在当前会话执行 `/reload`；本地开发可重启 Pi 或重新加载本地扩展。
 
 旧版配置中的顶层 `architect`、`developer-test` 和 `docs-commit` 字段仍会自动读取，但只有用户明确执行 `/pi-init save` 时才规范化写入 `schemaVersion: 2` 与 `roleModels`。旧项目已有的 `.pi/skills/<slug>/SKILL.md` 不会被脚手架自动删除；请人工确认内容后再删除。用户自定义的其他 Skill 同样不会被修改。
 
 ## 角色编排
 
-公共 Skill 按交付物选择角色；默认模型映射如下：
-
-| 角色 | 默认模型 | 推理强度 |
-| --- | --- | --- |
-| 架构师 | `openai-codex/gpt-5.6-sol` | `max` |
-| 开发测试工程师 | `openai-codex/gpt-5.6-luna` | `max` |
-| 文档与收尾工程师 | `openai-codex/gpt-5.6-luna` | `medium` |
-
-内置角色的默认配置保存在项目的 `.pi/role-models.json`；项目也可加入其他合法角色 ID：
+公共 Skill 按交付物选择角色；pi-init 不再为内置标准职责预设固定 provider/model 或推理强度。未显式映射的标准职责沿用当前会话模型和推理强度，显式角色映射仍优先。Runtime 工作流创建时会把解析出的实际模型和推理强度冻结到任务 `profile_snapshot`，后续会话或配置变化不会改写已有 Runtime authority。项目可加入其他合法角色 ID：
 
 - `auto`：自动切换。
 - `confirm`：切换前询问。
-- `manual`：手动模式。阻止自动换角；原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`。写回需要受信任项目和活动角色，否则只提示不写文件。
+- `manual`：手动模式。阻止自动换角；原生 `/model` 切换不会被扩展回滚。只有当前活动角色已有显式映射且项目受信任时，切换才更新该映射；标准职责使用会话默认模型时不会创建固定映射。无活动角色或项目不受信任时不写文件。
 - `/pi-init role` 和 `switch_role` 只切换当前会话，不写项目配置。
 - `/pi-init config [角色]` 与 `/pi-init config workflow` 只暂存当前会话变更；执行 `/pi-init save`（保存角色配置）后才写入 `.pi/role-models.json`。
 
-自动模式仅在实际跨角色，或活动工作流的非最终任务完成后且上下文使用率达到 50% 时额外触发一次压缩；检查发生在 agent 完全 settled 后，压缩会保留目标、决策、进度、文件、验证结果和下一步，成功或失败后都继续工作流。最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不会因任务边界额外压缩。会话恢复时会根据当前模型和推理强度唯一匹配并恢复角色。所有 `session_compact`（无论由谁触发）都会持久化“职责待恢复”标记；普通压缩、reload、resume、fork 及 startup 加载已有上下文后，下一回合必须重新确认职责。若 pi-init 已明确完成目标角色交接，则运行时在续跑前写入 acknowledged，不要求重复切换；否则只允许查看工作流状态、读取文件或调用 `switch_role`，成功后才能编辑、写入、测试、执行 shell 或提交结果。new 或空会话不会额外上锁。
+自动模式仅在实际跨角色，或活动工作流的非最终任务完成后且上下文使用率达到 50% 时额外触发一次压缩；检查发生在 agent 完全 settled 后，压缩会保留目标、决策、进度、文件、验证结果和下一步，成功或失败后都继续工作流。最终任务、低于阈值、未知上下文以及 `confirm`、`manual` 模式不会因任务边界额外压缩。会话恢复时只按当前模型和推理强度匹配显式映射；没有唯一匹配时不猜测活动角色，仍按职责确认和恢复门处理。所有 `session_compact`（无论由谁触发）都会持久化“职责待恢复”标记；普通压缩、reload、resume、fork 及 startup 加载已有上下文后，下一回合必须重新确认职责。若 pi-init 已明确完成目标角色交接，则运行时在续跑前写入 acknowledged，不要求重复切换；否则只允许查看工作流状态、读取文件或调用 `switch_role`，成功后才能编辑、写入、测试、执行 shell 或提交结果。new 或空会话不会额外上锁。
 
 ### 读取与探索策略
 
@@ -186,12 +180,15 @@ flowchart LR
   MODE -->|auto：自动决定| ROLE[角色<br/>架构师 / 开发测试 / 文档与收尾]
   MODE -->|confirm：先询问| CONFIRM[用户确认]
   CONFIRM --> ROLE
-  MODE -->|manual：直连宿主| COMMAND["/pi-init role<br/>原生 /model 写回配置"]
-  COMMAND --> ROLE
-  ROLE --> CONFIG[项目默认配置<br/>.pi/role-models.json]
+  MODE -->|manual：阻止自动换角| COMMAND["原生 /model"]
+  COMMAND -->|已有映射且项目受信任| CONFIG[显式角色映射<br/>.pi/role-models.json]
+  ROLE --> CONFIG
   CONFIG --> OVERRIDE[当前会话暂存覆盖]
+  ROLE -->|标准职责无显式映射| SESSION_DEFAULT[当前 Pi 会话模型与推理]
   OVERRIDE --> MODEL[模型<br/>provider/model]
   OVERRIDE --> THINKING[推理强度<br/>off ... max]
+  SESSION_DEFAULT --> MODEL
+  SESSION_DEFAULT --> THINKING
   MODEL --> SESSION[当前会话]
   THINKING --> SESSION
 ```
@@ -248,7 +245,7 @@ flowchart LR
 
 模型安全来自角色和工作流配置中的明确引用，不维护 Provider 白名单（`1.1.0` 起移除 `providerPolicy`，旧配置中的该字段会被忽略）：
 
-- 角色模型和 `runtime` 工作流配置使用完整 `provider/model` 引用，并要求显式引用在注册表中存在。
+- 显式角色模型映射和 `runtime` 工作流配置使用完整 `provider/model` 引用，并要求显式引用在注册表中存在；标准职责无显式映射时直接沿用当前会话模型。
 - 原生 Agent 子代理由 Pi 宿主决定模型；pi-init 不注入、不校验、不拦截其 `model` 参数，模糊名称和跨 Provider 解析由宿主负责。
 历史上的 OpenRouter 意外调用曾与 Agent 子代理的模糊模型解析有关；当前项目不再在原生 Agent 边界重复实现模型路由，需要控制该行为时应配置 Pi 宿主或显式使用完整模型引用。
 
@@ -256,11 +253,13 @@ flowchart LR
 
 - `/pi-init config [角色]`：候选列表展示全部已注册模型（含刚登录的 Provider），随时暂存；在 TUI 配置菜单中按 `Ctrl+S`，或执行 `/pi-init save`，即可持久化。
 - 直接编辑 `.pi/role-models.json` 的角色模型：保存即生效。
-- 手动模式（`mode: "manual"`）：原生 `/model` 切换会把活动角色的模型直接写回 `.pi/role-models.json`。
+- 手动模式（`mode: "manual"`）：原生 `/model` 切换保留宿主行为；只有活动角色已有显式映射且项目受信任时才更新该映射。使用会话默认模型的标准职责不会因手动切换而生成固定映射。
 
 注意取舍：完全限定的跨 Provider 引用（如 AI 主动写 `openrouter/...`）不会被拦截——如果你需要严格限制可用 Provider，应当自行在配置中只保留对应角色模型。
 
 每个中间任务完成时只输出该任务的精简报告：任务、摘要、实现原因、耗时和验证。`implementationRationale` 必须由执行角色说明采用该实现的原因和关键取舍，不能重复摘要。验证结果只显示明确失败的验证项；成功项不显示，没有失败项时省略验证行，不再输出灰色 bullet 辅助项。完整 verification 仍保存在工作流状态中。
+
+工作流暂停时，自动暂停通知和 `task_workflow block` 工具结果使用简洁摘要，只显示暂停状态、每项真实阻塞原因及对应的 retry/replan 建议一次；block 工具以结果展示为反馈，不另发重复 toast。显式 `task_workflow status`/TUI 查询与持久化状态仍保留完整任务、摘要和细节。
 
 仅当最后一个任务完成、工作流进入 `completed` 时，才输出一次工作流完成报告：目标、进度、最终任务的摘要/实现原因/验证，以及整体开始/结束时间和总耗时；不会重新汇总前序任务。最终任务验证同样只显示明确失败的验证项。这样可以保留最终交付的完整上下文，同时避免任务报告和工作流报告重复。规划、架构审阅等待和任务之间的调度等待不计入整体执行耗时；不调用模型生成主观内容。local 与 `runtime` 执行器使用相同格式。报告中的开始/结束时间使用系统本地时区，格式为 `YYYY-MM-DD HH:mm:ss±HH:MM`。
 

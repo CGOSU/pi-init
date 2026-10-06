@@ -6,7 +6,7 @@ import {
   normalizeTextList,
   requireText,
 } from "./workflow-model.js";
-import { resolveRoleModel } from "./roles.js";
+import { resolveRoleModel, unwrapRoleResult } from "./roles.js";
 
 function stableHash(value) {
   let hash = 0x811c9dc5;
@@ -21,7 +21,7 @@ function runtimeTaskInput(task) {
   return [task.task, "", "Files:", ...task.files.map((file) => `- ${file}`)].join("\n");
 }
 
-export function buildRuntimeWorkflow(workflow, config, cwd, clientConfig) {
+export function buildRuntimeWorkflow(workflow, config, cwd, clientConfig, sessionDefault) {
   const runtime = config.runtime;
   if (!runtime || typeof runtime !== "object") throw new Error("workflowExecutor=runtime 需要显式 runtime endpoint/profile 配置");
   if (typeof runtime.agentBackend !== "string" || !runtime.agentBackend.trim()) throw new Error("runtime.agentBackend 必须是非空 Agent backend ID");
@@ -33,7 +33,7 @@ export function buildRuntimeWorkflow(workflow, config, cwd, clientConfig) {
     tasks: workflow.tasks.map(({ id, task, files, acceptanceCriteria, dependsOn, role }) => ({ id, task, files, acceptanceCriteria, dependsOn, role })),
   }))}`;
   const tasks = workflow.tasks.map((task) => {
-    const model = resolveRoleModel(config, task.role);
+    const model = unwrapRoleResult(resolveRoleModel(config, task.role, sessionDefault));
     const profileSnapshot = {
       role: task.role,
       agent_backend: runtime.agentBackend.trim(),

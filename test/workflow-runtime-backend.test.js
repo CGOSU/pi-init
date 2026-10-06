@@ -7,6 +7,7 @@ import {
   emitExtensionEvent,
   mkdir,
   path,
+  readFile,
   withTempDirectory,
   writeFile,
 } from "./helpers.js";
@@ -14,7 +15,10 @@ import {
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
-async function writeRuntimeConfig(directory, endpoint, workflowMode = "auto") {
+async function writeRuntimeConfig(directory, endpoint, workflowMode = "auto", roleModels = {
+  architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
+  "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
+}) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify({
     schemaVersion: 2,
@@ -28,10 +32,7 @@ async function writeRuntimeConfig(directory, endpoint, workflowMode = "auto") {
       timeoutMs: 1000,
       retries: 1,
     },
-    roleModels: {
-      architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
-      "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
-    },
+    roleModels,
   }, null, 2)}\n`);
 }
 
@@ -189,6 +190,58 @@ test("runtime workflow submits one frozen graph with exact task/profile mapping"
       assert.equal(graph.tasks[0].profile_snapshot.model, developer.id);
       assert.equal(graph.tasks[0].profile_snapshot.permission_profile, "safe-read-write");
       assert.equal(workflowEntry(branch).data.authority, "runtime");
+      await emitExtensionEvent(harness, "session_shutdown");
+    });
+  });
+});
+
+test("未映射 Runtime 工作流角色冻结当前会话模型且不写 fallback 映射", async () => {
+  const submitted = [];
+  await withTempDirectory(async (directory) => {
+    await withRuntimeServer((socket, request) => {
+      const command = request.command.command;
+      if (command === "submit_graph") {
+        submitted.push(request.command.payload.graph);
+        socket.end(ok(request.request_id, "graph_submitted", {
+          graph_revision: request.command.payload.graph.graph_revision,
+        }));
+      } else if (command === "read_events") {
+        socket.end(ok(request.request_id, "events", { events: [] }));
+      } else if (command === "query_graph") {
+        const graph = submitted[0];
+        socket.end(ok(request.request_id, "state", { state: {
+          graph_revision: graph.graph_revision,
+          tasks: graph.tasks.map((task) => ({ task_id: task.task_id, state: "ready" })),
+          attempts: [],
+          active_attempt_id: null,
+        } }));
+      } else {
+        socket.end(errorResponse(request.request_id, "invalid_command", `unexpected ${command}`));
+      }
+    }, async (endpoint) => {
+      await writeRuntimeConfig(directory, endpoint, "on", {});
+      const model = { provider: "test-provider", id: "session-current" };
+      const branch = [];
+      const harness = createExtensionHarness(branch, {
+        cwd: directory,
+        trusted: true,
+        model,
+        availableModels: [model],
+        thinkingLevel: "medium",
+      });
+      await emitExtensionEvent(harness, "session_start");
+      const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
+      await switchRole.execute("select-architect", { role: "architect" }, undefined, undefined, harness.context);
+      const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+      await workflow.execute("runtime-default-plan", runtimePlan(), undefined, undefined, harness.context);
+
+      const profile = submitted[0].tasks[0].profile_snapshot;
+      assert.equal(profile.model_provider, model.provider);
+      assert.equal(profile.model, model.id);
+      assert.equal(profile.thinking_level, "medium");
+      harness.context.model = { provider: "test-provider", id: "later-session-model" };
+      assert.deepEqual(workflowEntry(branch).data.runtimeAuthority.graph.tasks[0].profile_snapshot, profile);
+      assert.deepEqual(JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8")).roleModels, {});
       await emitExtensionEvent(harness, "session_shutdown");
     });
   });

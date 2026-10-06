@@ -32,6 +32,9 @@ function assertArchitectBlocked(result, toolName) {
 test("architect 仅允许职责切换和 task_workflow 规划控制", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
+  await harness.tools.find((tool) => tool.name === "switch_role").execute(
+    "architect", { role: "architect" }, undefined, undefined, harness.context,
+  );
 
   assert.equal(await callToolCall(harness, "switch_role", { role: "docs-commit" }), undefined);
   for (const action of ["plan", "replan", "status"]) {
@@ -48,6 +51,9 @@ test("architect 仅允许职责切换和 task_workflow 规划控制", async () =
 test("architect 对取证、执行、MCP、协作和未知工具全部 fail-closed", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
+  await harness.tools.find((tool) => tool.name === "switch_role").execute(
+    "architect", { role: "architect" }, undefined, undefined, harness.context,
+  );
 
   for (const toolName of [
     "read",
@@ -119,6 +125,7 @@ test("architect 切换到 docs-commit 后恢复探索能力", async () => {
   await emitExtensionEvent(harness, "session_start");
   const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
 
+  await switchRole.execute("architect", { role: "architect" }, undefined, undefined, harness.context);
   await switchRole.execute("docs", { role: "docs-commit" }, undefined, undefined, harness.context);
   assert.equal(await callToolCall(harness, "read"), undefined);
   assert.equal(await callToolCall(harness, "grep"), undefined);

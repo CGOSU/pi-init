@@ -85,7 +85,7 @@ test("本地修改托管区块时报告冲突并保持原文件和状态不变",
     await createScaffold(target, { projectName: "Modified" });
     const agentsPath = path.join(target, "AGENTS.md");
     const before = (await readFile(agentsPath, "utf8"))
-      .replace("不创建 `task_workflow` 或额外书面计划", "本地自定义规则");
+      .replace("本节优先于下方通用会话收尾规则", "本地自定义规则");
     await writeFile(agentsPath, before, "utf8");
     const stateBefore = await readFile(path.join(target, TEMPLATE_STATE_PATH), "utf8");
 
@@ -106,7 +106,7 @@ test("没有状态文件的旧版托管区块被修改时不静默覆盖", async
     const agentsPath = path.join(target, "AGENTS.md");
     const statePath = path.join(target, TEMPLATE_STATE_PATH);
     const legacy = withoutManagedMarkers(await readFile(agentsPath, "utf8"))
-      .replace("不创建 `task_workflow` 或额外书面计划", "旧项目自定义规则");
+      .replace("本节优先于下方通用会话收尾规则", "旧项目自定义规则");
     await writeFile(agentsPath, legacy, "utf8");
     await rm(statePath);
 

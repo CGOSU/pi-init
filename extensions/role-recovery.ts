@@ -82,7 +82,7 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
   function guardToolCall(event: { toolName: string; input?: Record<string, unknown> }) {
     if (!state.roleRecoveryPending) return undefined;
     if (event.toolName === "switch_role") return undefined;
-    if (state.activeRole?.role !== "architect" && READ_ONLY_TOOLS.has(event.toolName)) return undefined;
+    if (state.activeRole?.role && state.activeRole.role !== "architect" && READ_ONLY_TOOLS.has(event.toolName)) return undefined;
     if (event.toolName === "task_workflow" && event.input?.action === "status") return undefined;
     return {
       block: true,

@@ -21,7 +21,6 @@ const {
   createScaffold,
   formatEnvironmentInstructions,
   DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_MODELS,
   DEFAULT_WORKFLOW_EXECUTOR,
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,

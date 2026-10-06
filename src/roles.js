@@ -128,34 +128,14 @@ export function findMatchingRole(config, model, thinkingLevel) {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-export const DEFAULT_ROLE_MODELS = {
-  architect: {
-    provider: "openai-codex",
-    model: "gpt-5.6-sol",
-    thinkingLevel: "max",
-  },
-  "developer-test": {
-    provider: "openai-codex",
-    model: "gpt-5.6-luna",
-    thinkingLevel: "max",
-  },
-  "docs-commit": {
-    provider: "openai-codex",
-    model: "gpt-5.6-luna",
-    thinkingLevel: "medium",
-  },
-};
-
-export const DEFAULT_ROLE_NAMES = Object.keys(DEFAULT_ROLE_MODELS);
+export const DEFAULT_ROLE_NAMES = ["architect", "developer-test", "docs-commit"];
 
 export const DEFAULT_ROLE_CONFIG = {
   schemaVersion: ROLE_CONFIG_SCHEMA_VERSION,
   mode: DEFAULT_ROLE_MODE,
   workflowMode: DEFAULT_WORKFLOW_MODE,
   workflowExecutor: DEFAULT_WORKFLOW_EXECUTOR,
-  roleModels: Object.fromEntries(
-    DEFAULT_ROLE_NAMES.map((role) => [role, { ...DEFAULT_ROLE_MODELS[role] }]),
-  ),
+  roleModels: {},
 };
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -171,19 +151,38 @@ const CONFIG_METADATA_KEYS = new Set([
   "runtime",
 ]);
 
+function configError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function failure(code, message) {
+  return { ok: false, code, message };
+}
+
+function resultFromError(error, fallbackCode = "ROLE_CONFIG_INVALID") {
+  return failure(
+    error && typeof error.code === "string" ? error.code : fallbackCode,
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+export function unwrapRoleResult(result) {
+  if (result.ok) return result.value;
+  throw configError(result.code, result.message);
+}
+
 function configObject(config) {
-  if (config === undefined || config === null) return {};
-  if (!isRecord(config)) throw new Error("角色模型配置格式无效");
+  if (config === undefined) return {};
+  if (!isRecord(config)) throw configError("ROLE_CONFIG_INVALID_TYPE", "角色模型配置必须是对象");
   return config;
 }
 
 function validateConfigVersion(config) {
   const version = config.schemaVersion;
   if (version !== undefined && version !== 1 && version !== ROLE_CONFIG_SCHEMA_VERSION) {
-    throw new Error(`不支持的角色模型配置版本：${version}`);
-  }
-  if (version === ROLE_CONFIG_SCHEMA_VERSION && !hasOwn(config, "roleModels")) {
-    throw new Error("角色模型配置缺少 roleModels 映射");
+    throw configError("ROLE_CONFIG_UNSUPPORTED_VERSION", `不支持的角色模型配置版本：${version}`);
   }
 }
 
@@ -196,14 +195,14 @@ function rawRoleModelEntries(config) {
   validateConfigVersion(source);
   if (hasOwn(source, "roleModels")) {
     if (!isRecord(source.roleModels)) {
-      throw new Error("角色模型 roleModels 必须是对象");
+      throw configError("ROLE_MODELS_INVALID_TYPE", "角色模型 roleModels 必须是对象");
     }
     return Object.entries(source.roleModels);
   }
 
   const legacy = {};
   for (const role of DEFAULT_ROLE_NAMES) {
-    legacy[role] = source[role] ?? DEFAULT_ROLE_MODELS[role];
+    if (hasOwn(source, role)) legacy[role] = source[role];
   }
   for (const [role, value] of Object.entries(source)) {
     if (!CONFIG_METADATA_KEYS.has(role) && !hasOwn(legacy, role) && roleModelLike(value)) {
@@ -215,18 +214,18 @@ function rawRoleModelEntries(config) {
 
 function normalizeRoleModel(value, role) {
   if (!isRecord(value)) {
-    throw new Error(`角色 ${role} 缺少模型配置`);
+    throw configError("ROLE_MODEL_INVALID_TYPE", `角色 ${role} 的模型配置必须是对象`);
   }
 
   const { provider, model, thinkingLevel } = value;
   if (typeof provider !== "string" || !provider.trim()) {
-    throw new Error(`角色 ${role} 的 provider 无效`);
+    throw configError("ROLE_MODEL_PROVIDER_INVALID", `角色 ${role} 的 provider 无效`);
   }
   if (typeof model !== "string" || !model.trim()) {
-    throw new Error(`角色 ${role} 的 model 无效`);
+    throw configError("ROLE_MODEL_ID_INVALID", `角色 ${role} 的 model 无效`);
   }
   if (!THINKING_LEVEL_SET.has(thinkingLevel)) {
-    throw new Error(`角色 ${role} 的 thinkingLevel 无效：${thinkingLevel}`);
+    throw configError("ROLE_MODEL_THINKING_LEVEL_INVALID", `角色 ${role} 的 thinkingLevel 无效：${thinkingLevel}`);
   }
 
   return { provider: provider.trim(), model: model.trim(), thinkingLevel };
@@ -235,9 +234,14 @@ function normalizeRoleModel(value, role) {
 function normalizeRoleModels(config) {
   const roleModels = {};
   for (const [rawRole, value] of rawRoleModelEntries(config)) {
-    const role = normalizeRoleId(rawRole, "角色");
+    let role;
+    try {
+      role = normalizeRoleId(rawRole, "角色");
+    } catch (error) {
+      throw configError("ROLE_ID_INVALID", error instanceof Error ? error.message : String(error));
+    }
     if (hasOwn(roleModels, role)) {
-      throw new Error(`角色 ID 重复：${role}`);
+      throw configError("ROLE_ID_DUPLICATE", `角色 ID 重复：${role}`);
     }
     roleModels[role] = normalizeRoleModel(value, role);
   }
@@ -245,18 +249,30 @@ function normalizeRoleModels(config) {
 }
 
 export function getRoleNames(config) {
-  return Object.keys(normalizeRoleModels(config));
+  const resolved = resolveRoleConfig(config);
+  if (!resolved.ok) return resolved;
+  return { ok: true, value: [...new Set([...DEFAULT_ROLE_NAMES, ...Object.keys(resolved.value.roleModels)])] };
 }
 
-export function isRoleConfigured(config, role) {
-  const normalizedRole = normalizeRoleId(role);
-  return hasOwn(normalizeRoleModels(config), normalizedRole);
+export function isRoleAvailable(config, role) {
+  const resolved = resolveRoleConfig(config);
+  if (!resolved.ok) return resolved;
+  let normalizedRole;
+  try {
+    normalizedRole = normalizeRoleId(role);
+  } catch (error) {
+    return resultFromError(error, "ROLE_ID_INVALID");
+  }
+  return {
+    ok: true,
+    value: DEFAULT_ROLE_NAMES.includes(normalizedRole) || hasOwn(resolved.value.roleModels, normalizedRole),
+  };
 }
 
 export function resolveRoleMode(config) {
   const mode = config?.mode ?? DEFAULT_ROLE_MODE;
   if (!ROLE_MODES.includes(mode)) {
-    throw new Error(`职责切换模式无效：${mode}`);
+    throw configError("ROLE_MODE_INVALID", `职责切换模式无效：${mode}`);
   }
   return mode;
 }
@@ -265,7 +281,7 @@ export function resolveWorkflowMode(config) {
   const configuredMode = config?.workflowMode;
   if (configuredMode !== undefined) {
     if (!WORKFLOW_MODES.includes(configuredMode)) {
-      throw new Error(`工作流模式 workflowMode 无效：${configuredMode}`);
+      throw configError("WORKFLOW_MODE_INVALID", `工作流模式 workflowMode 无效：${configuredMode}`);
     }
     return configuredMode;
   }
@@ -273,7 +289,7 @@ export function resolveWorkflowMode(config) {
   const legacyEnabled = config?.workflowEnabled;
   if (legacyEnabled === undefined) return DEFAULT_WORKFLOW_MODE;
   if (typeof legacyEnabled !== "boolean") {
-    throw new Error(`工作流开关 workflowEnabled 必须是布尔值：${legacyEnabled}`);
+    throw configError("WORKFLOW_ENABLED_INVALID", `工作流开关 workflowEnabled 必须是布尔值：${legacyEnabled}`);
   }
   return legacyEnabled ? "on" : "off";
 }
@@ -281,7 +297,7 @@ export function resolveWorkflowMode(config) {
 export function resolveWorkflowExecutor(config) {
   const executor = config?.workflowExecutor ?? DEFAULT_WORKFLOW_EXECUTOR;
   if (!WORKFLOW_EXECUTORS.includes(executor)) {
-    throw new Error(`工作流执行器 workflowExecutor 无效：${executor}`);
+    throw configError("WORKFLOW_EXECUTOR_INVALID", `工作流执行器 workflowExecutor 无效：${executor}`);
   }
   return executor;
 }
@@ -289,23 +305,23 @@ export function resolveWorkflowExecutor(config) {
 export function resolveRuntimeConfig(config) {
   const runtime = config?.runtime;
   if (runtime === undefined) return undefined;
-  if (!isRecord(runtime)) throw new Error("runtime 配置必须是对象");
+  if (!isRecord(runtime)) throw configError("RUNTIME_CONFIG_INVALID_TYPE", "runtime 配置必须是对象");
   const allowed = new Set(["endpoint", "agentBackend", "permissionProfile", "timeoutMs", "retries", "maxFrameBytes"]);
   for (const key of Object.keys(runtime)) {
-    if (!allowed.has(key)) throw new Error(`runtime 配置包含未知字段：${key}`);
+    if (!allowed.has(key)) throw configError("RUNTIME_CONFIG_UNKNOWN_FIELD", `runtime 配置包含未知字段：${key}`);
   }
   for (const [field, label] of [["endpoint", "endpoint"], ["agentBackend", "agentBackend"], ["permissionProfile", "permissionProfile"]]) {
     if (typeof runtime[field] !== "string" || !runtime[field].trim()) {
-      throw new Error(`runtime.${label} 必须是非空字符串`);
+      throw configError("RUNTIME_CONFIG_FIELD_INVALID", `runtime.${label} 必须是非空字符串`);
     }
   }
   for (const field of ["timeoutMs", "retries", "maxFrameBytes"]) {
     if (runtime[field] !== undefined && (!Number.isInteger(runtime[field]) || runtime[field] < 0)) {
-      throw new Error(`runtime.${field} 必须是非负整数`);
+      throw configError("RUNTIME_CONFIG_RANGE_INVALID", `runtime.${field} 必须是非负整数`);
     }
   }
-  if (runtime.timeoutMs !== undefined && runtime.timeoutMs === 0) throw new Error("runtime.timeoutMs 必须大于 0");
-  if (runtime.maxFrameBytes !== undefined && runtime.maxFrameBytes === 0) throw new Error("runtime.maxFrameBytes 必须大于 0");
+  if (runtime.timeoutMs !== undefined && runtime.timeoutMs === 0) throw configError("RUNTIME_CONFIG_RANGE_INVALID", "runtime.timeoutMs 必须大于 0");
+  if (runtime.maxFrameBytes !== undefined && runtime.maxFrameBytes === 0) throw configError("RUNTIME_CONFIG_RANGE_INVALID", "runtime.maxFrameBytes 必须大于 0");
   return {
     endpoint: runtime.endpoint.trim(),
     agentBackend: runtime.agentBackend.trim(),
@@ -327,13 +343,35 @@ export function shouldOrchestrateWorkflow({ mode, taskCount }) {
   return mode === "on" || (mode === "auto" && taskCount > WORKFLOW_AUTO_TASK_LIMIT);
 }
 
-export function resolveRoleModel(config, role) {
-  const normalizedRole = normalizeRoleId(role);
-  const roleModels = normalizeRoleModels(config);
-  if (!hasOwn(roleModels, normalizedRole)) {
-    throw new Error(`角色 ${normalizedRole} 未配置模型；请先执行 /pi-init config ${normalizedRole}`);
+export function resolveRoleModel(config, role, sessionDefault) {
+  const resolved = resolveRoleConfig(config);
+  if (!resolved.ok) return resolved;
+
+  let normalizedRole;
+  try {
+    normalizedRole = normalizeRoleId(role);
+  } catch (error) {
+    return resultFromError(error, "ROLE_ID_INVALID");
   }
-  return roleModels[normalizedRole];
+  const configured = resolved.value.roleModels[normalizedRole];
+  if (configured) return { ok: true, value: configured };
+  if (!DEFAULT_ROLE_NAMES.includes(normalizedRole)) {
+    return failure("ROLE_NOT_ENABLED", `角色 ${normalizedRole} 未启用；请先配置该角色及职责说明`);
+  }
+  if (!sessionDefault) {
+    return failure("SESSION_MODEL_UNAVAILABLE", `角色 ${normalizedRole} 未配置模型，且当前 Pi 会话没有可用的默认模型`);
+  }
+
+  try {
+    const fallback = normalizeRoleModel({
+      provider: sessionDefault.provider,
+      model: sessionDefault.model ?? sessionDefault.id,
+      thinkingLevel: sessionDefault.thinkingLevel,
+    }, normalizedRole);
+    return { ok: true, value: fallback };
+  } catch (error) {
+    return resultFromError(error, "SESSION_MODEL_INVALID");
+  }
 }
 
 export function filterRoleModels(models, query) {
@@ -349,7 +387,7 @@ function stagedRoleModels(changes) {
   const result = {};
   if (hasOwn(changes, "roleModels")) {
     if (!isRecord(changes.roleModels)) {
-      throw new Error("暂存的 roleModels 必须是对象");
+      throw configError("ROLE_MODELS_INVALID_TYPE", "暂存的 roleModels 必须是对象");
     }
     Object.assign(result, changes.roleModels);
   }
@@ -359,7 +397,7 @@ function stagedRoleModels(changes) {
   return result;
 }
 
-export function mergeRoleConfig(base, changes) {
+function mergeRoleConfigData(base, changes) {
   const baseConfig = configObject(base);
   const changeConfig = configObject(changes);
   const merged = { ...baseConfig, ...changeConfig };
@@ -373,8 +411,7 @@ export function mergeRoleConfig(base, changes) {
   return merged;
 }
 
-export function resolveRoleConfig(config) {
-  const source = configObject(config);
+function parseRoleConfig(source) {
   const roleModels = normalizeRoleModels(source);
   const runtime = resolveRuntimeConfig(source);
   const resolved = {
@@ -385,9 +422,17 @@ export function resolveRoleConfig(config) {
     roleModels,
     ...(runtime ? { runtime } : {}),
   };
-  // Keep property access working for the legacy scaffold until it is migrated.
   for (const [role, model] of Object.entries(roleModels)) {
     Object.defineProperty(resolved, role, { value: model, enumerable: false });
   }
   return resolved;
+}
+
+export function resolveRoleConfig(config, changes) {
+  try {
+    const source = changes === undefined ? configObject(config) : mergeRoleConfigData(config, changes);
+    return { ok: true, value: parseRoleConfig(source) };
+  } catch (error) {
+    return resultFromError(error);
+  }
 }

@@ -27,11 +27,6 @@ export function createWorkflowDispatch(
 ) {
   let localScheduleInFlight = false;
 
-  function formatBlockedWorkflowMessage(message: string, workflowState: NonNullable<ExtensionRuntimeState["workflowState"]>) {
-    const guidance = deps.report.formatWorkflowBlockNotice(workflowState);
-    return guidance ? `${message}\n${guidance}` : message;
-  }
-
   function startTaskBoundaryCompaction(
     ctx: ExtensionContext,
     continuation: RoleCompactionContinuation,
@@ -115,7 +110,7 @@ export function createWorkflowDispatch(
       deps.report.persistWorkflowState(blocked, ctx);
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(
-        formatBlockedWorkflowMessage(`工作流任务 ${taskId} 已暂停：${reason}`, blocked),
+        deps.report.formatWorkflowPauseSummary(blocked),
         "warning",
       );
     } catch (error) {
@@ -162,7 +157,7 @@ export function createWorkflowDispatch(
       deps.report.persistWorkflowState(nudged, ctx);
       if (nudged.status === "paused") {
         ctx.ui.notify(
-          formatBlockedWorkflowMessage("工作流已暂停：任务未提交 complete/block。", nudged),
+          deps.report.formatWorkflowPauseSummary(nudged),
           "warning",
         );
         return;
@@ -199,7 +194,7 @@ export function createWorkflowDispatch(
         deps.report.persistWorkflowState(paused, ctx);
         state.workflowDispatchInFlight = false;
         ctx.ui.notify(
-          formatBlockedWorkflowMessage(`任务 ${next.id} 已暂停：未能应用要求的角色 ${next.role}。`, paused),
+          deps.report.formatWorkflowPauseSummary(paused),
           "warning",
         );
         return;
@@ -227,7 +222,7 @@ export function createWorkflowDispatch(
       deps.report.persistWorkflowState(paused, ctx);
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(
-        formatBlockedWorkflowMessage(`工作流已暂停：${textOf(error)}`, paused),
+        deps.report.formatWorkflowPauseSummary(paused),
         "error",
       );
     }

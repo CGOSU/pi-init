@@ -14,7 +14,7 @@ import {
   retryWorkflowTask,
   validateWorkflowPlan,
 } from "../src/workflow.js";
-import { roleLabel, shouldOrchestrateWorkflow } from "../src/roles.js";
+import { resolveRoleModel, shouldOrchestrateWorkflow, unwrapRoleResult } from "../src/roles.js";
 import { RuntimeClient, RuntimeClientError } from "./runtime-client.ts";
 import { createRuntimeClientConfig } from "./runtime-client-config.ts";
 import { textOf, type ExtensionRuntimeState, type WorkflowState } from "./runtime-state.ts";
@@ -40,13 +40,17 @@ export function createWorkflowActions(
     }
     return shouldOrchestrateWorkflow({ mode, taskCount });
   }
-  function assertConfiguredTaskRoles(config: { roleModels: Record<string, unknown> }, tasks: Array<{ id: string; role: string }>) {
-    const configuredRoles = new Set(Object.keys(config.roleModels));
+  function assertConfiguredTaskRoles(
+    config: { roleModels: Record<string, unknown> },
+    tasks: Array<{ id: string; role: string }>,
+    sessionDefault: ReturnType<RoleRuntime["currentRole"]>,
+  ) {
     for (const task of tasks) {
-      if (!configuredRoles.has(task.role)) {
-        throw new Error(
-          `工作流任务 ${task.id} 要求角色 ${roleLabel(task.role)}，但该角色未配置模型；请先执行 /pi-init config ${task.role}`,
-        );
+      const resolved = resolveRoleModel(config, task.role, sessionDefault);
+      if (!resolved.ok) {
+        const error = unwrapRoleResult(resolved);
+        error.message = `工作流任务 ${task.id} 无法解析角色 ${task.role} 的模型：${error.message}`;
+        throw error;
       }
     }
   }
@@ -197,7 +201,8 @@ export function createWorkflowActions(
 
   async function initializeRuntimeWorkflow(workflow: WorkflowState, config: any, ctx: ExtensionContext) {
     const clientConfig = createRuntimeClientConfig(config.runtime);
-    const built = buildRuntimeWorkflow(workflow, config, ctx.cwd, clientConfig);
+    const sessionDefault = deps.roleRuntime.currentRole("architect", ctx);
+    const built = buildRuntimeWorkflow(workflow, config, ctx.cwd, clientConfig, sessionDefault);
     const next = cloneState(workflow);
     next.runtimeAuthority = built.runtimeAuthority;
     state.runtimeClient = new RuntimeClient(clientConfig);
@@ -310,7 +315,7 @@ export function createWorkflowActions(
           tasks: params.tasks,
           reviewRequired: params.reviewRequired,
         });
-        assertConfiguredTaskRoles(config, plan.tasks);
+        assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
         if (config.workflowMode === "off") {
           throw new Error(
             "task_workflow 当前策略为 off；请先执行 /pi-init config workflow 选择 on 或 auto，或在 .pi/role-models.json 中将 workflowMode 设为 on/auto",
@@ -364,7 +369,7 @@ export function createWorkflowActions(
           constraints: params.constraints,
           tasks: params.tasks,
         });
-        assertConfiguredTaskRoles(config, plan.tasks);
+        assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
         const next = applyWorkflowReplan(state.workflowState, {
           revisionId: params.revisionId,
           summary: params.summary,
@@ -419,12 +424,7 @@ export function createWorkflowActions(
         const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
-        const blockNotice = deps.report.formatWorkflowBlockNotice(next);
-        ctx.ui.notify(
-          [`工作流已暂停：任务 ${taskId} 被标记为阻塞。`, blockNotice].filter(Boolean).join("\n"),
-          "warning",
-        );
-        return { content: [{ type: "text", text: deps.report.formatWorkflowState(next) }], details: next, terminate: true };
+        return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(next) }], details: next, terminate: true };
       }
       case "resume": {
         if (!state.workflowState) throw new Error("当前没有活动工作流");

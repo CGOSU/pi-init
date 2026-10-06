@@ -20,7 +20,7 @@ import {
 import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
 import {
   DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_MODELS,
+  DEFAULT_ROLE_NAMES,
   DEFAULT_WORKFLOW_EXECUTOR,
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,
@@ -29,6 +29,8 @@ import {
   THINKING_LEVELS,
   filterRoleModels,
   findMatchingRole,
+  getRoleNames,
+  isRoleAvailable,
   normalizeModelReference,
   resolveRoleConfig,
   resolveRoleMode,
@@ -36,6 +38,7 @@ import {
   resolveWorkflowMode,
   resolveRoleModel,
   shouldOrchestrateWorkflow,
+  unwrapRoleResult,
   shouldCompactOnRoleSwitch,
   shouldCompactAfterWorkflowTask,
 } from "../src/roles.js";
@@ -94,8 +97,11 @@ function createExtensionHarness(branch = [], options = {}) {
   const reloadCalls = [];
   const sentMessages = [];
   const sentUserMessages = [];
-  const defaultModel = options.model ?? { provider: "openai-codex", id: "gpt-5.6-luna" };
-  const availableModels = options.availableModels ?? [defaultModel];
+  const defaultModel = Object.prototype.hasOwnProperty.call(options, "model")
+    ? options.model
+    : { provider: "test-provider", id: "session-default" };
+  const availableModels = options.availableModels ?? (defaultModel ? [defaultModel] : []);
+  let currentThinkingLevel = options.thinkingLevel ?? "max";
   const activeTools = options.activeTools ?? [];
   let context;
 
@@ -169,9 +175,11 @@ function createExtensionHarness(branch = [], options = {}) {
       tools.push(tool);
     },
     getThinkingLevel() {
-      return options.thinkingLevel ?? "max";
+      return currentThinkingLevel;
     },
-    setThinkingLevel() {},
+    setThinkingLevel(level) {
+      currentThinkingLevel = level;
+    },
     getActiveTools() {
       return activeTools;
     },
@@ -435,7 +443,7 @@ export {
   createScaffold,
   formatEnvironmentInstructions,
   DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_MODELS,
+  DEFAULT_ROLE_NAMES,
   DEFAULT_WORKFLOW_EXECUTOR,
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,
@@ -444,6 +452,8 @@ export {
   THINKING_LEVELS,
   filterRoleModels,
   findMatchingRole,
+  getRoleNames,
+  isRoleAvailable,
   normalizeModelReference,
   resolveRoleConfig,
   resolveRoleMode,
@@ -451,6 +461,7 @@ export {
   resolveWorkflowMode,
   resolveRoleModel,
   shouldOrchestrateWorkflow,
+  unwrapRoleResult,
   shouldCompactOnRoleSwitch,
   shouldCompactAfterWorkflowTask,
   WORKFLOW_MAX_NUDGES,

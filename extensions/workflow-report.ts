@@ -479,6 +479,7 @@ export function createWorkflowReport(
     dispose,
     persistWorkflowState,
     formatWorkflowState,
+    formatWorkflowPauseSummary: (workflowState: WorkflowState) => ["工作流已暂停。", ...formatWorkflowBlockLines(workflowState)].join("\n"),
     formatWorkflowBlockNotice: (workflowState: WorkflowState) => {
       const lines = formatWorkflowBlockLines(workflowState);
       return lines.length > 0 ? lines.join("\n") : undefined;

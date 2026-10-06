@@ -34,18 +34,23 @@ export type ControlCenterDependencies = {
   ) => Promise<void>;
 };
 
-function roleMenuItems(config: ResolvedRoleConfig, mode: string) {
+function roleMenuItems(config: ResolvedRoleConfig, mode: string, roleNames: string[]) {
   return [
     {
       value: "mode",
       label: `● 模式 · ${roleModeLabel(mode)}`,
       description: "只影响本次会话，不修改项目文件",
     },
-    ...Object.keys(config.roleModels).map((role) => ({
-      value: role,
-      label: `● ${roleLabel(role)} · ${shortModelName(config.roleModels[role].model)}/${config.roleModels[role].thinkingLevel}`,
-      description: formatRoleModel(config.roleModels[role]),
-    })),
+    ...roleNames.map((role) => {
+      const model = config.roleModels[role];
+      return {
+        value: role,
+        label: model
+          ? `● ${roleLabel(role)} · ${shortModelName(model.model)}/${model.thinkingLevel}`
+          : `● ${roleLabel(role)} · 会话默认模型`,
+        description: model ? formatRoleModel(model) : "未单独配置模型时，沿用当前 Pi 会话模型和推理强度",
+      };
+    }),
     { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
   ];
 }
@@ -71,8 +76,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         value,
         label: roleModeLabel(value),
         description:
-          value === "auto" ? "按任务自动选择角色和模型"
-          : value === "manual" ? "不自动换角，原生 /model 切换直接写回项目配置"
+          value === "auto" ? "按任务自动切换角色；显式配置映射时切换对应模型"
+          : value === "manual" ? "不自动换角；原生 /model 仅为显式映射的当前角色写回配置"
           : undefined,
       })),
       saveMenuOptions(ctx),
@@ -90,11 +95,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
 
   async function switchRole(requested: string | undefined, ctx: ExtensionCommandContext) {
     const config = await roleRuntime.readSessionRoleConfig(ctx);
-    const roleNames = Object.keys(config.roleModels);
-    if (roleNames.length === 0) {
-      ctx.ui.notify("当前没有已配置角色；请先执行 /pi-init config <角色 ID> 配置模型。", "error");
-      return;
-    }
+    const roleNames = state.configuredRoleNames;
     const role = requested || await showMenu(
       ctx,
       "切换角色",
@@ -102,8 +103,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       saveMenuOptions(ctx),
     );
     if (!role || isMenuBack(role)) return;
-    if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
-      ctx.ui.notify(`角色 ${role} 未配置模型；可用值：${roleNames.join(", ")}`, "error");
+    if (!roleNames.includes(role)) {
+      ctx.ui.notify(`角色 ${role} 未启用；可用值：${roleNames.join(", ")}`, "error");
       return;
     }
     try {
@@ -190,7 +191,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       return;
     }
     const config = await roleRuntime.readSessionRoleConfig(ctx);
-    const roleNames = Object.keys(config.roleModels);
+    const roleNames = state.configuredRoleNames;
     const role = requested || await showMenu(
       ctx,
       "配置角色模型",
@@ -198,8 +199,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       saveMenuOptions(ctx),
     );
     if (!role || isMenuBack(role)) return;
-    if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
-      ctx.ui.notify(`角色 ${role} 未配置模型；可用值：${roleNames.join(", ")}`, "error");
+    if (!roleNames.includes(role)) {
+      ctx.ui.notify(`角色 ${role} 未启用；可用值：${roleNames.join(", ")}`, "error");
       return;
     }
     if (!ctx.hasUI) {
@@ -254,7 +255,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     let config = await roleRuntime.readSessionRoleConfig(ctx);
     while (true) {
       const mode = state.sessionModeOverride ?? config.mode;
-      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode), saveMenuOptions(ctx));
+      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode, state.configuredRoleNames), saveMenuOptions(ctx));
       if (!action || isMenuBack(action)) return;
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
