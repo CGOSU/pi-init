@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-06：让 `/fast` 手动进入单次精简流程
+
+- 完成内容：`/fast` 现在表示用户为本次任务显式选择 Fast Path，不再重复检查自动资格中的任务类型、规模和修改范围；同步命令提示、中英文脚手架规则、公共角色路由 Skill、README 和项目当前状态。保留忙碌 Agent/未结束工作流保护，并明确安全、职责、上下文恢复和必要验证仍优先。
+- 决策：见 [`docs/decisions.md`](decisions.md) 的“`/fast` 手动启用单次精简流程”。
+- 验证：`node --test test/extension-lifecycle.test.js test/scaffold.test.js`，25 项全部通过。
+- 遗留问题：未运行全量测试；尚未在真实 Pi 会话确认 slash command 的交互及模型对新提示的遵循效果。未提交或推送。
+
 ### 2026-09-30：新增一次性 `/fast` 命令
 
 - 完成内容：新增 `/fast <任务描述>`，通过 user message 为本次任务请求 Fast Path；不是持久模式或强制执行保证。只在符合既有 Fast Path 条件时请求直接定位、读取最小上下文、实现和风险匹配的最小核对；权限、安全、项目规则、architect 边界与必要验证仍优先。Agent 忙碌或工作流处于 running、paused、replanning 时拒绝派发；completed/cancelled 不阻止新的独立任务。

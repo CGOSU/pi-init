@@ -116,6 +116,7 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
     assert.match(agents, /<!-- pi-init:managed:start fast-path-wrap-up -->/);
     assert.match(agents, /<!-- pi-init:managed:end fast-path-wrap-up -->/);
     assert.match(agents, /## Fast Path 收尾优先级/);
+    assert.match(agents, /用户通过 `\/fast` 显式手动选择本次 Fast Path/);
     assert.ok(agents.indexOf("## Fast Path 收尾优先级") < agents.indexOf("## 会话收尾"));
     const templateState = JSON.parse(await readFile(path.join(target, ".pi/pi-init-state.json"), "utf8"));
     assert.equal(templateState.schemaVersion, 1);
@@ -202,6 +203,7 @@ test("部分职责配置回退默认值且不生成项目级 Skill", async () =>
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
     assert.match(agents, /pi-init-role-routing/);
     assert.match(agents, /## Fast Path Wrap-up Priority/);
+    assert.match(agents, /user explicitly selects a one-time Fast Path via `\/fast`/);
     assert.ok(agents.indexOf("## Fast Path Wrap-up Priority") < agents.indexOf("## Session Wrap-up"));
     await assert.rejects(
       readFile(path.join(target, ".pi/skills/partial-app/SKILL.md"), "utf8"),

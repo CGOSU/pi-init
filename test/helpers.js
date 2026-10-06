@@ -331,10 +331,12 @@ async function assertFastCommandContract() {
     const message = harness.sentUserMessages[0]?.message ?? "";
     assert.equal(harness.sentUserMessages.length, 1);
     assert.ok(message.endsWith(task));
-    assert.match(message, /单次 Fast Path 任务/);
-    assert.match(message, /不保证该任务符合 Fast Path 资格/);
-    assert.match(message, /直接定向定位、读取最小必要上下文、实现/);
-    assert.match(message, /权限与安全边界.*必要验证仍优先/);
+    assert.match(message, /单次启用 Fast Path/);
+    assert.match(message, /这是对 Fast Path 自动适用条件的手动选择/);
+    assert.match(message, /不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程/);
+    assert.match(message, /直接定向读取最少必要上下文.*风险匹配的最小验证/);
+    assert.match(message, /安全、权限、需求\/契约确认.*必要验证仍优先/);
+    assert.doesNotMatch(message, /不保证该任务符合 Fast Path 资格|若任务不符合 Fast Path 条件/);
     await assert.rejects(readFile(path.join(directory, ".pi", "role-models.json")), { code: "ENOENT" });
   });
 

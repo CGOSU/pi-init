@@ -285,7 +285,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (!task || !ctx.isIdle() || (workflow && !["completed", "cancelled"].includes(workflow.status))) {
       ctx.ui.notify(!task ? "用法：/fast <任务描述>" : !ctx.isIdle() ? "Agent 正忙；请等待当前操作完成后再使用 /fast。" : "当前有未结束的工作流；/fast 不会绕过或覆盖它，请按工作流流程继续。", "warning"); return;
     }
-    pi.sendUserMessage(`用户通过 /fast 请求将下面这一项作为单次 Fast Path 任务处理；这不是持久模式，也不保证该任务符合 Fast Path 资格。\n若符合全部 Fast Path 条件，直接定向定位、读取最小必要上下文、实现并做风险匹配的最小核对；不要额外创建 task_workflow 或例行留痕。\n用户和项目指令、权限与安全边界、需求确认、architect 职责限制、上下文恢复门以及必要验证仍优先。\n若任务不符合 Fast Path 条件，简要说明原因并按正常流程处理。\n\n用户任务：\n${task}`);
+    pi.sendUserMessage(`用户通过 /fast 明确选择对下面这一项单次启用 Fast Path；这不是持久模式，也不修改模型或项目配置。\n这是对 Fast Path 自动适用条件的手动选择：不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程。直接定向读取最少必要上下文，完成任务所需修改和风险匹配的最小验证；不要仅因不符合自动适用条件而创建 task_workflow 或做例行留痕。\n安全、权限、需求/契约确认、数据保护、architect 职责限制、上下文恢复门、工作流保护和必要验证仍优先；若这些独立边界要求暂停或升级流程，简要说明具体原因，不要只以自动 Fast Path 资格为由退回。\n\n用户任务：\n${task}`);
   }});
 
   pi.registerCommand("pi-init", {

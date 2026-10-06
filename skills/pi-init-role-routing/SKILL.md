@@ -25,6 +25,11 @@ metadata:
 - [`roles/developer-test.md`](roles/developer-test.md)
 - [`roles/docs-commit.md`](roles/docs-commit.md)
 
+## `/fast` 手动 Fast Path
+
+- 用户显式调用 `/fast <任务描述>` 表示只为本次任务手动选择 Fast Path；不要再次以自动资格为门槛，也不要因任务类型、规模、文件数、代码行数或修改范围不符而退回普通流程。该命令不切换模型、不改变持久配置。
+- 此选择不覆盖安全、权限、需求/契约确认、角色职责、上下文恢复门、活动工作流保护或必要验证；任务本身独立要求架构规划/工作流时仍按对应规则处理。不要只因自动 Fast Path 资格不满足而额外创建工作流或例行留痕。
+
 ## 角色和模型来源
 
 - `.pi/role-models.json` 的 `roleModels` 是唯一启用角色和模型的项目级来源；只有其中已配置的角色才能被请求。
