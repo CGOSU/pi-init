@@ -17,9 +17,9 @@ The package-published `pi-init-role-routing` Skill is the single source for the 
 
 For a clear, low-risk goal, make ordinary implementation choices and proceed without asking the user about helpers, internal decomposition, test organization, investigation order, or bug fixes that restore intended behavior. Ask only for business or contract conflicts, missing permission or credentials, irreversible or external-state operations, unsafe merges, or blocked real verification; record newly requested behavior, contracts, permissions, or data structures in the confirmed requirements or decision record first.
 
-## Workflow Executors
+## Workflow Execution
 
-`workflowExecutor` supports only `local` (sequential execution in the main session) and `runtime` (execution through the configured Runtime endpoint); the default is `local`.
+pi-init workflows run sequentially in the current main session (local only); missing configuration and the legacy `workflowExecutor: "local"` value remain readable. A legacy top-level `runtime` field or `workflowExecutor: "runtime"` returns a distinct retirement error rather than silently falling back. Old session entries with Runtime executor/authority are not automatically restored, rewritten, or deleted; review legacy configuration and records, and decide how to handle them manually.
 
 ## Runtime Environment and Command Conventions
 

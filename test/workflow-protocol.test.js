@@ -145,24 +145,23 @@ test("架构工作流拒绝重复任务、未知依赖和循环依赖", () => {
     getWorkflowTaskDuration({ startedAt: 20, completedAt: 10 }),
     undefined,
   );
-  assert.throws(
-    () => hydrateWorkflowState({
-      version: 2,
+  const invalidHydration = hydrateWorkflowState({
+    version: 2,
+    status: "completed",
+    plan: { summary: "无效时间", constraints: [] },
+    tasks: [{
+      id: "task",
+      task: "任务",
+      role: "developer-test",
+      files: ["src"],
+      acceptanceCriteria: ["完成"],
+      dependsOn: [],
       status: "completed",
-      plan: { summary: "无效时间", constraints: [] },
-      tasks: [{
-        id: "task",
-        task: "任务",
-        role: "developer-test",
-        files: ["src"],
-        acceptanceCriteria: ["完成"],
-        dependsOn: [],
-        status: "completed",
-        startedAt: 20,
-        completedAt: 10,
-      }],
-    }),
-    /completedAt 早于 startedAt/,
-  );
+      startedAt: 20,
+      completedAt: 10,
+    }],
+  });
+  assert.equal(invalidHydration.code, "WORKFLOW_STATE_INVALID");
+  assert.match(invalidHydration.message, /completedAt 早于 startedAt/);
 });
 

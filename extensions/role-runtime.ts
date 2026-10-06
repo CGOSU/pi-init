@@ -44,12 +44,6 @@ export function workflowModeLabel(mode: string) {
   return mode;
 }
 
-export function workflowExecutorLabel(executor: string) {
-  if (executor === "local") return "主会话顺序执行";
-  if (executor === "runtime") return "Runtime 执行器";
-  return executor;
-}
-
 export function createRoleRuntime(
   pi: ExtensionAPI,
   state: ExtensionRuntimeState,
@@ -254,7 +248,6 @@ export function createRoleRuntime(
       state.sessionRoleConfigOverrides = {};
       state.configuredRoleNames = unwrapRoleResult(getRoleNames(outcome.resolved));
       state.workflowModeStatus = outcome.resolved.workflowMode;
-      state.workflowExecutorStatus = outcome.resolved.workflowExecutor;
       refreshRoleStatus(ctx, state.sessionModeOverride ?? outcome.resolved.mode);
       return {
         ok: true as const,
@@ -268,7 +261,9 @@ export function createRoleRuntime(
   }
 
   function inactiveWorkflowStateLabel() {
-    return `策略 ${workflowModeLabel(state.workflowModeStatus)} · 执行器 ${workflowExecutorLabel(state.workflowExecutorStatus)} · 无活动工作流`;
+    const restoreError = state.workflowRestoreError;
+    if (restoreError) return `工作流恢复失败（${restoreError.code}）`;
+    return `策略 ${workflowModeLabel(state.workflowModeStatus)} · 无活动工作流`;
   }
 
   function workflowStateLabel(workflowState = deps.getWorkflowState()) {
@@ -276,12 +271,11 @@ export function createRoleRuntime(
 
     const progress = workflowProgress(workflowState);
     const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
-    const executor = ` · ${workflowExecutorLabel(workflowState.executor)}`;
-    if (workflowState.status === "paused") return `已暂停 ${progress.completed}/${progress.total}${executor}${current}`;
-    if (workflowState.status === "replanning") return `等待重规划 ${progress.completed}/${progress.total}${executor}`;
-    if (workflowState.status === "completed") return `已完成 ${progress.completed}/${progress.total}${executor}`;
-    if (workflowState.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}${executor}`;
-    if (workflowState.executor === "local" && progress.currentTaskId) {
+    if (workflowState.status === "paused") return `已暂停 ${progress.completed}/${progress.total}${current}`;
+    if (workflowState.status === "replanning") return `等待重规划 ${progress.completed}/${progress.total}`;
+    if (workflowState.status === "completed") return `已完成 ${progress.completed}/${progress.total}`;
+    if (workflowState.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}`;
+    if (progress.currentTaskId) {
       const task = workflowState.tasks.find((item) => item.id === progress.currentTaskId);
       if (task?.executionStartedAt === undefined) {
         const phase = state.roleCompactionPhase === "stalled"
@@ -291,10 +285,10 @@ export function createRoleRuntime(
             : state.workflowDispatchInFlight
               ? "正在交接任务"
               : "等待任务启动";
-        return `${phase} ${progress.completed}/${progress.total}${executor}${current}`;
+        return `${phase} ${progress.completed}/${progress.total}${current}`;
       }
     }
-    return `运行 ${progress.completed}/${progress.total}${executor}${current || " · 待调度"}`;
+    return `运行 ${progress.completed}/${progress.total}${current || " · 待调度"}`;
   }
 
   function workflowStatusLabel(workflowState = deps.getWorkflowState()) {
@@ -328,7 +322,6 @@ export function createRoleRuntime(
     const normalizedRole = normalizeRoleId(role);
     const config = await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;
-    state.workflowExecutorStatus = config.workflowExecutor;
     const target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
     const hasExplicitModel = Object.prototype.hasOwnProperty.call(config.roleModels, normalizedRole);
     if (hasExplicitModel) {

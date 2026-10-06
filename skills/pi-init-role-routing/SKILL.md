@@ -55,7 +55,7 @@ metadata:
 - `workflowMode: off` 拒绝新规划，`on` 始终编排，`auto` 对不超过两个低风险任务走直接角色顺序；`reviewRequired` 只有用户一开始明确要求架构审阅时才为 `true`。
 - 当前任务必须由实际执行角色完成；若任务属于需要工作流的范围，完成时仍须由实际执行角色提供真实验证并调用 `complete`。简单任务采用最小验证策略时，不把未执行的检查描述为通过；缺少需求、权限、凭据、破坏性操作确认或无法恢复时调用 `block`，不得用默认值或空结果掩盖失败。
 - 活动工作流的普通方向变更在当前任务边界合并为一个 revision；应用新计划前不得启动旧后续任务。
-- `workflowExecutor` 仅支持 `local` 和 `runtime`；`local` 在主会话顺序执行，`runtime` 使用冻结的 Runtime authority。
+- pi-init 工作流仅支持当前主会话内 local 顺序执行；缺省及旧 `workflowExecutor: "local"` 配置可用。旧 `runtime` 配置和 Runtime executor/authority 状态返回结构化退役错误，不会回退、自动恢复或改写 session entry。
 - `task_workflow` 是唯一的规划、依赖、验收、阻塞和重规划状态机；Agent 完成、进程退出或返回文本都不自动等于任务验收完成。
 
 ## 交付

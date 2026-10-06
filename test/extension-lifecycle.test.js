@@ -81,7 +81,7 @@ test("角色配置先写会话，显式保存才落盘", async () => {
     await writeFile(configPath, original, "utf8");
 
     const harness = createExtensionHarness([], { cwd: directory, trusted: true });
-    const choices = ["始终编排", "保持主会话顺序执行"];
+    const choices = ["始终编排"];
     harness.context.ui.select = async () => choices.shift();
     const command = harness.commands.get("pi-init");
 
@@ -434,14 +434,11 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.equal(resolveWorkflowMode({ workflowEnabled: true }), "on");
   assert.equal(resolveWorkflowMode({ workflowEnabled: false }), "off");
   assert.equal(resolveWorkflowMode({ workflowMode: "auto", workflowEnabled: false }), "auto");
-  assert.equal(resolveWorkflowExecutor(undefined), DEFAULT_WORKFLOW_EXECUTOR);
-  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "local" }), "local");
-  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "runtime" }), "runtime");
+  assert.deepEqual(resolveWorkflowExecutor(undefined), { ok: true, value: DEFAULT_WORKFLOW_EXECUTOR });
+  assert.deepEqual(resolveWorkflowExecutor({ workflowExecutor: "local" }), { ok: true, value: "local" });
+  assert.equal(resolveWorkflowExecutor({ workflowExecutor: "runtime" }).code, "WORKFLOW_EXECUTOR_RETIRED");
   for (const workflowExecutor of ["subagents", "subtask", "collaboration", "remote"]) {
-    assert.throws(
-      () => resolveWorkflowExecutor({ workflowExecutor }),
-      /workflowExecutor 无效/,
-    );
+    assert.equal(resolveWorkflowExecutor({ workflowExecutor }).code, "WORKFLOW_EXECUTOR_INVALID");
   }
   assert.throws(
     () => resolveWorkflowMode({ workflowEnabled: "yes" }),
@@ -459,6 +456,10 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     /工作流任务数无效/,
   );
   assert.equal(resolveRoleConfig({ workflowExecutor: "subagents" }).code, "WORKFLOW_EXECUTOR_INVALID");
+  assert.equal(resolveRoleConfig({ workflowExecutor: "runtime" }).code, "WORKFLOW_EXECUTOR_RETIRED");
+  assert.equal(resolveRoleConfig({ runtime: null }).code, "RUNTIME_CONFIG_RETIRED");
+  assert.equal(resolveRoleConfig({ workflowExecutor: null }).code, "WORKFLOW_EXECUTOR_INVALID");
+  assert.equal(unwrapRoleResult(resolveRoleConfig({ workflowExecutor: "local" })).workflowExecutor, "local");
   assert.deepEqual(unwrapRoleResult(resolveRoleConfig(undefined)).roleModels, {});
   assert.deepEqual(unwrapRoleResult(getRoleNames(undefined)), DEFAULT_ROLE_NAMES);
   assert.deepEqual(

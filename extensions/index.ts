@@ -3,7 +3,6 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-export * from "./runtime-client.ts";
 import {
   ROLE_MODES,
   findMatchingRole,
@@ -144,7 +143,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     event: { text?: unknown; source?: unknown },
     ctx: ExtensionContext,
   ) {
-    if (runtimeState.workflowState?.executor === "runtime") return false;
     if (
       !runtimeState.workflowState ||
       !["running", "replanning"].includes(runtimeState.workflowState.status) ||
@@ -208,7 +206,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     if (
       !runtimeState.workflowState ||
-      runtimeState.workflowState.executor === "runtime" ||
       !runtimeState.workflowState.currentTaskId ||
       !isWorkflowActive(runtimeState.workflowState)
     ) return;
@@ -226,7 +223,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     roleRuntime.disposeWorkflowCompaction();
-    runtimeState.runtimeBackend?.dispose();
     workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;
     runTimingDiagnostics.reset();
@@ -243,10 +239,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.configuredRoleNames = [];
       runtimeState.activeRole = undefined;
       roleRecovery.restore(ctx, event.reason);
+      runtimeState.currentContext = ctx;
+      workflowDispatch.restoreWorkflowState(ctx);
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       runtimeState.currentContext = ctx;
       runtimeState.workflowModeStatus = config.workflowMode;
-      runtimeState.workflowExecutorStatus = config.workflowExecutor;
       const thinkingLevel = pi.getThinkingLevel();
       const role = findMatchingRole(config, ctx.model, thinkingLevel);
       runtimeState.activeRole = role && ctx.model
@@ -257,7 +254,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             thinkingLevel,
           }
         : undefined;
-      workflowDispatch.restoreWorkflowState(ctx);
       roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
       const roleModelConfigs = Object.entries(config.roleModels).map(([configuredRole, model]) =>
         `◆ ${roleLabel(configuredRole)}\n  模型：${model.provider}/${model.model}\n  推理强度：${model.thinkingLevel}`,
@@ -282,9 +278,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: (args, ctx) => {
     const task = args.trim(), workflow = runtimeState.workflowState;
-    if (!task || !ctx.isIdle() || (workflow && !["completed", "cancelled"].includes(workflow.status))) {
-      ctx.ui.notify(!task ? "用法：/fast <任务描述>" : !ctx.isIdle() ? "Agent 正忙；请等待当前操作完成后再使用 /fast。" : "当前有未结束的工作流；/fast 不会绕过或覆盖它，请按工作流流程继续。", "warning"); return;
-    }
+    const restoreError = runtimeState.workflowRestoreError;
+    if (!task || !ctx.isIdle() || restoreError || (workflow && !["completed", "cancelled"].includes(workflow.status))) return ctx.ui.notify(
+      !task ? "用法：/fast <任务描述>"
+        : !ctx.isIdle() ? "Agent 正忙；请等待当前操作完成后再使用 /fast。"
+          : restoreError ? `已保存的工作流无法恢复（${restoreError.code}）：${restoreError.message}；/fast 不会启动新任务。`
+            : "当前有未结束的工作流；/fast 不会绕过或覆盖它，请按工作流流程继续。",
+      "warning",
+    );
     pi.sendUserMessage(`用户通过 /fast 明确选择对下面这一项单次启用 Fast Path；这不是持久模式，也不修改模型或项目配置。\n这是对 Fast Path 自动适用条件的手动选择：不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程。直接定向读取最少必要上下文，完成任务所需修改和风险匹配的最小验证；不要仅因不符合自动适用条件而创建 task_workflow 或做例行留痕。\n安全、权限、需求/契约确认、数据保护、architect 职责限制、上下文恢复门、工作流保护和必要验证仍优先；若这些独立边界要求暂停或升级流程，简要说明具体原因，不要只以自动 Fast Path 资格为由退回。\n\n用户任务：\n${task}`);
   }});
 

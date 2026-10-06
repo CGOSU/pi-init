@@ -17,9 +17,9 @@
 
 目标明确的低风险任务由 AI 自主选择实现方案并直接推进；不因 helper、内部拆分、测试组织、排查顺序或恢复既定行为的 bug 请求用户选择。只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问；新增行为、契约、权限或数据结构仍先记录到确认的需求/决策载体。
 
-## 工作流执行器
+## 工作流执行
 
-`workflowExecutor` 仅支持 `local`（主会话顺序执行）和 `runtime`（由配置的 Runtime endpoint 执行）；默认值为 `local`。
+pi-init 工作流仅在当前主会话内按顺序执行（local）；缺省配置及旧 `workflowExecutor: "local"` 配置可用。旧顶层 `runtime` 配置或 `workflowExecutor: "runtime"` 会返回明确退役错误，不会静默回退。含 Runtime executor/authority 的旧 session entry 不会自动恢复、改写或删除；请先检查并由用户自行决定如何处理旧配置与记录。
 
 ## 运行环境与命令约定
 

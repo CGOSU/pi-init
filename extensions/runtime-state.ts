@@ -1,7 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { createWorkflowState } from "../src/workflow.js";
-import type { RuntimeClient } from "./runtime-client.ts";
-
 export type ActiveRole = {
   role: string;
   provider: string;
@@ -23,14 +21,6 @@ export type PendingRoleCompaction = {
 
 export type RoleCompactionPhase = "idle" | "compacting" | "stalled";
 
-export type RuntimeBackendHooks = {
-  initialize: (workflow: WorkflowState, config: unknown, ctx: ExtensionContext) => Promise<WorkflowState>;
-  schedule: (ctx: ExtensionContext) => Promise<void>;
-  cancel: (ctx: ExtensionContext, reason: string) => Promise<void>;
-  retry: (ctx: ExtensionContext, taskId?: string) => Promise<void>;
-  dispose: () => void;
-};
-
 export type ExtensionRuntimeState = {
   activeRole?: ActiveRole;
   sessionModeOverride?: string;
@@ -39,7 +29,7 @@ export type ExtensionRuntimeState = {
   controlCenterGuideShown: boolean;
   roleModeStatus: string;
   workflowModeStatus: string;
-  workflowExecutorStatus: string;
+  workflowRestoreError?: { code: string; message: string };
   roleRecoveryPending: boolean;
   pendingRoleCompaction?: PendingRoleCompaction;
   roleCompactionPhase: RoleCompactionPhase;
@@ -53,11 +43,6 @@ export type ExtensionRuntimeState = {
   internalContinuationPending: boolean;
   currentContext?: ExtensionContext;
   runtimeDisposed: boolean;
-  runtimeClient?: RuntimeClient;
-  runtimeBackend?: RuntimeBackendHooks;
-  runtimePollTimer?: ReturnType<typeof setTimeout>;
-  runtimeDispatchInFlight: boolean;
-  runtimeError?: { code: string; message: string };
 };
 
 export type WorkflowState = ReturnType<typeof createWorkflowState>;
@@ -69,7 +54,6 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     controlCenterGuideShown: false,
     roleModeStatus: "auto",
     workflowModeStatus: "auto",
-    workflowExecutorStatus: "local",
     roleRecoveryPending: false,
     roleCompactionPhase: "idle",
     roleCompactionStalled: false,
@@ -78,7 +62,6 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     workflowDispatchInFlight: false,
     internalContinuationPending: false,
     runtimeDisposed: false,
-    runtimeDispatchInFlight: false,
   };
 }
 

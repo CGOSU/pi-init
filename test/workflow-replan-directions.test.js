@@ -46,7 +46,7 @@ test("连续方向输入合并到同一待处理 revision，重规划前不启�
   assert.equal(appendedTwice.revisions[0].direction, appendedTwice.pendingRevision.direction);
   assert.equal(getNextWorkflowTask(appendedTwice), undefined);
 
-  const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(appendedTwice)));
+  const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(appendedTwice))).value;
   assert.deepEqual(restored.pendingRevision, appendedTwice.pendingRevision);
   assert.deepEqual(restored.revisions, appendedTwice.revisions);
 

@@ -8,11 +8,20 @@
 
 ## 已确认决策
 
+### 2026-10-06：退役 pi-init 自建 Runtime 工作流集成
+
+- 决定：按用户确认移除 pi-init 自建外部 Runtime workflow executor、配置入口、传输协议及执行/恢复后端；保留 local-only 主会话顺序工作流及现有角色、安全、恢复门、压缩和报告行为。用户以官方已有相应能力为退役理由；此理由未在本任务中独立核实，也不代表本项目将集成或猜测官方接口。
+- 原因：用户不准备继续维护本项目自建 Runtime 实现。
+- 兼容与数据约束：缺省 executor 与显式 `workflowExecutor: "local"` 配置保持可读；显式旧 `workflowExecutor: "runtime"` 或 `runtime` 配置字段应返回有专用、可区分错误 code 的退役失败，不得忽略、规范化成 local 或与其他未知 executor/损坏配置混淆。旧持久化 workflow 中只要存在 Runtime executor/authority 或冲突的旧 Runtime payload，就必须拒绝本地恢复/执行；状态查询和动作入口明确呈现恢复错误，不得伪装为无活动工作流，不改写或删除原始 session entry，也不自动将用户配置/历史数据迁移为 local。历史信息可由用户按需自行清理。
+- 实现触点：`src/roles.js:resolveWorkflowExecutor` 和 `resolveRoleConfig` 以结构化 Result 区分 `WORKFLOW_EXECUTOR_RETIRED`、`RUNTIME_CONFIG_RETIRED` 与其他无效配置；控制中心和 TypeBox schema 不再提供 executor 选项。`src/workflow-hydration.js:hydrateWorkflowState` 返回 Result，分别报告缺失、类型错误、损坏/未知 executor 和 `WORKFLOW_STATE_RUNTIME_RETIRED`；对旧 executor、authority 及残留 Runtime payload 在恢复前 fail-closed。`extensions/workflow-dispatch.ts:restoreWorkflowState` 将失败保留在 `workflowRestoreError`，状态、工作流动作与 `/fast` 不伪装无数据或本地重放；原 session entry 不会被改写。运行时仅保留 local dispatch；Runtime transport、Graph/事件投影及其专用测试已删除。通用 `runtime-routing-context.ts`、`runtime-state.ts`、`role-runtime.ts` 和 `scaffold-runtime.ts` 仍承担 Pi context、状态、角色及脚手架职责。
+- 测试边界与结果：配置退役和 local 兼容覆盖于 `test/extension-lifecycle.test.js`；local 创建、持久化、hydration 与生命周期覆盖于 `test/workflow-core.test.js`、`test/workflow-protocol.test.js`、`test/workflow-replan-directions.test.js`；`test/workflow-runtime-retirement.test.js` 验证退役/未知/损坏状态的区分、错误可见、动作与 `/fast` fail-closed，以及不改写 session entry。仅 Runtime transport/backend/integration 专用测试已删除。定向相关测试 39/39、角色恢复门定向测试 14/14、`npm test` 152/152 通过；行数检查和 `git diff --check` 通过。真实 Pi E2E、安装/reload、官方接口均未验证或接入。
+- 替代：本决定替代此前“Runtime executor 保留独立 authority、运行时冻结并恢复”的现行实现约束及 `docs/plans/runtime-migration.md` 中尚未完成 cutover 的双轨计划；历史记录保留用于解释旧数据来源，不再代表当前功能方向。
+
 ### 2026-10-06：工作流暂停输出采用精简摘要并避免重复通知
 
 - 决定：自动暂停通知与 `task_workflow block` 结果使用统一精简摘要，只展示暂停状态、每项真实阻塞原因及对应 retry/replan 建议；block 工具以工具结果为反馈，不再额外发送重复 toast。显式状态/TUI 查询和持久化状态继续保留完整任务、完成摘要及细节。
 - 原因：通知和工具展示并行输出相同原因/建议会形成重复，而暂停结果附带所有已完成任务的长描述和摘要也会淹没当前阻塞信息。
-- 约束：历史状态缺少原因时明确显示未记录；多个阻塞任务分别保留原因和建议。不得改变工作流状态机、调度、重试、重规划、Runtime authority 或显式完整状态查询。
+- 约束：历史状态缺少原因时明确显示未记录；多个阻塞任务分别保留原因和建议。不得改变工作流状态机、local 调度、重试、重规划或显式完整状态查询。
 
 ### 2026-10-06：移除内置角色模型预设并回退到会话默认
 

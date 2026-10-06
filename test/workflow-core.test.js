@@ -198,7 +198,7 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
     requestedAt: 130,
   });
   assert.equal(requested.revisions[0].status, "requested");
-  const restoredRequest = hydrateWorkflowState(JSON.parse(JSON.stringify(requested)));
+  const restoredRequest = hydrateWorkflowState(JSON.parse(JSON.stringify(requested))).value;
   assert.equal(restoredRequest.status, "replanning");
   assert.deepEqual(restoredRequest.pendingRevision, requested.pendingRevision);
   assert.deepEqual(restoredRequest.revisions, requested.revisions);
@@ -253,7 +253,7 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
     },
   });
 
-  const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(applied)));
+  const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(applied))).value;
   assert.equal(restored.version, 3);
   assert.deepEqual(restored.tasks, applied.tasks);
   assert.deepEqual(restored.revisions, applied.revisions);
@@ -394,12 +394,12 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
     createdAt: 10,
     updatedAt: 20,
   };
-  const restored = hydrateWorkflowState(legacy);
+  const restored = hydrateWorkflowState(legacy).value;
   assert.equal(restored.version, 3);
   assert.deepEqual(restored.revisions, []);
   assert.equal(restored.executor, "local");
   assert.equal(restored.currentTaskId, "legacy-task");
-  const restoredV2 = hydrateWorkflowState({ ...legacy, version: 2, executor: "local" });
+  const restoredV2 = hydrateWorkflowState({ ...legacy, version: 2, executor: "local" }).value;
   assert.equal(restoredV2.version, 3);
   assert.deepEqual(restoredV2.revisions, []);
   assert.equal(restored.tasks[0].status, "in_progress");
@@ -408,7 +408,7 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
   const staleStarted = hydrateWorkflowState({
     ...legacy,
     tasks: [{ ...legacy.tasks[0], startedAt: 5 }],
-  });
+  }).value;
   const refreshedStart = markWorkflowTaskStarted(staleStarted, "legacy-task", 30);
   assert.equal(refreshedStart.tasks[0].startedAt, 30);
   assert.equal(refreshedStart.tasks[0].executionStartedAt, 30);
@@ -419,13 +419,13 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
     status: "completed",
     currentTaskId: undefined,
     tasks: [{ ...legacy.tasks[0], status: "completed", startedAt: 40, completedAt: 70 }],
-  });
+  }).value;
   assert.deepEqual(getWorkflowExecutionBounds(legacyCompleted), { startedAt: 40, completedAt: 70 });
   assert.equal(getWorkflowExecutionDuration(legacyCompleted), 30);
   assert.equal(getWorkflowExecutionDuration({ startedAt: 80, completedAt: 70, tasks: [] }), undefined);
-  assert.throws(
-    () => hydrateWorkflowState({ ...legacy, startedAt: 80, completedAt: 70 }),
-    /completedAt 早于 startedAt/,
+  assert.equal(
+    hydrateWorkflowState({ ...legacy, startedAt: 80, completedAt: 70 }).code,
+    "WORKFLOW_STATE_INVALID",
   );
 });
 
@@ -464,7 +464,7 @@ test("已移除的委派执行器明确拒绝，历史 delegation 不改变本�
       delegation: legacyDelegation,
     }],
     currentTaskId: "implementation",
-  });
+  }).value;
   const blocked = blockWorkflowTask(restored, { taskId: "implementation", reason: "需要人工处理" }, 120);
   assert.equal(blocked.status, "paused");
   assert.deepEqual(blocked.tasks[0].delegation, legacyDelegation);

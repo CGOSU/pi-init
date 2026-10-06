@@ -146,8 +146,7 @@ function normalizeHydratedTask(task, index, { allowSuperseded = false } = {}) {
   };
 }
 
-export function hydrateWorkflowState(state) {
-  if (!state || typeof state !== "object") return undefined;
+function hydrateWorkflowStateValue(state) {
   const version = state.version ?? 1;
   if (version !== 1 && version !== 2 && version !== WORKFLOW_STATE_VERSION) {
     throw new Error(`不支持的工作流状态版本：${version}`);
@@ -218,7 +217,7 @@ export function hydrateWorkflowState(state) {
     ...state,
     version: WORKFLOW_STATE_VERSION,
     status,
-    // Version 1 never delegated work, so it is always safe to resume locally.
+    // Version 1 never delegated work; explicit executor/authority markers are checked by the Result boundary.
     executor: version === 1 ? "local" : normalizeExecutor(state.executor),
     plan: {
       ...(state.plan ?? {}),
@@ -231,4 +230,38 @@ export function hydrateWorkflowState(state) {
     revisions,
     ...(pendingRevision ? { pendingRevision } : {}),
   };
+}
+
+function resultFailure(code, message) {
+  return { ok: false, code, message };
+}
+
+function hasRuntimeAuthorityMarker(state) {
+  const authority = state.authority;
+  return state.executor === "runtime"
+    || authority === "runtime"
+    || (authority && typeof authority === "object" && authority.kind === "runtime")
+    || Object.prototype.hasOwnProperty.call(state, "runtimeAuthority");
+}
+
+export function hydrateWorkflowState(state) {
+  if (state === undefined) {
+    return resultFailure("WORKFLOW_STATE_MISSING", "没有已保存的工作流状态");
+  }
+  if (!state || typeof state !== "object" || Array.isArray(state)) {
+    return resultFailure("WORKFLOW_STATE_INVALID_TYPE", "已保存的工作流状态必须是对象");
+  }
+  if (hasRuntimeAuthorityMarker(state)) {
+    return resultFailure("WORKFLOW_STATE_RUNTIME_RETIRED", "已保存的 Runtime 工作流已退役；不会恢复或改写原始记录");
+  }
+  try {
+    if (Object.prototype.hasOwnProperty.call(state, "executor")) normalizeExecutor(state.executor);
+    if (Object.prototype.hasOwnProperty.call(state, "authority")) normalizeExecutor(state.authority);
+    return { ok: true, value: hydrateWorkflowStateValue(state) };
+  } catch (error) {
+    return resultFailure(
+      typeof error?.code === "string" ? error.code : "WORKFLOW_STATE_INVALID",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }

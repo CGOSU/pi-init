@@ -7,7 +7,6 @@ import {
 import type { ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import {
-  workflowExecutorLabel,
   workflowModeLabel,
   type RoleRuntime,
 } from "./role-runtime.ts";
@@ -149,34 +148,18 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     ], { selectedValue: config.workflowMode, ...saveMenuOptions(ctx) });
     if (!choice || isMenuBack(choice)) return;
 
-    const executor = await showMenu(ctx, "工作流执行器", [
-      {
-        value: "local",
-        label: config.workflowExecutor === "local" ? "保持主会话顺序执行" : "主会话顺序执行",
-        description: "使用当前会话和现有角色切换逻辑",
-      },
-      {
-        value: "runtime",
-        label: config.workflowExecutor === "runtime" ? "保持 Runtime 执行器" : "Runtime 执行器",
-        description: "通过配置的 Runtime endpoint 执行工作流任务；需要有效的 Runtime 配置和权限 profile",
-      },
-      { value: MENU_BACK, label: "← 返回上一级" },
-    ], { selectedValue: config.workflowExecutor, ...saveMenuOptions(ctx) });
-    if (!executor || isMenuBack(executor)) return;
-
-    if (choice !== config.workflowMode || executor !== config.workflowExecutor) {
-      roleRuntime.stageRoleConfig({ workflowMode: choice, workflowExecutor: executor });
+    if (choice !== config.workflowMode) {
+      roleRuntime.stageRoleConfig({ workflowMode: choice });
     }
     const next = await roleRuntime.readSessionRoleConfig(ctx);
     state.workflowModeStatus = next.workflowMode;
-    state.workflowExecutorStatus = next.workflowExecutor;
     roleRuntime.refreshRoleStatus(ctx, state.roleModeStatus);
     ctx.ui.notify(
       next.workflowMode === "off"
-        ? `当前会话工作流已关闭；执行器为${workflowExecutorLabel(next.workflowExecutor)}，新规划将被拒绝。保存角色配置后才会写入项目文件。`
+        ? "当前会话工作流已关闭，新规划将被拒绝。保存角色配置后才会写入项目文件。"
         : next.workflowMode === "on"
-          ? `当前会话工作流已设为始终编排，执行器为${workflowExecutorLabel(next.workflowExecutor)}。保存角色配置后才会写入项目文件。`
-          : `当前会话工作流已设为自动，执行器为${workflowExecutorLabel(next.workflowExecutor)}；不超过 2 个任务的规划将跳过编排。保存角色配置后才会写入项目文件。`,
+          ? "当前会话工作流已设为始终编排。保存角色配置后才会写入项目文件。"
+          : "当前会话工作流已设为自动；不超过 2 个任务的规划将跳过编排。保存角色配置后才会写入项目文件。",
       "info",
     );
   }
@@ -285,7 +268,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     while (true) {
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       state.workflowModeStatus = config.workflowMode;
-      state.workflowExecutorStatus = config.workflowExecutor;
       const mode = state.sessionModeOverride ?? config.mode;
       const role = roleRuntime.activeRoleFor(ctx);
       const modelLabel = ctx.model
@@ -298,7 +280,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
           : "角色  尚未切换（按任务自动选择）",
         `模型  ${modelLabel}`,
         `工作流策略  ${workflowModeLabel(config.workflowMode)}`,
-        `工作流执行器  ${workflowExecutorLabel(config.workflowExecutor)}`,
         `工作流状态  ${roleRuntime.workflowStateLabel()}`,
       ];
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");

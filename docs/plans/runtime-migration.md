@@ -1,8 +1,8 @@
-# pi-init Runtime backend 迁移与切换清单
+# pi-init Runtime backend 迁移与切换清单（历史记录，已退役）
 
-状态：双轨实现已接入并通过无模型 Runtime fixture 验收；**cutover-ready：否**。
+> 已于 2026-10-06 随 pi-init 自建外部 Runtime 工作流集成一并退役。本文件以下内容仅保留为历史实现与验证记录，不是当前能力说明、实施计划或 cutover 指引。当前决定见 [`docs/decisions.md`](../decisions.md)“退役 pi-init 自建 Runtime 工作流集成”；当前用户说明见 [`README.md`](../../README.md)。
 
-本清单只记录迁移边界和可核对的符号，不在本任务删除旧链路。Runtime 是选择为 `runtime` 的 workflow 的唯一 authority；`local`、`subtask`、`collaboration` workflow 仍分别由现有 pi-init 后端负责。一个 workflow 不得在两个 backend 间双写。
+本历史记录描述当时的双轨实现和迁移计划。当前 pi-init 只在主会话内按顺序执行 local 工作流；旧 Runtime 配置和持久状态不会静默回退或自动迁移，运行时恢复失败会显式报告且不改写原 entry。未接入或核实任何官方 Runtime 接口。
 
 ## 已确认边界
 

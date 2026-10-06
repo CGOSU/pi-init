@@ -15,7 +15,6 @@ import { roleLabel } from "../src/roles.js";
 import { getRunTimingDuration } from "../src/run-timing.js";
 import type { ReportTheme, RunTimingEntryData } from "./contracts.ts";
 import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
-import { workflowExecutorLabel } from "./role-runtime.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 
 const VERIFICATION_FAILURE_PATTERN = /(?:失败|未通过|不通过|报错|异常|[✗✕❌]|\b(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|timed?\s*out|timeout|non[-\s]?zero|(?:exit(?:ed)?|退出)[^\d\n]{0,20}(?:[1-9]\d*|non[-\s]?zero))/iu;
@@ -88,7 +87,7 @@ export function createWorkflowReport(
     if (workflowState.status === "completed") return "已完成";
     if (workflowState.status === "cancelled") return "已取消";
     if (!task) return "等待调度";
-    if (workflowState.executor === "local" && task.executionStartedAt === undefined) {
+    if (task.executionStartedAt === undefined) {
       if (state.roleCompactionPhase === "stalled") return "压缩等待异常";
       if (state.roleCompactionPhase === "compacting" || state.pendingRoleCompaction) return "正在压缩上下文";
       if (state.workflowDispatchInFlight) return "正在交接任务";
@@ -99,6 +98,9 @@ export function createWorkflowReport(
 
   function renderWorkflowStatus(ctx: ExtensionContext) {
     const workflowState = state.workflowState;
+    if (!workflowState && state.workflowRestoreError) return ctx.ui.setStatus(
+      WORKFLOW_STATUS_KEY,
+      `工作流恢复失败（${state.workflowRestoreError.code}）：${state.workflowRestoreError.message}`);
     if (!workflowState || ["completed", "cancelled"].includes(workflowState.status)) {
       ctx.ui.setStatus(WORKFLOW_STATUS_KEY, undefined);
       return;
@@ -147,13 +149,14 @@ export function createWorkflowReport(
 
   function persistWorkflowState(next: WorkflowState, ctx: ExtensionContext) {
     state.workflowState = next;
+    state.workflowRestoreError = undefined;
     deps.pi.appendEntry("pi-init-workflow", next);
     updateWorkflowStatus(ctx);
     return next;
   }
 
   function formatWorkflowState(workflowState = state.workflowState) {
-    if (!workflowState) return "当前没有活动工作流。";
+    if (!workflowState) return state.workflowRestoreError ? `无法恢复已保存的工作流（${state.workflowRestoreError.code}）：${state.workflowRestoreError.message}` : "当前没有活动工作流。";
     const progress = workflowProgress(workflowState);
     const lines = [
       `状态：${workflowState.status}`,
@@ -161,7 +164,6 @@ export function createWorkflowReport(
       `进度：${progress.completed}/${progress.total}`,
       `总任务开始时间：${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
       `总任务已运行时间：${formatWorkflowElapsedDuration(workflowState)}`,
-      `执行器：${workflowExecutorLabel(workflowState.executor)}`,
       `规划：${workflowState.plan.summary}`,
     ];
     if (workflowState.currentTaskId) lines.push(`当前任务：${workflowState.currentTaskId}`);
@@ -204,7 +206,6 @@ export function createWorkflowReport(
               `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
               `总任务开始时间  ${formatWorkflowTimestamp(getWorkflowExecutionBounds(current).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
               `总任务已运行时间  ${formatWorkflowElapsedDuration(current)}`,
-              `执行器  ${workflowExecutorLabel(current.executor)}`,
               `规划  ${current.plan.summary}`,
               ...(current.currentTaskId ? [`当前任务  ${current.currentTaskId}`] : []),
               ...(current.pauseReason ? [`暂停原因  ${current.pauseReason}${current.taskPauseReason ? ` · ${current.taskPauseReason}` : ""}`] : []),
@@ -217,7 +218,7 @@ export function createWorkflowReport(
                 `用户方向  ${current.pendingRevision.direction}`,
               ] : []),
             ].join("\n")
-          : "当前没有活动工作流。"));
+          : formatWorkflowState()));
       };
       const taskItems: SelectItem[] = workflowState?.tasks.map((task) => {
         const taskStatus = task.status === "completed"
@@ -240,7 +241,7 @@ export function createWorkflowReport(
         };
       }) ?? [];
       if (taskItems.length === 0) {
-        taskItems.push({ value: "close", label: "当前没有活动工作流", description: "按 Enter 或 Esc 关闭" });
+        taskItems.push({ value: "close", label: state.workflowRestoreError ? "工作流恢复失败" : "当前没有活动工作流", description: formatWorkflowState() });
       }
 
       const list = new SelectList(taskItems, Math.min(taskItems.length, 5), {

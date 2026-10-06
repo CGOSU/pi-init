@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-06：退役 pi-init 自建外部 Runtime 工作流
+
+- 完成内容：移除 Runtime 专用客户端、配置、wire、Graph/事件投影、执行与恢复接线及其专用测试；工作流执行固定为当前主会话内的 local 顺序流程。显式旧 Runtime 配置/状态以结构化退役错误 fail-closed；查询和动作保留错误，不本地重放或改写旧 session entry。保留会话默认模型、角色/恢复安全边界、上下文压缩和精简暂停报告。
+- 文档：README、当前状态、公共角色路由 Skill 和中英文项目模板改为 local-only；删除已退役的 Runtime client 使用指南，将迁移计划标记为历史并由退役决策替代。
+- 决策：见 [`docs/decisions.md`](decisions.md)“退役 pi-init 自建 Runtime 工作流集成”。旧配置请用户手动检查清理；pi-init 不自动更改配置或 session 数据。未接入/核实官方 Runtime 接口。
+- 验证：`node --test test/extension-lifecycle.test.js test/workflow-core.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/workflow-compaction.test.js test/role-model-persistence.test.js`，39 项通过；`node --test test/role-recovery.test.js`，14 项通过；`npm test`，152 项通过、0 失败、0 跳过；`node scripts/check-line-count.js` 与 `git diff --check` 通过。
+- 未执行：真实 Pi E2E、安装/更新/reload、外部 Runtime/官方接口集成。未提交或推送。
+
 ### 2026-10-06：移除内置角色模型预设并精简工作流暂停输出
 
 - 完成内容：移除标准职责的固定 provider/model/thinkingLevel 预设。没有项目配置或没有任何显式角色映射（包括 schema v2 缺少 `roleModels`/映射为空且无兼容旧版顶层映射）时，标准职责使用当前 Pi 会话模型和推理强度；显式映射优先，未知自定义角色仍需配置。无会话模型、损坏/无效配置、显式模型不可用或凭据缺失保持真实错误，不静默 fallback。无映射标准职责的手动模型切换不生成映射；Runtime 创建时将实际模型和推理强度冻结到 `profile_snapshot`。

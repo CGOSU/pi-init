@@ -63,9 +63,8 @@ test("before_agent_start 为无活动工作流的恢复门提供简单问答快�
   );
 });
 
-test("before_agent_start 在活动工作流恢复时仍要求先查看状态", async () => {
+test("before_agent_start 在活动 Local 工作流恢复时仍要求先查看状态", async () => {
   const workflow = createWorkflowState({
-    executor: "runtime",
     summary: "恢复状态测试",
     tasks: [{ id: "task", role: "developer-test", task: "执行任务", files: ["src"], acceptanceCriteria: ["完成"] }],
   });

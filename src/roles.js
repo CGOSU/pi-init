@@ -2,7 +2,7 @@ export const ROLE_MODES = ["auto", "confirm", "manual"];
 export const DEFAULT_ROLE_MODE = "auto";
 export const WORKFLOW_MODES = ["off", "on", "auto"];
 export const DEFAULT_WORKFLOW_MODE = "auto";
-export const WORKFLOW_EXECUTORS = ["local", "runtime"];
+export const WORKFLOW_EXECUTORS = ["local"];
 export const DEFAULT_WORKFLOW_EXECUTOR = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
 export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
@@ -294,42 +294,25 @@ export function resolveWorkflowMode(config) {
   return legacyEnabled ? "on" : "off";
 }
 
-export function resolveWorkflowExecutor(config) {
-  const executor = config?.workflowExecutor ?? DEFAULT_WORKFLOW_EXECUTOR;
+function resolveWorkflowExecutorValue(config) {
+  const executor = hasOwn(config ?? {}, "workflowExecutor")
+    ? config.workflowExecutor
+    : DEFAULT_WORKFLOW_EXECUTOR;
+  if (executor === "runtime") {
+    throw configError("WORKFLOW_EXECUTOR_RETIRED", "workflowExecutor=runtime 已退役；当前仅支持 local 工作流");
+  }
   if (!WORKFLOW_EXECUTORS.includes(executor)) {
     throw configError("WORKFLOW_EXECUTOR_INVALID", `工作流执行器 workflowExecutor 无效：${executor}`);
   }
   return executor;
 }
 
-export function resolveRuntimeConfig(config) {
-  const runtime = config?.runtime;
-  if (runtime === undefined) return undefined;
-  if (!isRecord(runtime)) throw configError("RUNTIME_CONFIG_INVALID_TYPE", "runtime 配置必须是对象");
-  const allowed = new Set(["endpoint", "agentBackend", "permissionProfile", "timeoutMs", "retries", "maxFrameBytes"]);
-  for (const key of Object.keys(runtime)) {
-    if (!allowed.has(key)) throw configError("RUNTIME_CONFIG_UNKNOWN_FIELD", `runtime 配置包含未知字段：${key}`);
+export function resolveWorkflowExecutor(config) {
+  try {
+    return { ok: true, value: resolveWorkflowExecutorValue(config) };
+  } catch (error) {
+    return resultFromError(error, "WORKFLOW_EXECUTOR_INVALID");
   }
-  for (const [field, label] of [["endpoint", "endpoint"], ["agentBackend", "agentBackend"], ["permissionProfile", "permissionProfile"]]) {
-    if (typeof runtime[field] !== "string" || !runtime[field].trim()) {
-      throw configError("RUNTIME_CONFIG_FIELD_INVALID", `runtime.${label} 必须是非空字符串`);
-    }
-  }
-  for (const field of ["timeoutMs", "retries", "maxFrameBytes"]) {
-    if (runtime[field] !== undefined && (!Number.isInteger(runtime[field]) || runtime[field] < 0)) {
-      throw configError("RUNTIME_CONFIG_RANGE_INVALID", `runtime.${field} 必须是非负整数`);
-    }
-  }
-  if (runtime.timeoutMs !== undefined && runtime.timeoutMs === 0) throw configError("RUNTIME_CONFIG_RANGE_INVALID", "runtime.timeoutMs 必须大于 0");
-  if (runtime.maxFrameBytes !== undefined && runtime.maxFrameBytes === 0) throw configError("RUNTIME_CONFIG_RANGE_INVALID", "runtime.maxFrameBytes 必须大于 0");
-  return {
-    endpoint: runtime.endpoint.trim(),
-    agentBackend: runtime.agentBackend.trim(),
-    permissionProfile: runtime.permissionProfile.trim(),
-    ...(runtime.timeoutMs !== undefined ? { timeoutMs: runtime.timeoutMs } : {}),
-    ...(runtime.retries !== undefined ? { retries: runtime.retries } : {}),
-    ...(runtime.maxFrameBytes !== undefined ? { maxFrameBytes: runtime.maxFrameBytes } : {}),
-  };
 }
 
 export function shouldOrchestrateWorkflow({ mode, taskCount }) {
@@ -412,15 +395,18 @@ function mergeRoleConfigData(base, changes) {
 }
 
 function parseRoleConfig(source) {
+  if (hasOwn(source, "runtime")) {
+    throw configError("RUNTIME_CONFIG_RETIRED", "runtime 配置已退役；当前仅支持 local 工作流");
+  }
   const roleModels = normalizeRoleModels(source);
-  const runtime = resolveRuntimeConfig(source);
+  const workflowExecutor = resolveWorkflowExecutor(source);
+  if (!workflowExecutor.ok) throw configError(workflowExecutor.code, workflowExecutor.message);
   const resolved = {
     schemaVersion: ROLE_CONFIG_SCHEMA_VERSION,
     mode: resolveRoleMode(source),
     workflowMode: resolveWorkflowMode(source),
-    workflowExecutor: resolveWorkflowExecutor(source),
+    workflowExecutor: workflowExecutor.value,
     roleModels,
-    ...(runtime ? { runtime } : {}),
   };
   for (const [role, model] of Object.entries(roleModels)) {
     Object.defineProperty(resolved, role, { value: model, enumerable: false });

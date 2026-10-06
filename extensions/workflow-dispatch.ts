@@ -90,15 +90,17 @@ export function createWorkflowDispatch(
     const entry = ctx.sessionManager.getBranch().findLast(
       (item) => item.type === "custom" && item.customType === "pi-init-workflow",
     );
-    const data = entry && "data" in entry ? entry.data : undefined;
-    try {
-      state.workflowState = data && typeof data === "object" && Array.isArray((data as { tasks?: unknown }).tasks)
-        ? hydrateWorkflowState(data)
-        : undefined;
-      if (state.workflowState) state.workflowExecutorStatus = state.workflowState.executor;
-    } catch (error) {
-      state.workflowState = undefined;
-      ctx.ui.notify(`无法恢复工作流状态：${textOf(error)}`, "error");
+    state.workflowState = undefined;
+    state.workflowRestoreError = undefined;
+    if (entry) {
+      const data = "data" in entry ? entry.data : undefined;
+      const restored = hydrateWorkflowState(data);
+      if (restored.ok) {
+        state.workflowState = restored.value;
+      } else {
+        state.workflowRestoreError = { code: restored.code, message: restored.message };
+        ctx.ui.notify(`无法恢复工作流状态（${restored.code}）：${restored.message}`, "error");
+      }
     }
     deps.report.updateWorkflowStatus(ctx);
   }
@@ -142,15 +144,6 @@ export function createWorkflowDispatch(
       return;
     }
     if (!isWorkflowActive(state.workflowState)) return;
-    if (state.workflowState.executor === "runtime") {
-      if (!state.runtimeBackend) {
-        ctx.ui.notify("Runtime workflow backend 未初始化；不会回退到本地调度。", "error");
-        return;
-      }
-      await state.runtimeBackend.schedule(ctx);
-      return;
-    }
-
     if (state.workflowState.currentTaskId) {
       const nudged = recordWorkflowNudge(state.workflowState);
       if (nudged === state.workflowState) return;
