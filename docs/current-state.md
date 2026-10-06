@@ -13,6 +13,7 @@
 
 ## 当前已确认事实
 
+- `/fast <任务描述>` 是一次性 Fast Path 请求，不持久写入配置；仅适用于满足全部 Fast Path 条件的任务，权限、安全、项目规则、职责边界与必要验证不变。Agent 忙碌或存在未结束的 running/paused/replanning 工作流时拒绝派发；终态工作流不阻止独立任务。行为详见 [README.md](../README.md)。
 - 项目脚手架生成的中英文 `AGENTS.md` 包含带标记的 Fast Path 收尾约束；`/pi-init sync [目录]` 只更新托管区块、创建缺失的项目记忆文档并保留已有记录，冲突时不写入。控制中心各级角色配置菜单统一支持 `Ctrl+S` 和 `F2` 保存（Windows 终端可能拦截 `Ctrl+S`），保存中、成功或失败会在当前菜单内即时反馈；上一级菜单保存完成后也会更新全局通知，避免残留的“尚未保存”提示；显式保存列表项已移除，非 TUI 和兼容场景保留 `/pi-init save`。TUI session 启动时，若当前模型匹配已配置角色，会显示一条包含角色和精确 provider/model 的就绪通知；非 TUI 和未匹配角色不提示。具体取舍见 [`docs/decisions.md`](decisions.md)。
 
 - 控制中心同步当前项目发生实际变更并执行 `ctx.reload()` 后立即结束旧控制中心调用；同步结果通过 `reloaded` 标记向调用方表达，避免 reload 后继续使用失效的旧 `ctx`。无变更或有冲突时不 reload，菜单仍可继续。具体决策与验证见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
@@ -28,7 +29,7 @@
 - TTY 下 `pi-usage --update` 以及首次/过期自动刷新会显示扫描统计，重算日期取 session 文件最新修改时间并精确到分钟，另列受影响日期；非 TTY 只输出原有报表。当前本机 112 个 session、约 215,607,665 字节的首次导入统计为 112 个重建文件，实际约 2.3 秒；后续无变化刷新约 65 ms，跳过 112 个文件且不重算日期。
 - 默认生成 `AGENTS.md`、`docs/clean-code.md`、四个项目记忆文档和 `.pi/role-models.json`；`AGENTS.md` 引用随 package 发布的 `pi-init-role-routing` Skill，并要求任务开始前先读取 Clean Code 规则。新项目不生成 `.pi/skills/<slug>/SKILL.md`，已有项目级或用户自定义 Skill 不会被自动删除。
 - package 发布 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/developer-test.md`、`roles/docs-commit.md`；公共 Skill 集中维护风险分级路由、自主决策边界和共享硬约束，角色说明只保留各自职责/边界/交接，运行时提示只保留当前任务硬约束，不嵌入具体模型值。`architect` 只负责思考、分析、决策、规划和安排；所有仓库、代码、测试、文档和外部事实取证由 `docs-commit` 结构化交接，architect 仅允许 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`，其他工具及 MCP 均由运行时 fail-closed 阻断。目标明确的低风险任务由适合的非 architect 角色调查、实现和验证；复杂/高风险任务仍要求新鲜结构化证据、角色边界、真实验证和授权。
-- 测试和断言遵循全局 Test Value Gate：默认不锁定纯文案、样式、布局、渲染结构、简单存在性和内部临时字段，优先保留权限安全、公共数据、状态流转、持久化、幂等、并发和历史缺陷回归；生成模板关键规则、工具元数据和状态语义仍按稳定契约保留。当前 `npm test` 为 154 项通过、0 项失败、3 项跳过。
+- 测试和断言遵循全局 Test Value Gate：默认不锁定纯文案、样式、布局、渲染结构、简单存在性和内部临时字段，优先保留权限安全、公共数据、状态流转、持久化、幂等、并发和历史缺陷回归；生成模板关键规则、工具元数据和状态语义仍按稳定契约保留。当前 `npm test` 为 155 项通过、0 项失败、3 项跳过。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；简单只读咨询和低风险开发由适合的非 architect 角色直接完成，凡需仓库、代码、测试、文档或外部事实取证均由 `docs-commit` 收集并交接包含事实、来源、相关符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只负责思考、分析、决策、规划和安排，不修改文件、不执行命令、不连接 MCP，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status` 外不调用工具。开发测试工程师负责自主实现/验证且不写项目 Markdown，文档与收尾工程师不写代码；仅遇到业务/契约冲突、权限/凭据、不可逆或外部状态、已有改动无法安全合并或真实验证阻塞时才暂停。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚，并把活动角色的模型直接写回 `.pi/role-models.json`；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色；无活动角色或非受信任项目只提示不写。所有 `session_compact` 默认持久化 `pi-init-role-recovery` pending，恢复回合先确认任务边界；普通压缩和 reload/resume/fork/startup 加载已有上下文后必须成功 `switch_role` 才能执行写入类工具，pi-init 已明确完成目标角色交接时由运行时在续跑前记录 acknowledged。new 或空会话不额外上锁。
 - `before_agent_start` 通过 `sections.pi_init_runtime` 注入当前有效角色、Provider/模型/推理强度、恢复门和活动工作流摘要；职责已确认且无活动工作流时，简单无工具问答不调用 `task_workflow(status)` 或重复 `switch_role`。恢复 pending 且无活动工作流时允许无需工具或新证据的简单回答，但不自动解除恢复门；需要执行时仍先切换职责。该快速通道不做文本启发式分类、不自动切模型、不削弱 `tool_call` 守卫。
@@ -57,6 +58,7 @@
 
 ## 最近一次更新
 
+- 2026-09-30：新增 `/fast <任务描述>` 一次性 Fast Path 请求命令；非强制、不持久更改配置，拒绝忙碌 Agent 与未结束工作流；扩展生命周期定向测试和 `npm test` 均通过（155 项通过、3 项因 runtime-daemon 未构建而跳过）。
 - 2026-09-30：按用户确认撤销角色模型 v3 分层改造，恢复扁平 `roleModels` / `schemaVersion: 2` 配置；此前保存的 v3 配置不自动迁移。针对性测试 52 项通过；`npm test` 154 项通过、0 项失败、3 项跳过。
 - 2026-09-24：修复角色配置变更后在上一级菜单按 `Ctrl+S` 保存时，旧“尚未保存”全局提示仍显示的问题；成功或失败都会发布保存结果通知。`npm test` 152 项通过、3 项跳过。
 - 2026-09-23：TUI session 启动时新增当前匹配角色及精确 provider/model 的单条就绪通知；非 TUI 或未匹配角色时静默，相关测试 14 项通过。

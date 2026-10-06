@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-09-30：新增一次性 `/fast` 命令
+
+- 完成内容：新增 `/fast <任务描述>`，通过 user message 为本次任务请求 Fast Path；不是持久模式或强制执行保证。只在符合既有 Fast Path 条件时请求直接定位、读取最小上下文、实现和风险匹配的最小核对；权限、安全、项目规则、architect 边界与必要验证仍优先。Agent 忙碌或工作流处于 running、paused、replanning 时拒绝派发；completed/cancelled 不阻止新的独立任务。
+- 修改范围：`extensions/index.ts`、`test/helpers.js`、`test/extension-lifecycle.test.js`、`README.md`、`docs/current-state.md`、`docs/session-log.md`。
+- 验证：`node --test test/extension-lifecycle.test.js`，12 项通过；`npm test`，158 项中 155 项通过、0 项失败、3 项跳过（需先构建 `runtime-daemon` 或设置 `AGENT_RUNTIME_DAEMON`）；测试脚本中的 500 行约束通过。
+- 遗留问题：未在真实 Pi 交互会话中确认 slash command UI，也未验证模型对提示的实际遵循效果；命令本身仅传达用户请求，不能强制 Fast Path。
+
 ### 2026-09-30：回退角色模型 v3 分层配置
 
 - 完成内容：按用户确认执行 `git revert --no-commit 80710e8`，恢复旧的扁平 `roleModels` / `schemaVersion: 2` 实现；未改写已推送历史、未推送回退提交，也未触碰 `AGENTS.md` 原有工作区修改。

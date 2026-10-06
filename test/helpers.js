@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -92,6 +93,7 @@ function createExtensionHarness(branch = [], options = {}) {
   const aborts = [];
   const reloadCalls = [];
   const sentMessages = [];
+  const sentUserMessages = [];
   const defaultModel = options.model ?? { provider: "openai-codex", id: "gpt-5.6-luna" };
   const availableModels = options.availableModels ?? [defaultModel];
   const activeTools = options.activeTools ?? [];
@@ -192,6 +194,9 @@ function createExtensionHarness(branch = [], options = {}) {
     },
     async sendMessage(message, options) {
       sentMessages.push({ message, options });
+    },
+    sendUserMessage(message, options) {
+      sentUserMessages.push({ message, options });
     },
     async exec(command, args, execOptions) {
       if (typeof options.exec === "function") return options.exec(command, args, execOptions);
@@ -307,6 +312,7 @@ function createExtensionHarness(branch = [], options = {}) {
     reloadCalls,
     context,
     sentMessages,
+    sentUserMessages,
     completeCompaction,
   };
 }
@@ -314,6 +320,67 @@ function createExtensionHarness(branch = [], options = {}) {
 async function emitExtensionEvent(harness, name, event = {}) {
   for (const handler of harness.handlers.get(name) ?? []) {
     await handler(event, harness.context);
+  }
+}
+
+async function assertFastCommandContract() {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory });
+    const task = "调整按钮颜色\\n  保留现有键盘操作";
+    await harness.commands.get("fast").handler(task, harness.context);
+    const message = harness.sentUserMessages[0]?.message ?? "";
+    assert.equal(harness.sentUserMessages.length, 1);
+    assert.ok(message.endsWith(task));
+    assert.match(message, /单次 Fast Path 任务/);
+    assert.match(message, /不保证该任务符合 Fast Path 资格/);
+    assert.match(message, /直接定向定位、读取最小必要上下文、实现/);
+    assert.match(message, /权限与安全边界.*必要验证仍优先/);
+    await assert.rejects(readFile(path.join(directory, ".pi", "role-models.json")), { code: "ENOENT" });
+  });
+
+  for (const options of [{ task: " " }, { task: "不应发送", isIdle: false }]) {
+    await withTempDirectory(async (directory) => {
+      const harness = createExtensionHarness([], { cwd: directory, isIdle: options.isIdle });
+      await harness.commands.get("fast").handler(options.task, harness.context);
+      assert.equal(harness.sentUserMessages.length, 0);
+      assert.equal(harness.notifications.length, 1);
+    });
+  }
+
+  const workflowState = (status) => {
+    let state = createWorkflowState({
+      summary: `Fast Path guard ${status}`,
+      reviewRequired: status === "paused",
+      tasks: [{ id: "task", task: "task", files: ["src"], acceptanceCriteria: ["done"] }],
+    });
+    if (status === "replanning") state = requestWorkflowReplan(state, { revisionId: "revision-fast", direction: "test" });
+    if (status === "completed") {
+      state = startWorkflowTask(state, "task");
+      state = completeWorkflowTask(state, {
+        taskId: "task", completionSummary: "done", implementationRationale: "test", verification: ["passed"],
+      });
+    }
+    if (status === "cancelled") state = cancelWorkflow(state);
+    return state;
+  };
+  for (const status of ["running", "paused", "replanning", "completed", "cancelled"]) {
+    await withTempDirectory(async (directory) => {
+      const state = workflowState(status);
+      const harness = createExtensionHarness([
+        { type: "custom", customType: "pi-init-workflow", data: state },
+      ], { cwd: directory });
+      await emitExtensionEvent(harness, "session_start");
+      const branchSize = harness.branch.length;
+      await harness.commands.get("fast").handler("独立任务", harness.context);
+      const blocked = !["completed", "cancelled"].includes(status);
+      assert.equal(harness.sentUserMessages.length, blocked ? 0 : 1);
+      if (blocked) {
+        assert.equal(harness.branch.length, branchSize);
+        assert.equal(harness.branch.findLast((entry) => entry.customType === "pi-init-workflow").data.status, status);
+      } else {
+        assert.match(harness.sentUserMessages[0].message, /独立任务/);
+      }
+    });
   }
 }
 
@@ -414,4 +481,5 @@ export {
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
+  assertFastCommandContract,
 };

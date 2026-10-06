@@ -205,6 +205,7 @@ flowchart LR
 控制中心提供快速初始化、高级初始化、项目模板同步、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
 
 ```text
+/fast <任务描述>
 /pi-init init [目录]
 /pi-init advanced [目录]
 /pi-init sync [目录]
@@ -214,6 +215,8 @@ flowchart LR
 /pi-init save
 /pi-init mode <auto|confirm|manual>
 ```
+
+`/fast <任务描述>` 仅为本次任务请求 Fast Path，不设置持久开关或修改项目配置；Agent 忙碌或存在未结束工作流（running/paused/replanning）时会拒绝派发。它不是强制模式：仅当任务符合全部 Fast Path 条件时才直接定位、读取最小必要上下文、实现并做风险匹配的最小核对；安全、权限、项目规则、职责边界和必要验证始终优先。不符合条件时按正常流程处理。
 
 ### 控制中心与次级菜单
 

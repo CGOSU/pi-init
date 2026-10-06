@@ -280,6 +280,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
   });
 
+  pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: (args, ctx) => {
+    const task = args.trim(), workflow = runtimeState.workflowState;
+    if (!task || !ctx.isIdle() || (workflow && !["completed", "cancelled"].includes(workflow.status))) {
+      ctx.ui.notify(!task ? "用法：/fast <任务描述>" : !ctx.isIdle() ? "Agent 正忙；请等待当前操作完成后再使用 /fast。" : "当前有未结束的工作流；/fast 不会绕过或覆盖它，请按工作流流程继续。", "warning"); return;
+    }
+    pi.sendUserMessage(`用户通过 /fast 请求将下面这一项作为单次 Fast Path 任务处理；这不是持久模式，也不保证该任务符合 Fast Path 资格。\n若符合全部 Fast Path 条件，直接定向定位、读取最小必要上下文、实现并做风险匹配的最小核对；不要额外创建 task_workflow 或例行留痕。\n用户和项目指令、权限与安全边界、需求确认、architect 职责限制、上下文恢复门以及必要验证仍优先。\n若任务不符合 Fast Path 条件，简要说明原因并按正常流程处理。\n\n用户任务：\n${task}`);
+  }});
+
   pi.registerCommand("pi-init", {
     description: "打开 Pi Init 控制中心：初始化项目、配置角色和切换模型",
     getArgumentCompletions: (prefix) => {
