@@ -2,13 +2,6 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
-### 2026-10-07：为 pi-usage 增加 PNG 导出
-
-- 完成内容：`pi-usage --output` 按文件扩展名支持 `.svg` 与 `.png`；PNG 由 `@resvg/resvg-js` 渲染为 1500 像素宽，原 SVG 和文本报表行为保持不变。后续修复独立启动器的模块解析：安装器将 Resvg 和已安装的平台 native binding 复制到 `pi-usage-lib/node_modules`。
-- 修改范围：`package.json`、`package-lock.json`、`scripts/install-launchers.js`、`scripts/pi-usage/bill.js`、`scripts/pi-usage/cli.js`、相关测试、README 及项目记忆文档。
-- 验证：初次实现 `npm test`，153 项通过、0 项失败、0 项跳过；本次 `node --test test/pi-usage.test.js`，14 项通过；`node scripts/check-line-count.js` 与 `git diff --check` 通过。安装器回归测试在隔离目录用子进程实际渲染 PNG 并检查文件签名。
-- 遗留：依赖安装输出报告 1 项 high severity，尚未运行 `npm audit` 确认归属；尚未刷新用户的全局 launcher 或执行真实 Pi CLI/reload。未提交或推送。
-
 ### 2026-10-06：退役 pi-init 自建外部 Runtime 工作流
 
 - 完成内容：移除 Runtime 专用客户端、配置、wire、Graph/事件投影、执行与恢复接线及其专用测试；工作流执行固定为当前主会话内的 local 顺序流程。显式旧 Runtime 配置/状态以结构化退役错误 fail-closed；查询和动作保留错误，不本地重放或改写旧 session entry。保留会话默认模型、角色/恢复安全边界、上下文压缩和精简暂停报告。

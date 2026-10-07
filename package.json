@@ -21,8 +21,7 @@
     "postinstall": "node scripts/install-launchers.js"
   },
   "dependencies": {
-    "@duckdb/node-api": "1.5.5-r.3",
-    "@resvg/resvg-js": "2.6.2"
+    "@duckdb/node-api": "1.5.5-r.3"
   },
   "pi": {
     "extensions": [

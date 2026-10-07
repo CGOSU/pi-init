@@ -8,12 +8,6 @@
 
 ## 已确认决策
 
-### 2026-10-07：pi-usage 对账单支持 PNG 分享
-
-- 决定：`pi-usage --output <路径>` 按扩展名接受 `.svg` 或 `.png`；保留现有 SVG 输出，PNG 使用 `@resvg/resvg-js` 将同一份账单 SVG 渲染为默认 1500 像素宽的 PNG。
-- 原因：SVG 继续满足矢量缩放需求，PNG 可直接适配社交平台常见的图片上传/预览。
-- 约束：不改变查询 summary 和账单统计；不依赖系统级外部转换器；SVG 路径不加载 PNG 渲染器。安装器将 Resvg 包及已安装的平台 native binding 复制到独立的 `pi-usage-lib/node_modules`，因为全局启动器不能可靠解析 pi-init 包内部的依赖。两种格式的费用均为 API 等值估算，不是实际账单。
-
 ### 2026-10-06：退役 pi-init 自建 Runtime 工作流集成
 
 - 决定：按用户确认移除 pi-init 自建外部 Runtime workflow executor、配置入口、传输协议及执行/恢复后端；保留 local-only 主会话顺序工作流及现有角色、安全、恢复门、压缩和报告行为。用户以官方已有相应能力为退役理由；此理由未在本任务中独立核实，也不代表本项目将集成或猜测官方接口。

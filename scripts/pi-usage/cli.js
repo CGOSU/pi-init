@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createBillPng, createBillSvg } from "./bill.js";
+import { createBillSvg } from "./bill.js";
 import { queryUsage, summarizeUsage } from "./refresh.js";
 import { formatDateMinute, formatNumber, formatReport, supportsColor } from "./report.js";
 
@@ -9,7 +9,6 @@ export function parseArguments(args, agentDir) {
   const rangeArguments = [];
   let update = false;
   let outputPath;
-  let outputFormat;
   let databasePath = process.env.PI_USAGE_DB || path.join(agentDir, "pi-usage.duckdb");
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -18,11 +17,9 @@ export function parseArguments(args, agentDir) {
     } else if (argument === "--output") {
       outputPath = args[++index];
       if (!outputPath || outputPath.startsWith("--")) throw new Error("--output 需要输出路径");
-      const extension = path.extname(outputPath).toLowerCase();
-      if (extension !== ".svg" && extension !== ".png") {
-        throw new Error("--output 仅支持 .svg 或 .png 文件");
+      if (path.extname(outputPath).toLowerCase() !== ".svg") {
+        throw new Error("--output 目前仅支持 .svg 文件");
       }
-      outputFormat = extension.slice(1);
     } else if (argument === "--db") {
       databasePath = args[++index];
       if (!databasePath || databasePath.startsWith("--")) throw new Error("--db 需要数据库路径");
@@ -34,7 +31,7 @@ export function parseArguments(args, agentDir) {
       rangeArguments.push(argument);
     }
   }
-  return { rangeArguments, databasePath, update, outputPath, outputFormat };
+  return { rangeArguments, databasePath, update, outputPath };
 }
 
 function createRefreshProgressReporter() {
@@ -58,7 +55,7 @@ function createRefreshProgressReporter() {
 
 export async function runCli() {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  const { rangeArguments, databasePath, update, outputPath, outputFormat } = parseArguments(
+  const { rangeArguments, databasePath, update, outputPath } = parseArguments(
     process.argv.slice(2),
     agentDir,
   );
@@ -70,13 +67,8 @@ export async function runCli() {
     : await queryUsage(rangeArguments, databasePath, runtimeDirectory, sessionsDirectory, options);
   if (outputPath) {
     const resolvedOutputPath = path.resolve(outputPath);
-    if (outputFormat === "png") {
-      await writeFile(resolvedOutputPath, await createBillPng(summary));
-      console.log(`PNG 已生成：${resolvedOutputPath}`);
-    } else {
-      await writeFile(resolvedOutputPath, createBillSvg(summary), "utf8");
-      console.log(`SVG 已生成：${resolvedOutputPath}`);
-    }
+    await writeFile(resolvedOutputPath, createBillSvg(summary), "utf8");
+    console.log(`SVG 已生成：${resolvedOutputPath}`);
     return;
   }
   console.log(formatReport(summary, { color: supportsColor() }));
