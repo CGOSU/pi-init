@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import * as helpers from "./helpers.js";
 
 const {
@@ -41,15 +43,25 @@ test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
     assert.equal(packageManifest.scripts.postinstall, "node scripts/install-launchers.js");
 
     assert.equal(await installLaunchers({ targetDir: directory, platform: "win32" }), true);
-    assert.equal(await installLaunchers({ targetDir: directory, platform: "linux" }), true);
+    const posixDirectory = path.join(directory, "posix");
+    await mkdir(posixDirectory);
+    assert.equal(await installLaunchers({ targetDir: posixDirectory, platform: "linux" }), true);
     assert.match(await readFile(path.join(directory, "pi-usage.cmd"), "utf8"), /pi-usage\.js/);
-    assert.match(await readFile(path.join(directory, "pi-usage"), "utf8"), /pi-usage\.js/);
+    assert.match(await readFile(path.join(posixDirectory, "pi-usage"), "utf8"), /pi-usage\.js/);
     const installedUsage = await readFile(path.join(directory, "pi-usage.js"), "utf8");
     const installedVersion = await readFile(path.join(directory, "pi-usage-lib", "version.js"), "utf8");
     const installedCore = await readFile(path.join(directory, "pi-usage-lib", "core.js"), "utf8");
     assert.match(installedUsage, /\.\/pi-usage-lib\/version\.js/);
     assert.match(installedCore, /DUCKDB_PACKAGE/);
     assert.ok(installedVersion.includes(`const EMBEDDED_PACKAGE_VERSION = "${packageManifest.version}";`));
+
+    const installedBillUrl = pathToFileURL(path.join(directory, "pi-usage-lib", "bill.js")).href;
+    const pngSignature = execFileSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      `const bill = await import(${JSON.stringify(installedBillUrl)}); const png = await bill.createBillPng({ date: "2026-09-22", sessions: 0, rows: [] }); process.stdout.write(Buffer.from(png).subarray(0, 8));`,
+    ]);
+    assert.deepEqual([...pngSignature], [137, 80, 78, 71, 13, 10, 26, 10]);
   });
 });
 

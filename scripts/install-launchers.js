@@ -2,13 +2,16 @@ import {
   accessSync,
   chmodSync,
   copyFileSync,
+  cpSync,
   constants,
   readdirSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,11 +92,44 @@ function copyPiUsageSupport(sourceDir, targetDir, version) {
   }
 }
 
+function copyPngRendererRuntime(sourceDir, targetSupportDir) {
+  const packagePath = path.join(sourceDir, "..", "package.json");
+  const manifest = JSON.parse(readFileSync(packagePath, "utf8"));
+  if (!manifest.dependencies?.["@resvg/resvg-js"]) return;
+
+  const requireFromSource = createRequire(path.join(sourceDir, "install-launchers.js"));
+  const resvgEntry = requireFromSource.resolve("@resvg/resvg-js");
+  const resvgPackageDir = path.dirname(resvgEntry);
+  const resvgManifest = JSON.parse(readFileSync(path.join(resvgPackageDir, "package.json"), "utf8"));
+  const targetScopeDir = path.join(targetSupportDir, "node_modules", "@resvg");
+  rmSync(targetScopeDir, { recursive: true, force: true });
+  mkdirSync(targetScopeDir, { recursive: true });
+
+  const copyPackage = (name, entryPath) => {
+    cpSync(path.dirname(entryPath), path.join(targetScopeDir, name.slice("@resvg/".length)), {
+      recursive: true,
+    });
+  };
+  copyPackage("@resvg/resvg-js", resvgEntry);
+  for (const name of Object.keys(resvgManifest.optionalDependencies ?? {})) {
+    let entryPath;
+    try {
+      entryPath = requireFromSource.resolve(name);
+    } catch (error) {
+      if (error.code === "MODULE_NOT_FOUND") continue;
+      throw error;
+    }
+    copyPackage(name, entryPath);
+  }
+}
+
 function copyVersionedUsageScript(sourceDir, targetDir, version) {
   const source = readFileSync(path.join(sourceDir, "pi-usage.js"), "utf8");
   const target = source.replaceAll("./pi-usage/", "./pi-usage-lib/");
   writeFileSync(path.join(targetDir, "pi-usage.js"), target);
+  const targetSupportDir = path.join(targetDir, "pi-usage-lib");
   copyPiUsageSupport(sourceDir, targetDir, version);
+  copyPngRendererRuntime(sourceDir, targetSupportDir);
 }
 
 export function installLaunchers({
