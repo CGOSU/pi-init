@@ -144,6 +144,14 @@ function renderStats(summary, total, startY) {
     .join("");
 }
 
+export async function createBillPng(summary, options = {}) {
+  const { Resvg } = await import("@resvg/resvg-js");
+  const renderer = new Resvg(createBillSvg(summary, options), {
+    fitTo: { mode: "width", value: options.width ?? 1500 },
+  });
+  return renderer.render().asPng();
+}
+
 export function createBillSvg(summary, options = {}) {
   const rows = Array.isArray(summary?.rows) ? summary.rows : [];
   const total = calculateTotal(rows);

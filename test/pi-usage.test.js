@@ -3,6 +3,7 @@ import test from "node:test";
 import * as helpers from "./helpers.js";
 
 const {
+  createBillPng,
   createBillSvg,
   parseArguments,
   PI_USAGE_VERSION,
@@ -443,9 +444,11 @@ test("pi-usage 对账单 SVG 汇总费用并转义动态文本", () => {
   assert.doesNotMatch(svg, /<model>/);
 });
 
-test("pi-usage SVG 输出复用查询时间范围", () => {
+test("pi-usage SVG 与 PNG 输出复用查询时间范围", () => {
   const parsed = parseArguments(["yesterday", "--output", "bill.svg"], "agent");
   assert.equal(parsed.outputPath, "bill.svg");
+  assert.equal(parsed.outputFormat, "svg");
+  assert.equal(parseArguments(["--output", "bill.PNG"], "agent").outputFormat, "png");
   assert.deepEqual(parsed.rangeArguments, ["yesterday"]);
   assert.equal(parsed.databasePath, path.join("agent", "pi-usage.duckdb"));
   assert.deepEqual(parseArguments(["7d", "--output", "range.svg"], "agent").rangeArguments, ["7d"]);
@@ -454,7 +457,19 @@ test("pi-usage SVG 输出复用查询时间范围", () => {
     ["2026-08-01", "2026-08-25"],
   );
   assert.throws(() => parseArguments(["--output"], "agent"), /--output 需要输出路径/);
-  assert.throws(() => parseArguments(["--output", "bill.png"], "agent"), /--output 目前仅支持 \.svg 文件/);
+  assert.throws(() => parseArguments(["--output", "bill.webp"], "agent"), /仅支持 \.svg 或 \.png/);
+});
+
+test("pi-usage 可将 SVG 对账单渲染为适合分享的 PNG", async () => {
+  const png = Buffer.from(
+    await createBillPng(
+      { date: "2026-09-22", sessions: 0, rows: [] },
+      { generatedAt: new Date(2026, 8, 22, 20, 18) },
+    ),
+  );
+  assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(png.readUInt32BE(16), 1500);
+  assert.ok(png.readUInt32BE(20) > 0);
 });
 
 test("pi-usage 空数据对账单明确显示无记录", () => {

@@ -7,6 +7,7 @@ import test from "node:test";
 import initProjectExtension from "../extensions/index.ts";
 import { installLaunchers } from "../scripts/install-launchers.js";
 import {
+  createBillPng,
   createBillSvg,
   dateRange,
   formatDateMinute,
@@ -431,6 +432,7 @@ export {
   path,
   initProjectExtension,
   installLaunchers,
+  createBillPng,
   createBillSvg,
   dateRange,
   formatDateMinute,
