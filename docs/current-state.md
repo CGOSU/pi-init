@@ -19,7 +19,7 @@
 - Local 工作流的 `complete`/`block` 到达时若交接仍为 `queued`，仅在完整 handoff 身份匹配、活动 session branch 含精确交接消息且当前角色匹配任务角色时，先持久化补记 `executing` 再进行严格验收；身份、branch 或角色不符仍 fail-closed，未知结果仍须显式核对和 retry。身份校验失败以模型可见 JSON 给出 code、差异字段、白名单 expected/received 与下一步；`status`、任务提示和重规划提示展示通过共享构造器生成的可复制 JSON 身份，`status` 保持只读。`task_workflow` TUI 将这些失败诊断按类别、代码、原因、白名单身份差异和下一步分段显示；普通错误与无法解析的诊断仍保留原始错误内容，不改变模型错误 JSON 或失败守卫。该路径不改变恢复时 queued 结果未知的策略，也不确认原始 stale identity 故障的字段根因。
 - 控制中心同步当前项目发生实际变更并执行 `ctx.reload()` 后立即结束旧控制中心调用；同步结果通过 `reloaded` 标记向调用方表达，避免 reload 后继续使用失效的旧 `ctx`。无变更或有冲突时不 reload，菜单仍可继续。具体决策与验证见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - pi-init 工作流固定为当前主会话内 local 顺序执行；缺省 executor 与旧 `workflowExecutor: "local"` 配置仍可读，执行器不再是控制中心或 schema 选项。`subagents`、`subtask`、`collaboration` 等未知值明确拒绝。当前状态持久化在 `pi.appendEntry` 正常返回后才更新内存状态；append 异常保留旧状态并停止本次调度。`architect` 不得作为执行任务角色，plan/replan 校验拒绝该角色；旧活动计划含 architect 执行任务时不持久化自动修复或派发，仅保留恢复错误供检查；用户显式取消后可另建计划。后续交接身份与恢复边界见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
-- 工作流暂停通知和 block 工具结果使用精简摘要，每条阻塞原因及 retry/replan 建议只展示一次；显式状态/TUI 查询和持久化状态继续保留完整任务详情，block 工具不另发重复通知。
+- 工作流暂停通知和 block 工具结果使用分区摘要，突出真实原因及恢复建议；暂停结果不以成功标记呈现，展开后显示完整任务与身份技术状态。未知结果仍须先核对外部副作用，再显式确认 retry；block 工具不另发重复通知。
 - 旧配置顶层 `runtime` 字段返回 `RUNTIME_CONFIG_RETIRED`，`workflowExecutor: "runtime"` 返回 `WORKFLOW_EXECUTOR_RETIRED`；旧 Runtime executor/authority 或残留 payload 的持久状态返回 `WORKFLOW_STATE_RUNTIME_RETIRED`。状态和动作保留恢复错误，不会静默转为 local、不自动重放/迁移，也不改写或删除原始 session entry；旧配置需由用户检查并手动清理。
 - 当前不包含自建外部 Runtime backend，也未接入或核实任何官方 Runtime 接口。历史双轨实现与旧验证记录仅作为历史保留，见 [`docs/decisions.md`](decisions.md) 的退役决策及 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md) 的历史标记。
 
@@ -60,6 +60,7 @@
 
 ## 最近一次更新
 
+- 2026-10-09：工作流暂停结果改为警告态分区摘要，展示进度、阻塞任务、原因和分步恢复建议；完整身份/任务状态只在展开结果中显示。unknown outcome 仍要求先核对外部副作用，再用确认参数 retry。`node --test test/workflow-report.test.js` 3 项通过，`npm run typecheck` 与 `git diff --check` 通过；详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-09：将工作流动作失败的 TUI 展示分段并分类，保留模型 JSON、原始错误与安全建议；包版本更新至 `2.0.4`。`npm run typecheck` 通过，针对性测试 12 项通过，完整 `node --test` 177 项通过；`npm test` 在既有 `test/pi-usage.test.js` 509 行门禁处停止（该文件来自 HEAD `8a4129f`，未修改），详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-08：完成 `src` 11 个 JavaScript 实现到 TypeScript 的迁移，并同步直接调用方；新增共享类型模块，关闭 `allowJs`，保留 scripts/tests 为 JavaScript，无构建产物或运行器。`npm run typecheck` 通过，`npm test` 176 项通过；Node 22.19.0 最低版本未实测，Pi 长驻进程故障根因未确认，详见 [`docs/session-log.md`](session-log.md) 与 [`docs/pitfalls.md`](pitfalls.md)。
 - 2026-10-08：关闭架构执行任务死锁、过期压缩续跑和 branch 职责确认漏洞：禁止 architect 作为计划/重规划的执行角色，旧活动计划不自动改写或派发；压缩回调绑定 operation、角色代次、session/branch 上下文及当前 workflow/replan 身份，失败不自动唤起新回合；branch 改变后重新建立职责恢复门，manual 模式提示使用 `/pi-init role`。`npm test` 173 项通过、0 失败、0 跳过，`git diff --check` 通过；未执行真实 Pi E2E、安装/reload，未重放旧故障或提交/推送。

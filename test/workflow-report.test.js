@@ -64,14 +64,62 @@ test("暂停摘要精简已完成任务内容且保留全部真实阻塞原因�
   assert.match(pauseSummary, /工作流已暂停/);
   assert.equal((pauseSummary.match(/缺少产品决策/g) ?? []).length, 1);
   assert.match(pauseSummary, /未记录（历史状态未保存阻塞原因）/);
-  assert.equal((pauseSummary.match(/建议解决方法：/g) ?? []).length, 2);
+  assert.equal((pauseSummary.match(/恢复建议：/g) ?? []).length, 2);
   assert.match(pauseSummary, /\/pi-init workflow retry blocked/);
   assert.match(pauseSummary, /\/pi-init workflow retry legacy-blocked/);
   assert.doesNotMatch(pauseSummary, /已完成任务的长描述|重复展示时应隐藏的完整完成摘要/);
 
+  const unknownState = {
+    ...workflowState,
+    tasks: workflowState.tasks.map((task) => task.id === "blocked" ? { ...task, outcomeUnknown: true } : task),
+  };
+  const unknownSummary = report.formatWorkflowPauseSummary(unknownState);
+  assert.ok(unknownSummary.indexOf("先核对是否已产生外部副作用") < unknownSummary.indexOf("--confirm-unknown-outcome"));
+  assert.match(unknownSummary, /--confirm-unknown-outcome/);
+
+  const reviewState = {
+    ...workflowState,
+    pauseReason: "architecture-review",
+    tasks: workflowState.tasks.map((task) => task.status === "blocked"
+      ? { ...task, status: "pending", blockReason: undefined }
+      : task),
+  };
+  assert.match(report.formatWorkflowPauseSummary(reviewState), /等待架构师审阅/);
+  assert.match(report.formatWorkflowPauseSummary(reviewState), /\/pi-init workflow resume/);
+
   const fullStatus = report.formatWorkflowState(workflowState);
   assert.match(fullStatus, /已完成任务的长描述/);
   assert.match(fullStatus, /重复展示时应隐藏的完整完成摘要/);
+});
+
+test("暂停工具结果突出原因和恢复操作，完整技术状态仅在展开时显示", () => {
+  const workflowState = createBlockedHistory();
+  const harness = createExtensionHarness();
+  const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+  const result = {
+    content: [{ type: "text", text: "暂停内容" }],
+    details: workflowState,
+  };
+  const compact = workflow.renderResult(
+    result,
+    { expanded: false, isPartial: false },
+    harness.context.ui.theme,
+    { isError: false },
+  ).render(80).join("\n");
+  assert.match(compact, /工作流已暂停/);
+  assert.doesNotMatch(compact, /✓ 工作流/);
+  assert.match(compact, /缺少产品决策/);
+  assert.match(compact, /\/pi-init workflow retry blocked/);
+  assert.doesNotMatch(compact, /workflowId：/);
+
+  const expanded = workflow.renderResult(
+    result,
+    { expanded: true, isPartial: false },
+    harness.context.ui.theme,
+    { isError: false },
+  ).render(80).join("\n");
+  assert.match(expanded, /workflowId：/);
+  assert.match(expanded, /recoveryGeneration：/);
 });
 
 test("block 工具结果精简且不会再发出重复阻塞通知", async () => {
@@ -92,8 +140,7 @@ test("block 工具结果精简且不会再发出重复阻塞通知", async () =>
 
     const content = result.content[0].text;
     assert.equal((content.match(/缺少产品决策/g) ?? []).length, 1);
-    assert.equal((content.match(/建议解决方法：/g) ?? []).length, 1);
-    assert.match(content, /建议解决方法：/);
+    assert.match(content, /\/pi-init workflow retry blocked/);
     assert.doesNotMatch(content, /已完成任务的长描述|重复展示时应隐藏的完整完成摘要/);
     assert.equal(harness.notifications.some(({ message }) => message.includes("缺少产品决策")), false);
     assert.equal(harness.notifications.some(({ message }) => message.includes("/pi-init workflow retry blocked")), false);

@@ -27,6 +27,7 @@ import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispat
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { formatWorkflowOperationFailure } from "./workflow-error-renderer.ts";
+import { renderWorkflowPauseResult } from "./workflow-pause-renderer.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
@@ -428,19 +429,15 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (!details || !Array.isArray(details.tasks)) {
         return new Text(contentText || "工作流已更新", 0, 0);
       }
+      if (details.status === "paused") {
+        return renderWorkflowPauseResult(details, expanded, theme, workflowReport);
+      }
       const progress = workflowProgress(details);
       const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";
       const workflowLabel = details.status === "completed"
         ? "工作流已完成"
         : `工作流 ${progress.completed}/${progress.total}`;
       let text = theme.fg("success", "✓ ") + theme.fg("accent", workflowLabel) + theme.fg("muted", current);
-      if (details.status === "paused") {
-        text += theme.fg("warning", " · 已暂停");
-        const blockNotice = workflowReport.formatWorkflowBlockNotice(details);
-        if (blockNotice) {
-          text += `\n${blockNotice.split("\n").map((line) => theme.fg("warning", line)).join("\n")}`;
-        }
-      }
       if (details.status === "replanning") text += theme.fg("warning", " · 等待架构师重规划");
       if (expanded) text += `\n${details.tasks.map((task) => `  [${task.status}] ${task.id} · ${task.task}`).join("\n")}`;
       return new Text(text, 0, 0);

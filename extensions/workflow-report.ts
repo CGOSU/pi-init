@@ -12,6 +12,7 @@ import {
   workflowProgress,
 } from "../src/workflow.ts";
 import { formatWorkflowIdentityLines } from "./workflow-identity-report.ts";
+import { workflowPauseReasonLabel } from "./workflow-pause-labels.ts";
 import { roleLabel } from "../src/roles.ts";
 import { getRunTimingDuration } from "../src/run-timing.ts";
 import type { ReportTheme, RunTimingEntryData } from "./contracts.ts";
@@ -24,23 +25,19 @@ const VERIFICATION_NO_FAILURE_PATTERN = /(?:\b0\s+(?:fail(?:ed|ure)?s?|errors?|e
 function isVerificationFailure(value: string) {
   return VERIFICATION_FAILURE_PATTERN.test(value) && !VERIFICATION_NO_FAILURE_PATTERN.test(value);
 }
-function getWorkflowBlockDetails(workflowState: WorkflowState) {
-  return workflowState.tasks
-    .filter((task) => task.status === "blocked")
-    .map((task) => ({
-      taskId: task.id,
-      reason: task.blockReason ?? "未记录（历史状态未保存阻塞原因）",
-      suggestion: task.outcomeUnknown
-        ? `先核对是否已产生外部副作用，再显式执行 /pi-init workflow retry ${task.id} --confirm-unknown-outcome；如果需求或方案已改变，请让架构师重规划。`
-        : `先解决该原因，然后执行 /pi-init workflow retry ${task.id}；如果需求或方案已改变，请让架构师通过 task_workflow(action="replan") 重规划。`,
-    }));
-}
-
 function formatWorkflowBlockLines(workflowState: WorkflowState) {
-  return getWorkflowBlockDetails(workflowState).flatMap(({ taskId, reason, suggestion }) => [
-    `阻塞原因：任务 ${taskId} · ${reason}`,
-    `建议解决方法：${suggestion}`,
-  ]);
+  return workflowState.tasks.filter((task) => task.status === "blocked").flatMap((task) => {
+    const nextSteps = task.outcomeUnknown
+      ? ["先核对是否已产生外部副作用。", `核对后显式执行 /pi-init workflow retry ${task.id} --confirm-unknown-outcome。`, "如果需求或方案已改变，请让架构师重规划。"]
+      : [`解决原因后执行 /pi-init workflow retry ${task.id}。`, "如果需求或方案已改变，请让架构师通过 task_workflow(action=\"replan\") 重规划。"];
+    return [`阻塞任务：${task.id}`, `暂停原因：${task.blockReason ?? "未记录（历史状态未保存阻塞原因）"}`, "恢复建议：", ...nextSteps.map((step, index) => `  ${index + 1}. ${step}`)];
+  });
+}
+function formatWorkflowPauseSummary(workflowState: WorkflowState) {
+  const blocks = formatWorkflowBlockLines(workflowState);
+  const pauseReason = workflowState.taskPauseReason?.trim() || workflowPauseReasonLabel(workflowState.pauseReason);
+  const pauseLines = blocks.length ? blocks : [`暂停原因：${pauseReason}`];
+  return ["⏸ 工作流已暂停", ...pauseLines].join("\n");
 }
 function formatVerification(verification: string[] | undefined) {
   const failures = verification?.filter(isVerificationFailure) ?? [];
@@ -168,8 +165,9 @@ export function createWorkflowReport(
       `规划：${workflowState.plan.summary}`,
     ];
     lines.push(...formatWorkflowIdentityLines(workflowState));
-    if (workflowState.pauseReason) {
-      lines.push(`暂停原因：${workflowState.pauseReason}${workflowState.taskPauseReason ? ` · ${workflowState.taskPauseReason}` : ""}`);
+    if (workflowState.pauseReason) lines.push(`暂停类别：${workflowState.pauseReason}`);
+    if (workflowState.taskPauseReason && !workflowState.tasks.some((task) => task.status === "blocked")) {
+      lines.push(`暂停说明：${workflowState.taskPauseReason}`);
     }
     lines.push(...formatWorkflowBlockLines(workflowState));
     if (workflowState.pendingRevision) {
@@ -210,11 +208,9 @@ export function createWorkflowReport(
               `规划  ${current.plan.summary}`,
               ...(current.currentTaskId ? [`当前任务  ${current.currentTaskId}`] : []),
               ...(current.handoff ? [`handoff  ${current.handoff.handoffId} · attempt  ${current.handoff.attemptId} · ${current.handoff.phase}`] : []),
-              ...(current.pauseReason ? [`暂停原因  ${current.pauseReason}${current.taskPauseReason ? ` · ${current.taskPauseReason}` : ""}`] : []),
-              ...getWorkflowBlockDetails(current).flatMap(({ taskId, reason, suggestion }) => [
-                `阻塞原因  任务 ${taskId} · ${reason}`,
-                `建议解决方法  ${suggestion}`,
-              ]),
+              ...(current.pauseReason ? [`暂停类别  ${current.pauseReason}`] : []),
+              ...(current.taskPauseReason && !current.tasks.some((task) => task.status === "blocked") ? [`暂停说明  ${current.taskPauseReason}`] : []),
+              ...formatWorkflowBlockLines(current),
               ...(current.pendingRevision ? [
                 `待处理 revision  ${current.pendingRevision.revisionId}`,
                 `用户方向  ${current.pendingRevision.direction}`,
@@ -482,7 +478,7 @@ export function createWorkflowReport(
     dispose,
     persistWorkflowState,
     formatWorkflowState,
-    formatWorkflowPauseSummary: (workflowState: WorkflowState) => ["工作流已暂停。", ...formatWorkflowBlockLines(workflowState)].join("\n"),
+    formatWorkflowPauseSummary,
     formatWorkflowBlockNotice: (workflowState: WorkflowState) => {
       const lines = formatWorkflowBlockLines(workflowState);
       return lines.length > 0 ? lines.join("\n") : undefined;
