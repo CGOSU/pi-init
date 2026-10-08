@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Static } from "typebox";
 import {
   applyWorkflowReplan,
   blockWorkflowTask,
@@ -17,11 +18,18 @@ import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from 
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowDispatch } from "./workflow-dispatch.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
+import { taskWorkflowParameters } from "./contracts.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
   dispatch: WorkflowDispatch;
   report: WorkflowReport;
+};
+
+type WorkflowActionResult = {
+  content: { type: "text"; text: string }[];
+  details: unknown;
+  terminate?: boolean;
 };
 
 export function createWorkflowActions(
@@ -152,10 +160,10 @@ export function createWorkflowActions(
   }
 
   async function runTaskWorkflowAction(
-    params: any,
+    params: Static<typeof taskWorkflowParameters>,
     signal: AbortSignal | undefined,
     ctx: ExtensionContext,
-  ) {
+  ): Promise<WorkflowActionResult> {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "工作流操作已取消。" }], details: {} };
     }

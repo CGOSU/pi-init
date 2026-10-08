@@ -165,7 +165,7 @@ async function collectRoleModelsForInit(
 }
 
 async function confirmScaffold(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   message: string,
   allowBack: boolean,
 ) {

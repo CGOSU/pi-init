@@ -33,7 +33,7 @@ export function createRunTimingDiagnostics(
   }
 
   function captureInput(source: unknown) {
-    if (!isExternalRunSource(source)) return false;
+    if (typeof source !== "string" || !isExternalRunSource(source)) return false;
     if (isWorkflowActive()) {
       clearProbes();
       return true;

@@ -27,6 +27,7 @@ import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispat
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
+import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
 import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
 import { createRuntimeRoutingContext } from "./runtime-routing-context.ts";
@@ -271,7 +272,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
   });
 
-  pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: (args, ctx) => {
+  pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: async (args, ctx) => {
     const task = args.trim(), workflow = runtimeState.workflowState;
     const restoreError = runtimeState.workflowRestoreError;
     if (!task || !ctx.isIdle() || restoreError || (workflow && !["completed", "cancelled"].includes(workflow.status))) return ctx.ui.notify(
@@ -281,7 +282,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             : "当前有未结束的工作流；/fast 不会绕过或覆盖它，请按工作流流程继续。",
       "warning",
     );
-    pi.sendUserMessage(`用户通过 /fast 明确选择对下面这一项单次启用 Fast Path；这不是持久模式，也不修改模型或项目配置。\n这是对 Fast Path 自动适用条件的手动选择：不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程。直接定向读取最少必要上下文，完成任务所需修改和风险匹配的最小验证；不要仅因不符合自动适用条件而创建 task_workflow 或做例行留痕。\n安全、权限、需求/契约确认、数据保护、architect 职责限制、上下文恢复门、工作流保护和必要验证仍优先；若这些独立边界要求暂停或升级流程，简要说明具体原因，不要只以自动 Fast Path 资格为由退回。\n\n用户任务：\n${task}`);
+    await pi.sendUserMessage(`用户通过 /fast 明确选择对下面这一项单次启用 Fast Path；这不是持久模式，也不修改模型或项目配置。\n这是对 Fast Path 自动适用条件的手动选择：不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程。直接定向读取最少必要上下文，完成任务所需修改和风险匹配的最小验证；不要仅因不符合自动适用条件而创建 task_workflow 或做例行留痕。\n安全、权限、需求/契约确认、数据保护、architect 职责限制、上下文恢复门、工作流保护和必要验证仍优先；若这些独立边界要求暂停或升级流程，简要说明具体原因，不要只以自动 Fast Path 资格为由退回。\n\n用户任务：\n${task}`);
   }});
 
   pi.registerCommand("pi-init", {
@@ -311,23 +312,22 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const tokens = args.trim().split(/\s+/).filter(Boolean);
       const action = tokens.shift();
       try {
-        if (!action) return (await loadControlCenter()).showControlCenter(ctx);
-        if (action === "init") return (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx);
-        if (action === "advanced") return (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx);
-        if (action === "sync") return (await loadScaffoldRuntime()).syncProject(tokens.join(" ") || ".", ctx);
-        if (action === "config") return (await loadControlCenter()).configureRole(tokens[0], ctx);
+        if (!action) { await (await loadControlCenter()).showControlCenter(ctx); return; }
+        if (action === "init") { await (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx); return; }
+        if (action === "advanced") { await (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx); return; }
+        if (action === "sync") { await (await loadScaffoldRuntime()).syncProject(tokens.join(" ") || ".", ctx); return; }
+        if (action === "config") { await (await loadControlCenter()).configureRole(tokens[0], ctx); return; }
         if (action === "save") {
           const result = await roleRuntime.saveRoleConfig(ctx);
           ctx.ui.notify(result.message, result.ok ? "info" : "error");
           return;
         }
-        if (action === "role") return (await loadControlCenter()).switchRole(tokens[0], ctx);
-        if (action === "mode") return (await loadControlCenter()).setSessionMode(tokens[0], ctx);
+        if (action === "role") { await (await loadControlCenter()).switchRole(tokens[0], ctx); return; }
+        if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
         if (action === "workflow") {
-      const workflowAction = tokens.shift();
-      const taskId = tokens.shift();
-      return workflowActions.workflowCommand(workflowAction, taskId, ctx, tokens.includes("--confirm-unknown-outcome"));
-    }
+          await workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));
+          return;
+        }
         ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");
@@ -415,10 +415,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const taskCount = Array.isArray(args.tasks) ? ` · ${args.tasks.length} 个任务` : "";
       return new Text(theme.fg("toolTitle", theme.bold("工作流请求 ")) + theme.fg("muted", `${action}${taskCount}`), 0, 0);
     },
-    renderResult(result, { expanded }, theme) {
-      if (result.isError) return new Text(theme.fg("error", result.content[0]?.type === "text" && result.content[0].text.trim() ? `工作流操作失败：${result.content[0].text.trim()}` : "工作流操作失败"), 0, 0);
+    renderResult(result, { expanded }, theme, context) {
       const firstContent = result.content[0];
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
+      if (context.isError) return new Text(theme.fg("error", contentText.trim() ? `工作流操作失败：${contentText.trim()}` : "工作流操作失败"), 0, 0);
       if (contentText.startsWith("任务完成报告") || contentText.startsWith("工作流完成报告")) {
         return new Text(workflowReport.styleReportText(contentText, theme), 0, 0);
       }
@@ -466,8 +466,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     renderCall(args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("角色切换 ")) + theme.fg("muted", roleLabel(args.role)), 0, 0);
     },
-    renderResult(result, _options, theme) {
-      if (result.isError) return new Text(theme.fg("error", "角色切换失败"), 0, 0);
+    renderResult(result, _options, theme, context) {
+      if (context.isError) return new Text(theme.fg("error", "角色切换失败"), 0, 0);
       const details = result.details as { role?: string; model?: string; thinkingLevel?: string } | undefined;
       return new Text(
         theme.fg("success", "✓ ") + theme.fg("accent", roleLabel(details?.role ?? "")) +

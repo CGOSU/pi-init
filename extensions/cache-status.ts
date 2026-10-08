@@ -117,7 +117,8 @@ export function createCacheStatus(pi: ExtensionAPI) {
 
   function updatePartial(ctx: ExtensionContext, event: MessageUpdateEvent) {
     if (!requestActive || event.message?.role !== "assistant") return;
-    const partial = event.assistantMessageEvent?.partial;
+    const assistantEvent = event.assistantMessageEvent;
+    const partial = assistantEvent && "partial" in assistantEvent ? assistantEvent.partial : undefined;
     const incoming = countsFromUsage(partial?.usage ?? event.message.usage);
     activeCounts = {
       read: Math.max(activeCounts.read, incoming.read),

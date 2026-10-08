@@ -1,4 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_MODES } from "../src/roles.js";
 import { WORKFLOW_MAX_TASKS } from "../src/workflow.js";
@@ -34,10 +35,7 @@ export type RunTimingEntryData = {
   settledAt?: unknown;
 };
 
-export type ReportTheme = {
-  fg: (color: string, text: string) => string;
-  bold: (text: string) => string;
-};
+export type ReportTheme = Pick<Theme, "fg" | "bold">;
 
 export type ResolvedRoleConfig = {
   schemaVersion: number;

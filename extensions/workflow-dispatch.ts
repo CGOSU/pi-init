@@ -51,11 +51,20 @@ function sameIdentity(left: WorkflowActionIdentity, right: WorkflowActionIdentit
     && left.recoveryGeneration === right.recoveryGeneration;
 }
 
+function isTaskCompletionContinuation(continuation: WorkflowState["continuation"]) {
+  return (continuation?.kind === "schedule" || continuation?.kind === "replan")
+    && continuation.reason === "task-completed";
+}
+
 export function createWorkflowDispatch(
   state: ExtensionRuntimeState,
   deps: WorkflowDispatchDependencies,
 ) {
   let localScheduleInFlight = false;
+
+  function currentPendingRoleCompaction() {
+    return state.pendingRoleCompaction;
+  }
 
   function startTaskBoundaryCompaction(
     ctx: ExtensionContext,
@@ -73,12 +82,16 @@ export function createWorkflowDispatch(
       deps.report.persistWorkflowState(setWorkflowHandoffPhase(current, "compacting"), ctx);
     } else if (continuation.kind === "workflow-replan" && current.continuation?.kind === "replan") {
       const next = cloneState(current);
-      next.continuation = { ...next.continuation!, phase: "compacting" };
-      deps.report.persistWorkflowState(next, ctx);
+      if (next.continuation?.kind === "replan") {
+        next.continuation = { ...next.continuation, phase: "compacting" };
+        deps.report.persistWorkflowState(next, ctx);
+      }
     } else if (continuation.kind === "workflow-schedule" && current.continuation?.kind === "schedule") {
       const next = cloneState(current);
-      next.continuation = { ...next.continuation, phase: "compacting" };
-      deps.report.persistWorkflowState(next, ctx);
+      if (next.continuation?.kind === "schedule") {
+        next.continuation = { ...next.continuation, phase: "compacting" };
+        deps.report.persistWorkflowState(next, ctx);
+      }
     }
 
     state.pendingRoleCompaction ??= deps.roleRuntime.createPendingRoleCompaction(ctx, fromRole, toRole);
@@ -120,15 +133,14 @@ export function createWorkflowDispatch(
     ) return;
 
     let current = state.workflowState;
-    if (["dispatching", "queued"].includes(current.continuation?.phase ?? "")) return;
+    if (current.continuation?.kind === "replan" && ["dispatching", "queued"].includes(current.continuation.phase)) return;
     const ensured = ensureWorkflowReplanHandoff(current);
-    if (ensured !== current) {
-      deps.report.persistWorkflowState(ensured, ctx);
-      current = ensured;
-    }
+    if (!ensured) return;
+    if (ensured !== current) deps.report.persistWorkflowState(ensured, ctx);
+    current = ensured;
     const identity = replanIdentity(current);
     if (!identity) return;
-    const taskCompletionPending = current.continuation?.reason === "task-completed";
+    const taskCompletionPending = isTaskCompletionContinuation(current.continuation);
     state.workflowDispatchInFlight = true;
     const previousRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     try {
@@ -145,13 +157,16 @@ export function createWorkflowDispatch(
         );
         return;
       }
-      if (selection.transition && state.pendingRoleCompaction) {
-        state.pendingRoleCompaction.continuation = { kind: "workflow-replan", identity };
+      const pendingRoleCompaction = currentPendingRoleCompaction();
+      if (selection.transition && pendingRoleCompaction) {
+        pendingRoleCompaction.continuation = { kind: "workflow-replan", identity };
         const refreshed = state.workflowState;
         if (refreshed?.continuation?.kind === "replan") {
           const next = cloneState(refreshed);
-          next.continuation = { ...next.continuation, phase: "compacting" };
-          deps.report.persistWorkflowState(next, ctx);
+          if (next.continuation?.kind === "replan") {
+            next.continuation = { ...next.continuation, phase: "compacting" };
+            deps.report.persistWorkflowState(next, ctx);
+          }
         }
         deps.roleRuntime.startPendingRoleCompaction(ctx);
         deps.report.updateWorkflowStatus(ctx);
@@ -381,7 +396,7 @@ export function createWorkflowDispatch(
           ctx,
           handoff.taskId,
           deps.roleRuntime.activeRoleFor(ctx)?.role,
-          current.continuation?.reason === "task-completed",
+          isTaskCompletionContinuation(current.continuation),
         );
         return;
       }
@@ -408,7 +423,7 @@ export function createWorkflowDispatch(
 
     const next = getNextWorkflowTask(current);
     if (!next) return;
-    const taskCompletionPending = current.continuation?.reason === "task-completed";
+    const taskCompletionPending = isTaskCompletionContinuation(current.continuation);
     state.workflowDispatchInFlight = true;
     const previousRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     const started = startWorkflowTask(current, next.id);

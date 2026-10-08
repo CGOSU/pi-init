@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { getRunTimingDuration } from "../src/run-timing.js";
 import {
@@ -13,7 +13,7 @@ import type { RunTimingEntryData } from "./contracts.ts";
 const SESSION_WORK_TIME_WIDGET_KEY = "pi-init-session-work-time";
 const SESSION_WORK_TIME_ENTRY_TYPE = "pi-init-session-work-time";
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
-type SessionWorkTimeTheme = { fg: (color: string, text: string) => string };
+type SessionWorkTimeTheme = Pick<Theme, "fg">;
 
 type SessionWorkTimeEntryData = {
   totalMilliseconds?: unknown;

@@ -1,4 +1,4 @@
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   DynamicBorder,
   type ExtensionCommandContext,
@@ -13,6 +13,8 @@ import {
 } from "../src/roles.js";
 import type { MenuItem, MenuOptions, MenuSaveResult, RoleModelConfig } from "./contracts.ts";
 
+type RolePickerModel = Model<Api>;
+
 export const MENU_BACK = "__pi_init_back__" as const;
 
 export function isMenuBack(value: unknown): value is typeof MENU_BACK {
@@ -23,13 +25,13 @@ export function formatRoleModel(config: RoleModelConfig) {
   return `${config.provider}/${config.model} · ${config.thinkingLevel}`;
 }
 
-function availableThinkingLevels(model: any) {
+function availableThinkingLevels(model: RolePickerModel): ModelThinkingLevel[] {
   return getSupportedThinkingLevels(model).filter((level) =>
     (THINKING_LEVELS as readonly string[]).includes(level),
   );
 }
 
-function supportedThinkingText(model: any) {
+function supportedThinkingText(model: RolePickerModel) {
   const levels = availableThinkingLevels(model);
   return levels.length > 0 ? `推理：${levels.join("/")}` : "";
 }
@@ -180,12 +182,16 @@ export function getAvailableRoleModels(ctx: ExtensionContext) {
  * The role picker lists the full host registry. Role configuration uses exact
  * fully qualified provider/model references instead of an allowlist.
  */
+function hasSupportedThinkingLevel(levels: readonly ModelThinkingLevel[], candidate: string | undefined): candidate is ModelThinkingLevel {
+  return candidate !== undefined && levels.some((level) => level === candidate);
+}
+
 async function selectModelWithSearch(
   ctx: ExtensionContext,
   role: string,
-  models: any[],
-  selectedModel?: any,
-  onSave?: (model: any) => Promise<MenuSaveResult | void> | MenuSaveResult | void,
+  models: RolePickerModel[],
+  selectedModel?: RolePickerModel,
+  onSave?: (model: RolePickerModel) => Promise<MenuSaveResult | void> | MenuSaveResult | void,
 ) {
   if (ctx.mode !== "tui") {
     const query = await ctx.ui.input(
@@ -216,7 +222,7 @@ async function selectModelWithSearch(
       ? `${selectedModel.provider}/${selectedModel.id}`
       : undefined;
 
-    const createList = (items: any[]) => {
+    const createList = (items: RolePickerModel[]) => {
       const next = new SelectList(
         items.map((model) => ({
           value: `${model.provider}/${model.id}`,
@@ -350,10 +356,10 @@ export async function selectRoleModel(
     : undefined;
   while (true) {
     const saveModel = options.onSave
-      ? (candidate: any) => {
+      ? (candidate: RolePickerModel) => {
           const supportedLevels = availableThinkingLevels(candidate);
           const preferredLevel = selectedModel === candidate ? initialConfig?.thinkingLevel : undefined;
-          const thinkingLevel = preferredLevel !== undefined && supportedLevels.includes(preferredLevel)
+          const thinkingLevel = hasSupportedThinkingLevel(supportedLevels, preferredLevel)
             ? preferredLevel
             : supportedLevels[0];
           if (!thinkingLevel) {

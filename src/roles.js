@@ -357,6 +357,7 @@ export function resolveRoleModel(config, role, sessionDefault) {
   }
 }
 
+/** @template {{provider: string, id: string, name?: string}} T @param {T[]} models @param {string} query @returns {T[]} */
 export function filterRoleModels(models, query) {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return models;
