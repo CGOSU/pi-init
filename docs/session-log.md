@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-08：修复工作流状态持久化失败时的提前提交
+
+- 完成内容：将 `persistWorkflowState` 的内存提交移至 `pi.appendEntry` 正常返回之后；启动状态持久化失败恢复调度标志并传播错误，暂停状态写入失败释放 dispatch 锁并明确报错。测试 harness 支持注入 append 异常，新增三个持久化一致性回归测试。
+- 持久化边界：不声称 session entry append 提供磁盘事务/外部操作 exactly-once；Pi 新 durable 执行接口和后续交接恢复范围见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- 验证：`node --test test/workflow-persistence.test.js`，3 项通过；`node --test test/workflow-persistence.test.js test/workflow-compaction.test.js test/workflow-protocol.test.js test/workflow-report.test.js`，16 项通过；`node scripts/check-line-count.js`、`git diff --check` 和新增测试文件的 whitespace 检查通过（仅有 LF/CRLF 转换提示）。
+- 遗留：尚未实现交接阶段持久化和 attempt/revision 旧结果隔离；全量 `npm test` 留待最终交付；未执行真实 Pi E2E、依赖升级或 push。
+
 ### 2026-10-06：退役 pi-init 自建外部 Runtime 工作流
 
 - 完成内容：移除 Runtime 专用客户端、配置、wire、Graph/事件投影、执行与恢复接线及其专用测试；工作流执行固定为当前主会话内的 local 顺序流程。显式旧 Runtime 配置/状态以结构化退役错误 fail-closed；查询和动作保留错误，不本地重放或改写旧 session entry。保留会话默认模型、角色/恢复安全边界、上下文压缩和精简暂停报告。

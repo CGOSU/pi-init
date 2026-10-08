@@ -148,9 +148,9 @@ export function createWorkflowReport(
   }
 
   function persistWorkflowState(next: WorkflowState, ctx: ExtensionContext) {
+    deps.pi.appendEntry("pi-init-workflow", next);
     state.workflowState = next;
     state.workflowRestoreError = undefined;
-    deps.pi.appendEntry("pi-init-workflow", next);
     updateWorkflowStatus(ctx);
     return next;
   }

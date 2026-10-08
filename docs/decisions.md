@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-10-08：工作流状态持久化先于内存提交
+
+- 决定：更新 runtime 工作流状态前，先将新的完整快照通过 Pi Extension API `pi.appendEntry("pi-init-workflow", next)` 写入当前 session；append 同步失败时保留旧内存状态/恢复错误，不显示状态已成功推进、不派发下一任务，并释放本次临时调度锁。
+- 原因：否则一次 session entry 写入失败会让本进程状态领先于可恢复状态，完成工具或调度可能误报成功；最小可靠边界是在 API 正常返回后再提交内存状态。
+- 约束：`appendEntry` 是返回 void 的 session 数据 API，不提供本项目可用的 durable operation handle、事务或外部工具 exactly-once 保证。未发现稳定扩展公开接口可直接使用 AgentHarness durable operation records，因此不导入 Pi 内部依赖、不恢复自建 Runtime；状态结构、API 证据及剩余恢复规划见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+
 ### 2026-10-06：退役 pi-init 自建 Runtime 工作流集成
 
 - 决定：按用户确认移除 pi-init 自建外部 Runtime workflow executor、配置入口、传输协议及执行/恢复后端；保留 local-only 主会话顺序工作流及现有角色、安全、恢复门、压缩和报告行为。用户以官方已有相应能力为退役理由；此理由未在本任务中独立核实，也不代表本项目将集成或猜测官方接口。

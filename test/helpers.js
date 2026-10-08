@@ -162,6 +162,7 @@ function createExtensionHarness(branch = [], options = {}) {
       emit() {},
     },
     appendEntry(type, data) {
+      options.appendEntry?.(type, data);
       branch.push({ type: "custom", customType: type, data });
       entries.push({ type, data });
     },

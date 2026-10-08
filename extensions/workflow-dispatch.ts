@@ -9,7 +9,7 @@ import {
   startWorkflowTask,
 } from "../src/workflow.js";
 import { shouldCompactAfterWorkflowTask } from "../src/roles.js";
-import { textOf, type ExtensionRuntimeState, type RoleCompactionContinuation } from "./runtime-state.ts";
+import { textOf, type ExtensionRuntimeState, type RoleCompactionContinuation, type WorkflowState } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowMessages } from "./workflow-messages.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
@@ -105,6 +105,18 @@ export function createWorkflowDispatch(
     deps.report.updateWorkflowStatus(ctx);
   }
 
+  function persistDispatchPause(ctx: ExtensionContext, workflowState: WorkflowState, taskId: string) {
+    try {
+      deps.report.persistWorkflowState(workflowState, ctx);
+      state.workflowDispatchInFlight = false;
+      return true;
+    } catch (error) {
+      state.workflowDispatchInFlight = false;
+      ctx.ui.notify(`无法记录任务 ${taskId} 的暂停状态：${textOf(error)}`, "error");
+      return false;
+    }
+  }
+
   function blockWorkflowTaskFromDispatch(ctx: ExtensionContext, taskId: string, reason: string) {
     if (state.runtimeDisposed || !state.workflowState || state.workflowState.currentTaskId !== taskId || !isWorkflowActive(state.workflowState)) return;
     try {
@@ -175,7 +187,13 @@ export function createWorkflowDispatch(
     state.workflowDispatchInFlight = true;
     const previousRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     const started = startWorkflowTask(state.workflowState, next.id);
-    deps.report.persistWorkflowState(started, ctx);
+    try {
+      deps.report.persistWorkflowState(started, ctx);
+    } catch (error) {
+      state.workflowTaskCompactionPending = taskCompletionPending;
+      state.workflowDispatchInFlight = false;
+      throw error;
+    }
 
     try {
       const selection = await deps.roleRuntime.automaticRole(next.role, ctx);
@@ -184,8 +202,7 @@ export function createWorkflowDispatch(
           taskId: next.id,
           reason: `角色模式选择了 ${selection.result.role}，而任务要求 ${next.role}`,
         });
-        deps.report.persistWorkflowState(paused, ctx);
-        state.workflowDispatchInFlight = false;
+        if (!persistDispatchPause(ctx, paused, next.id)) return;
         ctx.ui.notify(
           deps.report.formatWorkflowPauseSummary(paused),
           "warning",
@@ -212,8 +229,7 @@ export function createWorkflowDispatch(
         taskId: next.id,
         reason: `无法切换到 ${next.role}：${textOf(error)}`,
       });
-      deps.report.persistWorkflowState(paused, ctx);
-      state.workflowDispatchInFlight = false;
+      if (!persistDispatchPause(ctx, paused, next.id)) return;
       ctx.ui.notify(
         deps.report.formatWorkflowPauseSummary(paused),
         "error",
