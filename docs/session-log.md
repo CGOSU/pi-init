@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-08：完成工作流可恢复交接与执行尝试隔离
+
+- 完成内容：工作流持久状态升级至 v4，记录 workflow/plan/session/recoveryGeneration 身份、task attempt/handoff 和 replan continuation；通过当前 session branch 校验 `complete`/`block`/`replan`，在 `agent_start` 持久化真实启动身份。可证明未派发的准备阶段可恢复续接；已派发/启动但无业务结果、legacy `in_progress` 或执行身份缺失时 fail-closed 暂停，未知结果需先核对再显式 retry。保持 local 顺序执行、`task_workflow` 唯一验收权威、旧 Runtime 退役错误及旧 entry 不原地改写。
+- 文档：README、公共 `pi-init-role-routing` Skill、current-state、decisions、pitfalls 与本计划记录恢复契约、工具身份、未知副作用限制和 Pi durable API 边界；不宣称已接入 AgentHarness durable execution 或保证 exactly-once。
+- 验证：`node --test test/workflow-core.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/workflow-persistence.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/extension-lifecycle.test.js`，45 项通过；`node scripts/check-line-count.js` 通过；`git diff --check` 通过，仅有 Windows 工作区 LF/CRLF 转换提示。
+- 遗留：全量 `npm test` 留待最终交付验证；未运行真实 Pi E2E，未升级依赖、安装/reload 或 push；本阶段按授权独立使用中文 commit 信息提交。
+
 ### 2026-10-08：修复工作流状态持久化失败时的提前提交
 
 - 完成内容：将 `persistWorkflowState` 的内存提交移至 `pi.appendEntry` 正常返回之后；启动状态持久化失败恢复调度标志并传播错误，暂停状态写入失败释放 dispatch 锁并明确报错。测试 harness 支持注入 append 异常，新增三个持久化一致性回归测试。

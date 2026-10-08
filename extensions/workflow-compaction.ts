@@ -23,9 +23,9 @@ const ROLE_SWITCH_CONTINUATION_TYPE = "pi-init-role-transition";
 type WorkflowCompactionDependencies = {
   setWorkflowDispatchInFlight: (value: boolean) => void;
   setInternalContinuationPending: (value: boolean) => void;
-  sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string) => void;
-  scheduleWorkflow: (ctx: ExtensionContext) => Promise<void>;
-  sendWorkflowReplanMessage: (ctx: ExtensionContext) => void;
+  sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: import("./runtime-state.ts").WorkflowHandoffIdentity) => void;
+  scheduleWorkflow: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowActionIdentity) => Promise<void>;
+  sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowReplanIdentity) => void;
   acknowledgeRoleRecovery: (role: string) => void;
 };
 
@@ -117,18 +117,18 @@ export function createWorkflowCompaction(
 
     switch (transition.continuation?.kind) {
       case "workflow-task":
-        deps.sendWorkflowTaskMessage(ctx, transition.continuation.taskId, warning);
+        deps.sendWorkflowTaskMessage(ctx, transition.continuation.taskId, warning, transition.continuation.identity);
         return;
       case "workflow-schedule":
         deps.setWorkflowDispatchInFlight(false);
-        void deps.scheduleWorkflow(ctx).catch((error) => ctx.ui.notify(`工作流自动续跑失败：${textOf(error)}`, "error"));
+        void deps.scheduleWorkflow(ctx, transition.continuation.identity).catch((error) => ctx.ui.notify(`工作流自动续跑失败：${textOf(error)}`, "error"));
         return;
       case "workflow-review":
         deps.setWorkflowDispatchInFlight(false);
         return;
       case "workflow-replan":
         deps.setWorkflowDispatchInFlight(false);
-        deps.sendWorkflowReplanMessage(ctx);
+        deps.sendWorkflowReplanMessage(ctx, transition.continuation.identity);
         return;
       default:
         sendGenericContinuation(operation);

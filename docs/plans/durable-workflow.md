@@ -1,6 +1,6 @@
 # 编排恢复能力与 Pi durable 接入边界
 
-> 状态：取证与实现边界记录。以下方案尚未实现；不得据此宣称 pi-init 已接入 AgentHarness durable execution。
+> 状态：durable 边界取证及实现记录。persistence-consistency 与 recoverable-handoff 均已实现并通过定向测试；全量 `npm test` 留待最终交付验证。pi-init 使用 Pi Extension session append/branch 恢复，不是 AgentHarness durable execution 集成。
 
 ## 用户确认的目标
 
@@ -27,48 +27,51 @@
 
 **边界结论：**当前可确认、面向扩展的 session durable API 是 `pi.appendEntry` + 当前 branch 恢复。CHANGELOG 中的 durable execution 属于不同层的 agent-core harness/session 能力；即使该实现存在，也不能由本项目当前稳定 Extension API 直接调用。因此本轮先改善 session 级状态与交接恢复，不引入私有 API、直接依赖内部 agent-core 模块或自建 Runtime。以后若 Pi 正式把 durable operation capability 暴露给扩展，并进入本项目支持的 peer 范围，再单独评估迁移。
 
-### 当前实现与直接调用
+### 已实现能力与直接调用
 
-- 第一阶段已调整 `extensions/workflow-report.ts::persistWorkflowState`：先调用 `pi.appendEntry("pi-init-workflow", next)`，正常返回后才赋值 `state.workflowState`、清除 `workflowRestoreError` 并刷新状态。若 append 同步抛错，内存状态和恢复错误保持原值。Pi API 仅返回 void，不能据此声称具备事务/磁盘 fsync 保证。
-- 持久化函数由 `extensions/workflow-actions.ts` 的 plan/replan/complete/block/resume/retry/cancel 路径、`extensions/workflow-dispatch.ts` 的开始/阻塞/nudge/调度路径，以及 `extensions/index.ts` 的任务启动和重规划方向事件直接调用。修复失败语义时需检查这些调用方是否会继续清锁、通知成功或派发后续任务。
-- `extensions/workflow-dispatch.ts::restoreWorkflowState` 在 session_start/session_tree 从当前 branch 的最后一个 `pi-init-workflow` custom entry hydration；`src/workflow-hydration.js` 对恢复数据做 schema 校验，并通过结构化结果返回 invalid/retired 错误。
-- 当前任务状态包含 `currentTaskId`、开始时间和 `executionStartedAt`，但没有 execution attempt ID；`src/workflow-transitions.js::completeWorkflowTask` 按 workflow status 和当前 taskId 验收，没有 attempt/revision identity 参数。`extensions/workflow-messages.ts` 的任务消息 details 仅有 `taskId`。
-- `extensions/workflow-dispatch.ts`、`extensions/workflow-compaction.ts` 和 `extensions/runtime-state.ts` 使用进程内锁、续跑 pending、压缩 continuation 与 operation ID；它们会在 shutdown/dispose 清除或不会跨进程恢复。不得把普通进程锁与跨重启业务意图混为一谈。
-- compaction 是 Pi session/role transition 机制；失败和 abort 目前仍会按已有行为尝试继续/通知，watchdog 不会自动派发，用户可 reload 后 resume。优化时需保持既有压缩和恢复安全门。
+- `extensions/workflow-report.ts::persistWorkflowState` 先调用 `pi.appendEntry("pi-init-workflow", next)`；正常返回后才更新 runtime 内存状态、清除恢复错误并刷新状态。同步 append 异常保留旧内存状态/恢复错误。该 API 返回 void，不提供事务、磁盘 fsync 或外部副作用 exactly-once 保证。
+- `extensions/workflow-dispatch.ts::restoreWorkflowState` 在 `session_start`/`session_tree` 从当前 branch 读取最新 workflow custom entry，经 `src/workflow-hydration.js` 做 schema/身份校验；旧 session fail-closed，新 fork 可创建新 workflow，但不沿用旧身份。旧 entry 不原地改写，Runtime retired 状态仍结构化拒绝。
+- `src/workflow-model.js` v4 状态包含 workflowId、sessionId、planVersion、recoveryGeneration、task handoff 与 continuation；`src/workflow-handoff.js` 生成/校验身份，并要求 complete/block/replan 结果匹配当前 session、当前 handoff 消息及 branch。重规划结果另校验 revisionId，task retry 创建新 attempt/handoff。
+- `extensions/workflow-dispatch.ts::markCurrentTaskStarted` 只在活动 branch 中找到匹配任务消息后才持久化 agent_start；消息派发/queued 写入异常后不伪装成功。角色切换、压缩和调度 continuation 通过稳定身份防止旧 callback 派发新任务。
+- `src/workflow-handoff.js::recoverWorkflowState` 仅允许没有启动证据且未进入派发阶段的 prepared/waiting-role/compacting 状态安全续接；已派发/启动但缺少业务结果、以及缺身份的 legacy in_progress，都变为 paused/outcomeUnknown。retry 必须显式确认外部副作用已核对（`--confirm-unknown-outcome`），不提供 exactly-once 保证。
+- direct action schema 与提示在 `extensions/contracts.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-messages.ts` 同步传递身份：基础 workflow/plan/session/recoveryGeneration；complete/block 附 taskId/attemptId/handoffId；replan 附 revisionId/handoffId。缺失身份不会从当前状态或自由文本补齐。
 
-### 现有测试与缺口
+### 测试与剩余验证
 
-- `test/workflow-compaction.test.js` 覆盖任务边界压缩、防重复派发、压缩失败/停滞、Local 未启动任务恢复及压缩期间 resume 保护。
-- `test/workflow-protocol.test.js` 覆盖状态机、重规划与输入/状态契约；`test/workflow-runtime-retirement.test.js` 覆盖旧 Runtime 状态拒绝；`test/role-recovery.test.js` 与 `test/extension-lifecycle.test.js` 覆盖恢复门及 session lifecycle。
-- `test/helpers.js` 的 mock `appendEntry` 已支持注入同步异常；新建 `test/workflow-persistence.test.js` 覆盖持久化异常时的内存/恢复错误保留、首次派发失败后的安全重试，以及完成操作失败不返回成功/不派发后续任务。
-- attempt/revision 身份阻止旧完成结果的测试仍待后续交接阶段实现。
+- 新增 `test/workflow-handoff.test.js` 覆盖身份缺失/过期、旧 attempt/session/revision、retry unknown outcome、legacy migration、fork session、恢复安全、dispatch persist failure 与损坏阶段的启动证据；既有 workflow/compaction/protocol/lifecycle/persistence/runtime retirement 测试覆盖直接调用和兼容边界。
+- 最近相关组合：`node --test test/workflow-core.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/workflow-persistence.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/extension-lifecycle.test.js`，45 项通过。
+- `node scripts/check-line-count.js` 与 `git diff --check` 通过；后者仅输出 Windows 工作树 LF/CRLF 转换提示。全量 `npm test` 留待最终交付阶段；真实 Pi E2E、安装/reload 和 peer 依赖升级未执行。
+
+## 本阶段确认实现契约（2026-10-08）
+
+本契约用于 `recoverable-handoff` 实现；它把用户确认的验收边界落实为状态与恢复规则，不改变 `task_workflow` 业务权威。
+
+- 新状态 schema 升级至 v4，为每个工作流分配不可复用的 `workflowId`；当前计划有单调递增 `planVersion`；每次任务启动/显式 retry 生成新的 `attemptId` 与 `handoffId`。重规划应用时递增 planVersion，旧 plan/attempt 的回调永不匹配新身份。身份字段必须由扩展生成并持久化，缺失不能以当前任务/当前版本自动补齐。
+- 持久化 handoff 阶段至少区分：任务已选但尚未派发、等待角色选择、压缩 continuation 待恢复、派发意图已持久化、消息已排队、agent 已开始、结果未知/需核对。需跨 reload/session_tree 的 continuation 与 handoff 阶段写入 session entry；dispatch mutex、timer 和局部 in-flight 标志继续仅存内存。
+- 每条 workflow task custom message details 与 prompt、complete/block 契约携带同一 workflowId/planVersion/taskId/attemptId/handoffId。complete/block 必须显式提供且逐项匹配当前身份；不得从当前 workflow/task 默认补值。恢复/验收同时校验当前 `sessionManager.getSessionId()` 与活动 branch 上对应的 handoff 消息身份；不依赖未公开的 branch ID 字段。若当前 session/branch 无法证明身份、或出现已排队/已启动而无业务终态结果的记录，结构化暂停并要求核对，旧 callback 不得推进状态。
+- `sendMessage`/`appendEntry` 是返回 void 的公开 Extension API；派发意图必须先持久化，调用失败保留可诊断状态。进入派发意图后若无法证明任务尚未启动，恢复不重发、不根据文本补完成；未进入派发意图的准备阶段才允许安全续跑。新状态创建时记录 session identity；旧 local 状态可继续解析，但缺少 attempt/handoff identity 的 legacy `in_progress` 任务转为需核对状态，不能静默启动或接受旧结果。原 session entry 不原地改写，Runtime retired 错误继续 fail-closed。
+- 无 exactly-once 承诺：unknown handoff 的人工核对/显式 retry 可创建新 attempt，但旧 attempt identity 保留在不再活动的历史记录或以不可匹配方式失效。task_workflow 仍唯一决定 complete/block/retry/replan 与验收，Pi agent_start/settled 和 message 文本本身不构成业务完成。
 
 ## 阶段进度（2026-10-08）
 
-- 已完成 `persistence-consistency`：session entry append 正常返回后才提交 runtime 状态；失败时不提交完成状态，不清除恢复错误；调度开始/暂停持久化失败会释放本地 dispatch 锁，并保留可安全重试的状态。没有改变任务验收权威或 local 顺序执行语义。
-- 已完成的实际验证：`node --test test/workflow-persistence.test.js`（3 项通过）；`node --test test/workflow-persistence.test.js test/workflow-compaction.test.js test/workflow-protocol.test.js test/workflow-report.test.js`（16 项通过）；`node scripts/check-line-count.js`（通过）；`git diff --check` 与新增测试文件的 `git diff --no-index --check`（无 whitespace error）。全量 `npm test` 尚未运行。
-- 尚未实现：交接阶段持久化、workflow/revision/task attempt identity、旧结果隔离和未知执行结果暂停策略。Pi durable 接口判断与剩余方案见本文件前文；不代表已实现原生 durable execution。
+- 已完成 `persistence-consistency`：session entry append 正常返回后才提交 runtime 状态；失败时不提交完成状态、不清除恢复错误；调度开始/暂停持久化失败会释放本地 dispatch 锁并保留真实错误。
+- 已完成 `recoverable-handoff`：实现 v4 workflow/plan/session/recovery generation 身份、task attempt/handoff/replan continuation，branch 验证、恢复门、旧结果隔离及未知结果显式 retry；保持 local 顺序执行、`task_workflow` 验收唯一权威、旧 entry 不原地改写和 Runtime retired fail-closed。
+- 最近实际验证：`node --test test/workflow-core.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/workflow-persistence.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/extension-lifecycle.test.js`（45 项通过）；`node scripts/check-line-count.js` 通过；`git diff --check` 通过，仅有 Windows 工作区 LF/CRLF 转换提示。
+- 全量 `npm test` 留待最终交付；未运行真实 Pi E2E、未升级 peer 依赖、未安装/reload。以后若 AgentHarness durable operation capability 正式进入受支持 Extension API 和本项目 peer 范围，再独立评估接入，不影响当前 session 级边界。
 
-## 实现边界和建议顺序
+## 已落实的实现边界
 
-1. **持久化一致性：**调用 session append 前不得发布新的内存状态或清除恢复错误；失败必须保留旧状态并真实暴露，且调用方不能误发成功、锁死或派发下一任务。因 Extension API 的 appendEntry 返回 void，处理真实同步异常，不伪造异步确认或事务保证。
-2. **可恢复交接：**以 session entry 表达必须跨 reload 恢复的工作流意图；进程内 in-flight mutex/timer 继续保持 ephemeral。界定已选中、等待角色/压缩、可派发、已开始及结果未知这些状态，并在 session_start/session_tree 按当前 branch 恢复。
-3. **执行身份与隔离：**对当前 workflow/plan revision/task attempt 建立稳定身份，complete/block/续跑只接受当前身份，不能只靠 taskId 让旧 attempt 结果完成 retry 后的新 attempt。具体 schema 迁移在编码前需按 `src/workflow-model.js`、`src/workflow-hydration.js` 兼容规则定义并以本文件记录。
-4. **未知执行结果安全策略：**Pi session durable 不等于外部工具副作用可重放。对已经启动、但没有可靠终态证据的任务不自动重做；让 `task_workflow` 明确暂停/请求核对，不宣称 exactly-once。
-5. **测试和交付：**覆盖 appendEntry 抛错、派发边界恢复、已启动未验收、retry/replan 后旧结果、不同 branch/旧 session 回调和重复事件；局部测试后因跨模块交付跑一次 `npm test`。按用户授权对纯本任务文件分阶段中文 commit，不 push。
-
-## 工作区与验证状态
-
-- 取证开始时 `git status --short` 无输出，工作区干净；项目 Git 身份是 `CGOSU <dev@cgosu.com>`。
-- 本文件是取证/实现边界，不代表代码已改动或计划已测试。
-- 本阶段未运行测试、未启动真实 Agent、未触发外部写入、未安装/升级依赖，未执行 commit 或 push。
-- 未确认项：Pi 后续版本是否会把 durable AgentHarness/operation records 作为稳定 Extension API 暴露；本项目将来是否提升并扩展 peer dependency 支持 1.1.0。两项都不影响按当前稳定 Extension API 继续改进 session 级恢复。
+- `appendEntry` 和 `sendMessage` 为公开 Extension API 的 void 调用；仅按同步异常处理，不伪造事务、fsync、异步确认或外部 exactly-once。
+- 持久化跨恢复的 handoff/continuation；mutex、timer、dispatch in-flight 等只保留进程内。只有未派发且没有启动证据的准备阶段才安全续跑；派发/启动后没有业务终态结果即暂停，不能自动重放。
+- 完成/阻塞/replan 只接受当前 session 和活动 branch 上匹配的 workflow/plan/recovery/attempt/handoff/revision identity。缺失身份不从当前状态、任务 ID 或文本补齐，旧 branch/session/revision/attempt 结果拒绝。
+- legacy local 状态继续读取；没有 identity 的 legacy `in_progress` 转为需核对的未知结果；原 session entry 不原地改写；Runtime executor/authority retired 错误继续 fail-closed。
+- 未执行安装、真实 Pi E2E、依赖升级或 push；第二阶段提交仅覆盖本任务相关文件并使用中文提交信息。
 
 ## 来源
 
 - Pi 1.1.0：`@earendil-works/pi-coding-agent/docs/extensions.md`（State、Context and session changes、Errors and cleanup）；`dist/core/extensions/types.d.ts`（`appendEntry`/`sendMessage` API）；`CHANGELOG.md` 1.1.0；依赖包 `@earendil-works/pi-agent-core/package.json` 和 `dist/index.d.ts`。
-- pi-init：`package.json`、`package-lock.json`；`extensions/workflow-report.ts`、`workflow-dispatch.ts`、`workflow-actions.ts`、`workflow-messages.ts`、`workflow-compaction.ts`、`runtime-state.ts`、`index.ts`；`src/workflow-model.js`、`workflow-hydration.js`、`workflow-transitions.js`、`workflow-replan.js`；`test/workflow-compaction.test.js`、`workflow-protocol.test.js`、`workflow-runtime-retirement.test.js`、`role-recovery.test.js`、`extension-lifecycle.test.js`、`helpers.js`。
+- pi-init：`package.json`、`package-lock.json`；`extensions/contracts.ts`、`workflow-report.ts`、`workflow-dispatch.ts`、`workflow-actions.ts`、`workflow-messages.ts`、`workflow-compaction.ts`、`runtime-state.ts`、`index.ts`；`src/workflow-model.js`、`workflow-handoff.js`、`workflow-hydration.js`、`workflow-transitions.js`、`workflow-replan.js`；`test/workflow-handoff.test.js`、`workflow-persistence.test.js`、`workflow-compaction.test.js`、`workflow-protocol.test.js`、`workflow-runtime-retirement.test.js`、`extension-lifecycle.test.js`、`helpers.js`。
 - Historical record only: `docs/plans/runtime-migration.md` explicitly marks the self-built Runtime integration retired; it is not a migration/cutover plan.
 - Git identity/worktree command: `git status --short; git config user.name; git config user.email`。
 - Installed dependency resolution command: `node -e "const p='C:/Users/gorou/AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent'; for (const n of ['@earendil-works/pi-agent-core/package.json','@earendil-works/pi-agent-core']) { try { console.log(n, require.resolve(n,{paths:[p]})); } catch(e) { console.log(n, e.code); } }"`。
-- No tests were executed during evidence gathering.
+- API evidence collection did not run tests; implementation verification is listed above.

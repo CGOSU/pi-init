@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   WORKFLOW_MAX_TASKS,
   assertAcyclic,
@@ -69,6 +70,8 @@ export function requestWorkflowReplan(state, { revisionId, direction } = {}, now
   if (!state.currentTaskId) {
     result.status = "replanning";
     result.pauseReason = "workflow-replan";
+    result.recoveryGeneration += 1;
+    result.continuation = { kind: "replan", revisionId: id, phase: "pending", reason: "replan-requested" };
   }
   return result;
 }
@@ -87,6 +90,16 @@ export function appendWorkflowReplanDirection(state, direction, now = Date.now()
   const pendingRevision = result.pendingRevision;
   const merged = mergeReplanDirections([pendingRevision.direction, text]);
   pendingRevision.direction = merged;
+  if (result.status === "replanning") {
+    result.recoveryGeneration += 1;
+    result.continuation = {
+      ...result.continuation,
+      kind: "replan",
+      revisionId: pendingRevision.revisionId,
+      handoffId: randomUUID(),
+      phase: "pending",
+    };
+  }
   const revision = result.revisions.find(
     (item) => item.revisionId === pendingRevision.revisionId && item.status === "requested",
   );
@@ -181,8 +194,11 @@ export function applyWorkflowReplan(
     summary: plan.summary,
     constraints: [...plan.constraints],
   };
+  result.planVersion += 1;
+  result.recoveryGeneration += 1;
   result.tasks = activeTasks;
   result.currentTaskId = undefined;
+  delete result.handoff;
   result.nudgeCount = 0;
   delete result.pendingRevision;
   delete result.pauseReason;
@@ -190,9 +206,11 @@ export function applyWorkflowReplan(
   if (result.tasks.every((task) => task.status === "completed")) {
     result.status = "completed";
     result.completedAt = now;
+    delete result.continuation;
   } else {
     result.status = "running";
     delete result.completedAt;
+    result.continuation = { kind: "schedule", phase: "pending", reason: "replan-applied" };
   }
   return result;
 }

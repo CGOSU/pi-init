@@ -48,14 +48,15 @@ import {
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,
-  createWorkflowState,
+  createWorkflowState as createWorkflowStateRaw,
   getNextWorkflowTask,
   getWorkflowTask,
   getWorkflowTaskDuration,
   getWorkflowExecutionBounds,
   getWorkflowExecutionDuration,
   hydrateWorkflowState,
-  markWorkflowTaskStarted,
+  markWorkflowTaskStarted as markWorkflowTaskStartedRaw,
+  setWorkflowHandoffPhase,
   recordWorkflowNudge,
   requestWorkflowReplan,
   appendWorkflowReplanDirection,
@@ -72,6 +73,9 @@ import {
   getRunTimingDuration,
   isExternalRunSource,
 } from "../src/run-timing.js";
+
+const createWorkflowState = (input, now) => createWorkflowStateRaw({ sessionId: "test-session", ...input }, now);
+const markWorkflowTaskStarted = (state, taskId, now) => markWorkflowTaskStartedRaw(state.handoff?.phase === "executing" ? state : setWorkflowHandoffPhase(state, "queued"), taskId, now);
 
 async function withTempDirectory(run) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-"));
@@ -203,6 +207,7 @@ function createExtensionHarness(branch = [], options = {}) {
     },
     async sendMessage(message, options) {
       sentMessages.push({ message, options });
+      branch.push({ type: "custom_message", id: `test-message-${branch.length + 1}`, parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString(), ...message });
     },
     sendUserMessage(message, options) {
       sentUserMessages.push({ message, options });
@@ -297,6 +302,7 @@ function createExtensionHarness(branch = [], options = {}) {
       await options.reload?.();
     },
     sessionManager: {
+      getSessionId: () => options.sessionId ?? "test-session",
       getBranch() {
         return branch;
       },
@@ -331,6 +337,8 @@ async function emitExtensionEvent(harness, name, event = {}) {
     await handler(event, harness.context);
   }
 }
+
+const workflowMessageIdentity = (harness, customType = "pi-init-workflow-task") => harness.sentMessages.findLast(({ message }) => message.customType === customType)?.message.details;
 
 async function assertFastCommandContract() {
   await withTempDirectory(async (directory) => {
@@ -423,20 +431,11 @@ async function runExternalAgent(harness, source, options = {}) {
 }
 
 export {
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  writeFile,
-  os,
-  path,
-  initProjectExtension,
-  installLaunchers,
-  createBillSvg,
-  dateRange,
-  formatDateMinute,
-  formatReport,
-  parseArguments,
+  mkdtemp, mkdir, readFile, rm, writeFile,
+  os, path,
+  initProjectExtension, installLaunchers,
+  createBillSvg, dateRange, formatDateMinute,
+  formatReport, parseArguments,
   PI_USAGE_VERSION,
   queryUsage,
   shouldRefreshUsage,
@@ -493,6 +492,7 @@ export {
   isExternalRunSource,
   withTempDirectory,
   createExtensionHarness,
+  workflowMessageIdentity,
   emitExtensionEvent,
   runExternalAgent,
   assertFastCommandContract,

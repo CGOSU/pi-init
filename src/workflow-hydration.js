@@ -14,6 +14,10 @@ import {
   normalizeTextList,
   normalizeTimestamp,
   normalizeRevisionId,
+  normalizeIdentityToken,
+  normalizePlanVersion,
+  normalizeWorkflowContinuation,
+  normalizeWorkflowHandoff,
   requireTimestamp,
   requireText,
 } from "./workflow-model.js";
@@ -112,7 +116,14 @@ function normalizeHydratedTask(task, index, { allowSuperseded = false } = {}) {
     throw new Error(`已保存的工作流任务 ${id} 的 id 无效`);
   }
   const startedAt = normalizeTimestamp(task.startedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 startedAt`);
+  const executionStartedAt = normalizeTimestamp(task.executionStartedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 executionStartedAt`);
   const completedAt = normalizeTimestamp(task.completedAt, `已保存的工作流任务 ${task.id ?? index + 1} 的 completedAt`);
+  if (task.outcomeUnknown !== undefined && typeof task.outcomeUnknown !== "boolean") {
+    throw new Error(`已保存的工作流任务 ${task.id} 的 outcomeUnknown 必须是布尔值`);
+  }
+  if (task.outcomeUnknown === true && status !== "blocked") {
+    throw new Error(`已保存的工作流任务 ${task.id} outcomeUnknown=true 时必须处于 blocked 状态`);
+  }
   const implementationRationale = task.implementationRationale === undefined
     ? undefined
     : requireText(task.implementationRationale, `已保存的工作流任务 ${task.id ?? index + 1} 的 implementationRationale`);
@@ -133,6 +144,7 @@ function normalizeHydratedTask(task, index, { allowSuperseded = false } = {}) {
     dependsOn: normalizeTextList(task.dependsOn, `已保存的工作流任务 ${task.id} 的 dependsOn`),
     status,
     ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(executionStartedAt !== undefined ? { executionStartedAt } : {}),
     ...(completedAt !== undefined ? { completedAt } : {}),
     ...(implementationRationale !== undefined ? { implementationRationale } : {}),
     ...(supersededAt !== undefined ? { supersededAt } : {}),
@@ -148,7 +160,7 @@ function normalizeHydratedTask(task, index, { allowSuperseded = false } = {}) {
 
 function hydrateWorkflowStateValue(state) {
   const version = state.version ?? 1;
-  if (version !== 1 && version !== 2 && version !== WORKFLOW_STATE_VERSION) {
+  if (version !== 1 && version !== 2 && version !== 3 && version !== WORKFLOW_STATE_VERSION) {
     throw new Error(`不支持的工作流状态版本：${version}`);
   }
   if (!Array.isArray(state.tasks) || state.tasks.length === 0) {
@@ -187,6 +199,13 @@ function hydrateWorkflowStateValue(state) {
   const pendingRevision = state.pendingRevision === undefined
     ? undefined
     : normalizePendingRevision(state.pendingRevision);
+  const legacy = version < WORKFLOW_STATE_VERSION;
+  const workflowId = legacy ? undefined : normalizeIdentityToken(state.workflowId, "已保存的工作流 workflowId");
+  const sessionId = legacy ? undefined : normalizeIdentityToken(state.sessionId, "已保存的工作流 sessionId");
+  const planVersion = legacy ? undefined : normalizePlanVersion(state.planVersion, "已保存的工作流 planVersion");
+  const recoveryGeneration = legacy ? 0 : normalizePlanVersion(state.recoveryGeneration, "已保存的工作流 recoveryGeneration");
+  const handoff = legacy || state.handoff === undefined ? undefined : normalizeWorkflowHandoff(state.handoff);
+  const continuation = legacy ? undefined : normalizeWorkflowContinuation(state.continuation);
   const requestedRevisions = revisions.filter((revision) => revision.status === "requested");
   if (requestedRevisions.length > 1) {
     throw new Error("已保存的工作流包含多个待处理的 revision");
@@ -203,19 +222,49 @@ function hydrateWorkflowStateValue(state) {
   if (pendingRevision && status === "replanning" && state.currentTaskId !== undefined) {
     throw new Error("已保存的工作流重规划状态不能包含进行中的任务");
   }
-  if (pendingRevision && status === "running" && state.currentTaskId === undefined) {
+  if (pendingRevision && status === "running" && state.currentTaskId === undefined
+    && !tasks.some((task) => task.status === "pending")) {
     throw new Error("已保存的工作流运行状态缺少重规划边界任务");
   }
-  if (pendingRevision && ["paused", "completed", "cancelled"].includes(status)) {
+  const allowedPausedRevisionReasons = new Set([
+    "task-blocked",
+    "task-not-completed",
+    "handoff-outcome-unknown",
+    "legacy-execution-outcome-unknown",
+  ]);
+  if (pendingRevision && (status === "completed" || status === "cancelled"
+    || (status === "paused" && !allowedPausedRevisionReasons.has(state.pauseReason)))) {
     throw new Error(`已保存的工作流 ${status} 状态不能包含 pendingRevision`);
   }
   if (status === "replanning" && !pendingRevision) {
     throw new Error("已保存的工作流重规划状态缺少 pendingRevision");
   }
+  const currentTask = state.currentTaskId === undefined
+    ? undefined
+    : tasks.find((task) => task.id === state.currentTaskId);
+  if (state.currentTaskId !== undefined && (!currentTask || currentTask.status !== "in_progress")) {
+    throw Object.assign(new Error("已保存的工作流 currentTaskId 与进行中任务不一致"), { code: "WORKFLOW_HANDOFF_STATE_MISMATCH" });
+  }
+  if (!legacy) {
+    const inProgressTasks = tasks.filter((task) => task.status === "in_progress");
+    if (Boolean(currentTask) !== Boolean(handoff) || inProgressTasks.length !== (currentTask ? 1 : 0)) {
+      throw Object.assign(new Error("已保存的工作流 handoff 与进行中任务不一致"), { code: "WORKFLOW_HANDOFF_STATE_MISMATCH" });
+    }
+    if (handoff && (
+      handoff.workflowId !== workflowId
+      || handoff.planVersion !== planVersion
+      || handoff.sessionId !== sessionId
+      || handoff.recoveryGeneration !== recoveryGeneration
+      || handoff.taskId !== currentTask.id
+    )) throw Object.assign(new Error("已保存的工作流 handoff 身份与当前状态不一致"), { code: "WORKFLOW_HANDOFF_IDENTITY_MISMATCH" });
+  }
 
   return {
     ...state,
     version: WORKFLOW_STATE_VERSION,
+    ...(legacy ? { legacySourceVersion: version } : { workflowId, sessionId, planVersion, recoveryGeneration }),
+    ...(handoff ? { handoff } : {}),
+    ...(continuation ? { continuation } : {}),
     status,
     // Version 1 never delegated work; explicit executor/authority markers are checked by the Result boundary.
     executor: version === 1 ? "local" : normalizeExecutor(state.executor),

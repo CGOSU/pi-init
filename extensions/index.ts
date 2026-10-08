@@ -10,9 +10,7 @@ import {
 } from "../src/roles.js";
 import {
   WORKFLOW_MAX_TASKS,
-  getWorkflowTask,
   isWorkflowActive,
-  markWorkflowTaskStarted,
   appendWorkflowReplanDirection,
   requestWorkflowReplan,
   workflowProgress,
@@ -54,11 +52,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   );
   pi.registerTool(createEditGuardTool());
   let workflowDispatch: WorkflowDispatch;
+  let workflowReport: ReturnType<typeof createWorkflowReport>;
   const workflowMessages = createWorkflowMessages(runtimeState, {
     pi,
     setInternalContinuationPending: (value) => {
       runtimeState.internalContinuationPending = value;
     },
+    persistWorkflowState: (next, ctx) => workflowReport.persistWorkflowState(next, ctx),
   });
   const roleRuntime = createRoleRuntime(pi, runtimeState, {
     getWorkflowState: () => runtimeState.workflowState,
@@ -68,9 +68,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     setInternalContinuationPending: (value) => {
       runtimeState.internalContinuationPending = value;
     },
-    sendWorkflowTaskMessage: (ctx, taskId, note) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note),
-    scheduleWorkflow: (ctx) => workflowDispatch.scheduleWorkflow(ctx),
-    sendWorkflowReplanMessage: (ctx) => workflowMessages.sendWorkflowReplanMessage(ctx),
+    sendWorkflowTaskMessage: (ctx, taskId, note, identity) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note, identity),
+    scheduleWorkflow: (ctx, identity) => workflowDispatch.scheduleWorkflow(ctx, identity),
+    sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
   const runtimeRoutingContext = createRuntimeRoutingContext(runtimeState, {
@@ -81,7 +81,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.on("session_compact", (event, ctx) => roleRuntime.handleSessionCompact(event, ctx));
   pi.on("session_compact_failed", (event, ctx) => roleRuntime.handleSessionCompactFailed(event, ctx));
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
-  const workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
+  workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
     messages: workflowMessages,
@@ -203,15 +203,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     runtimeState.internalContinuationPending = false;
     runTimingDiagnostics.agentStart();
-
-    if (
-      !runtimeState.workflowState ||
-      !runtimeState.workflowState.currentTaskId ||
-      !isWorkflowActive(runtimeState.workflowState)
-    ) return;
-    const task = getWorkflowTask(runtimeState.workflowState, runtimeState.workflowState.currentTaskId);
-    if (!task || task.executionStartedAt !== undefined) return;
-    workflowReport.persistWorkflowState(markWorkflowTaskStarted(runtimeState.workflowState, task.id), ctx);
+    workflowDispatch.markCurrentTaskStarted(ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -328,7 +320,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         }
         if (action === "role") return (await loadControlCenter()).switchRole(tokens[0], ctx);
         if (action === "mode") return (await loadControlCenter()).setSessionMode(tokens[0], ctx);
-        if (action === "workflow") return workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx);
+        if (action === "workflow") {
+      const workflowAction = tokens.shift();
+      const taskId = tokens.shift();
+      return workflowActions.workflowCommand(workflowAction, taskId, ctx, tokens.includes("--confirm-unknown-outcome"));
+    }
         ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");

@@ -1,7 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { normalizeRoleId } from "./roles.js";
 
-export const WORKFLOW_STATE_VERSION = 3;
+export const WORKFLOW_STATE_VERSION = 4;
 export const WORKFLOW_MAX_TASKS = 12;
+export const WORKFLOW_HANDOFF_PHASES = [
+  "prepared",
+  "waiting-role",
+  "compacting",
+  "dispatching",
+  "queued",
+  "executing",
+  "uncertain",
+];
+export const WORKFLOW_CONTINUATION_KINDS = ["schedule", "replan", "review"];
 export const WORKFLOW_MAX_NUDGES = 2;
 export const WORKFLOW_EXECUTORS = ["local"];
 export const WORKFLOW_DELEGATION_STATUSES = [
@@ -94,6 +105,63 @@ export function normalizeRevisionId(value, label) {
   const id = requireText(value, label);
   if (id.length > 128) throw new Error(`${label}过长`);
   return id;
+}
+
+export function normalizeIdentityToken(value, label) {
+  const token = requireText(value, label);
+  if (token.length > 128) throw new Error(`${label}过长`);
+  return token;
+}
+
+export function normalizePlanVersion(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label}必须是非负安全整数`);
+  return value;
+}
+
+export function normalizeWorkflowHandoff(value) {
+  if (!value || typeof value !== "object") throw new Error("已保存的工作流 handoff 格式无效");
+  if (!WORKFLOW_HANDOFF_PHASES.includes(value.phase)) {
+    throw new Error(`已保存的工作流 handoff 阶段无效：${value.phase}`);
+  }
+  return {
+    workflowId: normalizeIdentityToken(value.workflowId, "工作流 handoff 的 workflowId"),
+    planVersion: normalizePlanVersion(value.planVersion, "工作流 handoff 的 planVersion"),
+    taskId: requireText(value.taskId, "工作流 handoff 的 taskId").toLowerCase(),
+    attemptId: normalizeIdentityToken(value.attemptId, "工作流 handoff 的 attemptId"),
+    handoffId: normalizeIdentityToken(value.handoffId, "工作流 handoff 的 handoffId"),
+    sessionId: normalizeIdentityToken(value.sessionId, "工作流 handoff 的 sessionId"),
+    recoveryGeneration: normalizePlanVersion(value.recoveryGeneration, "工作流 handoff 的 recoveryGeneration"),
+    phase: value.phase,
+    createdAt: requireTimestamp(value.createdAt, "工作流 handoff 的 createdAt"),
+    ...(value.startedAt !== undefined ? { startedAt: requireTimestamp(value.startedAt, "工作流 handoff 的 startedAt") } : {}),
+  };
+}
+
+export function normalizeWorkflowContinuation(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || !WORKFLOW_CONTINUATION_KINDS.includes(value.kind)) {
+    throw new Error("已保存的工作流 continuation 格式无效");
+  }
+  if (value.kind === "review") return { kind: "review" };
+  const result = { kind: value.kind };
+  if (value.reason !== undefined) {
+    if (!["plan-created", "task-completed", "replan-applied", "retry", "resume", "replan-requested"].includes(value.reason)) {
+      throw new Error(`已保存的工作流 continuation reason 无效：${value.reason}`);
+    }
+    result.reason = value.reason;
+  }
+  if (value.kind === "replan") {
+    result.revisionId = normalizeRevisionId(value.revisionId, "工作流 continuation 的 revisionId");
+    if (value.handoffId !== undefined) {
+      result.handoffId = normalizeIdentityToken(value.handoffId, "工作流 continuation 的 handoffId");
+    }
+  }
+  const phase = value.phase ?? "pending";
+  if (!(["pending", "compacting", "dispatching", "queued"].includes(phase))) {
+    throw new Error(`已保存的工作流 continuation 阶段无效：${phase}`);
+  }
+  result.phase = phase;
+  return result;
 }
 
 export function normalizeTaskIds(value, label) {
@@ -259,12 +327,19 @@ export function normalizePendingRevision(revision) {
 export function createWorkflowState(input, now = Date.now()) {
   const plan = validateWorkflowPlan(input);
   const executor = normalizeExecutor(input.executor);
+  const workflowId = normalizeIdentityToken(input.workflowId ?? randomUUID(), "工作流 workflowId");
+  const sessionId = normalizeIdentityToken(input.sessionId, "工作流 sessionId");
   return {
     version: WORKFLOW_STATE_VERSION,
+    workflowId,
+    sessionId,
+    planVersion: 0,
+    recoveryGeneration: 0,
     executor,
     authority: executor,
     status: plan.reviewRequired ? "paused" : "running",
     pauseReason: plan.reviewRequired ? "architecture-review" : undefined,
+    continuation: plan.reviewRequired ? { kind: "review" } : { kind: "schedule", phase: "pending", reason: "plan-created" },
     plan: {
       summary: plan.summary,
       constraints: plan.constraints,
@@ -329,12 +404,16 @@ export function cloneState(state, now = Date.now()) {
   return {
     ...state,
     version: WORKFLOW_STATE_VERSION,
+    planVersion: state.planVersion ?? 0,
+    recoveryGeneration: state.recoveryGeneration ?? 0,
     executor,
     authority,
     plan: clonePlan(state.plan),
     tasks: state.tasks.map(cloneTask),
     revisions: (state.revisions ?? []).map(cloneRevision),
     ...(state.pendingRevision ? { pendingRevision: { ...state.pendingRevision } } : {}),
+    ...(state.handoff ? { handoff: { ...state.handoff } } : {}),
+    ...(state.continuation ? { continuation: { ...state.continuation } } : {}),
     updatedAt: now,
   };
 }

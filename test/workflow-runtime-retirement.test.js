@@ -10,6 +10,7 @@ import {
 function localWorkflow() {
   return createWorkflowState({
     summary: "历史工作流",
+    sessionId: "test-session",
     tasks: [{
       id: "prepare",
       task: "准备变更",

@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-10-08：session append/queued handoff 不证明外部操作结果
+
+- 日期：2026-10-08；
+- 现象：Pi 的 `appendEntry` 与 `sendMessage` 都是扩展公开 API 的同步 `void` 调用；即使工作流 entry 已写入或消息已排队，reload 后也不能由 session 数据证明业务操作尚未执行、已完成或可安全重放。
+- 根因：session-level extension data 与外部副作用执行记录是不同持久化层；单靠 Pi turn、branch message 或“queued/started”标记无法提供事务或 exactly-once 证据。
+- 修复：持久化发送意图，按当前 session/branch 和 workflow/plan/recovery/attempt/handoff identity 校验结果；已派发/启动但无业务验收结果时暂停为未知结果，不自动重放；核对后才允许显式确认并创建新 attempt。不得把旧消息文本或 `taskId` 当执行证明。
+- 验证：`node --test test/workflow-core.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/workflow-persistence.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/extension-lifecycle.test.js`，45 项通过。
+
 ### 2026-09-21：纯展示删除不应改写成反向断言
 
 - 日期：2026-09-21；

@@ -7,10 +7,13 @@ import {
   createWorkflowState,
   resumeWorkflow,
   retryWorkflowTask,
+  validateWorkflowHandoffIdentity,
+  validateWorkflowMutationIdentity,
+  validateWorkflowReplanIdentity,
   validateWorkflowPlan,
 } from "../src/workflow.js";
 import { resolveRoleModel, shouldOrchestrateWorkflow, unwrapRoleResult } from "../src/roles.js";
-import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowDispatch } from "./workflow-dispatch.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
@@ -34,6 +37,14 @@ export function createWorkflowActions(
       );
     }
     return new Error("当前没有活动工作流");
+  }
+
+  function requireIdentity(result: { ok: boolean; code?: string; message?: string }) {
+    if (!result.ok) {
+      throw Object.assign(new Error(result.message ?? "工作流执行身份无效"), {
+        code: result.code ?? "WORKFLOW_ACTION_IDENTITY_INVALID",
+      });
+    }
   }
 
   function shouldOrchestrateConfiguredWorkflow(mode: string, taskCount: number) {
@@ -63,6 +74,7 @@ export function createWorkflowActions(
     action: string | undefined,
     taskId: string | undefined,
     ctx: ExtensionCommandContext,
+    confirmUnknownOutcome = false,
   ) {
     if (action === undefined || action === "status") {
       await deps.report.showWorkflowProgress(ctx);
@@ -94,7 +106,7 @@ export function createWorkflowActions(
         return;
       }
       if (action === "retry") {
-        deps.report.persistWorkflowState(retryWorkflowTask(state.workflowState, taskId), ctx);
+        deps.report.persistWorkflowState(retryWorkflowTask(state.workflowState, taskId, undefined, { confirmUnknownOutcome }), ctx);
         await deps.dispatch.scheduleWorkflow(ctx);
         return;
       }
@@ -105,7 +117,7 @@ export function createWorkflowActions(
         ctx.ui.notify("工作流已取消。", "info");
         return;
       }
-      ctx.ui.notify("用法：/pi-init workflow [status|resume|retry <taskId>|cancel]", "error");
+      ctx.ui.notify("用法：/pi-init workflow [status|resume|retry <taskId> [--confirm-unknown-outcome]|cancel]", "error");
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
     }
@@ -122,7 +134,9 @@ export function createWorkflowActions(
     if (params.action !== "status" && !ctx.isProjectTrusted()) {
       throw new Error("task_workflow 仅允许在受信任项目中运行；请先信任当前项目");
     }
-    if (params.action !== "status" && state.workflowRestoreError) {
+    const mayStartFreshSessionWorkflow = params.action === "plan"
+      && state.workflowRestoreError?.code === "WORKFLOW_SESSION_MISMATCH";
+    if (params.action !== "status" && state.workflowRestoreError && !mayStartFreshSessionWorkflow) {
       throw missingWorkflowError();
     }
 
@@ -159,13 +173,23 @@ export function createWorkflowActions(
           };
         }
 
-        const next = createWorkflowState({ ...plan, executor: "local" });
+        const next = createWorkflowState({
+          ...plan,
+          executor: "local",
+          sessionId: ctx.sessionManager.getSessionId(),
+        });
         deps.report.persistWorkflowState(next, ctx);
+        const identity: WorkflowActionIdentity = {
+          workflowId: next.workflowId,
+          planVersion: next.planVersion,
+          sessionId: next.sessionId,
+          recoveryGeneration: next.recoveryGeneration,
+        };
         if (next.status === "paused") {
           ctx.ui.notify("架构规划已保存，等待用户审阅。审阅后执行 /pi-init workflow resume。", "info");
-          if (state.pendingRoleCompaction) state.pendingRoleCompaction.continuation = { kind: "workflow-review" };
+          if (state.pendingRoleCompaction) state.pendingRoleCompaction.continuation = { kind: "workflow-review", identity };
         } else if (state.pendingRoleCompaction) {
-          state.pendingRoleCompaction.continuation = { kind: "workflow-schedule" };
+          state.pendingRoleCompaction.continuation = { kind: "workflow-schedule", identity };
         }
         return {
           content: [{ type: "text", text: `已保存架构规划。\n${deps.report.formatWorkflowState(next)}${next.status === "paused" ? "\n\n当前按用户要求暂停，审阅后再执行。" : "\n\n将自动切换到第一个任务。"}` }],
@@ -193,6 +217,7 @@ export function createWorkflowActions(
           tasks: params.tasks,
         });
         assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
+        requireIdentity(validateWorkflowReplanIdentity(state.workflowState, params, ctx));
         const next = applyWorkflowReplan(state.workflowState, {
           revisionId: params.revisionId,
           summary: params.summary,
@@ -210,7 +235,8 @@ export function createWorkflowActions(
       }
       case "complete": {
         if (!state.workflowState) throw missingWorkflowError();
-        const taskId = params.taskId ?? state.workflowState.currentTaskId;
+        requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
+        const taskId = params.taskId;
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
@@ -228,7 +254,6 @@ export function createWorkflowActions(
           ? deps.report.formatWorkflowCompletion(next, completedTask)
           : taskCompletionReport;
         deps.report.persistWorkflowState(next, ctx);
-        state.workflowTaskCompactionPending = next.status !== "completed";
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : next.status === "replanning" ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。" : "下一任务将自动开始。"}` }],
           details: next,
@@ -237,7 +262,8 @@ export function createWorkflowActions(
       }
       case "block": {
         if (!state.workflowState) throw missingWorkflowError();
-        const taskId = params.taskId ?? state.workflowState.currentTaskId;
+        requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
+        const taskId = params.taskId;
         const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
@@ -245,6 +271,7 @@ export function createWorkflowActions(
       }
       case "resume": {
         if (!state.workflowState) throw missingWorkflowError();
+        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
         if (state.workflowState.status === "replanning") {
           await deps.dispatch.scheduleWorkflow(ctx);
           return {
@@ -274,12 +301,16 @@ export function createWorkflowActions(
       }
       case "retry": {
         if (!state.workflowState) throw missingWorkflowError();
-        const next = retryWorkflowTask(state.workflowState, params.taskId);
+        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
+        const next = retryWorkflowTask(state.workflowState, params.taskId, undefined, {
+          confirmUnknownOutcome: params.confirmUnknownOutcome === true,
+        });
         deps.report.persistWorkflowState(next, ctx);
         return { content: [{ type: "text", text: `任务 ${params.taskId ?? ""} 已重新排队，工作流将自动继续。` }], details: next, terminate: true };
       }
       case "cancel": {
         if (!state.workflowState) throw missingWorkflowError();
+        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
         const next = cancelWorkflow(state.workflowState);
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;

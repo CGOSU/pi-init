@@ -57,6 +57,8 @@ metadata:
 - 活动工作流的普通方向变更在当前任务边界合并为一个 revision；应用新计划前不得启动旧后续任务。
 - pi-init 工作流仅支持当前主会话内 local 顺序执行；缺省及旧 `workflowExecutor: "local"` 配置可用。旧 `runtime` 配置和 Runtime executor/authority 状态返回结构化退役错误，不会回退、自动恢复或改写 session entry。
 - `task_workflow` 是唯一的规划、依赖、验收、阻塞和重规划状态机；Agent 完成、进程退出或返回文本都不自动等于任务验收完成。
+- 工作流记录通过 Pi Extension API 的 `appendEntry` 保存到当前 session，并从活动 branch 恢复；这不是 AgentHarness durable operation 集成，不能保证事务/fsync 或外部副作用 exactly-once。任务 `complete`/`block` 必须匹配当前 `workflowId`、`planVersion`、`sessionId`、`recoveryGeneration`、`taskId`、`attemptId` 和 `handoffId`；`replan` 必须匹配当前基础身份、`revisionId` 和 `handoffId`。只使用当前交接提示提供的身份，不得从任务文本补齐，旧 branch/attempt/revision 结果必须拒绝。
+- 恢复时仅未派发的准备阶段可安全续接；已派发/启动但无业务结果的任务按结果未知暂停，禁止自动重放。核对可能的外部副作用后，显式 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 才能创建新 attempt；legacy `in_progress` 缺少身份时同样转为需核对状态，旧 session entry 不原地改写，已退役 Runtime 状态继续 fail-closed。
 
 ## 交付
 

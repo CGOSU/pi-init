@@ -47,6 +47,7 @@ const {
   cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
+  workflowMessageIdentity,
   getNextWorkflowTask,
   getWorkflowTask,
   getWorkflowTaskDuration,
@@ -220,11 +221,12 @@ test("工作流允许未映射的标准角色并拒绝未启用的自定义角�
 
     const inputHandler = harness.handlers.get("input")[0];
     await inputHandler({ source: "interactive", text: "改为 reviewer 角色" }, harness.context);
-    const revisionId = harness.entries.at(-1).data.pendingRevision.revisionId;
+    await emitExtensionEvent(harness, "agent_settled"); const replanIdentity = workflowMessageIdentity(harness, "pi-init-workflow-replan");
     await assert.rejects(
       workflow.execute("replan", {
+        ...replanIdentity,
         action: "replan",
-        revisionId,
+        revisionId: replanIdentity.revisionId,
         summary: "改用 reviewer",
         tasks: [{ id: "review", role: "reviewer", task: "执行评审", files: ["src/review.js"], acceptanceCriteria: ["评审完成"] }],
       }, undefined, undefined, harness.context),
@@ -234,8 +236,9 @@ test("工作流允许未映射的标准角色并拒绝未启用的自定义角�
     config.roleModels.reviewer = { provider: reviewer.provider, model: reviewer.id, thinkingLevel: "high" };
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     const applied = await workflow.execute("replan", {
+      ...replanIdentity,
       action: "replan",
-      revisionId,
+      revisionId: replanIdentity.revisionId,
       summary: "改用 reviewer",
       tasks: [{ id: "review", role: "reviewer", task: "执行评审", files: ["src/review.js"], acceptanceCriteria: ["评审完成"] }],
     }, undefined, undefined, harness.context);
@@ -282,7 +285,7 @@ test("无映射角色切换遇到 Pi 已完成的自动压缩时不重复压缩"
 
   assert.equal(compactCalls, 0);
   assert.equal(harness.context.model.id, architectModel.id);
-  assert.equal(harness.branch.at(-1).type, "custom");
+  assert.equal(harness.branch.at(-1).type, "custom_message");
   assert.equal(harness.entries.at(-1).data.status, "acknowledged");
 });
 

@@ -5,14 +5,16 @@ import {
   completeWorkflowTask,
   createWorkflowState,
   markWorkflowTaskStarted,
+  setWorkflowHandoffPhase,
   startWorkflowTask,
 } from "../src/workflow.js";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
-import { createExtensionHarness, emitExtensionEvent, withTempDirectory } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent, workflowMessageIdentity, withTempDirectory } from "./helpers.js";
 
-function createActiveWorkflow() {
+function createCompletedWorkflow() {
   const plan = createWorkflowState({
     summary: "报告格式测试",
+    sessionId: "test-session",
     tasks: [
       { id: "completed", task: "已完成任务的长描述", files: ["src/completed.js"], acceptanceCriteria: ["完成"] },
       { id: "blocked", task: "被阻塞任务", files: ["src/blocked.js"], acceptanceCriteria: ["解除阻塞"] },
@@ -20,7 +22,11 @@ function createActiveWorkflow() {
     ],
   }, 100);
   const completed = completeWorkflowTask(
-    markWorkflowTaskStarted(startWorkflowTask(plan, "completed", 110), "completed", 111),
+    markWorkflowTaskStarted(
+      setWorkflowHandoffPhase(startWorkflowTask(plan, "completed", 110), "queued"),
+      "completed",
+      111,
+    ),
     {
       taskId: "completed",
       completionSummary: "重复展示时应隐藏的完整完成摘要",
@@ -29,7 +35,15 @@ function createActiveWorkflow() {
     },
     120,
   );
-  return markWorkflowTaskStarted(startWorkflowTask(completed, "blocked", 130), "blocked", 131);
+  return completed;
+}
+
+function createActiveWorkflow() {
+  return markWorkflowTaskStarted(
+    setWorkflowHandoffPhase(startWorkflowTask(createCompletedWorkflow(), "blocked", 130), "queued"),
+    "blocked",
+    131,
+  );
 }
 
 function createBlockedHistory() {
@@ -62,13 +76,15 @@ test("暂停摘要精简已完成任务内容且保留全部真实阻塞原因�
 
 test("block 工具结果精简且不会再发出重复阻塞通知", async () => {
   await withTempDirectory(async (directory) => {
-    const active = createActiveWorkflow();
+    const active = createCompletedWorkflow();
     const harness = createExtensionHarness([
       { type: "custom", customType: "pi-init-workflow", data: active },
     ], { cwd: directory, trusted: true });
     await emitExtensionEvent(harness, "session_start");
+    await emitExtensionEvent(harness, "agent_start");
     const taskWorkflow = harness.tools.find((tool) => tool.name === "task_workflow");
     const result = await taskWorkflow.execute("block-test", {
+      ...workflowMessageIdentity(harness),
       action: "block",
       taskId: "blocked",
       reason: "缺少产品决策",

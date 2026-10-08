@@ -4,7 +4,7 @@ import * as helpers from "./helpers.js";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
-const { createExtensionHarness, createWorkflowState, emitExtensionEvent, markWorkflowTaskStarted, startWorkflowTask, withTempDirectory, mkdir, path, writeFile } = helpers;
+const { createExtensionHarness, createWorkflowState, emitExtensionEvent, workflowMessageIdentity, startWorkflowTask, withTempDirectory, mkdir, path, writeFile } = helpers;
 
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
@@ -31,8 +31,9 @@ async function writeWorkflowConfig(directory) {
   );
 }
 
-function completeParams() {
+function completeParams(harness) {
   return {
+    ...workflowMessageIdentity(harness),
     action: "complete",
     taskId: "first",
     completionSummary: "第一项完成",
@@ -93,10 +94,10 @@ test("完成状态写入失败不返回成功或派发后续任务", async () =>
   await withTempDirectory(async (directory) => {
     await writeWorkflowConfig(directory);
     let failAppend = false;
-    const initial = markWorkflowTaskStarted(
-      startWorkflowTask(createWorkflowState({ summary: "完成写入失败", tasks: tasks(), executor: "local" }, 100), "first", 110),
+    const initial = startWorkflowTask(
+      createWorkflowState({ summary: "完成写入失败", tasks: tasks(), executor: "local" }, 100),
       "first",
-      111,
+      110,
     );
     const branch = [{ type: "custom", customType: "pi-init-workflow", data: initial }];
     const harness = createExtensionHarness(branch, {
@@ -109,12 +110,13 @@ test("完成状态写入失败不返回成功或派发后续任务", async () =>
       },
     });
     await emitExtensionEvent(harness, "session_start");
+    await emitExtensionEvent(harness, "agent_start");
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
     const beforeDispatchCount = harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length;
     failAppend = true;
 
     await assert.rejects(
-      workflow.execute("complete-first", completeParams(), undefined, undefined, harness.context),
+      workflow.execute("complete-first", completeParams(harness), undefined, undefined, harness.context),
       /session entry 写入失败/,
     );
 

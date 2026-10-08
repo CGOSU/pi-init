@@ -1,6 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getWorkflowTask } from "../src/workflow.js";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import {
+  cloneState,
+  getWorkflowTask,
+  markWorkflowTaskOutcomeUnknown,
+  setWorkflowHandoffPhase,
+  workflowHandoffIdentity,
+} from "../src/workflow.js";
+import type {
+  ExtensionRuntimeState,
+  WorkflowHandoffIdentity,
+  WorkflowReplanIdentity,
+  WorkflowState,
+} from "./runtime-state.ts";
 import { textOf } from "./runtime-state.ts";
 
 const GENERIC_TASK_TOOL_GUIDANCE = "遵循公共 pi-init-role-routing Skill 的读写与安全边界；只修改当前任务允许范围，遇到需求或架构疑问交回 architect，实际验证并报告真实结果。";
@@ -27,15 +38,16 @@ function taskDirectionGuidance(role: string) {
     : "如果用户在本工作流期间提出会改变后续方向或新增后续工作的普通描述，不要自行派发旧计划的下一任务；扩展会先记录重规划请求，当前任务完成后交给架构师重规划。若必须立即停止当前任务，使用现有 cancel 流程。";
 }
 
-function taskCompletionGuidance(role: string, taskId: string) {
+function taskCompletionGuidance(role: string, identity: WorkflowHandoffIdentity) {
   return role === "architect"
     ? "架构师不直接执行或验证任务，不得调用 task_workflow 的 complete、block、resume、retry、cancel；仅可使用 plan、replan、status，或通过 switch_role 将执行交给对应角色。"
-    : `完成并实际验证后，必须调用 task_workflow(action="complete", taskId="${taskId}", completionSummary=..., implementationRationale=..., verification=[...])。implementationRationale 说明为什么采用该实现及关键取舍，不要重复 completionSummary；verification 只能填写实际执行过的命令和结果。若无法继续，调用 task_workflow(action="block", taskId="${taskId}", reason=...)，不要伪造完成。`;
+    : `完成并实际验证后，必须调用 task_workflow(action="complete", workflowId="${identity.workflowId}", planVersion=${identity.planVersion}, sessionId="${identity.sessionId}", recoveryGeneration=${identity.recoveryGeneration}, taskId="${identity.taskId}", attemptId="${identity.attemptId}", handoffId="${identity.handoffId}", completionSummary=..., implementationRationale=..., verification=[...])。implementationRationale 说明为什么采用该实现及关键取舍，不要重复 completionSummary；verification 只能填写实际执行过的命令和结果。若无法继续，调用 task_workflow(action="block", 并原样提供上述全部身份字段, reason=...)，不要伪造完成。`;
 }
 
 export type WorkflowMessageDependencies = {
   pi: ExtensionAPI;
   setInternalContinuationPending: (value: boolean) => void;
+  persistWorkflowState: (next: WorkflowState, ctx: ExtensionContext) => WorkflowState;
 };
 
 export function createWorkflowMessages(
@@ -47,6 +59,8 @@ export function createWorkflowMessages(
     if (!workflowState) throw new Error("当前没有活动工作流");
     const task = getWorkflowTask(workflowState, taskId);
     if (!task) throw new Error(`工作流任务不存在：${taskId}`);
+    const identity = workflowHandoffIdentity(workflowState);
+    if (!identity || identity.taskId !== taskId) throw new Error(`任务 ${taskId} 缺少活动交接身份`);
     const completed = workflowState.tasks
       .filter((item) => item.status === "completed")
       .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}`);
@@ -57,6 +71,7 @@ export function createWorkflowMessages(
       workflowState.plan.constraints.length > 0 ? `架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `已完成任务：\n${completed.join("\n")}` : "",
       `当前任务（${task.id}，角色 ${task.role}）：${task.task}`,
+      `当前执行身份：workflowId=${identity.workflowId}；planVersion=${identity.planVersion}；sessionId=${identity.sessionId}；recoveryGeneration=${identity.recoveryGeneration}；attemptId=${identity.attemptId}；handoffId=${identity.handoffId}`,
       `允许涉及的文件或目录：${task.files.join(", ")}`,
       `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
       taskRoleGuidance(task.role),
@@ -65,31 +80,76 @@ export function createWorkflowMessages(
 
       taskDirectionGuidance(task.role),
       "除非遇到真正阻塞的需求、权限、凭据、破坏性操作或必须由用户决定的产品取舍，不要询问用户；做合理假设并记录。",
-      taskCompletionGuidance(task.role, task.id),
+      taskCompletionGuidance(task.role, identity),
     ].filter(Boolean).join("\n\n");
   }
 
-  function sendWorkflowTaskMessage(ctx: ExtensionContext, taskId: string, note?: string) {
-    if (!state.workflowState || state.workflowState.currentTaskId !== taskId) return;
-    state.workflowDispatchInFlight = false;
+  function sendWorkflowTaskMessage(
+    ctx: ExtensionContext,
+    taskId: string,
+    note?: string,
+    expectedIdentity?: WorkflowHandoffIdentity,
+  ) {
+    const current = state.workflowState;
+    const identity = current ? workflowHandoffIdentity(current) : undefined;
+    if (!current || current.currentTaskId !== taskId || !identity
+      || (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowHandoffIdentity] === expectedIdentity[key as keyof WorkflowHandoffIdentity]))) {
+      return false;
+    }
+    const firstDispatch = ["prepared", "waiting-role", "compacting"].includes(current.handoff?.phase ?? "");
+    if (!firstDispatch && !["executing"].includes(current.handoff?.phase ?? "")) return false;
+    let dispatchAttempted = false;
     try {
+      if (firstDispatch) {
+        deps.persistWorkflowState(setWorkflowHandoffPhase(current, "dispatching"), ctx);
+      }
       deps.setInternalContinuationPending(true);
+      dispatchAttempted = true;
       deps.pi.sendMessage(
         {
           customType: "pi-init-workflow-task",
           content: workflowTaskPrompt(taskId, note),
           display: false,
-          details: { taskId },
+          details: identity,
         },
         { triggerTurn: true },
       );
+      if (firstDispatch
+        && state.workflowState?.handoff?.handoffId === identity.handoffId
+        && state.workflowState.handoff.phase === "dispatching") {
+        deps.persistWorkflowState(setWorkflowHandoffPhase(state.workflowState, "queued"), ctx);
+      }
+      return true;
     } catch (error) {
       deps.setInternalContinuationPending(false);
-      ctx.ui.notify(`无法自动进入任务 ${taskId}：${textOf(error)}`, "error");
+      const latest = state.workflowState;
+      const outcomeUnknown = firstDispatch && dispatchAttempted
+        && latest?.handoff?.phase === "dispatching"
+        && latest.handoff.handoffId === identity.handoffId;
+      if (outcomeUnknown && latest) {
+        const unknown = markWorkflowTaskOutcomeUnknown(latest, {
+          taskId,
+          reason: `派发任务消息后无法确认交接状态：${textOf(error)}`,
+        });
+        try {
+          deps.persistWorkflowState(unknown, ctx);
+        } catch (persistError) {
+          ctx.ui.notify(`任务 ${taskId} 的执行结果未知，且无法持久化暂停状态：${textOf(persistError)}；不会自动重放`, "error");
+        }
+      }
+      const failureMessage = outcomeUnknown
+        ? `无法确认任务 ${taskId} 的交接结果；结果未知，不会自动重放。${textOf(error)}`
+        : !dispatchAttempted
+          ? `无法持久化任务 ${taskId} 的派发状态；任务消息尚未发送。${textOf(error)}`
+          : `任务 ${taskId} 的状态已变化或提醒消息发送失败；未伪造完成或自动重放。${textOf(error)}`;
+      ctx.ui.notify(failureMessage, "error");
+      return false;
+    } finally {
+      state.workflowDispatchInFlight = false;
     }
   }
 
-  function workflowReplanPrompt() {
+  function workflowReplanPrompt(identity: WorkflowReplanIdentity) {
     const workflowState = state.workflowState;
     const request = workflowState?.pendingRevision;
     if (!workflowState || !request) throw new Error("工作流缺少待处理的重规划请求");
@@ -102,6 +162,7 @@ export function createWorkflowMessages(
 
     return [
       "[PI-INIT 工作流重规划]",
+      `当前重规划身份：workflowId=${identity.workflowId}；planVersion=${identity.planVersion}；sessionId=${identity.sessionId}；recoveryGeneration=${identity.recoveryGeneration}；revisionId=${identity.revisionId}；handoffId=${identity.handoffId}`,
       `工作流当前 revisionId：${request.revisionId}`,
       `用户新增方向或需求（按提交顺序合并的全部指令）：\n${request.direction.split("\n").map((item) => `- ${item}`).join("\n")}`,
       `当前工作流目标：${workflowState.plan.summary}`,
@@ -111,29 +172,54 @@ export function createWorkflowMessages(
       "规划边界：architect 不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；需要最新实现、直接调用方或测试证据时，先 switch_role 到 docs-commit，由 docs-commit 核对后再交回 architect 规划。architect 不得自行完成低风险只读检查。",
       "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。",
       "若只是新增后续工作，把仍有效的旧任务 ID 放入 retainTaskIds；新增 tasks 必须使用从未出现过的新 ID。若替换旧任务，不要把被替换任务 ID 放进新 tasks，也不要让新任务依赖被替换任务。",
-      `规划完成后，必须调用 task_workflow(action="replan", revisionId="${request.revisionId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,
+      `规划完成后，必须调用 task_workflow(action="replan", workflowId="${identity.workflowId}", planVersion=${identity.planVersion}, sessionId="${identity.sessionId}", recoveryGeneration=${identity.recoveryGeneration}, revisionId="${request.revisionId}", handoffId="${identity.handoffId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,
       "不要调用 complete、block 或 cancel 来代替 replan；如果无法形成可靠的新计划，说明真正阻塞原因并保持当前重规划状态。",
     ].filter(Boolean).join("\n\n");
   }
 
-  function sendWorkflowReplanMessage(ctx: ExtensionContext) {
-    const workflowState = state.workflowState;
-    if (!workflowState || workflowState.status !== "replanning" || !workflowState.pendingRevision) return;
-    state.workflowDispatchInFlight = false;
+  function sendWorkflowReplanMessage(ctx: ExtensionContext, expectedIdentity?: WorkflowReplanIdentity) {
+    const current = state.workflowState;
+    const continuation = current?.continuation;
+    const revision = current?.pendingRevision;
+    if (!current || current.status !== "replanning" || !revision || continuation?.kind !== "replan" || !continuation.handoffId) return false;
+    const identity: WorkflowReplanIdentity = {
+      workflowId: current.workflowId,
+      planVersion: current.planVersion,
+      sessionId: current.sessionId,
+      recoveryGeneration: current.recoveryGeneration,
+      revisionId: revision.revisionId,
+      handoffId: continuation.handoffId,
+    };
+    if (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowReplanIdentity] === expectedIdentity[key as keyof WorkflowReplanIdentity])) return false;
     try {
+      if (continuation.phase !== "dispatching" && continuation.phase !== "queued") {
+        const dispatching = cloneState(current);
+        dispatching.continuation = { ...continuation, phase: "dispatching" };
+        deps.persistWorkflowState(dispatching, ctx);
+      }
       deps.setInternalContinuationPending(true);
       deps.pi.sendMessage(
         {
           customType: "pi-init-workflow-replan",
-          content: workflowReplanPrompt(),
+          content: workflowReplanPrompt(identity),
           display: false,
-          details: { revisionId: workflowState.pendingRevision.revisionId },
+          details: identity,
         },
         { triggerTurn: true },
       );
+      const latest = state.workflowState;
+      if (latest?.continuation?.kind === "replan" && latest.continuation.handoffId === identity.handoffId) {
+        const queued = cloneState(latest);
+        queued.continuation = { ...latest.continuation, phase: "queued" };
+        deps.persistWorkflowState(queued, ctx);
+      }
+      return true;
     } catch (error) {
       deps.setInternalContinuationPending(false);
-      ctx.ui.notify(`无法自动进入架构重规划：${textOf(error)}`, "error");
+      ctx.ui.notify(`无法确认架构重规划交接：${textOf(error)}；不会伪造派发成功`, "error");
+      return false;
+    } finally {
+      state.workflowDispatchInFlight = false;
     }
   }
 

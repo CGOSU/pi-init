@@ -23,7 +23,15 @@ import {
   workflowProgress,
 } from "../src/workflow.js";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
-import { activeRoleMatches, textOf, type ExtensionRuntimeState, type WorkflowState } from "./runtime-state.ts";
+import {
+  activeRoleMatches,
+  textOf,
+  type ExtensionRuntimeState,
+  type WorkflowActionIdentity,
+  type WorkflowHandoffIdentity,
+  type WorkflowReplanIdentity,
+  type WorkflowState,
+} from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
 
@@ -31,9 +39,9 @@ export type RoleRuntimeDependencies = {
   getWorkflowState: () => WorkflowState | undefined;
   setWorkflowDispatchInFlight: (value: boolean) => void;
   setInternalContinuationPending: (value: boolean) => void;
-  sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string) => void;
-  scheduleWorkflow: (ctx: ExtensionContext) => Promise<void>;
-  sendWorkflowReplanMessage: (ctx: ExtensionContext) => void;
+  sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: WorkflowHandoffIdentity) => void;
+  scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity) => Promise<void>;
+  sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
   acknowledgeRoleRecovery: (role: string) => void;
 };
 

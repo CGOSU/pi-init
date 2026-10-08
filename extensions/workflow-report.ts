@@ -23,14 +23,15 @@ const VERIFICATION_NO_FAILURE_PATTERN = /(?:\b0\s+(?:fail(?:ed|ure)?s?|errors?|e
 function isVerificationFailure(value: string) {
   return VERIFICATION_FAILURE_PATTERN.test(value) && !VERIFICATION_NO_FAILURE_PATTERN.test(value);
 }
-
 function getWorkflowBlockDetails(workflowState: WorkflowState) {
   return workflowState.tasks
     .filter((task) => task.status === "blocked")
     .map((task) => ({
       taskId: task.id,
       reason: task.blockReason ?? "未记录（历史状态未保存阻塞原因）",
-      suggestion: `先解决该原因，然后执行 /pi-init workflow retry ${task.id}；如果需求或方案已改变，请让架构师通过 task_workflow(action="replan") 重规划。`,
+      suggestion: task.outcomeUnknown
+        ? `先核对是否已产生外部副作用，再显式执行 /pi-init workflow retry ${task.id} --confirm-unknown-outcome；如果需求或方案已改变，请让架构师重规划。`
+        : `先解决该原因，然后执行 /pi-init workflow retry ${task.id}；如果需求或方案已改变，请让架构师通过 task_workflow(action="replan") 重规划。`,
     }));
 }
 
@@ -40,7 +41,6 @@ function formatWorkflowBlockLines(workflowState: WorkflowState) {
     `建议解决方法：${suggestion}`,
   ]);
 }
-
 function formatVerification(verification: string[] | undefined) {
   const failures = verification?.filter(isVerificationFailure) ?? [];
   return failures.length > 0 ? `验证：${failures.join("；")}` : undefined;
@@ -159,7 +159,7 @@ export function createWorkflowReport(
     if (!workflowState) return state.workflowRestoreError ? `无法恢复已保存的工作流（${state.workflowRestoreError.code}）：${state.workflowRestoreError.message}` : "当前没有活动工作流。";
     const progress = workflowProgress(workflowState);
     const lines = [
-      `状态：${workflowState.status}`,
+      `状态：${workflowState.status} · workflowId：${workflowState.workflowId} · planVersion：${workflowState.planVersion} · recoveryGeneration：${workflowState.recoveryGeneration} · sessionId：${workflowState.sessionId}`,
       `阶段：${workflowActivityLabel(workflowState)}`,
       `进度：${progress.completed}/${progress.total}`,
       `总任务开始时间：${formatWorkflowTimestamp(getWorkflowExecutionBounds(workflowState).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
@@ -167,6 +167,7 @@ export function createWorkflowReport(
       `规划：${workflowState.plan.summary}`,
     ];
     if (workflowState.currentTaskId) lines.push(`当前任务：${workflowState.currentTaskId}`);
+    if (workflowState.handoff) lines.push(`handoff：${workflowState.handoff.handoffId} · attempt：${workflowState.handoff.attemptId} · 阶段：${workflowState.handoff.phase}`);
     if (workflowState.pauseReason) {
       lines.push(`暂停原因：${workflowState.pauseReason}${workflowState.taskPauseReason ? ` · ${workflowState.taskPauseReason}` : ""}`);
     }
@@ -202,12 +203,13 @@ export function createWorkflowReport(
         const progress = current ? workflowProgress(current) : undefined;
         summary.setText(theme.fg("text", current
           ? [
-              `状态  ${statusLabel}`,
+              `状态  ${statusLabel} · workflowId  ${current.workflowId} · planVersion  ${current.planVersion} · recoveryGeneration  ${current.recoveryGeneration}`,
               `进度  ${progress?.completed ?? 0}/${progress?.total ?? 0}`,
               `总任务开始时间  ${formatWorkflowTimestamp(getWorkflowExecutionBounds(current).startedAt, "不可用（工作流未记录有效的开始时间）")}`,
               `总任务已运行时间  ${formatWorkflowElapsedDuration(current)}`,
               `规划  ${current.plan.summary}`,
               ...(current.currentTaskId ? [`当前任务  ${current.currentTaskId}`] : []),
+              ...(current.handoff ? [`handoff  ${current.handoff.handoffId} · attempt  ${current.handoff.attemptId} · ${current.handoff.phase}`] : []),
               ...(current.pauseReason ? [`暂停原因  ${current.pauseReason}${current.taskPauseReason ? ` · ${current.taskPauseReason}` : ""}`] : []),
               ...getWorkflowBlockDetails(current).flatMap(({ taskId, reason, suggestion }) => [
                 `阻塞原因  任务 ${taskId} · ${reason}`,

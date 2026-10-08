@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   WORKFLOW_MAX_NUDGES,
   cloneState,
@@ -32,7 +33,27 @@ export function startWorkflowTask(state, taskId, now = Date.now()) {
   delete task.startedAt;
   delete task.executionStartedAt;
   result.currentTaskId = task.id;
+  result.handoff = {
+    workflowId: result.workflowId,
+    planVersion: result.planVersion,
+    taskId: task.id,
+    attemptId: randomUUID(),
+    handoffId: randomUUID(),
+    sessionId: result.sessionId,
+    recoveryGeneration: result.recoveryGeneration,
+    phase: "prepared",
+    createdAt: now,
+  };
+  delete result.continuation;
   result.nudgeCount = 0;
+  return result;
+}
+
+export function setWorkflowHandoffPhase(state, phase, now = Date.now()) {
+  if (!state?.handoff) throw new Error("工作流没有活动 handoff");
+  const result = cloneState(state, now);
+  result.handoff.phase = phase;
+  if (phase === "executing" && result.handoff.startedAt === undefined) result.handoff.startedAt = now;
   return result;
 }
 
@@ -46,9 +67,17 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
   if (!task || task.status !== "in_progress") {
     throw new Error(`任务 ${taskId} 当前不在执行中`);
   }
-  if (task.executionStartedAt !== undefined) return state;
+  if (!state.handoff || state.handoff.taskId !== taskId) {
+    throw new Error("当前任务缺少可验证的 handoff 身份");
+  }
+  if (!["dispatching", "queued", "executing"].includes(state.handoff.phase)) {
+    throw new Error(`工作流 handoff 尚未派发：${state.handoff.phase}`);
+  }
+  if (state.handoff.phase === "executing" && task.executionStartedAt !== undefined) return state;
 
   const result = cloneState(state, now);
+  result.handoff.phase = "executing";
+  result.handoff.startedAt ??= now;
   const startedTask = getWorkflowTask(result, taskId);
   startedTask.startedAt = now;
   startedTask.executionStartedAt = now;
@@ -85,17 +114,42 @@ export function completeWorkflowTask(
   task.verification = checks;
   task.completedAt = now;
   result.currentTaskId = undefined;
+  delete result.handoff;
+  result.recoveryGeneration += 1;
   result.nudgeCount = 0;
   if (result.pendingRevision) {
     result.status = "replanning";
     result.pauseReason = "workflow-replan";
+    result.continuation = { kind: "replan", revisionId: result.pendingRevision.revisionId, phase: "pending", reason: "task-completed" };
     delete result.completedAt;
   } else if (result.tasks.every((item) => item.status === "completed")) {
     result.status = "completed";
     result.completedAt = now;
+    delete result.continuation;
   } else {
     delete result.completedAt;
+    result.continuation = { kind: "schedule", phase: "pending", reason: "task-completed" };
   }
+  return result;
+}
+
+export function markWorkflowTaskOutcomeUnknown(state, { taskId, reason }, now = Date.now()) {
+  if (!state || state.status !== "running" || state.currentTaskId !== taskId) {
+    throw new Error(`只能暂停当前任务 ${state?.currentTaskId ?? "（无）"} 的未知交接结果`);
+  }
+  const result = cloneState(state, now);
+  const task = getWorkflowTask(result, taskId);
+  task.status = "blocked";
+  task.outcomeUnknown = true;
+  task.blockReason = requireText(reason, "未知执行结果原因");
+  result.currentTaskId = undefined;
+  delete result.handoff;
+  delete result.continuation;
+  result.recoveryGeneration += 1;
+  result.status = "paused";
+  result.pauseReason = "handoff-outcome-unknown";
+  result.taskPauseReason = `任务 ${taskId} 的交接结果未知`;
+  result.nudgeCount = 0;
   return result;
 }
 
@@ -110,19 +164,29 @@ export function blockWorkflowTask(state, { taskId, reason }, now = Date.now()) {
   task.status = "blocked";
   task.blockReason = requireText(reason, "任务阻塞原因");
   result.currentTaskId = undefined;
+  delete result.handoff;
+  delete result.continuation;
+  result.recoveryGeneration += 1;
   result.status = "paused";
-  result.pauseReason = "task-blocked";
+  result.pauseReason = task.outcomeUnknown ? "handoff-outcome-unknown" : "task-blocked";
   result.nudgeCount = 0;
   return result;
 }
 
-export function retryWorkflowTask(state, taskId, now = Date.now()) {
+export function retryWorkflowTask(state, taskId, now = Date.now(), { confirmUnknownOutcome = false } = {}) {
   if (!state || state.status !== "paused") throw new Error("只有暂停的工作流才能重试任务");
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId ?? result.tasks.find((item) => item.status === "blocked")?.id);
   if (!task || task.status !== "blocked") throw new Error("没有可重试的阻塞任务");
+  if (task.outcomeUnknown && !confirmUnknownOutcome) {
+    throw Object.assign(
+      new Error(`任务 ${task.id} 的旧执行结果未知；核对外部副作用后显式确认 retry`),
+      { code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" },
+    );
+  }
 
   task.status = "pending";
+  delete task.outcomeUnknown;
   delete task.blockReason;
   delete task.completionSummary;
   delete task.implementationRationale;
@@ -133,7 +197,11 @@ export function retryWorkflowTask(state, taskId, now = Date.now()) {
   delete task.delegation;
   result.status = "running";
   delete result.pauseReason;
+  delete result.taskPauseReason;
   result.currentTaskId = undefined;
+  delete result.handoff;
+  result.recoveryGeneration += 1;
+  result.continuation = { kind: "schedule", phase: "pending", reason: "retry" };
   result.nudgeCount = 0;
   return result;
 }
@@ -147,7 +215,11 @@ export function resumeWorkflow(state, now = Date.now()) {
   const result = cloneState(state, now);
   result.status = "running";
   delete result.pauseReason;
+  delete result.taskPauseReason;
   result.currentTaskId = undefined;
+  delete result.handoff;
+  result.recoveryGeneration += 1;
+  result.continuation = { kind: "schedule", phase: "pending", reason: "resume" };
   result.nudgeCount = 0;
   return result;
 }
@@ -159,6 +231,9 @@ export function cancelWorkflow(state, now = Date.now()) {
   const result = cloneState(state, now);
   result.status = "cancelled";
   result.currentTaskId = undefined;
+  result.recoveryGeneration += 1;
+  delete result.handoff;
+  delete result.continuation;
   result.nudgeCount = 0;
   return result;
 }
@@ -170,9 +245,13 @@ export function recordWorkflowNudge(state, now = Date.now()) {
   if (result.nudgeCount >= WORKFLOW_MAX_NUDGES) {
     const task = getWorkflowTask(result, state.currentTaskId);
     task.status = "blocked";
-    task.blockReason = `连续 ${WORKFLOW_MAX_NUDGES} 次回合未提交完成或阻塞结果`;
+    task.outcomeUnknown = true;
+    task.blockReason = `连续 ${WORKFLOW_MAX_NUDGES} 次回合未提交完成或阻塞结果；执行结果未知，核对副作用后再 retry`;
+    delete result.handoff;
+    delete result.continuation;
+    result.recoveryGeneration += 1;
     result.status = "paused";
-    result.pauseReason = "task-not-completed";
+    result.pauseReason = "handoff-outcome-unknown";
     result.currentTaskId = undefined;
     result.taskPauseReason = `任务 ${state.currentTaskId} 连续 ${WORKFLOW_MAX_NUDGES} 次回合未提交完成或阻塞结果`;
   }

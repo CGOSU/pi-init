@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-10-08：工作流恢复使用 session/attempt 身份并对未知结果 fail-closed
+
+- 决定：工作流 schema v4 为 workflow、plan、session 与 recovery generation 建立身份，并为任务 attempt/handoff 与重规划 revision 建立分离身份。状态从当前 Pi session branch 恢复；`complete`/`block`/`replan` 必须提供并匹配当前身份和相应 handoff 消息，旧 attempt、revision、session 或 branch 回调不得推进状态。
+- 原因：只有 taskId 或当前状态不足以区分同一任务的 retry、已重规划方案、session fork 与恢复前迟到结果；按活动 branch 和 generation 校验可在不信任消息文本的前提下拒绝过期结果。
+- 约束：仅当前公共 Extension API 的 `appendEntry`/SessionManager branch 用于 session 级状态持久化；不接入未导出/未确认的 AgentHarness durable operation API，不声称事务、fsync 或外部副作用 exactly-once。仅可证明尚未派发的准备态允许恢复续跑；派发/启动阶段缺少业务验收结果时暂停为未知结果，必须核对后用 `--confirm-unknown-outcome` 显式创建新 attempt。旧 local entry 不原地改写；legacy `in_progress` 暂停核对，退役 Runtime 状态继续拒绝。详见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+
 ### 2026-10-08：工作流状态持久化先于内存提交
 
 - 决定：更新 runtime 工作流状态前，先将新的完整快照通过 Pi Extension API `pi.appendEntry("pi-init-workflow", next)` 写入当前 session；append 同步失败时保留旧内存状态/恢复错误，不显示状态已成功推进、不派发下一任务，并释放本次临时调度锁。

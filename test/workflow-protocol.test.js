@@ -104,7 +104,13 @@ test("架构工作流未提交完成时有限次提醒后暂停", () => {
   const paused = recordWorkflowNudge(nudged);
   assert.equal(paused.status, "paused");
   assert.equal(paused.tasks[0].status, "blocked");
-  assert.equal(paused.pauseReason, "task-not-completed");
+  assert.equal(paused.pauseReason, "handoff-outcome-unknown");
+  assert.equal(paused.tasks[0].outcomeUnknown, true);
+  assert.throws(
+    () => retryWorkflowTask(paused, "task"),
+    { code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" },
+  );
+  assert.equal(retryWorkflowTask(paused, "task", undefined, { confirmUnknownOutcome: true }).status, "running");
   assert.equal(WORKFLOW_MAX_NUDGES, 2);
 });
 
