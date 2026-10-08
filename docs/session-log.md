@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-08：完成 src JavaScript 到 TypeScript 迁移与最终验证
+
+- 完成内容：将 `src` 的 11 个实现迁为唯一 `.ts` 实现：计时工具、角色配置、工作流模型/恢复/转换/重规划/handoff/入口，以及脚手架和模板同步；新增 `role-types.ts`、`workflow-types.ts`、`scaffold-types.ts`。同步 extensions、内部源码与测试的直接导入，删除对应 `.js` 与旧 `.d.ts`，未保留转发层。`tsconfig.json` 使用 strict/noEmit/NodeNext 等设置，`allowJs: false`，仅检查 `extensions/**/*.ts` 和 `src/**/*.ts`；scripts/tests 保持 JS，不增加构建步骤或运行器。
+- 验证：`npm run typecheck` 通过；`npm test`（含行数门禁）176 项通过、0 失败；`git diff --check` 通过（有 LF/CRLF 转换提示）。`node --test test/workflow-runtime-exports.test.js` 1 项通过；Node v24.14.1 原生直接导入 TypeScript 并执行工作流角色/身份检查通过。Pi 1.1.0 隔离 RPC 加载当前扩展并发现 `/fast`、`/pi-init`，未发送 prompt 或调用模型。`npm pack --dry-run --ignore-scripts --json` 核对 68 个包文件，14 个迁移实现/共享类型均包含，`test/` 未打包；旧 `.js` 导入搜索无匹配。
+- 未确认/未执行：Node `>=22.19.0` 最低版本未实测。先前长驻 Pi 进程不可检查；静态 Jiti 调度与新 Pi RPC 均通过，但不能证明旧进程已恢复，导出函数缺失的历史根因（包括是否为缓存、旧 package 或不同代码副本）未确认，详见 [`docs/pitfalls.md`](pitfalls.md)。未执行真实模型请求、扩展 reload、commit 或 push。
+
 ### 2026-10-08：关闭工作流角色死锁与压缩续跑风险
 
 - 完成内容：工作流 plan/replan 拒绝 `architect` 作为执行角色；旧活动计划中的非法角色保留原记录、报告恢复错误并阻止自动派发，可由用户显式取消或另建计划。压缩续跑绑定 operation、目标角色、角色/上下文代次、session/branch 及当前 workflow/replan 身份；只有该操作自己的 callback 能完成交接，过期 callback 和无归属 `session_compact` 不续跑。普通角色切换不再额外触发空回合；压缩失败排入 `triggerTurn: false` 的模型可见诊断。branch 改变会使旧角色确认失效；恢复提示按 auto/confirm/manual 模式提供相符操作，manual 无法验证角色时指引 `/pi-init role`。
@@ -797,7 +803,7 @@
 
 ### 2026-08-14：修复工作流运行时版本错误并外显工作流状态
 
-- 完成内容：定位 `(0, _roles.shouldOrchestrateWorkflow) is not a function` 为 Pi package 更新/reload 后扩展与相邻 `src/roles.js` 版本不一致；增加运行时诊断、升级到 `1.0.4`，并在 README 记录 `pi update --extensions`、`/reload` 和本地重启步骤。
+- 完成内容：当时将 `(0, _roles.shouldOrchestrateWorkflow) is not a function` 解释为 Pi package 更新/reload 后扩展与相邻 `src/roles.js` 版本不一致；增加缺失函数时 fail-closed 的诊断、升级到 `1.0.4`，并在 README 记录 `pi update --extensions`、`/reload` 和本地重启建议。后续证据表明原长驻进程的实际加载路径未记录，具体 package/模块版本、缓存或副本原因没有被隔离；详见 [`docs/pitfalls.md`](pitfalls.md)。
 - 完成内容：将工作流策略配置移出“变更 · 角色与模型”子菜单，增加控制中心顶层入口；主 `pi-init` 状态项和控制中心摘要显示工作流策略及活动工作流进度。
 - 验证：`npm test`，24 项通过；`node --check src/roles.js`、`node --check src/workflow.js`、`node --check extensions/init-project.ts`、`node --check test/scaffold.test.js`、`git diff --check` 通过；RPC 扩展加载和命令发现成功。
 - 遗留问题：尚未在真实交互式 TUI 中截图验收；当前项目配置 `.pi/role-models.json` 的 `workflowMode` 仍为用户手动改成的 `off`，未覆盖。

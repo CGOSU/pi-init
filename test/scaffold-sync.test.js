@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { syncScaffold, createScaffold } from "../src/scaffold.js";
-import { FAST_PATH_BLOCK, TEMPLATE_STATE_PATH } from "../src/template-sync.js";
+import { syncScaffold, createScaffold } from "../src/scaffold.ts";
+import { FAST_PATH_BLOCK, TEMPLATE_STATE_PATH } from "../src/template-sync.ts";
 
 async function makeProject(name) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-init-sync-"));

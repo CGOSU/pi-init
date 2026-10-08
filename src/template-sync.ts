@@ -1,4 +1,14 @@
 import { createHash } from "node:crypto";
+import type {
+  LegacyBlockMatch,
+  ManagedBlockDefinition,
+  ManagedBlockMatch,
+  ManagedTemplateBlocks,
+  ParsedTemplateState,
+  TemplateLanguage,
+  TemplateState,
+  TemplateStateParseResult,
+} from "./scaffold-types.ts";
 
 export const TEMPLATE_SCHEMA_VERSION = 1;
 export const TEMPLATE_STATE_PATH = ".pi/pi-init-state.json";
@@ -16,17 +26,17 @@ export const FAST_PATH_BLOCK = {
     "zh-CN": "## 会话收尾",
     en: "## Session Wrap-up",
   },
-};
+} as const satisfies ManagedBlockDefinition;
 
-export function normalizeLineEndings(value) {
+export function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n/g, "\n");
 }
 
-export function hashText(value) {
+export function hashText(value: string): string {
   return createHash("sha256").update(normalizeLineEndings(value), "utf8").digest("hex");
 }
 
-export function findManagedBlock(text, definition = FAST_PATH_BLOCK) {
+export function findManagedBlock(text: string, definition: ManagedBlockDefinition = FAST_PATH_BLOCK): ManagedBlockMatch {
   const start = text.indexOf(definition.startMarker);
   if (start < 0) return { kind: "missing" };
   const endMarkerStart = text.indexOf(definition.endMarker, start + definition.startMarker.length);
@@ -46,14 +56,18 @@ export function findManagedBlock(text, definition = FAST_PATH_BLOCK) {
   };
 }
 
-export function managedBlockBody(block, definition = FAST_PATH_BLOCK) {
+export function managedBlockBody(block: string, definition: ManagedBlockDefinition = FAST_PATH_BLOCK): string {
   return normalizeLineEndings(block)
     .replace(`${definition.startMarker}\n`, "")
     .replace(`\n${definition.endMarker}`, "")
     .trim();
 }
 
-export function findLegacyBlock(text, language, definition = FAST_PATH_BLOCK) {
+export function findLegacyBlock(
+  text: string,
+  language: TemplateLanguage,
+  definition: ManagedBlockDefinition = FAST_PATH_BLOCK,
+): LegacyBlockMatch {
   const sectionStart = definition.sectionStart[language];
   const sectionEnd = definition.sectionEnd[language];
   const start = text.indexOf(sectionStart);
@@ -68,7 +82,7 @@ export function findLegacyBlock(text, language, definition = FAST_PATH_BLOCK) {
   };
 }
 
-export function replaceBlock(text, start, end, replacement) {
+export function replaceBlock(text: string, start: number, end: number, replacement: string): string {
   const before = text.slice(0, start);
   const after = text.slice(end);
   const prefix = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
@@ -76,11 +90,11 @@ export function replaceBlock(text, start, end, replacement) {
   return `${before}${prefix}${replacement}${suffix}${after}`;
 }
 
-export function replaceManagedBlock(text, match, replacement) {
+export function replaceManagedBlock(text: string, match: Extract<ManagedBlockMatch, { kind: "managed" }>, replacement: string): string {
   return replaceBlock(text, match.start, match.end, replacement);
 }
 
-export function createTemplateState(language, managedBlocks) {
+export function createTemplateState(language: TemplateLanguage, managedBlocks: ManagedTemplateBlocks): TemplateState {
   return {
     schemaVersion: 1,
     templateSchemaVersion: TEMPLATE_SCHEMA_VERSION,
@@ -89,18 +103,27 @@ export function createTemplateState(language, managedBlocks) {
   };
 }
 
-export function parseTemplateState(text) {
-  let parsed;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseTemplateState(text: string): TemplateStateParseResult {
+  let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     return { ok: false, code: "STATE_INVALID_JSON", message: "pi-init 模板状态文件不是有效 JSON" };
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isRecord(parsed)) {
     return { ok: false, code: "STATE_INVALID_SHAPE", message: "pi-init 模板状态文件结构无效" };
   }
   if (parsed.schemaVersion !== 1 || parsed.templateSchemaVersion !== TEMPLATE_SCHEMA_VERSION) {
     return { ok: false, code: "STATE_UNSUPPORTED_VERSION", message: "pi-init 模板状态版本不受支持" };
   }
-  return { ok: true, value: parsed };
+  const value: ParsedTemplateState = {
+    ...parsed,
+    schemaVersion: 1,
+    templateSchemaVersion: TEMPLATE_SCHEMA_VERSION,
+  };
+  return { ok: true, value };
 }

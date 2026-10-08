@@ -7,7 +7,7 @@ import {
   markWorkflowTaskStarted,
   setWorkflowHandoffPhase,
   startWorkflowTask,
-} from "../src/workflow.js";
+} from "../src/workflow.ts";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { createExtensionHarness, emitExtensionEvent, workflowMessageIdentity, withTempDirectory } from "./helpers.js";
 

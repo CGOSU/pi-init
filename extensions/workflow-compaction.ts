@@ -2,7 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.js";
+import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
 import {
   textOf,
   type ActiveRole,

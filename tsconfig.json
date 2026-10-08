@@ -7,9 +7,10 @@
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "allowJs": true,
-    "checkJs": false,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": false,
     "types": ["node"]
   },
-  "include": ["extensions/**/*.ts"]
+  "include": ["extensions/**/*.ts", "src/**/*.ts"]
 }

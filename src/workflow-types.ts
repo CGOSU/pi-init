@@ -1,8 +1,12 @@
+import type { WorkflowExecutor } from "./role-types.ts";
+export type { WorkflowExecutor } from "./role-types.ts";
+
 export type WorkflowStatus = "running" | "paused" | "replanning" | "completed" | "cancelled";
 export type WorkflowTaskStatus = "pending" | "in_progress" | "completed" | "blocked" | "superseded";
 export type WorkflowRevisionStatus = "requested" | "applied";
 export type WorkflowHandoffPhase = "prepared" | "waiting-role" | "compacting" | "dispatching" | "queued" | "executing" | "uncertain";
 export type WorkflowContinuationPhase = "pending" | "compacting" | "dispatching" | "queued";
+export type WorkflowContinuationReason = "plan-created" | "task-completed" | "replan-applied" | "retry" | "resume" | "replan-requested";
 
 export type WorkflowTaskDelegation = {
   status: "spawning" | "running" | "stop-requested" | "completed" | "failed";
@@ -94,8 +98,8 @@ export type WorkflowHandoff = WorkflowHandoffIdentity & {
 };
 
 export type WorkflowContinuation =
-  | { kind: "schedule"; phase: WorkflowContinuationPhase; reason?: "plan-created" | "task-completed" | "replan-applied" | "retry" | "resume" }
-  | { kind: "replan"; revisionId: string; handoffId?: string; phase: WorkflowContinuationPhase; reason?: "task-completed" | "replan-requested" }
+  | { kind: "schedule"; phase: WorkflowContinuationPhase; reason?: WorkflowContinuationReason }
+  | { kind: "replan"; revisionId: string; handoffId?: string; phase: WorkflowContinuationPhase; reason?: WorkflowContinuationReason }
   | { kind: "review" };
 
 export type WorkflowState = {
@@ -104,21 +108,21 @@ export type WorkflowState = {
   sessionId: string;
   planVersion: number;
   recoveryGeneration: number;
-  executor: "local";
-  authority?: "local";
+  executor: WorkflowExecutor;
+  authority?: WorkflowExecutor;
   status: WorkflowStatus;
   pauseReason?: string;
   taskPauseReason?: string;
   plan: WorkflowPlanSummary;
   tasks: WorkflowTask[];
   currentTaskId?: string;
-  nudgeCount: number;
+  nudgeCount?: number;
   revisions: WorkflowRevision[];
   pendingRevision?: WorkflowPendingRevision;
   handoff?: WorkflowHandoff;
   continuation?: WorkflowContinuation;
-  createdAt: number;
-  updatedAt: number;
+  createdAt?: number;
+  updatedAt?: number;
   startedAt?: number;
   completedAt?: number;
   legacySourceVersion?: number;
@@ -148,5 +152,20 @@ export type WorkflowRoleValidationResult = { ok: true } | WorkflowValidationFail
 export type WorkflowIdentityValidationResult<T extends WorkflowActionIdentity> = WorkflowResult<T>;
 export type WorkflowHydrationResult = WorkflowResult<HydratedWorkflowState>;
 
-export type WorkflowPlanInput = object;
-export type WorkflowStateInput = object;
+export type WorkflowPlanInput = unknown;
+export type WorkflowStateInput = unknown;
+export type WorkflowTaskInput = unknown;
+export type WorkflowExecutionBounds = { startedAt: number | undefined; completedAt: number | undefined };
+export type WorkflowTaskTimestampField = "startedAt" | "completedAt";
+export type WorkflowTaskTimestampReducer = (accumulator: number, value: number) => number;
+export type WorkflowRoleValidationOptions = { unfinishedOnly?: boolean };
+export type WorkflowTextListOptions = { required?: boolean };
+export type WorkflowTaskNormalizationOptions = { allowSuperseded?: boolean };
+export type WorkflowModelError = Error & { code?: string; details?: unknown };
+export type WorkflowStateVersion = 1 | 2 | 3 | 4;
+export type WorkflowStateRecord = Record<string, unknown>;
+export type WorkflowLegacyState = Partial<WorkflowState> & Record<string, unknown>;
+export type WorkflowRevisionRecord = Record<string, unknown>;
+export type WorkflowTaskRecord = Record<string, unknown>;
+export type WorkflowIdentityValues = Record<string, unknown>;
+export type WorkflowContinuationKind = WorkflowContinuation["kind"];

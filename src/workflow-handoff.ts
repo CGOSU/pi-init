@@ -1,19 +1,46 @@
 import { randomUUID } from "node:crypto";
-import { cloneState } from "./workflow-model.js";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { cloneState } from "./workflow-model.ts";
+import type {
+  HydratedWorkflowState,
+  WorkflowActionIdentity,
+  WorkflowHandoffIdentity,
+  WorkflowIdentityValidationResult,
+  WorkflowRecoveryResult,
+  WorkflowReplanIdentity,
+  WorkflowState,
+  WorkflowValidationFailure,
+} from "./workflow-types.ts";
 
 const TASK_MESSAGE_TYPE = "pi-init-workflow-task";
 const REPLAN_MESSAGE_TYPE = "pi-init-workflow-replan";
-const BASE_IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration"];
+const BASE_IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration"] as const;
 
-function failure(code, message, details = {}) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasWorkflowIdentity(state: HydratedWorkflowState): state is WorkflowState {
+  return typeof state.workflowId === "string"
+    && typeof state.sessionId === "string"
+    && typeof state.planVersion === "number" && Number.isSafeInteger(state.planVersion) && state.planVersion >= 0
+    && typeof state.recoveryGeneration === "number" && Number.isSafeInteger(state.recoveryGeneration) && state.recoveryGeneration >= 0;
+}
+
+function failure(
+  code: string,
+  message: string,
+  details: Partial<Omit<WorkflowValidationFailure, "ok" | "code" | "message">> = {},
+): WorkflowValidationFailure {
   return { ok: false, code, message, ...details };
 }
 
-function safeIdentityValues(source, fields) {
-  const result = {};
+function safeIdentityValues(source: unknown, fields: readonly string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const values = isRecord(source) ? source : undefined;
   for (const field of fields) {
-    if (!source || !Object.prototype.hasOwnProperty.call(source, field)) continue;
-    const value = source[field];
+    if (!values || !Object.prototype.hasOwnProperty.call(values, field)) continue;
+    const value = values[field];
     if (typeof value === "string") result[field] = value.length <= 256 ? value : `${value.slice(0, 256)}…`;
     else if (typeof value === "number" && Number.isFinite(value)) result[field] = value;
     else if (value === null) result[field] = null;
@@ -22,7 +49,14 @@ function safeIdentityValues(source, fields) {
   return result;
 }
 
-function identityFailure(code, message, mismatchedFields, expected, received, nextAction) {
+function identityFailure(
+  code: string,
+  message: string,
+  mismatchedFields: string[],
+  expected: unknown,
+  received: unknown,
+  nextAction: string,
+): WorkflowValidationFailure {
   return failure(code, message, {
     mismatchedFields,
     expected: safeIdentityValues(expected, [...new Set([...mismatchedFields, ...BASE_IDENTITY_FIELDS])]),
@@ -31,18 +65,25 @@ function identityFailure(code, message, mismatchedFields, expected, received, ne
   });
 }
 
-function differingIdentityFields(actual, expected, fields) {
-  return fields.filter((field) => actual?.[field] !== expected?.[field]);
+function differingIdentityFields(actual: unknown, expected: unknown, fields: readonly string[]): string[] {
+  const actualValues = isRecord(actual) ? actual : undefined;
+  const expectedValues = isRecord(expected) ? expected : undefined;
+  return fields.filter((field) => actualValues?.[field] !== expectedValues?.[field]);
 }
 
-function sameIdentity(actual, expected, fields) {
-  return Boolean(actual && typeof actual === "object" && fields.every((field) => actual[field] === expected[field]));
+function sameIdentity(actual: unknown, expected: unknown, fields: readonly string[]): boolean {
+  if (!isRecord(actual) || !isRecord(expected)) return false;
+  return fields.every((field) => actual[field] === expected[field]);
 }
 
-function validateBaseIdentity(state, input, ctx) {
-  if (!input || typeof input !== "object") {
+function validateBaseIdentity(
+  state: WorkflowState | undefined,
+  input: unknown,
+  ctx: ExtensionContext,
+): WorkflowIdentityValidationResult<WorkflowActionIdentity> {
+  if (!isRecord(input)) {
     return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份", {
-      mismatchedFields: BASE_IDENTITY_FIELDS,
+      mismatchedFields: [...BASE_IDENTITY_FIELDS],
       expected: safeIdentityValues(state, BASE_IDENTITY_FIELDS),
       received: {},
       nextAction: "读取当前工作流状态；不要从旧任务文本或记忆中补造身份。",
@@ -69,7 +110,7 @@ function validateBaseIdentity(state, input, ctx) {
     }
   }
   for (const field of ["planVersion", "recoveryGeneration"]) {
-    if (!Number.isSafeInteger(input[field]) || input[field] < 0) {
+    if (typeof input[field] !== "number" || !Number.isSafeInteger(input[field]) || input[field] < 0) {
       return identityFailure(
         "WORKFLOW_ACTION_IDENTITY_INVALID",
         `工作流 ${field} 必须是非负安全整数`,
@@ -109,15 +150,21 @@ function validateBaseIdentity(state, input, ctx) {
   return { ok: true, value: workflowActionIdentity(state) };
 }
 
-function activeBranchContains(ctx, customType, expected, fields) {
+function activeBranchContains(
+  ctx: ExtensionContext,
+  customType: string,
+  expected: unknown,
+  fields: readonly string[],
+): boolean {
   const branch = ctx?.sessionManager?.getBranch?.();
   if (!Array.isArray(branch)) return false;
-  return branch.some((entry) => entry.type === "custom_message"
+  return branch.some((entry: unknown) => isRecord(entry)
+    && entry.type === "custom_message"
     && entry.customType === customType
     && sameIdentity(entry.details, expected, fields));
 }
 
-export function workflowHandoffMessageOnBranch(ctx, identity) {
+export function workflowHandoffMessageOnBranch(ctx: ExtensionContext, identity: WorkflowHandoffIdentity): boolean {
   return activeBranchContains(
     ctx,
     TASK_MESSAGE_TYPE,
@@ -126,8 +173,10 @@ export function workflowHandoffMessageOnBranch(ctx, identity) {
   );
 }
 
-/** @returns {import("./workflow-types.js").WorkflowActionIdentity | undefined} */
-export function workflowActionIdentity(state) {
+export function workflowActionIdentity(state: WorkflowState): WorkflowActionIdentity;
+export function workflowActionIdentity(state: undefined): undefined;
+export function workflowActionIdentity(state: WorkflowState | undefined): WorkflowActionIdentity | undefined;
+export function workflowActionIdentity(state: WorkflowState | undefined): WorkflowActionIdentity | undefined {
   if (!state) return undefined;
   return {
     workflowId: state.workflowId,
@@ -137,8 +186,7 @@ export function workflowActionIdentity(state) {
   };
 }
 
-/** @returns {import("./workflow-types.js").WorkflowHandoffIdentity | undefined} */
-export function workflowHandoffIdentity(state) {
+export function workflowHandoffIdentity(state: WorkflowState | undefined): WorkflowHandoffIdentity | undefined {
   if (!state?.handoff) return undefined;
   return {
     workflowId: state.handoff.workflowId,
@@ -151,8 +199,7 @@ export function workflowHandoffIdentity(state) {
   };
 }
 
-/** @returns {import("./workflow-types.js").WorkflowReplanIdentity | undefined} */
-export function workflowReplanIdentity(state) {
+export function workflowReplanIdentity(state: WorkflowState | undefined): WorkflowReplanIdentity | undefined {
   const continuation = state?.continuation;
   const revision = state?.pendingRevision;
   if (state?.status !== "replanning" || !revision || continuation?.kind !== "replan" || !continuation.handoffId) {
@@ -167,15 +214,25 @@ export function workflowReplanIdentity(state) {
   };
 }
 
-/** @returns {import("./workflow-types.js").WorkflowIdentityValidationResult<import("./workflow-types.js").WorkflowActionIdentity>} */
-export function validateWorkflowMutationIdentity(state, input, ctx) {
+export function validateWorkflowMutationIdentity(
+  state: WorkflowState | undefined,
+  input: unknown,
+  ctx: ExtensionContext,
+): WorkflowIdentityValidationResult<WorkflowActionIdentity> {
   return validateBaseIdentity(state, input, ctx);
 }
 
-/** @returns {import("./workflow-types.js").WorkflowIdentityValidationResult<import("./workflow-types.js").WorkflowHandoffIdentity>} */
-export function validateWorkflowHandoffIdentity(state, input, ctx, { allowQueued = false } = {}) {
+export function validateWorkflowHandoffIdentity(
+  state: WorkflowState | undefined,
+  input: unknown,
+  ctx: ExtensionContext,
+  { allowQueued = false }: { allowQueued?: boolean } = {},
+): WorkflowIdentityValidationResult<WorkflowHandoffIdentity> {
   const base = validateBaseIdentity(state, input, ctx);
   if (!base.ok) return base;
+  if (!isRecord(input)) {
+    return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份");
+  }
   const handoff = state?.handoff;
   if (!handoff || !state.currentTaskId) {
     return failure("WORKFLOW_HANDOFF_MISSING", "当前工作流没有可验收的任务交接", {
@@ -239,10 +296,16 @@ export function validateWorkflowHandoffIdentity(state, input, ctx, { allowQueued
   return { ok: true, value: expected };
 }
 
-/** @returns {import("./workflow-types.js").WorkflowIdentityValidationResult<import("./workflow-types.js").WorkflowReplanIdentity>} */
-export function validateWorkflowReplanIdentity(state, input, ctx) {
+export function validateWorkflowReplanIdentity(
+  state: WorkflowState | undefined,
+  input: unknown,
+  ctx: ExtensionContext,
+): WorkflowIdentityValidationResult<WorkflowReplanIdentity> {
   const base = validateBaseIdentity(state, input, ctx);
   if (!base.ok) return base;
+  if (!isRecord(input)) {
+    return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份");
+  }
   const continuation = state?.continuation;
   const revision = state?.pendingRevision;
   if (state?.status !== "replanning" || !revision || continuation?.kind !== "replan") {
@@ -299,8 +362,10 @@ export function validateWorkflowReplanIdentity(state, input, ctx) {
   return { ok: true, value: expected };
 }
 
-/** @returns {import("./workflow-types.js").WorkflowRecoveryResult} */
-export function recoverWorkflowState(state, currentSessionId) {
+export function recoverWorkflowState(
+  state: HydratedWorkflowState,
+  currentSessionId: unknown,
+): WorkflowRecoveryResult {
   if (typeof currentSessionId !== "string" || !currentSessionId) {
     return failure("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法从 Pi 公共 SessionManager 读取当前 sessionId");
   }
@@ -309,17 +374,28 @@ export function recoverWorkflowState(state, currentSessionId) {
     return failure("WORKFLOW_SESSION_MISMATCH", "已保存的工作流属于其他 Pi session；不会恢复或重放");
   }
 
-  if (!legacy && ["completed", "cancelled"].includes(state.status) && !state.handoff) {
+  if (!legacy && !hasWorkflowIdentity(state)) {
+    return failure("WORKFLOW_STATE_INVALID", "已保存的工作流缺少有效身份，无法安全恢复");
+  }
+  if (!legacy && hasWorkflowIdentity(state)
+    && (state.status === "completed" || state.status === "cancelled") && !state.handoff) {
     return { ok: true, value: state, changed: false };
   }
 
-  const migrated = {
+  const workflowId = legacy ? randomUUID() : state.workflowId;
+  const sessionId = legacy ? currentSessionId : state.sessionId;
+  const planVersion = legacy
+    ? (state.revisions ?? []).filter((revision) => revision.status === "applied").length
+    : state.planVersion;
+  if (typeof workflowId !== "string" || typeof sessionId !== "string"
+    || typeof planVersion !== "number" || !Number.isSafeInteger(planVersion) || planVersion < 0) {
+    return failure("WORKFLOW_STATE_INVALID", "已保存的工作流缺少有效身份，无法安全恢复");
+  }
+  const migrated: WorkflowState = {
     ...state,
-    workflowId: legacy ? randomUUID() : state.workflowId,
-    sessionId: legacy ? currentSessionId : state.sessionId,
-    planVersion: legacy
-      ? (state.revisions ?? []).filter((revision) => revision.status === "applied").length
-      : state.planVersion,
+    workflowId,
+    sessionId,
+    planVersion,
     recoveryGeneration: (state.recoveryGeneration ?? 0) + 1,
     version: 4,
   };
@@ -349,7 +425,8 @@ export function recoverWorkflowState(state, currentSessionId) {
       || currentTask?.executionStartedAt !== undefined
       || currentTask?.startedAt !== undefined
       || previousHandoff.startedAt !== undefined;
-    if (!hasExecutionEvidence && ["prepared", "waiting-role", "compacting"].includes(previousHandoff.phase)) {
+    if (!hasExecutionEvidence
+      && (previousHandoff.phase === "prepared" || previousHandoff.phase === "waiting-role" || previousHandoff.phase === "compacting")) {
       migrated.handoff = {
         ...previousHandoff,
         attemptId: randomUUID(),
@@ -397,8 +474,7 @@ export function recoverWorkflowState(state, currentSessionId) {
   return { ok: true, value: cloneState(migrated), changed: true };
 }
 
-/** @returns {import("./workflow-types.js").WorkflowState | undefined} */
-export function ensureWorkflowReplanHandoff(state) {
+export function ensureWorkflowReplanHandoff(state: WorkflowState | undefined): WorkflowState | undefined {
   if (state?.status !== "replanning" || !state.pendingRevision) return undefined;
   if (state.continuation?.kind === "replan" && state.continuation.handoffId) return state;
   const next = cloneState(state);

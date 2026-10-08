@@ -10,7 +10,7 @@ import {
   withTempDirectory,
   writeFile,
 } from "./helpers.js";
-import { resolveRoleConfig, unwrapRoleResult } from "../src/roles.js";
+import { resolveRoleConfig, unwrapRoleResult } from "../src/roles.ts";
 
 test("无角色配置时标准职责只切换身份并沿用会话模型与推理", async () => {
   await withTempDirectory(async (directory) => {

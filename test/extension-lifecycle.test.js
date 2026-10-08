@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
+import { normalizeRoleId } from "../src/roles.ts";
 
 const {
   mkdtemp,
@@ -398,23 +399,24 @@ test("自动跨角色且上下文达到阈值时才触发压缩", () => {
   );
 });
 
+test("角色 ID 规范化以结构化结果区分类型和格式错误", () => {
+  assert.deepEqual(normalizeRoleId(" developer-test "), { ok: true, value: "developer-test" });
+  assert.deepEqual(normalizeRoleId(undefined), { ok: false, code: "ROLE_ID_TYPE_INVALID", message: "角色必须是文本" });
+  assert.equal(normalizeRoleId("Developer Test").code, "ROLE_ID_INVALID");
+});
+
 test("精确模型引用拒绝模糊名称且不再依赖 Provider 白名单", () => {
-  assert.deepEqual(normalizeModelReference("openai-codex/gpt-5.6-luna"), {
-    provider: "openai-codex",
-    model: "gpt-5.6-luna",
-  });
-  assert.deepEqual(normalizeModelReference("openrouter/anthropic/claude-haiku-4.5"), {
-    provider: "openrouter",
-    model: "anthropic/claude-haiku-4.5",
-  });
-  assert.deepEqual(normalizeModelReference({ provider: "openai-codex", id: "gpt-5.6-luna" }), {
-    provider: "openai-codex",
-    model: "gpt-5.6-luna",
-  });
-  assert.throws(() => normalizeModelReference("haiku"), /必须显式指定 provider\/model/);
-  assert.throws(() => normalizeModelReference("sonnet"), /必须显式指定 provider\/model/);
-  assert.throws(() => normalizeModelReference("/model"), /必须显式指定 provider\/model/);
-  assert.throws(() => normalizeModelReference("provider/"), /必须显式指定 provider\/model/);
+  for (const [input, expected] of [
+    ["openai-codex/gpt-5.6-luna", { provider: "openai-codex", model: "gpt-5.6-luna" }],
+    ["openrouter/anthropic/claude-haiku-4.5", { provider: "openrouter", model: "anthropic/claude-haiku-4.5" }],
+    [{ provider: "openai-codex", id: "gpt-5.6-luna" }, { provider: "openai-codex", model: "gpt-5.6-luna" }],
+  ]) assert.deepEqual(unwrapRoleResult(normalizeModelReference(input)), expected);
+  for (const input of ["haiku", "sonnet", "/model", "provider/"]) {
+    const result = normalizeModelReference(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "MODEL_REFERENCE_FORMAT_INVALID");
+    assert.match(result.message, /必须显式指定 provider\/model/);
+  }
   assert.deepEqual(
     unwrapRoleResult(resolveRoleConfig({
       providerPolicy: { mode: "locked", allowedProviders: ["openai-codex"] },
@@ -426,27 +428,24 @@ test("精确模型引用拒绝模糊名称且不再依赖 Provider 白名单", (
 });
 
 test("职责模型配置支持默认值、覆盖和校验", () => {
-  assert.equal(resolveRoleMode(undefined), "auto");
-  assert.equal(resolveRoleMode({ mode: "manual" }), "manual");
-  assert.throws(() => resolveRoleMode({ mode: "sometimes" }), /职责切换模式无效/);
-  assert.equal(resolveWorkflowMode(undefined), DEFAULT_WORKFLOW_MODE);
-  assert.equal(resolveWorkflowMode({ workflowMode: "off" }), "off");
-  assert.equal(resolveWorkflowMode({ workflowMode: "on" }), "on");
-  assert.equal(resolveWorkflowMode({ workflowMode: "auto" }), "auto");
-  assert.throws(() => resolveWorkflowMode({ workflowMode: "sometimes" }), /workflowMode 无效/);
-  assert.equal(resolveWorkflowMode({ workflowEnabled: true }), "on");
-  assert.equal(resolveWorkflowMode({ workflowEnabled: false }), "off");
-  assert.equal(resolveWorkflowMode({ workflowMode: "auto", workflowEnabled: false }), "auto");
+  assert.equal(unwrapRoleResult(resolveRoleMode(undefined)), "auto");
+  assert.equal(unwrapRoleResult(resolveRoleMode({ mode: "manual" })), "manual");
+  assert.equal(resolveRoleMode({ mode: "sometimes" }).code, "ROLE_MODE_INVALID");
+  assert.equal(unwrapRoleResult(resolveWorkflowMode(undefined)), DEFAULT_WORKFLOW_MODE);
+  assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowMode: "off" })), "off");
+  assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowMode: "on" })), "on");
+  assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowMode: "auto" })), "auto");
+  assert.equal(resolveWorkflowMode({ workflowMode: "sometimes" }).code, "WORKFLOW_MODE_INVALID");
+  assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowEnabled: true })), "on");
+  assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowEnabled: false })), "off");
+  assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowMode: "auto", workflowEnabled: false })), "auto");
   assert.deepEqual(resolveWorkflowExecutor(undefined), { ok: true, value: DEFAULT_WORKFLOW_EXECUTOR });
   assert.deepEqual(resolveWorkflowExecutor({ workflowExecutor: "local" }), { ok: true, value: "local" });
   assert.equal(resolveWorkflowExecutor({ workflowExecutor: "runtime" }).code, "WORKFLOW_EXECUTOR_RETIRED");
   for (const workflowExecutor of ["subagents", "subtask", "collaboration", "remote"]) {
     assert.equal(resolveWorkflowExecutor({ workflowExecutor }).code, "WORKFLOW_EXECUTOR_INVALID");
   }
-  assert.throws(
-    () => resolveWorkflowMode({ workflowEnabled: "yes" }),
-    /workflowEnabled.*布尔值/,
-  );
+  assert.equal(resolveWorkflowMode({ workflowEnabled: "yes" }).code, "WORKFLOW_ENABLED_INVALID");
   assert.equal(shouldOrchestrateWorkflow({ mode: "off", taskCount: 1 }), false);
   assert.equal(shouldOrchestrateWorkflow({ mode: "off", taskCount: 3 }), false);
   assert.equal(shouldOrchestrateWorkflow({ mode: "on", taskCount: 1 }), true);

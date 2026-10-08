@@ -6,7 +6,7 @@ import {
   setWorkflowHandoffPhase,
   workflowHandoffIdentity,
   workflowReplanIdentity,
-} from "../src/workflow.js";
+} from "../src/workflow.ts";
 import type {
   ExtensionRuntimeState,
   WorkflowHandoffIdentity,

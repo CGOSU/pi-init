@@ -16,8 +16,8 @@ import {
   workflowHandoffIdentity,
   workflowHandoffMessageOnBranch,
   validateWorkflowExecutionRoles,
-} from "../src/workflow.js";
-import { shouldCompactAfterWorkflowTask } from "../src/roles.js";
+} from "../src/workflow.ts";
+import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
 import {
   textOf,
   type ExtensionRuntimeState,

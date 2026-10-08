@@ -1,4 +1,4 @@
-import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import {
   DynamicBorder,
   type ExtensionCommandContext,
@@ -7,10 +7,11 @@ import {
 import { Box, Container, Input, Key, matchesKey, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import {
   DEFAULT_ROLE_NAMES,
-  THINKING_LEVELS,
+  isThinkingLevel,
   filterRoleModels,
   roleLabel,
-} from "../src/roles.js";
+} from "../src/roles.ts";
+import type { ThinkingLevel } from "../src/role-types.ts";
 import type { MenuItem, MenuOptions, MenuSaveResult, RoleModelConfig } from "./contracts.ts";
 
 type RolePickerModel = Model<Api>;
@@ -25,10 +26,8 @@ export function formatRoleModel(config: RoleModelConfig) {
   return `${config.provider}/${config.model} · ${config.thinkingLevel}`;
 }
 
-function availableThinkingLevels(model: RolePickerModel): ModelThinkingLevel[] {
-  return getSupportedThinkingLevels(model).filter((level) =>
-    (THINKING_LEVELS as readonly string[]).includes(level),
-  );
+function availableThinkingLevels(model: RolePickerModel): ThinkingLevel[] {
+  return getSupportedThinkingLevels(model).filter(isThinkingLevel);
 }
 
 function supportedThinkingText(model: RolePickerModel) {
@@ -182,7 +181,7 @@ export function getAvailableRoleModels(ctx: ExtensionContext) {
  * The role picker lists the full host registry. Role configuration uses exact
  * fully qualified provider/model references instead of an allowlist.
  */
-function hasSupportedThinkingLevel(levels: readonly ModelThinkingLevel[], candidate: string | undefined): candidate is ModelThinkingLevel {
+function hasSupportedThinkingLevel(levels: readonly ThinkingLevel[], candidate: string | undefined): candidate is ThinkingLevel {
   return candidate !== undefined && levels.some((level) => level === candidate);
 }
 
@@ -393,7 +392,7 @@ export async function selectRoleModel(
         selectedValue: selectedModel === model ? initialConfig?.thinkingLevel : undefined,
         onSave: options.onSave
           ? (thinkingLevel) => {
-              if (typeof thinkingLevel !== "string") {
+              if (!isThinkingLevel(thinkingLevel)) {
                 return { ok: false as const, message: "请选择推理强度后再保存。" };
               }
               return options.onSave?.({
@@ -410,7 +409,7 @@ export async function selectRoleModel(
       continue;
     }
     if (thinkingLevel === undefined) return undefined;
-    if (!supportedLevels.includes(thinkingLevel as (typeof supportedLevels)[number])) {
+    if (!hasSupportedThinkingLevel(supportedLevels, thinkingLevel)) {
       throw new Error(`模型 ${selectedModelLabel} 不支持推理强度：${thinkingLevel}`);
     }
 

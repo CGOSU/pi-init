@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { RoleMode, ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
 import type {
   WorkflowActionIdentity,
   WorkflowContinuation,
@@ -6,7 +7,7 @@ import type {
   WorkflowHandoffIdentity,
   WorkflowReplanIdentity,
   WorkflowState,
-} from "../src/workflow-types.js";
+} from "../src/workflow-types.ts";
 export type {
   WorkflowActionIdentity,
   WorkflowContinuation,
@@ -14,12 +15,12 @@ export type {
   WorkflowHandoffIdentity,
   WorkflowReplanIdentity,
   WorkflowState,
-} from "../src/workflow-types.js";
+} from "../src/workflow-types.ts";
 export type ActiveRole = {
   role: string;
   provider: string;
   model: string;
-  thinkingLevel: string;
+  thinkingLevel: ThinkingLevel;
 };
 
 export type RoleCompactionContinuation =
@@ -42,12 +43,12 @@ export type RoleCompactionPhase = "idle" | "compacting" | "stalled";
 
 export type ExtensionRuntimeState = {
   activeRole?: ActiveRole;
-  sessionModeOverride?: string;
+  sessionModeOverride?: RoleMode;
   sessionRoleConfigOverrides: Record<string, unknown>;
   configuredRoleNames: string[];
   controlCenterGuideShown: boolean;
-  roleModeStatus: string;
-  workflowModeStatus: string;
+  roleModeStatus: RoleMode;
+  workflowModeStatus: WorkflowMode;
   workflowRestoreError?: { code: string; message: string };
   pendingWorkflowRecovery?: WorkflowState;
   roleRecoveryPending: boolean;

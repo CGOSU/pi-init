@@ -11,19 +11,39 @@ import {
   normalizeTaskIds,
   normalizeTextList,
   requireText,
-} from "./workflow-model.js";
+} from "./workflow-model.ts";
+import type { WorkflowPlanSummary, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 
-function normalizeReplanPlan(input) {
-  if (!input || typeof input !== "object") throw new Error("工作流重规划格式无效");
-  if (!Array.isArray(input.tasks) || input.tasks.length === 0) {
+type WorkflowReplanRequest = { revisionId?: unknown; direction?: unknown };
+type WorkflowReplanApplication = {
+  revisionId?: unknown;
+  summary?: unknown;
+  constraints?: unknown;
+  tasks?: unknown;
+  retainTaskIds?: unknown;
+  preserveTaskIds?: unknown;
+};
+type NormalizedReplanPlan = WorkflowPlanSummary & { tasks: WorkflowTask[] };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function normalizeReplanPlan(input: unknown): NormalizedReplanPlan {
+  if (!isRecord(input)) throw new Error("工作流重规划格式无效");
+  if (!isUnknownArray(input.tasks) || input.tasks.length === 0) {
     throw new Error("工作流重规划至少需要一个新增任务");
   }
   if (input.tasks.length > WORKFLOW_MAX_TASKS) {
     throw new Error(`工作流重规划最多支持 ${WORKFLOW_MAX_TASKS} 个新增任务`);
   }
 
-  const tasks = input.tasks.map(normalizeTask);
-  const ids = new Set();
+  const tasks = input.tasks.map((task: unknown, index: number) => normalizeTask(task, index));
+  const ids = new Set<string>();
   for (const task of tasks) {
     if (ids.has(task.id)) throw new Error(`工作流重规划任务 id 重复：${task.id}`);
     ids.add(task.id);
@@ -35,8 +55,8 @@ function normalizeReplanPlan(input) {
   };
 }
 
-function workflowHistoricalTaskIds(state) {
-  const ids = new Set((state.tasks ?? []).map((task) => task.id));
+function workflowHistoricalTaskIds(state: WorkflowState): Set<string> {
+  const ids = new Set<string>((state.tasks ?? []).map((task) => task.id));
   for (const revision of state.revisions ?? []) {
     for (const task of revision.previousTasks ?? []) ids.add(task.id);
     for (const task of revision.replacedTasks ?? []) ids.add(task.id);
@@ -45,7 +65,11 @@ function workflowHistoricalTaskIds(state) {
   return ids;
 }
 
-export function requestWorkflowReplan(state, { revisionId, direction } = {}, now = Date.now()) {
+export function requestWorkflowReplan(
+  state: WorkflowState,
+  { revisionId, direction }: WorkflowReplanRequest = {},
+  now = Date.now(),
+): WorkflowState {
   if (!state || state.status !== "running") {
     throw new Error("只有运行中的工作流才能请求重规划");
   }
@@ -77,11 +101,11 @@ export function requestWorkflowReplan(state, { revisionId, direction } = {}, now
   return result;
 }
 
-function mergeReplanDirections(directions) {
+function mergeReplanDirections(directions: string[]): string {
   return directions.map((item) => item.trim()).filter(Boolean).join("\n");
 }
 
-export function appendWorkflowReplanDirection(state, direction, now = Date.now()) {
+export function appendWorkflowReplanDirection(state: WorkflowState, direction: unknown, now = Date.now()): WorkflowState {
   if (!state || !state.pendingRevision) {
     throw new Error("工作流没有待处理的重规划请求");
   }
@@ -89,6 +113,7 @@ export function appendWorkflowReplanDirection(state, direction, now = Date.now()
   const text = requireText(direction, "工作流重规划方向");
   const result = cloneState(state, now);
   const pendingRevision = result.pendingRevision;
+  if (!pendingRevision) throw new Error("工作流没有待处理的重规划请求");
   const merged = mergeReplanDirections([pendingRevision.direction, text]);
   pendingRevision.direction = merged;
   if (result.status === "replanning") {
@@ -110,10 +135,10 @@ export function appendWorkflowReplanDirection(state, direction, now = Date.now()
 }
 
 export function applyWorkflowReplan(
-  state,
-  { revisionId, summary, constraints, tasks, retainTaskIds, preserveTaskIds } = {},
+  state: WorkflowState,
+  { revisionId, summary, constraints, tasks, retainTaskIds, preserveTaskIds }: WorkflowReplanApplication = {},
   now = Date.now(),
-) {
+): WorkflowState {
   if (!state || state.status !== "replanning") {
     throw new Error("工作流当前不在等待重规划状态");
   }
@@ -151,7 +176,7 @@ export function applyWorkflowReplan(
   const retainedTasks = state.tasks.filter((task) => retainedIdSet.has(task.id));
   const replacedTasks = state.tasks
     .filter((task) => task.status !== "completed" && !retainedIdSet.has(task.id))
-    .map((task) => ({
+    .map((task): WorkflowTask => ({
       ...cloneTask(task),
       status: "superseded",
       supersededAt: now,
@@ -166,7 +191,7 @@ export function applyWorkflowReplan(
   if (activeTasks.length > WORKFLOW_MAX_TASKS) {
     throw new Error(`应用重规划后工作流最多支持 ${WORKFLOW_MAX_TASKS} 个活动任务`);
   }
-  const activeIds = new Set();
+  const activeIds = new Set<string>();
   for (const task of activeTasks) {
     if (activeIds.has(task.id)) throw new Error(`应用重规划后任务 id 重复：${task.id}`);
     activeIds.add(task.id);

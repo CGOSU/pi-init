@@ -10,10 +10,10 @@ import {
   getWorkflowTask,
   getWorkflowTaskDuration,
   workflowProgress,
-} from "../src/workflow.js";
+} from "../src/workflow.ts";
 import { formatWorkflowIdentityLines } from "./workflow-identity-report.ts";
-import { roleLabel } from "../src/roles.js";
-import { getRunTimingDuration } from "../src/run-timing.js";
+import { roleLabel } from "../src/roles.ts";
+import { getRunTimingDuration } from "../src/run-timing.ts";
 import type { ReportTheme, RunTimingEntryData } from "./contracts.ts";
 import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
@@ -355,7 +355,7 @@ export function createWorkflowReport(
       : workflowState.status === "running"
         ? now
         : workflowState.updatedAt;
-    if (!Number.isFinite(startedAt) || !Number.isFinite(endAt) || endAt < startedAt) return undefined;
+    if (typeof startedAt !== "number" || typeof endAt !== "number" || !Number.isFinite(startedAt) || !Number.isFinite(endAt) || endAt < startedAt) return undefined;
     return endAt - startedAt;
   }
 

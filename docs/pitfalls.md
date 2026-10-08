@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-10-08：Pi 长驻进程的工作流导出缺失不能仅凭新进程通过判定根因已修复
+
+- 日期：2026-10-08；
+- 现象：历史长驻 Pi 报告过工作流策略/身份函数不是函数，包括 `validateWorkflowExecutionRoles` 与 `workflowActionIdentity`；该进程当前无法访问。
+- 根因：未确认。当前源码直接导入通过；Pi static Jiti 测试加载完整扩展并触发 `session_start` 调度/身份路径通过；另一个 Pi 1.1.0 隔离 RPC 进程成功加载扩展。但这些结果不能说明历史进程实际解析的文件、代码版本或缓存状态。旧 package、不同副本、缓存等均只是待验证假设。
+- 修复/处置边界：不以 fallback、跳过守卫或把错误转成成功掩盖缺失导出；新进程和隔离测试只证明当前新加载路径。要核对旧实例，需在获准时完全退出并启动新进程；`/reload` 没有被证明可修复原根因。
+- 验证：`node --test test/workflow-runtime-exports.test.js` 1 项通过；Pi 1.1.0 隔离 RPC 的 `get_commands`/`get_state` 成功，发现 `/fast` 和 `/pi-init`，未发送模型请求。测试与命令完整结果见 [`docs/session-log.md`](session-log.md)。
+
 ### 2026-10-08：architect 不能作为工作流执行角色
 
 - 日期：2026-10-08；
@@ -296,12 +304,12 @@
 - 修复：使用 Unicode 八分之一分数块增加柱状图的离散显示分辨率，同时保留数值标签。
 - 验证：`npm test` 25 项通过；回归测试覆盖 100 与 99 token 的不同柱形。
 
-### 2026-08-14：Pi package 更新后扩展与相邻源码可能短暂混用
+### 2026-08-14：Pi 工作流策略导出曾在运行时不可调用
 
 - 现象：创建 2 个任务的工作流时出现 `(0, _roles.shouldOrchestrateWorkflow) is not a function`。
-- 根因：当前扩展已经调用新策略函数，但 Pi 运行时加载的 `src/roles.js` 仍是旧模块，常见于 Git package 更新后未 reload、旧扩展实例仍在内存中，或扩展与源码来自不同副本。
-- 修复：升级 pi-init 到 `1.0.4`，在调用前检测函数是否存在；缺失时停止规划并提示 `pi update --extensions`、`/reload`，本地开发重启 Pi 且确保扩展与 `src/roles.js` 来自同一目录。
-- 验证：本地 `node` 导入确认 `typeof shouldOrchestrateWorkflow === "function"`；RPC 扩展加载成功；`npm test` 24 项通过。
+- 根因边界：可确认的只有调用时该绑定不是可调用函数；当时把它归因于扩展与 `src/roles.js` 版本不一致，但没有记录实际解析路径或原长驻进程模块快照。package 更新未生效、模块缓存或不同副本等具体成因未被区分，不能视为已证实。
+- 修复/处置：`1.0.4` 增加缺失函数时 fail-closed 的提示以及更新/reload/重启建议；这能阻止不确定策略继续执行，但提示和防御性检查本身不证明环境根因已修复。当前迁移的后续证据与边界见本文件 2026-10-08 条目。
+- 验证：当时本地 `node` 导入确认函数可调用、RPC 扩展加载成功、`npm test` 24 项通过；没有复现原长驻进程的加载状态。
 
 ### 2026-08-14：自动任务必须以状态机和持久 entry 驱动
 

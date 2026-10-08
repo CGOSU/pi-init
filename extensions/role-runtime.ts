@@ -18,8 +18,9 @@ import {
   roleModeLabel,
   shouldCompactOnRoleSwitch,
   unwrapRoleResult,
-} from "../src/roles.js";
-import { workflowProgress } from "../src/workflow.js";
+} from "../src/roles.ts";
+import { workflowProgress } from "../src/workflow.ts";
+import type { RoleMode, WorkflowMode } from "../src/role-types.ts";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import {
   activeRoleMatches,
@@ -44,7 +45,7 @@ export type RoleRuntimeDependencies = {
   acknowledgeRoleRecovery: (role: string) => void;
 };
 
-export function workflowModeLabel(mode: string) {
+export function workflowModeLabel(mode: WorkflowMode) {
   if (mode === "off") return "关闭";
   if (mode === "on") return "始终编排";
   if (mode === "auto") return "自动（不超过 2 个任务时跳过）";
@@ -113,7 +114,7 @@ export function createRoleRuntime(
     const persisted = unwrapRoleResult(await readRoleConfig(ctx));
     if (persisted === undefined) return false;
     const config = unwrapRoleResult(resolveRoleConfig(persisted)) as ResolvedRoleConfig;
-    const saved = config.roleModels[normalizeRoleId(role)];
+    const saved = config.roleModels[unwrapRoleResult(normalizeRoleId(role))];
     return saved?.provider === expected.provider
       && saved.model === expected.model
       && saved.thinkingLevel === expected.thinkingLevel;
@@ -176,13 +177,12 @@ export function createRoleRuntime(
       ctx.ui.notify("手动模式写回仅允许在受信任项目中运行；本次切换未写入项目文件。", "info");
       return;
     }
-    let reference: { provider: string; model: string };
-    try {
-      reference = normalizeModelReference(event.model, "手动切换模型");
-    } catch (error) {
-      ctx.ui.notify(`手动模式下忽略无法解析的模型切换：${textOf(error)}`, "warning");
+    const referenceResult = normalizeModelReference(event.model, "手动切换模型");
+    if (!referenceResult.ok) {
+      ctx.ui.notify(`手动模式下忽略无法解析的模型切换：${referenceResult.message}`, "warning");
       return;
     }
+    const reference = referenceResult.value;
 
     const current = config.roleModels[role];
     const thinkingNow = pi.getThinkingLevel();
@@ -304,7 +304,7 @@ export function createRoleRuntime(
     return workflowStateLabel(workflowState);
   }
 
-  function refreshRoleStatus(ctx: ExtensionContext, mode: string) {
+  function refreshRoleStatus(ctx: ExtensionContext, mode: RoleMode) {
     const role = activeRoleFor(ctx);
     const model = ctx.model
       ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
@@ -316,7 +316,7 @@ export function createRoleRuntime(
     );
   }
 
-  function setRoleStatus(ctx: ExtensionContext, mode: string) {
+  function setRoleStatus(ctx: ExtensionContext, mode: RoleMode) {
     state.roleModeStatus = mode;
     refreshRoleStatus(ctx, mode);
   }
@@ -342,7 +342,7 @@ export function createRoleRuntime(
   function startPendingRoleCompaction(ctx: ExtensionContext) { workflowCompaction.start(ctx); }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
-    const normalizedRole = normalizeRoleId(role);
+    const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const config = await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;
     const target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
@@ -382,7 +382,7 @@ export function createRoleRuntime(
   }
 
   function currentRole(role: string, ctx: ExtensionContext) {
-    const normalizedRole = normalizeRoleId(role);
+    const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const result = ctx.model
       ? {
           role: normalizedRole,
@@ -406,7 +406,7 @@ export function createRoleRuntime(
   }
 
   async function automaticRole(role: string, ctx: ExtensionContext) {
-    const normalizedRole = normalizeRoleId(role);
+    const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const config = await readSessionRoleConfig(ctx);
     unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
     const mode = state.sessionModeOverride ?? config.mode;

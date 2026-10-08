@@ -7,16 +7,16 @@ import {
   ROLE_MODES,
   findMatchingRole,
   roleLabel,
-} from "../src/roles.js";
+} from "../src/roles.ts";
 import {
   WORKFLOW_MAX_TASKS,
   isWorkflowActive,
   appendWorkflowReplanDirection,
   requestWorkflowReplan,
   workflowProgress,
-} from "../src/workflow.js";
+} from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
-import { isExternalRunSource } from "../src/run-timing.js";
+import { isExternalRunSource } from "../src/run-timing.ts";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { createCacheStatus } from "./cache-status.ts";
 import { registerSessionWorkTime } from "./session-work-time.ts";

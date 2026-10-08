@@ -17,7 +17,7 @@ import {
   shouldRefreshUsage,
   summarizeUsage,
 } from "../scripts/pi-usage.js";
-import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.js";
+import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.ts";
 import {
   DEFAULT_ROLE_CONFIG,
   DEFAULT_ROLE_NAMES,
@@ -41,7 +41,7 @@ import {
   unwrapRoleResult,
   shouldCompactOnRoleSwitch,
   shouldCompactAfterWorkflowTask,
-} from "../src/roles.js";
+} from "../src/roles.ts";
 import {
   WORKFLOW_MAX_NUDGES,
   WORKFLOW_MAX_TASKS,
@@ -66,13 +66,13 @@ import {
   startWorkflowTask,
   validateWorkflowPlan,
   workflowProgress,
-} from "../src/workflow.js";
+} from "../src/workflow.ts";
 import {
   completeRunTiming,
   createRunTiming,
   getRunTimingDuration,
   isExternalRunSource,
-} from "../src/run-timing.js";
+} from "../src/run-timing.ts";
 
 const createWorkflowState = (input, now) => createWorkflowStateRaw({ sessionId: "test-session", ...input }, now);
 const markWorkflowTaskStarted = (state, taskId, now) => markWorkflowTaskStartedRaw(state.handoff?.phase === "executing" ? state : setWorkflowHandoffPhase(state, "queued"), taskId, now);

@@ -1,14 +1,10 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_MODES } from "../src/roles.js";
-import { WORKFLOW_MAX_TASKS } from "../src/workflow.js";
-
-export type RoleModelConfig = {
-  provider: string;
-  model: string;
-  thinkingLevel: string;
-};
+import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_MODES } from "../src/roles.ts";
+import type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
+export type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
+import { WORKFLOW_MAX_TASKS } from "../src/workflow.ts";
 
 export type RunTimingEntryData = {
   source?: unknown;
@@ -36,14 +32,6 @@ export type RunTimingEntryData = {
 };
 
 export type ReportTheme = Pick<Theme, "fg" | "bold">;
-
-export type ResolvedRoleConfig = {
-  schemaVersion: number;
-  mode: string;
-  workflowMode: string;
-  workflowExecutor: string;
-  roleModels: Record<string, RoleModelConfig>;
-};
 
 export type MenuItem = {
   value: string;

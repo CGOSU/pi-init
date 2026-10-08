@@ -275,15 +275,9 @@ flowchart LR
 
 `/pi-init mode`、`/pi-init role`、`switch_role` 和 `/pi-init config` 的运行时变更只影响当前会话；TUI 配置菜单可按 `Ctrl+S` 保存暂存角色配置，非 TUI 或兼容场景仍使用 `/pi-init save`。Pi 原生 `/model` 和 `Shift+Tab` 仍可用于临时切换，角色自动切换以当前会话配置为准。
 
-### 工作流运行时版本不一致
+### 工作流运行时导出函数缺失
 
-如果创建工作流时看到 `(0, _roles.shouldOrchestrateWorkflow) is not a function`，说明正在运行的扩展和 `src/roles.js` 不是同一版本，通常是 Pi 仍加载旧的 Git package 或 reload 前的模块缓存。执行：
-
-```bash
-pi update --extensions
-```
-
-然后在当前 Pi 会话执行 `/reload`；本地开发直接重启 Pi，并使用同一份 `extensions/index.ts` 与 `src/roles.js`。pi-init `1.0.4` 起会把该情况转换为可操作的错误提示，不会继续以不确定的策略创建工作流。
+若遇到历史符号 `shouldOrchestrateWorkflow` 或当前工作流符号 `validateWorkflowExecutionRoles`、`workflowActionIdentity` 不是函数，不要直接断定是模块缓存、旧 package 或某种更新步骤导致。当前源码已将 `src/roles.js` 等实现迁为 `.ts`；静态 Jiti 调度测试和 Pi 1.1.0 隔离 RPC 冷启动均通过，但无法检查先前报错的长驻 Pi 进程，因此其根因仍未确认。新进程通过不代表旧进程已修复，`/reload` 也未被验证为根因修复。准确的现象、证据和未确认项见 [`docs/pitfalls.md`](docs/pitfalls.md)。
 
 ## 全局协作规则
 
@@ -295,8 +289,11 @@ pi update --extensions
 
 `settings.json` 主要用于配置，不适合承载自然语言协作规则。
 
-## 检查
+## 检查与 TypeScript 源码
 
 ```bash
+npm run typecheck
 npm test
 ```
+
+`npm run typecheck` 运行 `tsc --noEmit`，以 `strict`、`NodeNext` 检查 `extensions/**/*.ts` 与 `src/**/*.ts`；`allowJs` 为 `false`，保留的 `scripts/` 和 `test/` JavaScript 不在 TypeScript 检查范围内。`npm test` 先运行 500 行数门禁，再运行 Node 测试。TypeScript ESM 源码不经构建直接由 Node/Pi jiti 加载，不生成 `dist`，也不要求 `tsx` 或 `ts-node`。本轮验证使用 Node v24.14.1 与 Pi 1.1.0；Node `>=22.19.0` 的最低声明版本尚未单独实测。

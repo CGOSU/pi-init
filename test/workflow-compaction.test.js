@@ -3,7 +3,7 @@ import test from "node:test";
 import * as helpers from "./helpers.js";
 import { createWorkflowCompaction } from "../extensions/workflow-compaction.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { workflowHandoffIdentity } from "../src/workflow-handoff.js";
+import { workflowHandoffIdentity } from "../src/workflow.ts";
 
 const {
   createExtensionHarness,

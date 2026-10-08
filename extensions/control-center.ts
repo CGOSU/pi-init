@@ -1,9 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   ROLE_MODES,
+  isRoleMode,
   roleLabel,
   roleModeLabel,
-} from "../src/roles.js";
+} from "../src/roles.ts";
 import type { ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import {
@@ -82,7 +83,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       saveMenuOptions(ctx),
     );
     if (!mode || isMenuBack(mode)) return undefined;
-    if (!ROLE_MODES.includes(mode)) {
+    if (!isRoleMode(mode)) {
       ctx.ui.notify(`未知角色模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
       return undefined;
     }

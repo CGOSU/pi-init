@@ -6,18 +6,27 @@ import {
   getWorkflowTask,
   normalizeTextList,
   requireText,
-} from "./workflow-model.js";
+} from "./workflow-model.ts";
+import type { WorkflowHandoffPhase, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 
-function dependenciesCompleted(state, task) {
+type CompleteTaskInput = {
+  taskId: string;
+  completionSummary: unknown;
+  implementationRationale: unknown;
+  verification: unknown;
+};
+type TaskReasonInput = { taskId: string; reason: unknown };
+
+function dependenciesCompleted(state: WorkflowState, task: WorkflowTask): boolean {
   return task.dependsOn.every((dependency) => getWorkflowTask(state, dependency)?.status === "completed");
 }
 
-export function getNextWorkflowTask(state) {
+export function getNextWorkflowTask(state: WorkflowState | null | undefined): WorkflowTask | undefined {
   if (!state || state.status !== "running" || state.currentTaskId) return undefined;
   return state.tasks.find((task) => task.status === "pending" && dependenciesCompleted(state, task));
 }
 
-export function startWorkflowTask(state, taskId, now = Date.now()) {
+export function startWorkflowTask(state: WorkflowState, taskId?: string, now = Date.now()): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不可启动任务");
   if (state.currentTaskId) throw new Error(`工作流已有进行中的任务：${state.currentTaskId}`);
 
@@ -29,6 +38,7 @@ export function startWorkflowTask(state, taskId, now = Date.now()) {
 
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, next.id);
+  if (!task) throw new Error("工作流没有可启动的下一个任务");
   task.status = "in_progress";
   delete task.startedAt;
   delete task.executionStartedAt;
@@ -49,15 +59,16 @@ export function startWorkflowTask(state, taskId, now = Date.now()) {
   return result;
 }
 
-export function setWorkflowHandoffPhase(state, phase, now = Date.now()) {
+export function setWorkflowHandoffPhase(state: WorkflowState, phase: WorkflowHandoffPhase, now = Date.now()): WorkflowState {
   if (!state?.handoff) throw new Error("工作流没有活动 handoff");
   const result = cloneState(state, now);
+  if (!result.handoff) throw new Error("工作流没有活动 handoff");
   result.handoff.phase = phase;
   if (phase === "executing" && result.handoff.startedAt === undefined) result.handoff.startedAt = now;
   return result;
 }
 
-export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
+export function markWorkflowTaskStarted(state: WorkflowState, taskId: string, now = Date.now()): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不可记录任务开始时间");
   if (state.currentTaskId !== taskId) {
     throw new Error(`只能记录当前任务 ${state.currentTaskId ?? "（无）"} 的开始时间`);
@@ -76,9 +87,11 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
   if (state.handoff.phase === "executing" && task.executionStartedAt !== undefined) return state;
 
   const result = cloneState(state, now);
+  if (!result.handoff) throw new Error("当前任务缺少可验证的 handoff 身份");
   result.handoff.phase = "executing";
   result.handoff.startedAt ??= now;
   const startedTask = getWorkflowTask(result, taskId);
+  if (!startedTask) throw new Error(`任务 ${taskId} 当前不在执行中`);
   startedTask.startedAt = now;
   startedTask.executionStartedAt = now;
   if (result.startedAt === undefined) {
@@ -87,17 +100,18 @@ export function markWorkflowTaskStarted(state, taskId, now = Date.now()) {
   return result;
 }
 
-export function getWorkflowTaskDuration(task) {
-  if (!task || !Number.isFinite(task.startedAt) || !Number.isFinite(task.completedAt)) return undefined;
+export function getWorkflowTaskDuration(task: WorkflowTask | null | undefined): number | undefined {
+  if (!task || typeof task.startedAt !== "number" || typeof task.completedAt !== "number"
+    || !Number.isFinite(task.startedAt) || !Number.isFinite(task.completedAt)) return undefined;
   if (task.completedAt < task.startedAt) return undefined;
   return task.completedAt - task.startedAt;
 }
 
 export function completeWorkflowTask(
-  state,
-  { taskId, completionSummary, implementationRationale, verification },
+  state: WorkflowState,
+  { taskId, completionSummary, implementationRationale, verification }: CompleteTaskInput,
   now = Date.now(),
-) {
+): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不在执行中");
   if (state.currentTaskId !== taskId) {
     throw new Error(`只能完成当前任务 ${state.currentTaskId ?? "（无）"}`);
@@ -108,6 +122,7 @@ export function completeWorkflowTask(
   const checks = normalizeTextList(verification, "任务验证结果", { required: true });
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
+  if (!task) throw new Error(`只能完成当前任务 ${state.currentTaskId ?? "（无）"}`);
   task.status = "completed";
   task.completionSummary = summary;
   task.implementationRationale = rationale;
@@ -133,12 +148,13 @@ export function completeWorkflowTask(
   return result;
 }
 
-export function markWorkflowTaskOutcomeUnknown(state, { taskId, reason }, now = Date.now()) {
+export function markWorkflowTaskOutcomeUnknown(state: WorkflowState, { taskId, reason }: TaskReasonInput, now = Date.now()): WorkflowState {
   if (!state || state.status !== "running" || state.currentTaskId !== taskId) {
     throw new Error(`只能暂停当前任务 ${state?.currentTaskId ?? "（无）"} 的未知交接结果`);
   }
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
+  if (!task) throw new Error(`只能暂停当前任务 ${state.currentTaskId ?? "（无）"} 的未知交接结果`);
   task.status = "blocked";
   task.outcomeUnknown = true;
   task.blockReason = requireText(reason, "未知执行结果原因");
@@ -153,7 +169,7 @@ export function markWorkflowTaskOutcomeUnknown(state, { taskId, reason }, now = 
   return result;
 }
 
-export function blockWorkflowTask(state, { taskId, reason }, now = Date.now()) {
+export function blockWorkflowTask(state: WorkflowState, { taskId, reason }: TaskReasonInput, now = Date.now()): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不在执行中");
   if (state.currentTaskId !== taskId) {
     throw new Error(`只能阻塞当前任务 ${state.currentTaskId ?? "（无）"}`);
@@ -161,6 +177,7 @@ export function blockWorkflowTask(state, { taskId, reason }, now = Date.now()) {
 
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
+  if (!task) throw new Error(`只能阻塞当前任务 ${state.currentTaskId ?? "（无）"}`);
   task.status = "blocked";
   task.blockReason = requireText(reason, "任务阻塞原因");
   result.currentTaskId = undefined;
@@ -173,10 +190,16 @@ export function blockWorkflowTask(state, { taskId, reason }, now = Date.now()) {
   return result;
 }
 
-export function retryWorkflowTask(state, taskId, now = Date.now(), { confirmUnknownOutcome = false } = {}) {
+export function retryWorkflowTask(
+  state: WorkflowState,
+  taskId?: string,
+  now = Date.now(),
+  { confirmUnknownOutcome = false }: { confirmUnknownOutcome?: boolean } = {},
+): WorkflowState {
   if (!state || state.status !== "paused") throw new Error("只有暂停的工作流才能重试任务");
   const result = cloneState(state, now);
-  const task = getWorkflowTask(result, taskId ?? result.tasks.find((item) => item.status === "blocked")?.id);
+  const blockedTaskId = taskId ?? result.tasks.find((item) => item.status === "blocked")?.id;
+  const task = blockedTaskId === undefined ? undefined : getWorkflowTask(result, blockedTaskId);
   if (!task || task.status !== "blocked") throw new Error("没有可重试的阻塞任务");
   if (task.outcomeUnknown && !confirmUnknownOutcome) {
     throw Object.assign(
@@ -206,7 +229,7 @@ export function retryWorkflowTask(state, taskId, now = Date.now(), { confirmUnkn
   return result;
 }
 
-export function resumeWorkflow(state, now = Date.now()) {
+export function resumeWorkflow(state: WorkflowState, now = Date.now()): WorkflowState {
   if (!state || state.status !== "paused") throw new Error("工作流当前不在暂停状态");
   if (state.pauseReason !== "architecture-review") {
     throw new Error("任务因阻塞或未完成暂停，请先使用 retry 重试任务或重新规划");
@@ -224,8 +247,8 @@ export function resumeWorkflow(state, now = Date.now()) {
   return result;
 }
 
-export function cancelWorkflow(state, now = Date.now()) {
-  if (!state || ["completed", "cancelled"].includes(state.status)) {
+export function cancelWorkflow(state: WorkflowState, now = Date.now()): WorkflowState {
+  if (!state || state.status === "completed" || state.status === "cancelled") {
     throw new Error("工作流已经结束");
   }
   const result = cloneState(state, now);
@@ -238,12 +261,19 @@ export function cancelWorkflow(state, now = Date.now()) {
   return result;
 }
 
-export function recordWorkflowNudge(state, now = Date.now()) {
+export function recordWorkflowNudge(state: WorkflowState, now?: number): WorkflowState;
+export function recordWorkflowNudge(state: WorkflowState | undefined, now?: number): WorkflowState | undefined;
+export function recordWorkflowNudge(state: null, now?: number): null;
+export function recordWorkflowNudge(
+  state: WorkflowState | null | undefined,
+  now = Date.now(),
+): WorkflowState | null | undefined {
   if (!state || state.status !== "running" || !state.currentTaskId) return state;
   const result = cloneState(state, now);
-  result.nudgeCount += 1;
+  result.nudgeCount = (result.nudgeCount ?? 0) + 1;
   if (result.nudgeCount >= WORKFLOW_MAX_NUDGES) {
     const task = getWorkflowTask(result, state.currentTaskId);
+    if (!task) throw new Error(`工作流当前任务不存在：${state.currentTaskId}`);
     task.status = "blocked";
     task.outcomeUnknown = true;
     task.blockReason = `连续 ${WORKFLOW_MAX_NUDGES} 次回合未提交完成或阻塞结果；执行结果未知，核对副作用后再 retry`;
@@ -258,13 +288,18 @@ export function recordWorkflowNudge(state, now = Date.now()) {
   return result;
 }
 
-export function workflowProgress(state) {
+export function workflowProgress(state: WorkflowState | null | undefined): {
+  completed: number;
+  total: number;
+  blocked: number;
+  currentTaskId: string | undefined;
+} {
   const total = state?.tasks?.length ?? 0;
   const completed = state?.tasks?.filter((task) => task.status === "completed").length ?? 0;
   const blocked = state?.tasks?.filter((task) => task.status === "blocked").length ?? 0;
   return { completed, total, blocked, currentTaskId: state?.currentTaskId };
 }
 
-export function isWorkflowActive(state) {
+export function isWorkflowActive(state: WorkflowState | null | undefined): boolean {
   return state?.status === "running";
 }

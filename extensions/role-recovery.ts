@@ -1,6 +1,6 @@
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isWorkflowActive } from "../src/workflow.js";
-import { roleLabel } from "../src/roles.js";
+import { isWorkflowActive } from "../src/workflow.ts";
+import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
 export const ROLE_RECOVERY_ENTRY_TYPE = "pi-init-role-recovery";

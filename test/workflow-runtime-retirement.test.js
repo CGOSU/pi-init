@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowState, hydrateWorkflowState } from "../src/workflow.js";
+import { createWorkflowState, hydrateWorkflowState } from "../src/workflow.ts";
 import {
   createExtensionHarness,
   emitExtensionEvent,

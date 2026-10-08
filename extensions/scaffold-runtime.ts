@@ -5,27 +5,27 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_ROLE_NAMES } from "../src/roles.js";
-import { createScaffold, syncScaffold } from "../src/scaffold.js";
+import { DEFAULT_ROLE_NAMES } from "../src/roles.ts";
+import { createScaffold, syncScaffold } from "../src/scaffold.ts";
+import type { ScaffoldOptions, TemplateLanguage } from "../src/scaffold-types.ts";
 import type { RoleModelConfig } from "./contracts.ts";
 import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
 
-function normalizeTargetDir(value: string) {
+function normalizeTargetDir(value: string): string {
   const target = value.trim();
   return target.startsWith("@") ? target.slice(1) : target;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
   const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
-  let packageJson: {
-    name?: unknown;
-    description?: unknown;
-    packageManager?: unknown;
-    scripts?: Record<string, unknown>;
-  } = {};
+  let packageJson: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(await readFile(join(absoluteTarget, "package.json"), "utf8"));
-    if (parsed && typeof parsed === "object") packageJson = parsed;
+    const parsed: unknown = JSON.parse(await readFile(join(absoluteTarget, "package.json"), "utf8"));
+    if (isRecord(parsed)) packageJson = parsed;
   } catch {
     // package.json is optional; directory-name defaults still make quick init useful.
   }
@@ -50,7 +50,7 @@ async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
     }
   }
 
-  const scripts = packageJson.scripts ?? {};
+  const scripts = isRecord(packageJson.scripts) ? packageJson.scripts : {};
   const scriptName = ["test", "check", "lint"].find((name) => typeof scripts[name] === "string");
   const inferredName = basename(absoluteTarget);
   return {
@@ -136,7 +136,7 @@ export type SyncOutcome = SyncResult;
 
 type AdvancedOptions = {
   projectName: string;
-  language: string;
+  language: TemplateLanguage;
   description?: string;
   testCommand?: string;
   roleConfiguration: "default" | "custom";
@@ -184,7 +184,7 @@ async function confirmScaffold(
 export async function runScaffold(
   ctx: ExtensionContext,
   targetDir: string,
-  options: Record<string, unknown>,
+  options: ScaffoldOptions,
   confirmation: "always" | "conflicts" | "never",
   allowBack = false,
 ): Promise<ScaffoldOutcome> {
@@ -263,7 +263,7 @@ async function collectOptions(
         step = 0;
         continue;
       }
-      if (!value || value === "cancel") return undefined;
+      if (value !== "zh-CN" && value !== "en") return undefined;
       language = value;
       step = 2;
       continue;
@@ -371,7 +371,7 @@ export async function syncProject(targetDir: string, ctx: ExtensionCommandContex
 export async function runSync(
   ctx: ExtensionCommandContext,
   targetDir: string,
-  options: Record<string, unknown> = {},
+  options: ScaffoldOptions = {},
 ): Promise<SyncOutcome> {
   const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
   return withFileMutationQueue(absoluteTarget, async () => {

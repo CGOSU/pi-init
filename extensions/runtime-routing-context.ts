@@ -1,6 +1,6 @@
 import type { BeforeAgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getWorkflowTask, isWorkflowActive } from "../src/workflow.js";
-import { roleLabel } from "../src/roles.js";
+import { getWorkflowTask, isWorkflowActive } from "../src/workflow.ts";
+import { roleLabel } from "../src/roles.ts";
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 
 const SECTION_KEY = "pi_init_runtime";

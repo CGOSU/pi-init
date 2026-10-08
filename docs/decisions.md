@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-10-08：src TypeScript 源码保持 ESM 直载并限定检查边界
+
+- 决定：将 `src` 中 11 个 JavaScript 实现迁为唯一 `.ts` 实现，新增共享类型模块并同步直接调用方；采用 `strict`、`noEmit`、`NodeNext`、`erasableSyntaxOnly` 与 `verbatimModuleSyntax`，`allowJs: false`，仅检查 `extensions/**/*.ts` 和 `src/**/*.ts`。scripts/tests 继续使用 JavaScript；不增加 `dist`、编译步骤、`tsx` 或 `ts-node`。
+- 原因：当前运行路径由 ESM、Node 原生 TypeScript 支持及 Pi jiti 直接加载源码；保留两份实现或额外构建层会增加模块分歧和发布复杂度。未迁移的 JS 不应被误述为已受 TypeScript 检查。
+- 约束：保留现有持久化/业务语义与错误边界，所有旧 JS 实现和导入路径一并移除。项目声明 Node `>=22.19.0`，本轮仅在 Node v24.14.1 实测；Pi 隔离运行使用 1.1.0。实际命令与结果见 [`docs/session-log.md`](session-log.md)。
+
 ### 2026-10-08：禁止 architect 执行工作流任务并使压缩续跑绑定上下文身份
 
 - 决定：`architect` 只规划，不得成为工作流执行角色；新计划和重规划拒绝该角色，恢复到含 architect 未完成任务的旧计划时不自动换角、持久化修复或派发。压缩续跑绑定 operation、目标角色、角色/上下文代次、session/branch 和当前 workflow/replan 身份；只有该次压缩回调可以收敛，过期回调不续跑。普通角色压缩完成不额外触发空任务回合，压缩失败仅排入不触发新 turn 的模型可见诊断；branch 实际变化使旧角色确认失效并重新建立恢复门。
@@ -608,11 +614,11 @@
 - 原因：工作流会改变任务调度、角色切换和会话状态，用户需要在外部直接看到并配置它，不能把它当成普通角色模型字段隐藏。
 - 约束：继续使用 `.pi/role-models.json` 的 `workflowMode` 和 `/pi-init config workflow` 持久配置；状态项在无活动工作流时也显示当前策略。
 
-### 2026-08-14：工作流运行时版本不一致必须给出可操作诊断
+### 2026-08-14：工作流策略导出缺失时 fail-closed
 
-- 决定：调用工作流策略函数前检查其运行时类型；函数缺失时停止当前规划并提示扩展与 `src/roles.js` 版本不一致，以及 `pi update --extensions`、`/reload` 或本地重启步骤。
-- 原因：Pi Git package 的扩展和相邻源码可能因更新/reload 时机不同而混用；继续猜测策略会比明确失败更危险。
-- 约束：通过 `1.0.4` 版本升级降低旧安装残留概率，不添加 silently fallback；`workflowEnabled` 兼容和既有工作流收尾行为不变。
+- 决定：调用工作流策略函数前检查其运行时类型；函数缺失时停止当前规划并提供诊断信息，不以猜测的策略继续执行。旧文档中的 package 更新、`/reload` 与本地重启是排查建议，不视为已证实的根因修复。
+- 原因：当时观察到运行时绑定不可调用，但没有记录 Pi 进程实际解析路径或模块快照；旧 package、更新/reload 时机、缓存或不同代码副本等具体原因未被区分。继续猜测策略比明确失败更危险。
+- 约束：保持 fail-closed，不添加 silently fallback；升级至 `1.0.4` 和新进程加载成功本身不能证明原长驻进程故障已修复。后续证据及根因边界见 [`docs/pitfalls.md`](pitfalls.md)；`workflowEnabled` 兼容和既有工作流收尾行为不变。
 
 ### 2026-08-14：任务工作流改为 off/on/auto 策略
 

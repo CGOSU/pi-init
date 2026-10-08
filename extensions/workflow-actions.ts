@@ -12,8 +12,10 @@ import {
   validateWorkflowMutationIdentity,
   validateWorkflowReplanIdentity,
   validateWorkflowPlan,
-} from "../src/workflow.js";
-import { resolveRoleModel, shouldOrchestrateWorkflow, unwrapRoleResult } from "../src/roles.js";
+} from "../src/workflow.ts";
+import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
+import type { WorkflowMode } from "../src/role-types.ts";
+import type { WorkflowHandoffIdentity, WorkflowResult } from "../src/workflow-types.ts";
 import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowDispatch } from "./workflow-dispatch.ts";
@@ -47,7 +49,7 @@ export function createWorkflowActions(
     return new Error("当前没有活动工作流");
   }
 
-  function requireIdentity(result: any) {
+  function requireIdentity<T>(result: WorkflowResult<T>): T {
     if (!result.ok) {
       const diagnostic = Object.fromEntries(Object.entries(result).filter(([key]) => key !== "ok"));
       const code = typeof result.code === "string" ? result.code : "WORKFLOW_ACTION_IDENTITY_INVALID";
@@ -56,12 +58,13 @@ export function createWorkflowActions(
         details: diagnostic,
       });
     }
+    return result.value;
   }
 
-  function shouldOrchestrateConfiguredWorkflow(mode: string, taskCount: number) {
+  function shouldOrchestrateConfiguredWorkflow(mode: WorkflowMode, taskCount: number) {
     if (typeof shouldOrchestrateWorkflow !== "function") {
       throw new Error(
-        "检测到 pi-init 运行时版本不一致：扩展与 src/roles.js 不是同一版本，缺少 shouldOrchestrateWorkflow。请先执行 pi update --extensions，然后在 Pi 中执行 /reload；本地开发请重启 Pi，并确保使用同一份扩展和 src/roles.js。",
+        "检测到 pi-init 运行时版本不一致：扩展与 src/roles.ts 不是同一版本，缺少 shouldOrchestrateWorkflow。请先执行 pi update --extensions，然后在 Pi 中执行 /reload；本地开发请重启 Pi，并确保使用同一份扩展和 src/roles.ts。",
       );
     }
     return shouldOrchestrateWorkflow({ mode, taskCount });
@@ -74,18 +77,19 @@ export function createWorkflowActions(
     for (const task of tasks) {
       const resolved = resolveRoleModel(config, task.role, sessionDefault);
       if (!resolved.ok) {
-        const error = unwrapRoleResult(resolved);
-        error.message = `工作流任务 ${task.id} 无法解析角色 ${task.role} 的模型：${error.message}`;
-        throw error;
+        throw Object.assign(
+          new Error(`工作流任务 ${task.id} 无法解析角色 ${task.role} 的模型：${resolved.message}`),
+          { code: resolved.code },
+        );
       }
     }
   }
 
-  function requireTaskHandoffIdentity(params: any, ctx: ExtensionContext) {
-    requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx, { allowQueued: true }));
+  function requireTaskHandoffIdentity(params: unknown, ctx: ExtensionContext): WorkflowHandoffIdentity {
+    return requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx, { allowQueued: true }));
   }
 
-  function markQueuedTaskStarted(params: any, ctx: ExtensionContext) {
+  function markQueuedTaskStarted(params: unknown, ctx: ExtensionContext) {
     const current = state.workflowState;
     if (current?.handoff?.phase !== "queued") return;
     const task = current.currentTaskId
@@ -283,8 +287,7 @@ export function createWorkflowActions(
       }
       case "complete": {
         if (!state.workflowState) throw missingWorkflowError();
-        requireTaskHandoffIdentity(params, ctx);
-        const taskId = params.taskId;
+        const { taskId } = requireTaskHandoffIdentity(params, ctx);
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
@@ -311,9 +314,8 @@ export function createWorkflowActions(
       }
       case "block": {
         if (!state.workflowState) throw missingWorkflowError();
-        requireTaskHandoffIdentity(params, ctx);
+        const { taskId } = requireTaskHandoffIdentity(params, ctx);
         markQueuedTaskStarted(params, ctx);
-        const taskId = params.taskId;
         const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;

@@ -5,7 +5,7 @@ import {
   createSessionWorkTime,
   getSessionWorkTime,
   startSessionWorkTime,
-} from "../src/session-work-time.js";
+} from "../src/session-work-time.ts";
 import { createSessionWorkTimeTracker } from "../extensions/session-work-time.ts";
 import * as helpers from "./helpers.js";
 

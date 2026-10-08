@@ -2,7 +2,7 @@ import {
   workflowActionIdentity,
   workflowHandoffIdentity,
   workflowReplanIdentity,
-} from "../src/workflow.js";
+} from "../src/workflow.ts";
 import type { WorkflowState } from "./runtime-state.ts";
 
 export function formatWorkflowIdentityLines(workflowState: WorkflowState) {

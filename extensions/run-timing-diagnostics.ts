@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { completeRunTiming, createRunTiming, isExternalRunSource } from "../src/run-timing.js";
+import { completeRunTiming, createRunTiming, isExternalRunSource, type ExternalRunSource } from "../src/run-timing.ts";
 import type { RunTimingEntryData } from "./contracts.ts";
 
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
@@ -7,7 +7,7 @@ const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 const DETAILED_TIMING_DIAGNOSTICS_ENABLED = false;
 
 type PendingProbe = {
-  source: string;
+  source: ExternalRunSource;
   inputAt: number;
 };
 
