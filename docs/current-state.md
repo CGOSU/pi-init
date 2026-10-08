@@ -59,7 +59,7 @@
 
 ## 最近一次更新
 
-- 2026-10-08：完成可恢复任务交接与执行尝试隔离：工作流身份绑定当前 session、plan、recovery generation、task attempt/handoff 与 replan revision；恢复仅续接可证明尚未派发的准备阶段，对已派发/启动但无业务验收结果的任务 fail-closed 暂停，并要求人工核对后显式 retry。相关定向测试 45 项通过，500 行检查通过；全量 `npm test` 留待最终交付。Pi Extension session append 与 AgentHarness durable operation 的区别、实现约束及验证边界见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- 2026-10-08：完成可恢复任务交接与执行尝试隔离：工作流身份绑定当前 session、plan、recovery generation、task attempt/handoff 与 replan revision；恢复仅续接可证明尚未派发的准备阶段，对已派发/启动但无业务验收结果的任务 fail-closed 暂停，并要求人工核对后显式 retry。定向测试 45 项通过；最终 `npm test`（含 500 行检查）162 项全部通过、0 失败、0 跳过。代码分阶段提交为 `bb46a7a` 和 `85bb460`。Pi Extension session append 与 AgentHarness durable operation 的区别、实现约束及验证边界见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)；未运行真实 Pi E2E、安装/reload 或依赖升级。
 - 2026-10-08：编排可靠性优化第一阶段已修复 session entry 写入失败时的内存状态提前推进和调度锁残留；故障注入与工作流相关测试 16 项通过。
 - 2026-10-06：移除 pi-init 自建外部 Runtime workflow executor、客户端、配置、wire、Graph/事件投影和运行时接线；保留 local 顺序工作流。旧 Runtime 配置和 session entry 明确 fail-closed，不静默 fallback 或改写原数据；`npm test` 152 项全部通过，500 行检查及 `git diff --check` 通过。未接入官方接口或执行真实 Pi E2E、安装与 reload，详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-06：`/fast` 改为用户显式单次选择精简流程，不再按自动任务类型、规模和修改范围复核资格；安全、职责、工作流保护和必要验证仍优先。扩展生命周期与中英文脚手架定向测试 25 项通过；未运行全量测试，尚未在真实 Pi 会话确认模型遵循效果。

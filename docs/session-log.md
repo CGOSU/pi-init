@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-08：完成编排可靠性最终验证与文档收尾
+
+- 完成内容：以实际最终验证结果更新 `docs/plans/durable-workflow.md` 和 `docs/current-state.md`，注明全量测试结果及未执行的真实 Pi E2E/安装/reload/依赖升级边界。
+- 阶段提交：持久化一致性 `bb46a7afb85fa752c168c145065333145035e2b1`（`修复工作流状态持久化失败一致性`）；可恢复交接及其文档 `85bb460a1e30ee4ad8974611acd24d0dc2dcbe1`（`完成可恢复工作流交接与结果隔离`）。未 push。
+- 验证：`npm test` 已通过 `scripts/check-line-count.js`，Node 测试 162 项全部通过，0 失败、0 跳过。
+- 遗留限制：未运行真实 Pi E2E，未安装/reload、升级依赖或接入 AgentHarness durable operation；当前实现只提供 Pi Extension session entry/branch 范围的状态恢复，不承诺外部副作用 exactly-once。
+
 ### 2026-10-08：完成工作流可恢复交接与执行尝试隔离
 
 - 完成内容：工作流持久状态升级至 v4，记录 workflow/plan/session/recoveryGeneration 身份、task attempt/handoff 和 replan continuation；通过当前 session branch 校验 `complete`/`block`/`replan`，在 `agent_start` 持久化真实启动身份。可证明未派发的准备阶段可恢复续接；已派发/启动但无业务结果、legacy `in_progress` 或执行身份缺失时 fail-closed 暂停，未知结果需先核对再显式 retry。保持 local 顺序执行、`task_workflow` 唯一验收权威、旧 Runtime 退役错误及旧 entry 不原地改写。

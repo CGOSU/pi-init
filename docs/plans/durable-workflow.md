@@ -1,6 +1,6 @@
 # 编排恢复能力与 Pi durable 接入边界
 
-> 状态：durable 边界取证及实现记录。persistence-consistency 与 recoverable-handoff 均已实现并通过定向测试；全量 `npm test` 留待最终交付验证。pi-init 使用 Pi Extension session append/branch 恢复，不是 AgentHarness durable execution 集成。
+> 状态：durable 边界取证、实现与最终验证记录。persistence-consistency 与 recoverable-handoff 均已实现；定向测试 45 项和最终 `npm test` 162 项全部通过。pi-init 使用 Pi Extension session append/branch 恢复，不是 AgentHarness durable execution 集成。
 
 ## 用户确认的目标
 
@@ -57,7 +57,7 @@
 - 已完成 `persistence-consistency`：session entry append 正常返回后才提交 runtime 状态；失败时不提交完成状态、不清除恢复错误；调度开始/暂停持久化失败会释放本地 dispatch 锁并保留真实错误。
 - 已完成 `recoverable-handoff`：实现 v4 workflow/plan/session/recovery generation 身份、task attempt/handoff/replan continuation，branch 验证、恢复门、旧结果隔离及未知结果显式 retry；保持 local 顺序执行、`task_workflow` 验收唯一权威、旧 entry 不原地改写和 Runtime retired fail-closed。
 - 最近实际验证：`node --test test/workflow-core.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/workflow-persistence.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/extension-lifecycle.test.js`（45 项通过）；`node scripts/check-line-count.js` 通过；`git diff --check` 通过，仅有 Windows 工作区 LF/CRLF 转换提示。
-- 全量 `npm test` 留待最终交付；未运行真实 Pi E2E、未升级 peer 依赖、未安装/reload。以后若 AgentHarness durable operation capability 正式进入受支持 Extension API 和本项目 peer 范围，再独立评估接入，不影响当前 session 级边界。
+- 最终 `npm test` 已通过：脚本先执行 `scripts/check-line-count.js`，再运行 Node 测试 162 项全部通过、0 失败、0 跳过。未运行真实 Pi E2E、未升级 peer 依赖、未安装/reload。以后若 AgentHarness durable operation capability 正式进入受支持 Extension API 和本项目 peer 范围，再独立评估接入，不影响当前 session 级边界。
 
 ## 已落实的实现边界
 
