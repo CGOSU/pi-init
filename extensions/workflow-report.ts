@@ -12,7 +12,8 @@ import {
   workflowProgress,
 } from "../src/workflow.ts";
 import { formatWorkflowIdentityLines } from "./workflow-identity-report.ts";
-import { workflowPauseReasonLabel } from "./workflow-pause-labels.ts";
+import { createWorkflowPauseView } from "./workflow-pause-view.ts";
+import { formatWorkflowPauseBlockLines, formatWorkflowPauseSummary as renderWorkflowPauseSummary } from "./workflow-pause-renderer.ts";
 import { roleLabel } from "../src/roles.ts";
 import { getRunTimingDuration } from "../src/run-timing.ts";
 import type { ReportTheme, RunTimingEntryData } from "./contracts.ts";
@@ -26,18 +27,10 @@ function isVerificationFailure(value: string) {
   return VERIFICATION_FAILURE_PATTERN.test(value) && !VERIFICATION_NO_FAILURE_PATTERN.test(value);
 }
 function formatWorkflowBlockLines(workflowState: WorkflowState) {
-  return workflowState.tasks.filter((task) => task.status === "blocked").flatMap((task) => {
-    const nextSteps = task.outcomeUnknown
-      ? ["先核对是否已产生外部副作用。", `核对后显式执行 /pi-init workflow retry ${task.id} --confirm-unknown-outcome。`, "如果需求或方案已改变，请让架构师重规划。"]
-      : [`解决原因后执行 /pi-init workflow retry ${task.id}。`, "如果需求或方案已改变，请让架构师通过 task_workflow(action=\"replan\") 重规划。"];
-    return [`阻塞任务：${task.id}`, `暂停原因：${task.blockReason ?? "未记录（历史状态未保存阻塞原因）"}`, "恢复建议：", ...nextSteps.map((step, index) => `  ${index + 1}. ${step}`)];
-  });
+  return formatWorkflowPauseBlockLines(createWorkflowPauseView(workflowState));
 }
 function formatWorkflowPauseSummary(workflowState: WorkflowState) {
-  const blocks = formatWorkflowBlockLines(workflowState);
-  const pauseReason = workflowState.taskPauseReason?.trim() || workflowPauseReasonLabel(workflowState.pauseReason);
-  const pauseLines = blocks.length ? blocks : [`暂停原因：${pauseReason}`];
-  return ["⏸ 工作流已暂停", ...pauseLines].join("\n");
+  return renderWorkflowPauseSummary(createWorkflowPauseView(workflowState));
 }
 function formatVerification(verification: string[] | undefined) {
   const failures = verification?.filter(isVerificationFailure) ?? [];

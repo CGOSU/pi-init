@@ -28,6 +28,7 @@ import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
 import { formatWorkflowOperationFailure } from "./workflow-error-renderer.ts";
 import { renderWorkflowPauseResult } from "./workflow-pause-renderer.ts";
+import { createWorkflowPauseView } from "./workflow-pause-view.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
@@ -430,7 +431,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         return new Text(contentText || "工作流已更新", 0, 0);
       }
       if (details.status === "paused") {
-        return renderWorkflowPauseResult(details, expanded, theme, workflowReport);
+        return renderWorkflowPauseResult(createWorkflowPauseView(details), expanded, theme, workflowReport.formatWorkflowState(details));
       }
       const progress = workflowProgress(details);
       const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";

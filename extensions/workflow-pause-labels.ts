@@ -11,6 +11,6 @@ export function workflowPauseReasonLabel(reason: string | undefined): string {
     case "workflow-replan":
       return "等待架构师重规划";
     default:
-      return "暂停原因未记录；展开查看技术详情";
+      return reason ? "暂停原因类型未识别；展开查看技术详情" : "暂停原因未记录。";
   }
 }
