@@ -26,6 +26,7 @@ import { createWorkflowActions } from "./workflow-actions.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
+import { formatWorkflowOperationFailure } from "./workflow-error-renderer.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
@@ -418,7 +419,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme, context) {
       const firstContent = result.content[0];
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
-      if (context.isError) return new Text(theme.fg("error", contentText.trim() ? `工作流操作失败：${contentText.trim()}` : "工作流操作失败"), 0, 0);
+      if (context.isError) return new Text(formatWorkflowOperationFailure(contentText, theme), 0, 0);
       if (contentText.startsWith("任务完成报告") || contentText.startsWith("工作流完成报告")) {
         return new Text(workflowReport.styleReportText(contentText, theme), 0, 0);
       }

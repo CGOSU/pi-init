@@ -243,6 +243,8 @@ flowchart LR
 
 创建工作流时会生成 `workflowId`、`planVersion`、当前 `sessionId` 与 `recoveryGeneration`；后续变更工具必须匹配当前基础身份。任务 `complete`/`block` 还须匹配当前 `taskId`、`attemptId` 和 `handoffId`，重规划还须匹配当前 `revisionId` 与 `handoffId`。这些身份由当前任务/重规划交接提供，缺失、旧 branch 或不匹配的身份会被拒绝，不从任务文本补齐。恢复时尚未派发的准备阶段可安全续接；已派发或已启动但无业务验收结果的任务会暂停为“结果未知”，不得自动重放。核对外部副作用后，用户可显式执行 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 创建新 attempt；这不是 exactly-once 或撤销既有副作用的保证。旧 local 状态可读取；缺少执行身份的 legacy `in_progress` 会暂停待核对，原 session entry 不原地改写，旧 Runtime 状态仍 fail-closed。
 
+工作流动作失败时，工具仍向模型返回 `[PI-INIT_WORKFLOW_ERROR]` 下的结构化 JSON，身份守卫和错误状态保持不变；TUI 的 `task_workflow` 结果渲染器按类别、代码、原因、白名单身份差异及安全下一步分段显示。普通错误和无法解析的诊断保留原始错误内容；此层只改变 TUI 展示，不替换模型诊断或自动重试。
+
 ### 活动工作流中的方向变更
 
 工作流运行期间，直接用普通自然语言描述新的方向或新增后续工作即可，不需要记忆新的命令，也不会解析固定文本格式。同一任务执行期间的连续 interactive/rpc 普通输入会按到达顺序合并为同一个带 `revisionId` 的待处理 revision，不会忽略后续指令或创建多个 revision。扩展会在当前任务完成后停在任务边界；在架构师根据完整合并指令重新规划前，旧计划中的后续任务不会先行启动。

@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：工作流失败 TUI 展示与 2.0.4 版本更新
+
+- 完成内容：`task_workflow` 失败结果增加人类可读的分段分类显示，提供错误类别/代码、原因、白名单身份差异和安全下一步；普通错误与损坏诊断保留真实原文。模型可见 `[PI-INIT_WORKFLOW_ERROR]` JSON、错误状态和工作流守卫未变。将 `package.json` 与 `package-lock.json` 根包版本从 `2.0.3` 更新为 `2.0.4`。
+- 决策：TUI 格式化与模型诊断协议分离；身份字段只按白名单展示。详见 [`docs/decisions.md`](decisions.md)。
+- 验证：`npm run typecheck` 通过；`node --test test/tool-render-errors.test.js test/workflow-handoff.test.js` 12 项通过；`node --test` 177 项通过、0 失败；`git diff --check` 通过（有 LF/CRLF 转换提示）。`npm test` 在运行 Node 测试前被 `scripts/check-line-count.js` 阻断，因 `test/pi-usage.test.js` 为 509 行；`git show HEAD:test/pi-usage.test.js` 确认该文件已在既有 `8a4129f` 提交中且未被本次修改。遵照用户要求暂不处理此限制，未将 `npm test` 描述为通过。
+- 未执行/遗留：未调用模型、未 reload 当前 Pi、未发布。本地 `master` 原已领先 `origin/master` 一个无关提交 `8a4129f`；推送当前分支会一并包含该提交，因此先完成本地提交，推送范围待用户明确确认。
+
 ### 2026-10-08：pi-usage 按模型展示缓存命中率和账单 Token
 
 - 完成内容：终端 Models 表新增每模型缓存命中率列，合计行按总量计算；SVG 对账单在每模型明细中增加总 Token 和缓存命中率，并扩展模型行间距及画布高度。比例复用 `(cacheRead + cacheWrite) / tokens`，零 Token 显示 0；用量采集和查询语义未变。

@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-10-09：工作流失败的 TUI 展示与模型诊断协议分离
+
+- 决定：`task_workflow` 的 TUI 错误结果将结构化工作流诊断分段显示为类别、代码、原因、白名单身份差异和安全下一步；普通错误及无法解析的结构化诊断仍显示原始错误内容。
+- 原因：模型侧需要可解析的错误 JSON，而 TUI 直接展示整段 JSON 不利于人类定位问题；分离格式化层可改善可读性而不改错误契约。
+- 约束：只改变 TUI 渲染，不修改 `[PI-INIT_WORKFLOW_ERROR]` 消息、失败状态、身份/branch/attempt/handoff/revision 守卫或 retry 行为；只读取允许的身份字段，不展示额外诊断属性。验证边界和未执行项见 [`docs/session-log.md`](session-log.md)。
+
 ### 2026-10-08：src TypeScript 源码保持 ESM 直载并限定检查边界
 
 - 决定：将 `src` 中 11 个 JavaScript 实现迁为唯一 `.ts` 实现，新增共享类型模块并同步直接调用方；采用 `strict`、`noEmit`、`NodeNext`、`erasableSyntaxOnly` 与 `verbatimModuleSyntax`，`allowJs: false`，仅检查 `extensions/**/*.ts` 和 `src/**/*.ts`。scripts/tests 继续使用 JavaScript；不增加 `dist`、编译步骤、`tsx` 或 `ts-node`。
