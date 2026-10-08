@@ -20,12 +20,15 @@ function workflowSummary(state: ExtensionRuntimeState) {
 
 function recoveryGuidance(state: ExtensionRuntimeState) {
   if (!state.roleRecoveryPending) {
-    return "职责恢复：已确认。简单无工具问答直接回答；不要调用 task_workflow(status)，当前职责匹配时不要重复 switch_role。";
+    return "职责恢复：已确认。简单无工具问答直接回答；不要调用 task_workflow(status)，当前职责匹配时不要重复 switch_role。自动交接已确认时只继续未完成工作，不为压缩重复换角。";
   }
+  const roleAction = state.roleModeStatus === "manual"
+    ? "当前为 manual 模式；若当前角色可验证，使用 switch_role，否则请用户执行 /pi-init role <role>，不要反复调用 switch_role。"
+    : "先按目标调用 switch_role 并等待成功。";
   if (state.workflowState && isWorkflowActive(state.workflowState)) {
-    return "职责恢复：pending。先调用 task_workflow(action=\"status\")，再调用 switch_role；恢复前不要执行其他工具。";
+    return `职责恢复：pending。先调用 task_workflow(action="status")，重新确认当前任务角色；${roleAction}恢复前不要执行其他工具。`;
   }
-  return "职责恢复：pending。无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。若需要任何工具或执行，先调用 switch_role。";
+  return `职责恢复：pending。无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}`;
 }
 
 function buildRuntimeSection(

@@ -19,9 +19,7 @@ import {
   shouldCompactOnRoleSwitch,
   unwrapRoleResult,
 } from "../src/roles.js";
-import {
-  workflowProgress,
-} from "../src/workflow.js";
+import { workflowProgress } from "../src/workflow.js";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import {
   activeRoleMatches,
@@ -31,6 +29,7 @@ import {
   type WorkflowHandoffIdentity,
   type WorkflowReplanIdentity,
   type WorkflowState,
+  type PendingRoleCompaction,
 } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
@@ -38,7 +37,7 @@ import { createWorkflowCompaction } from "./workflow-compaction.ts";
 export type RoleRuntimeDependencies = {
   getWorkflowState: () => WorkflowState | undefined;
   setWorkflowDispatchInFlight: (value: boolean) => void;
-  setInternalContinuationPending: (value: boolean) => void;
+  requireRoleRecovery: (ctx: ExtensionContext, reason: string) => void;
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: WorkflowHandoffIdentity) => void;
   scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity) => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
@@ -58,7 +57,10 @@ export function createRoleRuntime(
   deps: RoleRuntimeDependencies,
 ) {
   let internalModelSelectionDepth = 0;
-  const workflowCompaction = createWorkflowCompaction(pi, state, deps);
+  const workflowCompaction = createWorkflowCompaction(pi, state, {
+    ...deps,
+    getActiveRole: activeRoleFor,
+  });
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return { ok: true as const, value: undefined };
 
@@ -105,9 +107,7 @@ export function createRoleRuntime(
     return activeRoleMatches(state, ctx, pi.getThinkingLevel()) ? state.activeRole : undefined;
   }
 
-  function hasPendingRoleConfigChanges() {
-    return Object.keys(state.sessionRoleConfigOverrides).length > 0;
-  }
+  function hasPendingRoleConfigChanges() { return Object.keys(state.sessionRoleConfigOverrides).length > 0; }
 
   async function isRoleModelConfigPersisted(role: string, expected: RoleModelConfig, ctx: ExtensionContext) {
     const persisted = unwrapRoleResult(await readRoleConfig(ctx));
@@ -119,13 +119,9 @@ export function createRoleRuntime(
       && saved.thinkingLevel === expected.thinkingLevel;
   }
 
-  function effectiveRoleMode(config: Pick<ResolvedRoleConfig, "mode">) {
-    return state.sessionModeOverride ?? config.mode;
-  }
+  function effectiveRoleMode(config: Pick<ResolvedRoleConfig, "mode">) { return state.sessionModeOverride ?? config.mode; }
 
-  function isManualRoleMode(config: Pick<ResolvedRoleConfig, "mode">) {
-    return effectiveRoleMode(config) === "manual";
-  }
+  function isManualRoleMode(config: Pick<ResolvedRoleConfig, "mode">) { return effectiveRoleMode(config) === "manual"; }
 
   function stageRoleConfig(changes: Record<string, unknown>) {
     const next = { ...state.sessionRoleConfigOverrides, ...changes };
@@ -195,6 +191,7 @@ export function createRoleRuntime(
       : current.thinkingLevel;
     if (current.provider === reference.provider && current.model === reference.model) {
       state.activeRole = { role, ...reference, thinkingLevel };
+      state.roleTransitionGeneration += 1;
       return;
     }
 
@@ -215,6 +212,7 @@ export function createRoleRuntime(
       clearStagedRoleConfig(role);
       state.configuredRoleNames = unwrapRoleResult(getRoleNames(await readSessionRoleConfig(ctx)));
       state.activeRole = { role, ...reference, thinkingLevel };
+      state.roleTransitionGeneration += 1;
       ctx.ui.notify(
         `手动模式写回：${roleLabel(role)} → ${reference.provider}/${reference.model} 已写入 .pi/role-models.json。`,
         "info",
@@ -322,9 +320,26 @@ export function createRoleRuntime(
     state.roleModeStatus = mode;
     refreshRoleStatus(ctx, mode);
   }
-  function startPendingRoleCompaction(ctx: ExtensionContext) {
-    workflowCompaction.start(ctx);
+  function createPendingRoleCompaction(
+    ctx: ExtensionContext,
+    fromRole: string,
+    toRole: string,
+  ): PendingRoleCompaction {
+    const targetRole = activeRoleFor(ctx);
+    if (!targetRole || targetRole.role !== toRole) {
+      throw new Error(`无法为角色 ${toRole} 建立压缩交接：当前活动角色不匹配`);
+    }
+    return {
+      fromRole,
+      toRole,
+      sessionId: ctx.sessionManager.getSessionId(),
+      contextGeneration: state.roleContextGeneration,
+      roleTransitionGeneration: state.roleTransitionGeneration,
+      targetRole: { ...targetRole },
+    };
   }
+
+  function startPendingRoleCompaction(ctx: ExtensionContext) { workflowCompaction.start(ctx); }
 
   async function applyRole(role: string, ctx: ExtensionContext) {
     const normalizedRole = normalizeRoleId(role);
@@ -360,6 +375,7 @@ export function createRoleRuntime(
       thinkingLevel: pi.getThinkingLevel(),
     };
     state.activeRole = result;
+    state.roleTransitionGeneration += 1;
     setRoleStatus(ctx, state.sessionModeOverride ?? config.mode);
     deps.acknowledgeRoleRecovery(result.role);
     return result;
@@ -406,7 +422,9 @@ export function createRoleRuntime(
       const transition = compactAfterSwitch && previousRole
         ? { fromRole: previousRole, toRole: result.role }
         : undefined;
-      if (transition) state.pendingRoleCompaction = transition;
+      if (transition) {
+        state.pendingRoleCompaction = createPendingRoleCompaction(ctx, transition.fromRole, transition.toRole);
+      }
       return { mode, requestedRole: normalizedRole, result, transition };
     }
     if (mode === "manual") {
@@ -467,9 +485,8 @@ export function createRoleRuntime(
     saveRoleConfig,
     refreshRoleStatus,
     setRoleStatus,
+    createPendingRoleCompaction,
     startPendingRoleCompaction,
-    handleSessionCompact: workflowCompaction.handleSessionCompact,
-    handleSessionCompactFailed: workflowCompaction.handleSessionCompactFailed,
     disposeWorkflowCompaction: workflowCompaction.dispose,
     applyRole,
     automaticRole,

@@ -114,6 +114,38 @@ test("架构工作流未提交完成时有限次提醒后暂停", () => {
   assert.equal(WORKFLOW_MAX_NUDGES, 2);
 });
 
+test("架构角色不能作为工作流执行角色，错误包含结构化诊断", () => {
+  assert.throws(
+    () => validateWorkflowPlan({
+      summary: "禁止 architect 执行",
+      tasks: [{ id: "design", role: "architect", task: "执行实现", files: ["src"], acceptanceCriteria: ["完成"] }],
+    }),
+    (error) => error.code === "WORKFLOW_EXECUTION_ROLE_FORBIDDEN"
+      && error.message.includes('"taskId":"design"')
+      && error.message.includes('"role":"architect"'),
+  );
+});
+
+test("重规划不能保留 architect 执行任务", () => {
+  const state = createWorkflowState({
+    summary: "旧 architect 执行任务",
+    tasks: [{ id: "old-task", task: "旧任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+  });
+  state.tasks[0].role = "architect";
+  const pending = requestWorkflowReplan(state, { revisionId: "revision-role", direction: "替换不可执行任务" });
+  const original = JSON.stringify(pending);
+  assert.throws(
+    () => applyWorkflowReplan(pending, {
+      revisionId: "revision-role",
+      summary: "替换计划",
+      tasks: [{ id: "new-task", task: "有效任务", files: ["src"], acceptanceCriteria: ["完成"] }],
+      retainTaskIds: ["old-task"],
+    }),
+    { code: "WORKFLOW_EXECUTION_ROLE_FORBIDDEN" },
+  );
+  assert.equal(JSON.stringify(pending), original);
+});
+
 test("架构工作流拒绝重复任务、未知依赖和循环依赖", () => {
   assert.throws(
     () => validateWorkflowPlan({

@@ -39,10 +39,13 @@ export function createWorkflowActions(
     return new Error("当前没有活动工作流");
   }
 
-  function requireIdentity(result: { ok: boolean; code?: string; message?: string }) {
+  function requireIdentity(result: any) {
     if (!result.ok) {
-      throw Object.assign(new Error(result.message ?? "工作流执行身份无效"), {
-        code: result.code ?? "WORKFLOW_ACTION_IDENTITY_INVALID",
+      const diagnostic = Object.fromEntries(Object.entries(result).filter(([key]) => key !== "ok"));
+      const code = typeof result.code === "string" ? result.code : "WORKFLOW_ACTION_IDENTITY_INVALID";
+      throw Object.assign(new Error(`[PI-INIT_WORKFLOW_ERROR] ${JSON.stringify(diagnostic)}`), {
+        code,
+        details: diagnostic,
       });
     }
   }
@@ -70,6 +73,24 @@ export function createWorkflowActions(
     }
   }
 
+  function requireTaskHandoffIdentity(params: any, ctx: ExtensionContext) {
+    requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx, { allowQueued: true }));
+  }
+
+  function markQueuedTaskStarted(params: any, ctx: ExtensionContext) {
+    const current = state.workflowState;
+    if (current?.handoff?.phase !== "queued") return;
+    const task = current.currentTaskId
+      ? current.tasks.find((item) => item.id === current.currentTaskId)
+      : undefined;
+    if (!task) throw new Error("queued handoff 找不到当前任务，拒绝补记任务开始");
+    if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
+      throw new Error(`queued handoff 要求角色 ${task.role}，当前角色不匹配；拒绝补记任务开始`);
+    }
+    deps.dispatch.markCurrentTaskStarted(ctx);
+    requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
+  }
+
   async function workflowCommand(
     action: string | undefined,
     taskId: string | undefined,
@@ -78,6 +99,12 @@ export function createWorkflowActions(
   ) {
     if (action === undefined || action === "status") {
       await deps.report.showWorkflowProgress(ctx);
+      if (state.workflowRestoreError) {
+        ctx.ui.notify(
+          `工作流恢复诊断（${state.workflowRestoreError.code}）：${state.workflowRestoreError.message}`,
+          "error",
+        );
+      }
       return;
     }
     if (!state.workflowState) {
@@ -114,6 +141,7 @@ export function createWorkflowActions(
         const cancelled = cancelWorkflow(state.workflowState);
         deps.report.persistWorkflowState(cancelled, ctx);
         state.workflowDispatchInFlight = false;
+        state.workflowRestoreError = undefined;
         ctx.ui.notify("工作流已取消。", "info");
         return;
       }
@@ -136,7 +164,11 @@ export function createWorkflowActions(
     }
     const mayStartFreshSessionWorkflow = params.action === "plan"
       && state.workflowRestoreError?.code === "WORKFLOW_SESSION_MISMATCH";
-    if (params.action !== "status" && state.workflowRestoreError && !mayStartFreshSessionWorkflow) {
+    const mayCancelInvalidExecutionRole = params.action === "cancel"
+      && ["WORKFLOW_EXECUTION_ROLE_FORBIDDEN", "WORKFLOW_TASK_ROLE_INVALID"].includes(state.workflowRestoreError?.code ?? "")
+      && Boolean(state.workflowState);
+    if (params.action !== "status" && state.workflowRestoreError
+      && !mayStartFreshSessionWorkflow && !mayCancelInvalidExecutionRole) {
       throw missingWorkflowError();
     }
 
@@ -179,6 +211,7 @@ export function createWorkflowActions(
           sessionId: ctx.sessionManager.getSessionId(),
         });
         deps.report.persistWorkflowState(next, ctx);
+        state.workflowRestoreError = undefined;
         const identity: WorkflowActionIdentity = {
           workflowId: next.workflowId,
           planVersion: next.planVersion,
@@ -197,11 +230,18 @@ export function createWorkflowActions(
           terminate: true,
         };
       }
-      case "status":
+      case "status": {
+        const restoreDiagnostic = state.workflowRestoreError
+          ? `\n\n工作流恢复错误：${JSON.stringify(state.workflowRestoreError)}；不会改写原记录或派发任务。可显式取消该工作流后另建计划。`
+          : "";
         return {
-          content: [{ type: "text", text: deps.report.formatWorkflowState() }],
-          details: state.workflowState ?? (state.workflowRestoreError ? { error: state.workflowRestoreError } : {}),
+          content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}` }],
+          details: {
+            ...(state.workflowState ?? {}),
+            ...(state.workflowRestoreError ? { error: state.workflowRestoreError } : {}),
+          },
         };
+      }
       case "replan": {
         if (!state.workflowState) throw missingWorkflowError();
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") {
@@ -235,13 +275,14 @@ export function createWorkflowActions(
       }
       case "complete": {
         if (!state.workflowState) throw missingWorkflowError();
-        requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
+        requireTaskHandoffIdentity(params, ctx);
         const taskId = params.taskId;
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
           throw new Error(`任务 ${task.id} 要求角色 ${task.role}，当前角色不匹配；请先调用 switch_role`);
         }
+        markQueuedTaskStarted(params, ctx);
         const next = completeWorkflowTask(state.workflowState, {
           taskId,
           completionSummary: params.completionSummary,
@@ -262,7 +303,8 @@ export function createWorkflowActions(
       }
       case "block": {
         if (!state.workflowState) throw missingWorkflowError();
-        requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
+        requireTaskHandoffIdentity(params, ctx);
+        markQueuedTaskStarted(params, ctx);
         const taskId = params.taskId;
         const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
         deps.report.persistWorkflowState(next, ctx);

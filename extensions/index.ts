@@ -65,9 +65,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     setWorkflowDispatchInFlight: (value) => {
       runtimeState.workflowDispatchInFlight = value;
     },
-    setInternalContinuationPending: (value) => {
-      runtimeState.internalContinuationPending = value;
-    },
+    requireRoleRecovery: roleRecovery.requireConfirmation,
     sendWorkflowTaskMessage: (ctx, taskId, note, identity) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note, identity),
     scheduleWorkflow: (ctx, identity) => workflowDispatch.scheduleWorkflow(ctx, identity),
     sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
@@ -78,8 +76,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getThinkingLevel: () => pi.getThinkingLevel(),
   });
   pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
-  pi.on("session_compact", (event, ctx) => roleRuntime.handleSessionCompact(event, ctx));
-  pi.on("session_compact_failed", (event, ctx) => roleRuntime.handleSessionCompactFailed(event, ctx));
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
@@ -113,9 +109,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       }),
     );
   }
-  function settleExternalRunTiming() {
-    runTimingDiagnostics.settle();
-  }
+  function settleExternalRunTiming() { runTimingDiagnostics.settle(); }
   pi.registerEntryRenderer<RunTimingEntryData>(RUN_TIMING_ENTRY_TYPE, (entry, _options, theme) => {
     const data = entry.data && typeof entry.data === "object"
       ? entry.data as RunTimingEntryData
@@ -196,8 +190,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.internalContinuationPending = false;
   });
 
-  pi.on("context", (event) => roleRecovery.context(event));
-
   pi.on("agent_start", (_event, ctx) => {
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
@@ -214,6 +206,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
+    runtimeState.roleContextGeneration += 1;
+    runtimeState.roleTransitionGeneration += 1;
     roleRuntime.disposeWorkflowCompaction();
     workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;
@@ -227,6 +221,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (event, ctx) => {
     try {
       runtimeState.runtimeDisposed = false;
+      runtimeState.roleContextGeneration += 1;
+      runtimeState.roleTransitionGeneration += 1;
       runtimeState.sessionRoleConfigOverrides = {};
       runtimeState.configuredRoleNames = [];
       runtimeState.activeRole = undefined;
@@ -262,9 +258,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_tree", async (_event, ctx) => {
+  pi.on("session_tree", async (event, ctx) => {
     workflowDispatch.restoreWorkflowState(ctx);
-    roleRecovery.restore(ctx);
+    if (event.oldLeafId !== event.newLeafId) {
+      runtimeState.roleContextGeneration += 1;
+      runtimeState.roleTransitionGeneration += 1;
+      runtimeState.activeRole = undefined;
+      roleRecovery.requireConfirmation(ctx, "branch");
+    } else {
+      roleRecovery.restore(ctx);
+    }
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
   });
 
@@ -396,10 +399,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "task_workflow",
     label: "Task Workflow",
     description:
-      `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; Development and Test Engineers complete one task at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
+      `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",
+      "Never assign architect as an executable task role; planning validation rejects it, retained architect tasks cannot be applied by replan, and old active plans with architect execution tasks are not recovered or dispatched.",
       "Architect 不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；architect 不得读取、搜索、浏览、运行 shell、编辑、写入或调用任何其他工具。需要最新实现、直接调用方或测试等结构化证据时，先 switch_role 到 docs-commit，由 docs-commit 核对 latest implementation, direct callers, and tests 后再交回 architect 规划。fresh structured evidence from docs-commit 必须由 docs-commit 提供，architect 不得自行完成低风险只读检查。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",

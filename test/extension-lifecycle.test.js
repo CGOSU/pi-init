@@ -285,8 +285,8 @@ test("无映射角色切换遇到 Pi 已完成的自动压缩时不重复压缩"
 
   assert.equal(compactCalls, 0);
   assert.equal(harness.context.model.id, architectModel.id);
-  assert.equal(harness.branch.at(-1).type, "custom_message");
-  assert.equal(harness.entries.at(-1).data.status, "acknowledged");
+  assert.equal(harness.branch.at(-1).customType, "pi-init-role-recovery");
+  assert.equal(harness.branch.at(-1).data.status, "acknowledged");
 });
 
 test("扩展注册工作流工具、命令和生命周期处理器", async () => {

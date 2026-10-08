@@ -2,6 +2,20 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-08：关闭工作流角色死锁与压缩续跑风险
+
+- 完成内容：工作流 plan/replan 拒绝 `architect` 作为执行角色；旧活动计划中的非法角色保留原记录、报告恢复错误并阻止自动派发，可由用户显式取消或另建计划。压缩续跑绑定 operation、目标角色、角色/上下文代次、session/branch 及当前 workflow/replan 身份；只有该操作自己的 callback 能完成交接，过期 callback 和无归属 `session_compact` 不续跑。普通角色切换不再额外触发空回合；压缩失败排入 `triggerTurn: false` 的模型可见诊断。branch 改变会使旧角色确认失效；恢复提示按 auto/confirm/manual 模式提供相符操作，manual 无法验证角色时指引 `/pi-init role`。
+- 实现取舍：未放宽 architect、身份、branch、attempt 或未知结果保护；未自动重命名旧角色、重放旧 attempt、自动 retry 或用新身份绑定旧结果。已取消的旧工作流没有恢复或重放。
+- 验证：定向 `node --test test/workflow-protocol.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/role-recovery.test.js`，42 项通过；`node --test test/extension-lifecycle.test.js`，12 项通过；最终 `npm test`（含 500 行检查）173 项通过、0 失败、0 跳过；`git diff --check` 通过。
+- 未执行：真实 Pi 压缩 callback/跨 branch/reload E2E、扩展安装或 reload、TypeScript 单独检查；原 stale identity 故障的实际失配字段仍未知。未提交或推送。
+
+### 2026-10-08：修复 queued 工作流交接的结果验收闭环
+
+- 完成内容：`complete`/`block` 提交时若当前 handoff 仍处于 `queued`，只有基础身份与任务 attempt/handoff 身份匹配、活动 branch 含精确交接消息且当前角色符合任务角色，才由 dispatch 记录真实任务开始并重新执行严格 `executing` 校验。身份拒绝以模型可见 JSON 返回稳定 code、字段差异、白名单 expected/received 与安全下一步；status、任务提示和重规划提示通过共享身份构造器提供可直接复用的 JSON，status 保持只读。dispatching、身份过期、branch 缺失、角色不符及未知结果仍被拒绝，未全局放宽验收权限。
+- 根因边界：复现了结果调用面对 queued handoff 会因尚未标记 executing 而被拒绝；缺少原始 stale identity 调用参数和事件时序，未确认该 stale 错误的具体字段或根因。没有证据要求改变恢复时未知结果策略。
+- 验证：`node --test test/workflow-handoff.test.js test/workflow-report.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js`，16 项通过；`npm test`，165 项通过、0 项失败、0 项跳过（含行数检查）。
+- 未执行：真实 Pi 会话 E2E、扩展安装/reload、原故障会话重放；未提交或推送。
+
 ### 2026-10-08：完成编排可靠性最终验证与文档收尾
 
 - 完成内容：以实际最终验证结果更新 `docs/plans/durable-workflow.md` 和 `docs/current-state.md`，注明全量测试结果及未执行的真实 Pi E2E/安装/reload/依赖升级边界。

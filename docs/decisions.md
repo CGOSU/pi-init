@@ -8,6 +8,24 @@
 
 ## 已确认决策
 
+### 2026-10-08：禁止 architect 执行工作流任务并使压缩续跑绑定上下文身份
+
+- 决定：`architect` 只规划，不得成为工作流执行角色；新计划和重规划拒绝该角色，恢复到含 architect 未完成任务的旧计划时不自动换角、持久化修复或派发。压缩续跑绑定 operation、目标角色、角色/上下文代次、session/branch 和当前 workflow/replan 身份；只有该次压缩回调可以收敛，过期回调不续跑。普通角色压缩完成不额外触发空任务回合，压缩失败仅排入不触发新 turn 的模型可见诊断；branch 实际变化使旧角色确认失效并重新建立恢复门。
+- 原因：architect 的运行时守卫禁止 `complete`/`block`，允许它作为任务角色会造成不可执行且无法验收的死锁；压缩事件若不绑定操作可能被旧 session/branch 或后续角色选择的回调误用；终态/失败无条件触发新回合会造成空转或向模型报告虚假成功；branch 历史 acknowledged 不能确认当前上下文职责。
+- 约束：不放宽 architect、branch、attempt、workflow 或未知结果保护，不以最新身份替换旧调用身份，不自动重试未知结果。旧非法计划保留原 session entry 并显式报告，用户检查后须显式取消旧工作流，再另建计划。Pi 真实压缩、跨 branch callback 和 reload 行为未在真实宿主验证；未安装/reload 扩展。
+
+### 2026-10-08：pi-usage 统计页与账单按模型显示缓存命中率和 Token
+
+- 决定：终端统计页按模型展示缓存命中率；SVG 账单逐模型展示缓存命中率和总 Token，保留现有总览指标。
+- 原因：用户需要比较不同模型的缓存使用情况与 Token 用量，而仅有全局缓存比例无法区分模型差异。
+- 约束：逐模型比率沿用现有口径 `(cacheRead + cacheWrite) / tokens`，各模型分别按自身汇总计算；整体比率按总量计算，不得对模型百分比求平均。`tokens` 为 0 时比例为 0；不变更用量采集、数据库或查询语义。
+
+### 2026-10-08：工作流身份拒绝提供可诊断的当前动作身份
+
+- 决定：工作流变更动作发生身份拒绝时，错误应以模型可见的结构化失败内容说明错误类别和不匹配的身份字段，并提供完成诊断所需的最小当前动作身份与安全的下一步。状态查询保持只读，并通过模型可见内容提供基础动作身份及（存在时）当前任务或重规划的完整交接身份；状态、handoff 提示和校验使用一致的身份构造语义。
+- 原因：笼统地提示读取状态后重试，无法区分参数使用旧值、当前状态已恢复或交接已失效，会造成重复状态查询及 complete/resume/block 的无效重试。
+- 约束：继续严格校验 workflowId、planVersion、sessionId、recoveryGeneration、当前 session branch，以及任务 attempt/handoff 或重规划 revision/handoff；不得以服务端最新身份替换调用身份，不得用新身份验收旧结果。status 不得改变状态或身份。只有确认仍是同一活动交接且只是提交参数错误时才可更正后重试；身份已更换时旧结果不可迁移；结果未知时必须核对潜在副作用并由用户明确授权 retry。失败诊断以可解析 JSON 放入模型可见的错误消息，包含稳定 `code`、`message`、`mismatchedFields`、白名单 `expected`/`received` 身份值及 `nextAction`；不得回显任意输入或敏感数据。当前故障日志没有记录实际提交值与校验时状态快照，因此具体失配字段及是否由恢复事件触发仍未确认，不得将候选原因记录为已证实根因。若结果动作到达时 handoff 仍为 `queued`，仅当请求完整匹配当前 handoff 身份、活动 branch 含精确任务交接消息且当前角色符合任务角色时，允许先持久化补记 `executing`，再执行原严格验收；`dispatching`、旧身份、branch 缺失或角色不符仍拒绝，未知结果不适用此路径。
+
 ### 2026-10-08：工作流恢复使用 session/attempt 身份并对未知结果 fail-closed
 
 - 决定：工作流 schema v4 为 workflow、plan、session 与 recovery generation 建立身份，并为任务 attempt/handoff 与重规划 revision 建立分离身份。状态从当前 Pi session branch 恢复；`complete`/`block`/`replan` 必须提供并匹配当前身份和相应 handoff 消息，旧 attempt、revision、session 或 branch 回调不得推进状态。

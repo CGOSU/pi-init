@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizeRoleId } from "./roles.js";
+import { isValidRoleId, normalizeRoleId } from "./roles.js";
 
 export const WORKFLOW_STATE_VERSION = 4;
 export const WORKFLOW_MAX_TASKS = 12;
@@ -185,6 +185,53 @@ export function cloneTask(task) {
   };
 }
 
+export function validateWorkflowExecutionRoles(tasks, { unfinishedOnly = false } = {}) {
+  if (!Array.isArray(tasks)) {
+    return { ok: false, code: "WORKFLOW_TASK_ROLE_LIST_INVALID", message: "工作流任务角色列表必须是数组" };
+  }
+  for (const task of tasks) {
+    if (unfinishedOnly && ["completed", "superseded"].includes(task?.status)) continue;
+    const taskId = typeof task?.id === "string" ? task.id.slice(0, 64) : "未知任务";
+    const role = typeof task?.role === "string" ? task.role.slice(0, 64) : undefined;
+    if (!isValidRoleId(task?.role)) {
+      return {
+        ok: false,
+        code: "WORKFLOW_TASK_ROLE_INVALID",
+        message: `工作流任务 ${taskId} 的执行角色无效；不会自动猜测或替换角色`,
+        taskId,
+        role,
+      };
+    }
+    if (task.role === "architect") {
+      return {
+        ok: false,
+        code: "WORKFLOW_EXECUTION_ROLE_FORBIDDEN",
+        message: `工作流任务 ${taskId} 将 architect 分配为执行角色；architect 只负责规划，不得执行或验收任务`,
+        taskId,
+        role,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+export function assertWorkflowExecutionRoles(tasks, options) {
+  const result = validateWorkflowExecutionRoles(tasks, options);
+  if (!result.ok) {
+    const diagnostic = {
+      code: result.code,
+      message: result.message,
+      taskId: result.taskId,
+      role: result.role,
+      nextAction: "改用 developer-test 或 docs-commit 作为执行角色；不要自动重命名已有任务",
+    };
+    throw Object.assign(new Error(`[PI-INIT_WORKFLOW_ERROR] ${JSON.stringify(diagnostic)}`), {
+      code: result.code,
+      details: diagnostic,
+    });
+  }
+}
+
 export function normalizeTask(task, index) {
   if (!task || typeof task !== "object") {
     throw new Error(`工作流任务 ${index + 1} 格式无效`);
@@ -196,6 +243,7 @@ export function normalizeTask(task, index) {
   }
 
   const role = normalizeRoleId(task.role ?? "developer-test", `工作流任务 ${id} 的 role `);
+  assertWorkflowExecutionRoles([{ id, role, status: "pending" }]);
 
   const files = normalizeTextList(task.files, `工作流任务 ${id} 的 files`, { required: true });
   const acceptanceCriteria = normalizeTextList(

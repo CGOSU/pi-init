@@ -200,7 +200,7 @@ test("session_start 按恢复原因和 branch 内容重新锁定职责", async (
   assert.equal(acknowledged.entries.length, 1);
 });
 
-test("session_tree 只按目标 branch 的最新职责恢复记录解锁", async () => {
+test("session_tree 切换分支后必须重新确认职责，不能复用历史 acknowledged", async () => {
   const branch = recoveryBranch();
   const harness = createExtensionHarness(branch);
   await emitExtensionEvent(harness, "session_start", { reason: "new" });
@@ -208,12 +208,61 @@ test("session_tree 只按目标 branch 的最新职责恢复记录解锁", async
   assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
 
   branch.splice(0, branch.length, ...recoveryBranch("acknowledged"));
-  await emitExtensionEvent(harness, "session_tree");
-  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context), undefined);
+  await emitExtensionEvent(harness, "session_tree", { oldLeafId: "pending-leaf", newLeafId: "acknowledged-leaf" });
+  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
+  assert.equal(harness.branch.at(-1).data.status, "pending");
 
   branch.splice(0, branch.length, ...recoveryBranch());
-  await emitExtensionEvent(harness, "session_tree");
+  await emitExtensionEvent(harness, "session_tree", { oldLeafId: "acknowledged-leaf", newLeafId: "pending-leaf" });
   assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
+});
+
+test("manual 模式的 branch 恢复指引使用 /pi-init role，避免重复调用 switch_role", async () => {
+  const model = { provider: "test-provider", id: "manual-model" };
+  await withConfiguredHarness("manual", recoveryBranch("acknowledged"), {
+    model,
+    availableModels: [model],
+    roleModels: { "developer-test": { provider: model.provider, model: model.id, thinkingLevel: "max" } },
+  }, async (harness) => {
+    await emitExtensionEvent(harness, "session_start", { reason: "new" });
+    await emitExtensionEvent(harness, "session_tree", { oldLeafId: "old", newLeafId: "new" });
+    const runtime = await beforeAgentStart(harness);
+    assert.match(Object.values(runtime.systemPromptOptions.sections).join("\\n"), /manual 模式.*\/pi-init role/);
+
+    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
+    await assert.rejects(
+      switchRole.execute("manual-unestablished", { role: "developer-test" }, undefined, undefined, harness.context),
+      /当前为手动模式/,
+    );
+    assert.equal(harness.branch.at(-1).data.status, "pending");
+
+    await harness.commands.get("pi-init").handler("role developer-test", harness.context);
+    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
+    assert.equal(getHandler(harness, "tool_call")({ toolName: "write", input: {} }, harness.context), undefined);
+  });
+});
+
+test("职责恢复门持久化失败后仍 fail-closed，必须重新成功确认", async () => {
+  let failPersistence = true;
+  await withConfiguredHarness("auto", recoveryBranch("acknowledged"), {
+    appendEntry(type) {
+      if (failPersistence && type === ROLE_RECOVERY_ENTRY_TYPE) throw new Error("append failed");
+    },
+  }, async (harness) => {
+    await emitExtensionEvent(harness, "session_start", { reason: "new" });
+    await harness.completeCompaction({ reason: "manual" });
+    const toolCall = getHandler(harness, "tool_call");
+    assert.equal(toolCall({ toolName: "write", input: {} }, harness.context).block, true);
+
+    await emitExtensionEvent(harness, "session_tree", { oldLeafId: "same", newLeafId: "same" });
+    assert.equal(toolCall({ toolName: "write", input: {} }, harness.context).block, true);
+    failPersistence = false;
+    await harness.tools.find((tool) => tool.name === "switch_role").execute(
+      "restore-after-persist-failure", { role: "developer-test" }, undefined, undefined, harness.context,
+    );
+    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
+    assert.equal(toolCall({ toolName: "write", input: {} }, harness.context), undefined);
+  });
 });
 
 test("损坏角色配置不被当作缺失配置触发会话模型 fallback", async () => {

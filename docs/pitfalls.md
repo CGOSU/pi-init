@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-10-08：architect 不能作为工作流执行角色
+
+- 日期：2026-10-08；
+- 现象：若工作流把 `architect` 分配为实现任务角色，该角色的工具守卫禁止执行及 `complete`/`block`，但工作流验收仍要求当前角色与任务角色一致，切换到其他角色也无法验收，形成永久死锁。
+- 根因：架构职责与执行/验收职责是互斥边界；只在提示中要求 architect 不执行不足以阻止规划器创建非法任务。
+- 修复：plan/replan 入口拒绝 architect 执行角色；活动旧计划在恢复/调度前报告结构化错误，既不自动换角、派发或持久化改写，也不因非法角色放宽验收权限；用户检查后须显式取消旧工作流，再另建计划。取舍详见 [`docs/decisions.md`](decisions.md) 对应决策。
+- 验证：`node --test test/workflow-protocol.test.js test/workflow-handoff.test.js` 覆盖非法新计划、保留任务重规划与旧状态不派发；全量 `npm test` 173 项通过。
+
 ### 2026-10-08：session append/queued handoff 不证明外部操作结果
 
 - 日期：2026-10-08；

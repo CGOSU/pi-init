@@ -11,6 +11,7 @@ import {
   getWorkflowTaskDuration,
   workflowProgress,
 } from "../src/workflow.js";
+import { formatWorkflowIdentityLines } from "./workflow-identity-report.ts";
 import { roleLabel } from "../src/roles.js";
 import { getRunTimingDuration } from "../src/run-timing.js";
 import type { ReportTheme, RunTimingEntryData } from "./contracts.ts";
@@ -166,8 +167,7 @@ export function createWorkflowReport(
       `总任务已运行时间：${formatWorkflowElapsedDuration(workflowState)}`,
       `规划：${workflowState.plan.summary}`,
     ];
-    if (workflowState.currentTaskId) lines.push(`当前任务：${workflowState.currentTaskId}`);
-    if (workflowState.handoff) lines.push(`handoff：${workflowState.handoff.handoffId} · attempt：${workflowState.handoff.attemptId} · 阶段：${workflowState.handoff.phase}`);
+    lines.push(...formatWorkflowIdentityLines(workflowState));
     if (workflowState.pauseReason) {
       lines.push(`暂停原因：${workflowState.pauseReason}${workflowState.taskPauseReason ? ` · ${workflowState.taskPauseReason}` : ""}`);
     }

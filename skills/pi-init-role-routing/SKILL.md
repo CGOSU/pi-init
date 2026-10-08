@@ -38,8 +38,8 @@ metadata:
 
 ## 共享硬约束
 
-- 只有真正进入职责或跨越职责边界时调用 `switch_role`；在允许取证和执行的非 `architect` 职责内，调查、实现和验证不重复切换。普通压缩、reload、resume、fork 或已有上下文恢复后，先确认任务边界并重新切换；恢复门仍优先于低风险快捷路径。`manual` 模式要求用户执行 `/pi-init role <role>`，`confirm` 按确认流程执行。
-- `architect` 只负责思考、分析、决策、规划和安排；除 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status")` 外不得调用任何工具，不得连接或调用 MCP。运行时对其他工具一律 fail-closed。
+- 只有真正进入职责或跨越职责边界时调用 `switch_role`；在允许取证和执行的非 `architect` 职责内，调查、实现和验证不重复切换。普通压缩、reload、resume、fork 或已有上下文恢复后，先核对运行时恢复门；如果状态已确认或自动角色交接已确认，不要重复切换。恢复门仍优先于低风险快捷路径。`manual` 模式下若当前角色不能从真实模型/推理强度验证，只请用户执行 `/pi-init role <role>`，不要反复调用必然失败的 `switch_role`；`confirm` 按确认流程执行。
+- `architect` 只负责思考、分析、决策、规划和安排；除 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status")` 外不得调用任何工具，不得连接或调用 MCP。运行时对其他工具一律 fail-closed。工作流执行任务不得分配 `architect`：plan/replan 校验会拒绝，旧活动计划若含 architect 执行任务则不派发、不自动换角，并保留原记录报告错误；由用户检查后显式取消，再另建计划。
 - 低风险、局部、可逆且不改变既定契约的实现选择由 AI 自主决定：helper、内部命名、函数拆分、测试组织、排查顺序和已有模式内的方案不询问用户，也不因这些选择创建工作流。修复既定行为的 bug 不重新确认需求；新增行为、契约、权限或数据结构先写入用户已确认的需求/决策载体。
 - 用户明确要求简单任务只做实现时，采用最小验证策略：不创建 `task_workflow`，不默认运行全量测试、类型检查或构建；纯文档、文案、注释和样式修改只做必要的差异/静态核对。不得因此跳过安全措施、输入校验、数据不丢失处理、无障碍基础或用户明确要求的验证；涉及公共接口、权限、数据、并发、迁移或删除等高风险边界时恢复针对性验证，并明确列出未执行项。
 - `before_agent_start` 只能依据运行时真实状态注入简短的结构化职责/工作流 section；不得根据用户文本启发式分类、自动切换模型或自动确认 `roleRecoveryPending`，不得替代 `tool_call` 的执行类硬守卫。
@@ -47,7 +47,7 @@ metadata:
 - `docs-commit` 的正式证据包至少区分事实、来源、相关符号、调用/依赖、测试、工作区状态、风险和未确认项；仅在复杂/高风险判断或明确证据交接时建立。充分证据不重复读取，局部缺口通常 1 轮，未知位置/符号通常最多 2 轮；高风险改动（安全、认证、公共 API、迁移、并发、删除或共享工作区）必须核对最新实现、直接调用方和测试。
 - `read` 只接收 `path`、`offset`、`limit`；`edit` 只接收 `path`、`edits`。每个 `oldText` 调用前必须精确匹配一次，区域不得重叠；零匹配只允许定向重读并最多重试一次，禁止模糊/正则替换和持久缓存。运行时守卫对无效或歧义写入 fail-closed。
 - 不伪造成功、验证、权限或真实依赖；不泄露或写入密钥、凭据和敏感数据。行为变化前先更新用户确认的需求/决策载体。
-- 上下文恢复门对一般角色只放行读取、`task_workflow(action="status")` 和 `switch_role`，直到角色或任务交接成功；若当前角色是 `architect`，仅放行 `task_workflow(action="status")` 和 `switch_role`。
+- 上下文恢复门对一般角色只放行读取、`task_workflow(action="status")` 和 `switch_role`，直到角色或任务交接成功；若当前角色是 `architect`，仅放行 `task_workflow(action="status")` 和 `switch_role`。`session_tree` 真正切换 branch 时，目标 branch 的历史 acknowledged 不能确认当前角色，运行时会使内存角色确认失效并重新建立 pending；恢复引导必须与实际 mode 一致。
 
 ## 工作流
 
@@ -56,9 +56,10 @@ metadata:
 - 当前任务必须由实际执行角色完成；若任务属于需要工作流的范围，完成时仍须由实际执行角色提供真实验证并调用 `complete`。简单任务采用最小验证策略时，不把未执行的检查描述为通过；缺少需求、权限、凭据、破坏性操作确认或无法恢复时调用 `block`，不得用默认值或空结果掩盖失败。
 - 活动工作流的普通方向变更在当前任务边界合并为一个 revision；应用新计划前不得启动旧后续任务。
 - pi-init 工作流仅支持当前主会话内 local 顺序执行；缺省及旧 `workflowExecutor: "local"` 配置可用。旧 `runtime` 配置和 Runtime executor/authority 状态返回结构化退役错误，不会回退、自动恢复或改写 session entry。
-- `task_workflow` 是唯一的规划、依赖、验收、阻塞和重规划状态机；Agent 完成、进程退出或返回文本都不自动等于任务验收完成。
+- `task_workflow` 是唯一的规划、依赖、验收、阻塞和重规划状态机；Agent 完成、进程退出或返回文本都不自动等于任务验收完成。architect 仅规划，不得作为执行任务角色，也不得调用 `complete`/`block` 验收。
 - 工作流记录通过 Pi Extension API 的 `appendEntry` 保存到当前 session，并从活动 branch 恢复；这不是 AgentHarness durable operation 集成，不能保证事务/fsync 或外部副作用 exactly-once。任务 `complete`/`block` 必须匹配当前 `workflowId`、`planVersion`、`sessionId`、`recoveryGeneration`、`taskId`、`attemptId` 和 `handoffId`；`replan` 必须匹配当前基础身份、`revisionId` 和 `handoffId`。只使用当前交接提示提供的身份，不得从任务文本补齐，旧 branch/attempt/revision 结果必须拒绝。
 - 恢复时仅未派发的准备阶段可安全续接；已派发/启动但无业务结果的任务按结果未知暂停，禁止自动重放。核对可能的外部副作用后，显式 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 才能创建新 attempt；legacy `in_progress` 缺少身份时同样转为需核对状态，旧 session entry 不原地改写，已退役 Runtime 状态继续 fail-closed。
+- `task_workflow(action="status")` 的模型可见 content 提供基础动作身份，以及当前 task/replan handoff 的完整 JSON 身份；task/replan 提示复用相同身份结构。status 只读。身份失败会在模型可见错误消息中提供稳定错误码、差异字段、白名单 expected/received 值与下一步；只读查询一次后，只有确认仍是同一活动 attempt/handoff 的参数抄录错误才可修正重提。不得把旧结果改贴到新身份；结果未知仍必须核对潜在副作用并显式授权 retry。若结果调用面对 queued handoff，只有当前身份、角色和活动 branch 中精确消息全部匹配，系统才会先记录真实开始再执行原严格校验；其他阶段不因该路径放宽。角色压缩交接还须绑定 operation、目标角色、session/branch 上下文代次及当前 workflow/replan 身份；只有该操作自己的完成/失败回调能收敛，任意 `session_compact` 事件不能冒认完成。身份过期的回调不续跑；压缩失败以不触发新 turn 的诊断报告，任务只能在检查当前状态后显式恢复，架构审阅不得被自动 resume 绕过。
 
 ## 交付
 

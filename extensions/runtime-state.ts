@@ -45,6 +45,10 @@ export type RoleCompactionContinuation =
 export type PendingRoleCompaction = {
   fromRole: string;
   toRole: string;
+  sessionId: string;
+  contextGeneration: number;
+  roleTransitionGeneration: number;
+  targetRole: ActiveRole;
   continuation?: RoleCompactionContinuation;
 };
 
@@ -61,6 +65,9 @@ export type ExtensionRuntimeState = {
   workflowRestoreError?: { code: string; message: string };
   pendingWorkflowRecovery?: WorkflowState;
   roleRecoveryPending: boolean;
+  roleRecoveryPersistenceFailed: boolean;
+  roleContextGeneration: number;
+  roleTransitionGeneration: number;
   pendingRoleCompaction?: PendingRoleCompaction;
   roleCompactionPhase: RoleCompactionPhase;
   roleCompactionStalled: boolean;
@@ -92,6 +99,9 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     roleModeStatus: "auto",
     workflowModeStatus: "auto",
     roleRecoveryPending: false,
+    roleRecoveryPersistenceFailed: false,
+    roleContextGeneration: 0,
+    roleTransitionGeneration: 0,
     roleCompactionPhase: "idle",
     roleCompactionStalled: false,
     roleCompactionInFlight: false,

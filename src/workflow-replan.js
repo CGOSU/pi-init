@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   WORKFLOW_MAX_TASKS,
   assertAcyclic,
+  assertWorkflowExecutionRoles,
   clonePlan,
   cloneState,
   cloneTask,
@@ -161,6 +162,7 @@ export function applyWorkflowReplan(
     ...retainedTasks.map(cloneTask),
     ...plan.tasks.map(cloneTask),
   ];
+  assertWorkflowExecutionRoles(activeTasks, { unfinishedOnly: true });
   if (activeTasks.length > WORKFLOW_MAX_TASKS) {
     throw new Error(`应用重规划后工作流最多支持 ${WORKFLOW_MAX_TASKS} 个活动任务`);
   }

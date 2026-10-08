@@ -5,6 +5,7 @@ import {
   markWorkflowTaskOutcomeUnknown,
   setWorkflowHandoffPhase,
   workflowHandoffIdentity,
+  workflowReplanIdentity,
 } from "../src/workflow.js";
 import type {
   ExtensionRuntimeState,
@@ -71,7 +72,7 @@ export function createWorkflowMessages(
       workflowState.plan.constraints.length > 0 ? `架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `已完成任务：\n${completed.join("\n")}` : "",
       `当前任务（${task.id}，角色 ${task.role}）：${task.task}`,
-      `当前执行身份：workflowId=${identity.workflowId}；planVersion=${identity.planVersion}；sessionId=${identity.sessionId}；recoveryGeneration=${identity.recoveryGeneration}；attemptId=${identity.attemptId}；handoffId=${identity.handoffId}`,
+      `当前任务结果身份 JSON（complete/block 时按原样传回）：${JSON.stringify(identity)}`,
       `允许涉及的文件或目录：${task.files.join(", ")}`,
       `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
       taskRoleGuidance(task.role),
@@ -162,7 +163,7 @@ export function createWorkflowMessages(
 
     return [
       "[PI-INIT 工作流重规划]",
-      `当前重规划身份：workflowId=${identity.workflowId}；planVersion=${identity.planVersion}；sessionId=${identity.sessionId}；recoveryGeneration=${identity.recoveryGeneration}；revisionId=${identity.revisionId}；handoffId=${identity.handoffId}`,
+      `当前重规划身份 JSON（replan 时按原样传回）：${JSON.stringify(identity)}`,
       `工作流当前 revisionId：${request.revisionId}`,
       `用户新增方向或需求（按提交顺序合并的全部指令）：\n${request.direction.split("\n").map((item) => `- ${item}`).join("\n")}`,
       `当前工作流目标：${workflowState.plan.summary}`,
@@ -182,14 +183,8 @@ export function createWorkflowMessages(
     const continuation = current?.continuation;
     const revision = current?.pendingRevision;
     if (!current || current.status !== "replanning" || !revision || continuation?.kind !== "replan" || !continuation.handoffId) return false;
-    const identity: WorkflowReplanIdentity = {
-      workflowId: current.workflowId,
-      planVersion: current.planVersion,
-      sessionId: current.sessionId,
-      recoveryGeneration: current.recoveryGeneration,
-      revisionId: revision.revisionId,
-      handoffId: continuation.handoffId,
-    };
+    const identity = workflowReplanIdentity(current);
+    if (!identity) return false;
     if (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowReplanIdentity] === expectedIdentity[key as keyof WorkflowReplanIdentity])) return false;
     try {
       if (continuation.phase !== "dispatching" && continuation.phase !== "queued") {

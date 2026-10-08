@@ -432,7 +432,8 @@ test("公共角色路由 Skill 随 package 发布并按角色拆分说明", asyn
   assert.deepEqual(manifest.pi.skills, ["./skills"]);
   assert.match(sharedSkill, /^---\nname: pi-init-role-routing\n/);
   assert.match(sharedSkill, /roleModels/);
-  assert.match(sharedSkill, /普通压缩、reload、resume、fork 或已有上下文恢复后.*重新切换/);
+  assert.match(sharedSkill, /普通压缩、reload、resume、fork 或已有上下文恢复后，先核对运行时恢复门/);
+  assert.match(sharedSkill, /自动角色交接已确认，不要重复切换/);
   assert.match(sharedSkill, /task_workflow/);
   assert.match(sharedSkill, /## 路由/);
   assert.match(sharedSkill, /明确对应实现\/测试的指令直接交给 `developer-test`/);

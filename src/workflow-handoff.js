@@ -5,8 +5,34 @@ const TASK_MESSAGE_TYPE = "pi-init-workflow-task";
 const REPLAN_MESSAGE_TYPE = "pi-init-workflow-replan";
 const BASE_IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration"];
 
-function failure(code, message) {
-  return { ok: false, code, message };
+function failure(code, message, details = {}) {
+  return { ok: false, code, message, ...details };
+}
+
+function safeIdentityValues(source, fields) {
+  const result = {};
+  for (const field of fields) {
+    if (!source || !Object.prototype.hasOwnProperty.call(source, field)) continue;
+    const value = source[field];
+    if (typeof value === "string") result[field] = value.length <= 256 ? value : `${value.slice(0, 256)}…`;
+    else if (typeof value === "number" && Number.isFinite(value)) result[field] = value;
+    else if (value === null) result[field] = null;
+    else result[field] = `<${typeof value}>`;
+  }
+  return result;
+}
+
+function identityFailure(code, message, mismatchedFields, expected, received, nextAction) {
+  return failure(code, message, {
+    mismatchedFields,
+    expected: safeIdentityValues(expected, [...new Set([...mismatchedFields, ...BASE_IDENTITY_FIELDS])]),
+    received: safeIdentityValues(received, [...new Set([...mismatchedFields, ...BASE_IDENTITY_FIELDS])]),
+    nextAction,
+  });
+}
+
+function differingIdentityFields(actual, expected, fields) {
+  return fields.filter((field) => actual?.[field] !== expected?.[field]);
 }
 
 function sameIdentity(actual, expected, fields) {
@@ -14,27 +40,73 @@ function sameIdentity(actual, expected, fields) {
 }
 
 function validateBaseIdentity(state, input, ctx) {
-  if (!input || typeof input !== "object") return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份");
+  if (!input || typeof input !== "object") {
+    return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份", {
+      mismatchedFields: BASE_IDENTITY_FIELDS,
+      expected: safeIdentityValues(state, BASE_IDENTITY_FIELDS),
+      received: {},
+      nextAction: "读取当前工作流状态；不要从旧任务文本或记忆中补造身份。",
+    });
+  }
   for (const field of BASE_IDENTITY_FIELDS) {
     if (input[field] === undefined || input[field] === null || input[field] === "") {
-      return failure("WORKFLOW_ACTION_IDENTITY_MISSING", `工作流操作缺少 ${field}`);
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_MISSING",
+        `工作流操作缺少 ${field}`,
+        [field], state, input,
+        "读取当前工作流状态，并只补齐当前动作实际需要的身份字段。",
+      );
     }
   }
-  if (!Number.isSafeInteger(input.planVersion) || input.planVersion < 0
-    || !Number.isSafeInteger(input.recoveryGeneration) || input.recoveryGeneration < 0) {
-    return failure("WORKFLOW_ACTION_IDENTITY_INVALID", "工作流 planVersion 或 recoveryGeneration 格式无效");
+  for (const field of ["workflowId", "sessionId"]) {
+    if (typeof input[field] !== "string") {
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_INVALID",
+        `工作流 ${field} 必须是非空字符串`,
+        [field], state, input,
+        "读取当前工作流状态，使用该字段的正确类型和值；不要转换或猜测身份。",
+      );
+    }
+  }
+  for (const field of ["planVersion", "recoveryGeneration"]) {
+    if (!Number.isSafeInteger(input[field]) || input[field] < 0) {
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_INVALID",
+        `工作流 ${field} 必须是非负安全整数`,
+        [field], state, input,
+        "读取当前工作流状态，并使用原样数值；不要将无效值强制转换。",
+      );
+    }
   }
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   if (typeof sessionId !== "string" || !sessionId) {
-    return failure("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法从 Pi 公共 SessionManager 读取当前 sessionId");
+    return failure("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法从 Pi 公共 SessionManager 读取当前 sessionId", {
+      mismatchedFields: ["sessionId"],
+      received: safeIdentityValues(input, BASE_IDENTITY_FIELDS),
+      nextAction: "停止提交，不得猜测 sessionId；等待当前 Pi session 提供有效身份。",
+    });
   }
   if (input.sessionId !== sessionId || state?.sessionId !== sessionId) {
-    return failure("WORKFLOW_SESSION_MISMATCH", "当前 Pi session 与工作流身份不匹配；不会应用旧 session 的结果");
+    return failure("WORKFLOW_SESSION_MISMATCH", "当前 Pi session 与工作流身份不匹配；不会应用旧 session 的结果", {
+      mismatchedFields: [
+        ...(input.sessionId !== sessionId ? ["sessionId"] : []),
+        ...(state?.sessionId !== sessionId ? ["workflowSessionId"] : []),
+      ],
+      expected: { sessionId, workflowSessionId: safeIdentityValues(state, ["sessionId"]).sessionId },
+      received: { sessionId: safeIdentityValues(input, ["sessionId"]).sessionId },
+      nextAction: "不要将旧 session 的结果迁移到当前工作流；在拥有该工作流的 session 中处理，或重新规划。",
+    });
   }
-  if (!sameIdentity(input, state, BASE_IDENTITY_FIELDS)) {
-    return failure("WORKFLOW_ACTION_IDENTITY_STALE", "工作流 workflowId、planVersion 或恢复代次已变化；请读取当前状态后重试");
+  const mismatchedFields = differingIdentityFields(input, state, BASE_IDENTITY_FIELDS);
+  if (mismatchedFields.length > 0) {
+    return identityFailure(
+      "WORKFLOW_ACTION_IDENTITY_STALE",
+      `工作流基础身份已变化：${mismatchedFields.join(", ")}`,
+      mismatchedFields, state, input,
+      "只读查询当前状态一次。仅当同一活动 handoff 仍有效且确认只是提交字段抄录错误时更正；attempt、handoff、branch 或 session 已变化时不得用新身份提交旧结果。未知结果先核对副作用，再显式授权 retry。",
+    );
   }
-  return { ok: true, value: { workflowId: input.workflowId, planVersion: input.planVersion, sessionId, recoveryGeneration: input.recoveryGeneration } };
+  return { ok: true, value: workflowActionIdentity(state) };
 }
 
 function activeBranchContains(ctx, customType, expected, fields) {
@@ -54,6 +126,16 @@ export function workflowHandoffMessageOnBranch(ctx, identity) {
   );
 }
 
+export function workflowActionIdentity(state) {
+  if (!state) return undefined;
+  return {
+    workflowId: state.workflowId,
+    planVersion: state.planVersion,
+    sessionId: state.sessionId,
+    recoveryGeneration: state.recoveryGeneration,
+  };
+}
+
 export function workflowHandoffIdentity(state) {
   if (!state?.handoff) return undefined;
   return {
@@ -67,32 +149,87 @@ export function workflowHandoffIdentity(state) {
   };
 }
 
+export function workflowReplanIdentity(state) {
+  const continuation = state?.continuation;
+  const revision = state?.pendingRevision;
+  if (state?.status !== "replanning" || !revision || continuation?.kind !== "replan" || !continuation.handoffId) {
+    return undefined;
+  }
+  const actionIdentity = workflowActionIdentity(state);
+  if (!actionIdentity) return undefined;
+  return {
+    ...actionIdentity,
+    revisionId: revision.revisionId,
+    handoffId: continuation.handoffId,
+  };
+}
+
 export function validateWorkflowMutationIdentity(state, input, ctx) {
   return validateBaseIdentity(state, input, ctx);
 }
 
-export function validateWorkflowHandoffIdentity(state, input, ctx) {
+export function validateWorkflowHandoffIdentity(state, input, ctx, { allowQueued = false } = {}) {
   const base = validateBaseIdentity(state, input, ctx);
   if (!base.ok) return base;
   const handoff = state?.handoff;
   if (!handoff || !state.currentTaskId) {
-    return failure("WORKFLOW_HANDOFF_MISSING", "当前工作流没有可验收的任务交接");
+    return failure("WORKFLOW_HANDOFF_MISSING", "当前工作流没有可验收的任务交接", {
+      mismatchedFields: ["handoff"],
+      expected: safeIdentityValues(state, BASE_IDENTITY_FIELDS),
+      received: safeIdentityValues(input, BASE_IDENTITY_FIELDS),
+      nextAction: "查询当前状态；若没有当前任务和 handoff，不得提交 complete/block。旧结果不能绑定到后续任务。",
+    });
   }
   const fields = [...BASE_IDENTITY_FIELDS, "taskId", "attemptId", "handoffId"];
   for (const field of ["taskId", "attemptId", "handoffId"]) {
-    if (typeof input[field] !== "string" || !input[field].trim()) {
-      return failure("WORKFLOW_ACTION_IDENTITY_MISSING", `工作流任务结果缺少 ${field}`);
+    if (input[field] === undefined || input[field] === null || input[field] === "") {
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_MISSING",
+        `工作流任务结果缺少 ${field}`,
+        [field], workflowHandoffIdentity(state), input,
+        "从当前任务交接消息或状态中的 JSON 身份原样提供该字段；不要从旧 attempt 补齐。",
+      );
+    }
+    if (typeof input[field] !== "string") {
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_INVALID",
+        `工作流任务结果的 ${field} 必须是非空字符串`,
+        [field], workflowHandoffIdentity(state), input,
+        "从当前任务交接消息复制该字段的原始字符串值；不要转换或猜测。",
+      );
     }
   }
   const expected = workflowHandoffIdentity(state);
-  if (!sameIdentity(input, expected, fields)) {
-    return failure("WORKFLOW_HANDOFF_STALE", "任务 attempt/handoff 身份已变化；拒绝旧任务结果");
+  if (!expected) {
+    return failure("WORKFLOW_HANDOFF_MISSING", "当前工作流没有可验收的任务交接", {
+      mismatchedFields: ["handoff"],
+      nextAction: "查询当前状态；不得将旧任务结果绑定到后续任务。",
+    });
   }
-  if (handoff.phase !== "executing") {
-    return failure("WORKFLOW_HANDOFF_NOT_EXECUTING", `任务尚未处于可验收的实际执行阶段（${handoff.phase}）`);
+  const mismatchedFields = differingIdentityFields(input, expected, fields);
+  if (mismatchedFields.length > 0) {
+    return identityFailure(
+      "WORKFLOW_HANDOFF_STALE",
+      `任务 handoff 身份已变化：${mismatchedFields.join(", ")}`,
+      mismatchedFields, expected, input,
+      "拒绝旧 attempt 的结果。查询当前状态一次；若 attempt/handoff/branch 已变化，不得把旧结果换成最新身份提交。结果未知时先核对副作用并显式授权 retry。",
+    );
+  }
+  if (handoff.phase !== "executing" && !(allowQueued && handoff.phase === "queued")) {
+    return failure("WORKFLOW_HANDOFF_NOT_EXECUTING", `任务尚未处于可验收的实际执行阶段（${handoff.phase}）`, {
+      mismatchedFields: ["handoff.phase"],
+      expected: { phase: allowQueued ? "executing or queued" : "executing" },
+      received: { phase: handoff.phase },
+      nextAction: "不要重复 complete/block。等待当前任务真实启动；若状态已恢复为结果未知，核对潜在副作用后显式 retry。",
+    });
   }
   if (!activeBranchContains(ctx, TASK_MESSAGE_TYPE, expected, fields)) {
-    return failure("WORKFLOW_HANDOFF_BRANCH_MISMATCH", "当前 session branch 不包含匹配的任务交接消息；拒绝旧分支回调");
+    return identityFailure(
+      "WORKFLOW_HANDOFF_BRANCH_MISMATCH",
+      "当前 session branch 不包含匹配的任务交接消息；拒绝旧分支回调",
+      ["branch.handoff"], expected, input,
+      "不要从旧 branch 提交结果；仅在匹配 handoff 消息所在的当前 session branch 中处理该任务。",
+    );
   }
   return { ok: true, value: expected };
 }
@@ -103,24 +240,55 @@ export function validateWorkflowReplanIdentity(state, input, ctx) {
   const continuation = state?.continuation;
   const revision = state?.pendingRevision;
   if (state?.status !== "replanning" || !revision || continuation?.kind !== "replan") {
-    return failure("WORKFLOW_REPLAN_HANDOFF_MISSING", "当前没有可应用的重规划交接");
+    return failure("WORKFLOW_REPLAN_HANDOFF_MISSING", "当前没有可应用的重规划交接", {
+      mismatchedFields: ["replan.handoff"],
+      expected: safeIdentityValues(state, BASE_IDENTITY_FIELDS),
+      received: safeIdentityValues(input, BASE_IDENTITY_FIELDS),
+      nextAction: "查询当前状态；没有 pending revision 与 replan handoff 时，不得提交旧重规划结果。",
+    });
   }
   const fields = [...BASE_IDENTITY_FIELDS, "revisionId", "handoffId"];
-  const expected = {
-    ...base.value,
-    revisionId: revision.revisionId,
-    handoffId: continuation.handoffId,
-  };
+  const expected = workflowReplanIdentity(state);
+  if (!expected) {
+    return failure("WORKFLOW_REPLAN_HANDOFF_MISSING", "当前工作流没有有效的重规划身份", {
+      mismatchedFields: ["replan.handoff"],
+      nextAction: "查询当前状态；没有有效的 pending revision/handoff 时不得应用旧重规划结果。",
+    });
+  }
   for (const field of ["revisionId", "handoffId"]) {
-    if (typeof input[field] !== "string" || !input[field].trim()) {
-      return failure("WORKFLOW_ACTION_IDENTITY_MISSING", `工作流重规划结果缺少 ${field}`);
+    if (input[field] === undefined || input[field] === null || input[field] === "") {
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_MISSING",
+        `工作流重规划结果缺少 ${field}`,
+        [field], expected, input,
+        "从当前 replan handoff 消息原样提供 revisionId 和 handoffId；不要使用旧 revision。",
+      );
+    }
+    if (typeof input[field] !== "string") {
+      return identityFailure(
+        "WORKFLOW_ACTION_IDENTITY_INVALID",
+        `工作流重规划结果的 ${field} 必须是非空字符串`,
+        [field], expected, input,
+        "从当前 replan handoff 消息复制原始字符串值；不要转换或猜测。",
+      );
     }
   }
-  if (!sameIdentity(input, expected, fields)) {
-    return failure("WORKFLOW_REPLAN_STALE", "工作流 revision 或重规划交接身份已变化；拒绝旧结果");
+  const mismatchedFields = differingIdentityFields(input, expected, fields);
+  if (mismatchedFields.length > 0) {
+    return identityFailure(
+      "WORKFLOW_REPLAN_STALE",
+      `工作流重规划身份已变化：${mismatchedFields.join(", ")}`,
+      mismatchedFields, expected, input,
+      "拒绝旧 revision 的重规划结果。读取当前状态并由 architect 处理当前 revision；不得将旧计划改贴新 handoff 身份。",
+    );
   }
   if (!activeBranchContains(ctx, REPLAN_MESSAGE_TYPE, expected, fields)) {
-    return failure("WORKFLOW_REPLAN_BRANCH_MISMATCH", "当前 session branch 不包含匹配的重规划消息");
+    return identityFailure(
+      "WORKFLOW_REPLAN_BRANCH_MISMATCH",
+      "当前 session branch 不包含匹配的重规划消息",
+      ["branch.handoff"], expected, input,
+      "仅在包含当前 replan handoff 消息的活动 branch 中应用计划；不要从旧 branch 提交。",
+    );
   }
   return { ok: true, value: expected };
 }
