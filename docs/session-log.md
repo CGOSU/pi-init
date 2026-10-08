@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-08：pi-usage 按模型展示缓存命中率和账单 Token
+
+- 完成内容：终端 Models 表新增每模型缓存命中率列，合计行按总量计算；SVG 对账单在每模型明细中增加总 Token 和缓存命中率，并扩展模型行间距及画布高度。比例复用 `(cacheRead + cacheWrite) / tokens`，零 Token 显示 0；用量采集和查询语义未变。
+- 决策：见 [`docs/decisions.md`](decisions.md)“pi-usage 统计页与账单按模型显示缓存命中率和 Token”。
+- 验证：`node --test test/pi-usage.test.js`，14 项通过、0 失败。
+- 遗留：工作流状态工具持续拒绝与 `status` 完全一致的基础身份，任务无法通过工作流接口完成交接；实现与测试已完成，未提交或推送。
+
 ### 2026-10-08：完成 src JavaScript 到 TypeScript 迁移与最终验证
 
 - 完成内容：将 `src` 的 11 个实现迁为唯一 `.ts` 实现：计时工具、角色配置、工作流模型/恢复/转换/重规划/handoff/入口，以及脚手架和模板同步；新增 `role-types.ts`、`workflow-types.ts`、`scaffold-types.ts`。同步 extensions、内部源码与测试的直接导入，删除对应 `.js` 与旧 `.d.ts`，未保留转发层。`tsconfig.json` 使用 strict/noEmit/NodeNext 等设置，`allowJs: false`，仅检查 `extensions/**/*.ts` 和 `src/**/*.ts`；scripts/tests 保持 JS，不增加构建步骤或运行器。

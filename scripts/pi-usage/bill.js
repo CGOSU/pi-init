@@ -3,6 +3,7 @@ import { calculateCacheRatio, formatNumber } from "./report.js";
 const BILL_WIDTH = 750;
 const SIDE_PADDING = 54;
 const RIGHT_EDGE = BILL_WIDTH - SIDE_PADDING;
+const MODEL_ROW_HEIGHT = 104;
 const FONT_FAMILY = "-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif";
 const MONO_FONT_FAMILY = "SFMono-Regular,Consolas,Liberation Mono,monospace";
 
@@ -103,6 +104,8 @@ function modelRows(summary, total) {
       client: formatClient(model.client),
       model: truncate(model.model),
       cost: numberValue(row.cost),
+      tokens: numberValue(row.tokens),
+      cacheRatio: calculateCacheRatio(row).ratio,
     };
   });
 }
@@ -113,11 +116,13 @@ function renderModels(rows, startY) {
   }
   return rows
     .map((row, index) => {
-      const y = startY + index * 76;
+      const y = startY + index * MODEL_ROW_HEIGHT;
       return [
         text(row.client, SIDE_PADDING, y, 'class="model-client"'),
         text(formatCost(row.cost), RIGHT_EDGE, y, 'class="body mono" text-anchor="end"'),
         text(row.model, SIDE_PADDING + 58, y + 34, 'class="model-name"'),
+        text(`总 Token ${formatCompactNumber(row.tokens)}`, SIDE_PADDING + 58, y + 68, 'class="body mono"'),
+        text(`缓存命中率 ${Math.round(row.cacheRatio * 100)}%`, RIGHT_EDGE, y + 68, 'class="body mono" text-anchor="end"'),
       ].join("");
     })
     .join("");
@@ -151,7 +156,7 @@ export function createBillSvg(summary, options = {}) {
   const dateLabel = formatBillDate(summary?.date);
   const modelItems = modelRows(summary ?? {}, total);
   const modelStartY = 650;
-  const modelEndY = modelStartY + modelItems.length * 76 + 10;
+  const modelEndY = modelStartY + modelItems.length * MODEL_ROW_HEIGHT + 10;
   const statsStartY = modelEndY + 64;
   const statsEndY = statsStartY + 4 * 47 + 18;
   const footerStartY = statsEndY + 62;

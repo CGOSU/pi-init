@@ -122,18 +122,22 @@ function formatOverviewTable(summary, total, color) {
 
 function formatUsageTable(rows, color) {
   return formatTable(
-    rows.map((row) => [
-      row.model,
-      formatNumber(row.calls),
-      formatNumber(row.input),
-      formatNumber(row.output),
-      formatNumber(row.cacheRead),
-      formatNumber(row.cacheWrite),
-      formatNumber(row.tokens),
-      formatCost(row.cost),
-      formatTps(row.avgTps),
-    ]),
-    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cost", "Avg TPS"],
+    rows.map((row) => {
+      const cache = calculateCacheRatio(row);
+      return [
+        row.model,
+        formatNumber(row.calls),
+        formatNumber(row.input),
+        formatNumber(row.output),
+        formatNumber(row.cacheRead),
+        formatNumber(row.cacheWrite),
+        formatNumber(row.tokens),
+        formatPercentage(cache.ratio),
+        formatCost(row.cost),
+        formatTps(row.avgTps),
+      ];
+    }),
+    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cache %", "Cost", "Avg TPS"],
     [],
     { color, highlightLast: true },
   );
