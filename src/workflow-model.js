@@ -118,6 +118,7 @@ export function normalizePlanVersion(value, label) {
   return value;
 }
 
+/** @returns {import("./workflow-types.js").WorkflowHandoff} */
 export function normalizeWorkflowHandoff(value) {
   if (!value || typeof value !== "object") throw new Error("已保存的工作流 handoff 格式无效");
   if (!WORKFLOW_HANDOFF_PHASES.includes(value.phase)) {
@@ -137,6 +138,7 @@ export function normalizeWorkflowHandoff(value) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowContinuation | undefined} */
 export function normalizeWorkflowContinuation(value) {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || !WORKFLOW_CONTINUATION_KINDS.includes(value.kind)) {
@@ -174,6 +176,7 @@ export function normalizeTaskIds(value, label) {
   });
 }
 
+/** @returns {import("./workflow-types.js").WorkflowTask} */
 export function cloneTask(task) {
   return {
     ...task,
@@ -185,6 +188,7 @@ export function cloneTask(task) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowRoleValidationResult} */
 export function validateWorkflowExecutionRoles(tasks, { unfinishedOnly = false } = {}) {
   if (!Array.isArray(tasks)) {
     return { ok: false, code: "WORKFLOW_TASK_ROLE_LIST_INVALID", message: "工作流任务角色列表必须是数组" };
@@ -232,6 +236,7 @@ export function assertWorkflowExecutionRoles(tasks, options) {
   }
 }
 
+/** @returns {import("./workflow-types.js").WorkflowTask} */
 export function normalizeTask(task, index) {
   if (!task || typeof task !== "object") {
     throw new Error(`工作流任务 ${index + 1} 格式无效`);
@@ -292,6 +297,7 @@ export function assertAcyclic(tasks) {
   for (const task of tasks) visit(task.id);
 }
 
+/** @returns {import("./workflow-types.js").WorkflowPlan} */
 export function validateWorkflowPlan(input) {
   if (!input || typeof input !== "object") throw new Error("工作流规划格式无效");
 
@@ -319,6 +325,7 @@ export function validateWorkflowPlan(input) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowPlanSummary} */
 export function clonePlan(plan) {
   return {
     summary: plan.summary,
@@ -326,6 +333,7 @@ export function clonePlan(plan) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowRevision} */
 export function cloneRevision(revision) {
   return {
     ...revision,
@@ -354,6 +362,7 @@ export function normalizePlanSnapshot(value, label) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowPendingRevision} */
 export function normalizePendingRevision(revision) {
   if (!revision || typeof revision !== "object") {
     throw new Error("已保存的工作流 pendingRevision 格式无效");
@@ -372,6 +381,7 @@ export function normalizePendingRevision(revision) {
   return result;
 }
 
+/** @returns {import("./workflow-types.js").WorkflowState} */
 export function createWorkflowState(input, now = Date.now()) {
   const plan = validateWorkflowPlan(input);
   const executor = normalizeExecutor(input.executor);
@@ -401,6 +411,7 @@ export function createWorkflowState(input, now = Date.now()) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowTask | undefined} */
 export function getWorkflowTask(state, taskId) {
   return state?.tasks?.find((task) => task.id === taskId);
 }
@@ -440,6 +451,7 @@ export function getWorkflowExecutionDuration(state) {
   return completedAt - startedAt;
 }
 
+/** @returns {import("./workflow-types.js").WorkflowState} */
 export function cloneState(state, now = Date.now()) {
   if (Object.prototype.hasOwnProperty.call(state, "runtimeAuthority")) {
     throw workflowError("WORKFLOW_STATE_RUNTIME_RETIRED", "旧 Runtime 工作流 authority 已退役；不能克隆或本地执行");

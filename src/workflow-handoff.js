@@ -126,6 +126,7 @@ export function workflowHandoffMessageOnBranch(ctx, identity) {
   );
 }
 
+/** @returns {import("./workflow-types.js").WorkflowActionIdentity | undefined} */
 export function workflowActionIdentity(state) {
   if (!state) return undefined;
   return {
@@ -136,6 +137,7 @@ export function workflowActionIdentity(state) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowHandoffIdentity | undefined} */
 export function workflowHandoffIdentity(state) {
   if (!state?.handoff) return undefined;
   return {
@@ -149,6 +151,7 @@ export function workflowHandoffIdentity(state) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowReplanIdentity | undefined} */
 export function workflowReplanIdentity(state) {
   const continuation = state?.continuation;
   const revision = state?.pendingRevision;
@@ -164,10 +167,12 @@ export function workflowReplanIdentity(state) {
   };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowIdentityValidationResult<import("./workflow-types.js").WorkflowActionIdentity>} */
 export function validateWorkflowMutationIdentity(state, input, ctx) {
   return validateBaseIdentity(state, input, ctx);
 }
 
+/** @returns {import("./workflow-types.js").WorkflowIdentityValidationResult<import("./workflow-types.js").WorkflowHandoffIdentity>} */
 export function validateWorkflowHandoffIdentity(state, input, ctx, { allowQueued = false } = {}) {
   const base = validateBaseIdentity(state, input, ctx);
   if (!base.ok) return base;
@@ -234,6 +239,7 @@ export function validateWorkflowHandoffIdentity(state, input, ctx, { allowQueued
   return { ok: true, value: expected };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowIdentityValidationResult<import("./workflow-types.js").WorkflowReplanIdentity>} */
 export function validateWorkflowReplanIdentity(state, input, ctx) {
   const base = validateBaseIdentity(state, input, ctx);
   if (!base.ok) return base;
@@ -293,6 +299,7 @@ export function validateWorkflowReplanIdentity(state, input, ctx) {
   return { ok: true, value: expected };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowRecoveryResult} */
 export function recoverWorkflowState(state, currentSessionId) {
   if (typeof currentSessionId !== "string" || !currentSessionId) {
     return failure("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法从 Pi 公共 SessionManager 读取当前 sessionId");
@@ -390,6 +397,7 @@ export function recoverWorkflowState(state, currentSessionId) {
   return { ok: true, value: cloneState(migrated), changed: true };
 }
 
+/** @returns {import("./workflow-types.js").WorkflowState | undefined} */
 export function ensureWorkflowReplanHandoff(state) {
   if (state?.status !== "replanning" || !state.pendingRevision) return undefined;
   if (state.continuation?.kind === "replan" && state.continuation.handoffId) return state;

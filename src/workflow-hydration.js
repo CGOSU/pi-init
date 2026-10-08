@@ -293,6 +293,7 @@ function hasRuntimeAuthorityMarker(state) {
     || Object.prototype.hasOwnProperty.call(state, "runtimeAuthority");
 }
 
+/** @returns {import("./workflow-types.js").WorkflowHydrationResult} */
 export function hydrateWorkflowState(state) {
   if (state === undefined) {
     return resultFailure("WORKFLOW_STATE_MISSING", "没有已保存的工作流状态");
