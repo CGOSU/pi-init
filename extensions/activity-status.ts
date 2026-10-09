@@ -90,9 +90,9 @@ export type ActivityStatusReporter = ReturnType<typeof createActivityStatus>;
 function formatTokens(value: number) {
   if (!Number.isFinite(value) || value <= 0) return undefined;
   if (value < 1000) return String(Math.floor(value));
-  if (value < 10_000) return `${(value / 1000).toFixed(1)}k`;
+  if (value < 10_000) return `${(value / 1000).toFixed(1).replace(/\.0$/, "")}k`;
   if (value < 1_000_000) return `${Math.round(value / 1000)}k`;
-  return `${(value / 1_000_000).toFixed(1)}m`;
+  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
 }
 
 function cacheCountsText(read: number, write: number) {
@@ -100,7 +100,7 @@ function cacheCountsText(read: number, write: number) {
     read > 0 ? `R${formatTokens(read)}` : undefined,
     write > 0 ? `W${formatTokens(write)}` : undefined,
   ].filter((part): part is string => Boolean(part));
-  return counts.length > 0 ? `缓存 ${counts.join("/")}` : undefined;
+  return counts.length > 0 ? counts.join(" · ") : undefined;
 }
 
 function roleSegments(role: ActivityStatusRole | undefined): ActivityStatusSegment[] {
@@ -117,18 +117,18 @@ function cacheResultSegment(cache: ActivityStatusCache | undefined): ActivitySta
   if (!result) return undefined;
   if (result.kind === "request-error") return { text: `✕ ${source}请求失败`, tone: "error" };
   if (result.kind === "aborted") return { text: `! ${source}请求已中止`, tone: "warning" };
-  if (result.kind === "zero-unconfirmed") return { text: `${source}缓存 0（来源未确认）`, tone: "muted" };
+  if (result.kind === "zero-unconfirmed") return { text: `${source} 0?`, tone: "muted" };
   if (result.kind === "invalid") return { text: `${source}缓存 usage 无效`, tone: "warning" };
   if (result.kind === "unreported") {
     const text = result.error.code === "message-end-missing"
       ? `${source}缓存结果未到达`
       : result.error.code === "usage-missing"
-        ? `${source}缓存 usage 未提供`
+        ? `${source} 未报`
         : `${source}缓存 usage 字段不完整`;
     return { text, tone: "muted" };
   }
   const counts = cacheCountsText(result.read, result.write);
-  return counts ? { text: `${source}${counts}`, tone: "success" } : undefined;
+  return counts ? { text: `${source} ${counts}`, tone: "success" } : undefined;
 }
 
 function shortDuration(seconds: number) {

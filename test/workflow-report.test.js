@@ -88,7 +88,7 @@ test("workflow acknowledge 只收起当前告警、按 branch/reload 重新提�
   assert.deepEqual(currentWorkflow(), workflowBeforeAck);
   assert.equal(harness.branch.length, branchLengthBeforeAck);
   assert.match(latestActivityStatus(harness), /待处理：已暂停工作流/);
-  assert.match(latestActivityStatus(harness), /缓存 R2\.0k/);
+  assert.match(latestActivityStatus(harness), /本次 R2k/);
   assert.match(harness.notifications.at(-1).message, /工作流状态和恢复守卫未改变/);
   const statusTool = harness.tools.find((tool) => tool.name === "task_workflow");
   const fullStatus = await statusTool.execute("acknowledged-full-status", { action: "status" }, undefined, undefined, harness.context);
@@ -118,7 +118,7 @@ test("workflow acknowledge 只收起当前告警、按 branch/reload 重新提�
   assert.match(latestActivityStatus(reloadHarness), /待处理：已暂停工作流/);
   await reloadHarness.commands.get("pi-init").handler("workflow cancel", reloadHarness.context);
   assert.doesNotMatch(latestActivityStatus(reloadHarness), /待处理：|已暂停/);
-  assert.match(latestActivityStatus(reloadHarness), /缓存 R2\.0k/);
+  assert.match(latestActivityStatus(reloadHarness), /本次 R2k/);
   const branchLengthAfterCancel = reloadHarness.branch.length;
   await reloadHarness.commands.get("pi-init").handler("workflow acknowledge", reloadHarness.context);
   assert.equal(reloadHarness.branch.length, branchLengthAfterCancel);

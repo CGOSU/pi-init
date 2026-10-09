@@ -192,13 +192,13 @@ test("TUI 与 RPC 按活动、工作流、缓存、本地辅助信息的统一�
   const rpc = formatActivityStatusText(snapshot, 120, 2_000);
   assert.equal(tui, rpc);
   assert.ok(tui.indexOf("模型响应") < tui.indexOf("执行任务 B"));
-  assert.ok(tui.indexOf("执行任务 B") < tui.indexOf("上次缓存 R4.1k"));
-  assert.ok(tui.indexOf("上次缓存 R4.1k") < tui.indexOf("开发测试"));
+  assert.ok(tui.indexOf("执行任务 B") < tui.indexOf("上次 R4.1k"));
+  assert.ok(tui.indexOf("上次 R4.1k") < tui.indexOf("开发测试"));
 
   const normalWidth = renderActivityStatus(snapshot, 80, theme, 2_000).join("");
   assert.match(normalWidth, /模型响应/);
   assert.match(normalWidth, /执行任务 B/);
-  assert.match(normalWidth, /上次缓存 R4.1k/);
+  assert.match(normalWidth, /上次 R4.1k/);
   assert.doesNotMatch(normalWidth, /long-model-name/);
 
   const narrow = renderActivityStatus({
@@ -218,7 +218,7 @@ test("规范化零值标记来源未确认，不当作未报告或命中", () =>
     current: { kind: "zero-unconfirmed", read: 0, write: 0 },
   });
 
-  assert.match(harness.statusCalls.at(-1).text, /缓存 0（来源未确认）/);
+  assert.match(harness.statusCalls.at(-1).text, /本次 0\?/);
   assert.doesNotMatch(harness.statusCalls.at(-1).text, /缓存未报告|命中|未命中/);
   assert.doesNotMatch(harness.statusCalls.at(-1).text, /磁盘|网络/);
 });
@@ -231,6 +231,6 @@ test("缓存 usage 未报告时不推断磁盘或网络 I/O", () => {
     current: { kind: "unreported", error: { code: "usage-missing", message: "usage is missing" } },
   });
 
-  assert.match(harness.statusCalls.at(-1).text, /缓存 usage 未提供/);
+  assert.match(harness.statusCalls.at(-1).text, /本次 未报/);
   assert.doesNotMatch(harness.statusCalls.at(-1).text, /磁盘|网络|命中/);
 });
