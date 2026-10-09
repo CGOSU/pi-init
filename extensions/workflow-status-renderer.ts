@@ -4,6 +4,7 @@ import type { ReportTheme } from "./contracts.ts";
 import { formatWorkflowPauseBlockLines } from "./workflow-pause-renderer.ts";
 import type { WorkflowStatusActivity, WorkflowStatusView } from "./workflow-status-view.ts";
 import { formatWorkflowDuration, formatWorkflowTimestamp } from "./workflow-view-format.ts";
+import { classifyWorkflowRecoveryError } from "../src/workflow-recovery-disposition.ts";
 
 const ELAPSED_UNAVAILABLE = "不可用（工作流未记录有效的开始时间）";
 const TASK_DURATION_UNAVAILABLE = "不可用（历史任务未记录有效的开始时间）";
@@ -55,7 +56,17 @@ function workflowIdentityLines(view: Extract<WorkflowStatusView, { kind: "workfl
 export function formatWorkflowStatusText(view: WorkflowStatusView) {
   if (view.kind === "no-workflow") return "当前没有活动工作流。";
   if (view.kind === "restore-error") {
-    return `无法恢复已保存的工作流（${view.code}）：${view.message}`;
+    const classification = classifyWorkflowRecoveryError(view.code);
+    const recoveryMessage = !classification.ok
+      ? `当前不能隔离记录：${classification.error.message}`
+      : classification.value.kind === "discardable"
+        ? view.sourceEntryId
+          ? `仅在项目受信任且 Agent 空闲时，核对原记录及潜在外部副作用后执行 /pi-init workflow discard-recovery ${view.sourceEntryId} --confirm-unknown-outcome。此操作保留原记录，不代表任务成功或已取消。`
+          : "无法安全定位原 Session entry；当前不能隔离，请检查 Session branch 后重新加载。"
+        : classification.value.kind === "recoverable"
+          ? classification.value.message
+          : `当前不允许隔离：${classification.value.message}`;
+    return `无法恢复已保存的工作流（${view.code}）：${view.message}${view.sourceEntryId ? `\n原 Session entry ID：${view.sourceEntryId}` : ""}\n恢复建议：${recoveryMessage}`;
   }
   const lines = [
     `状态：${view.status} · workflowId：${view.identity.action.workflowId} · planVersion：${view.identity.action.planVersion} · recoveryGeneration：${view.identity.action.recoveryGeneration} · sessionId：${view.identity.action.sessionId}`,

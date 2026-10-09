@@ -12,8 +12,10 @@ import {
   validateWorkflowMutationIdentity,
   validateWorkflowReplanIdentity,
   validateWorkflowPlan,
+  workflowActionIdentity,
 } from "../src/workflow.ts";
 import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
+import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowMode } from "../src/role-types.ts";
 import type { WorkflowHandoffIdentity, WorkflowResult } from "../src/workflow-types.ts";
 import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from "./runtime-state.ts";
@@ -48,6 +50,7 @@ export function createWorkflowActions(
   state: ExtensionRuntimeState,
   deps: WorkflowActionDependencies,
 ) {
+  const recoveryActions = createWorkflowRecoveryActions(state, { report: deps.report });
   function missingWorkflowError() {
     const restoreError = state.workflowRestoreError;
     if (restoreError) {
@@ -64,6 +67,15 @@ export function createWorkflowActions(
       kind: "workflow-status",
       view: createCurrentWorkflowStatusView(state, workflowState),
     });
+  }
+
+  function persistTerminalWorkflowState(next: ExtensionRuntimeState["workflowState"], ctx: ExtensionContext) {
+    if (!next) throw new Error("终态持久化缺少工作流状态");
+    const previousIdentity = workflowActionIdentity(state.workflowState);
+    const persisted = deps.report.persistWorkflowState(next, ctx);
+    if (previousIdentity) deps.roleRuntime.retireWorkflowContinuation(previousIdentity);
+    state.workflowDispatchInFlight = false;
+    return persisted;
   }
 
   function requireIdentity<T>(result: WorkflowResult<T>): T {
@@ -126,21 +138,47 @@ export function createWorkflowActions(
     ctx: ExtensionCommandContext,
     confirmUnknownOutcome = false,
   ) {
+    if (action === "acknowledge") {
+      if (taskId !== undefined || confirmUnknownOutcome) {
+        ctx.ui.notify("用法：/pi-init workflow acknowledge（只确认当前工作流告警，不接受来源参数）", "error");
+        return;
+      }
+      try {
+        const result = deps.report.acknowledgeWorkflowNotice(ctx);
+        if (!result.ok) {
+          ctx.ui.notify(result.error.message, "warning");
+        } else {
+          ctx.ui.notify(result.value.alreadyAcknowledged
+            ? "当前工作流告警已确认；详细状态和恢复守卫仍保留。"
+            : "已确认当前工作流告警；仅收起前台突出提示，工作流状态和恢复守卫未改变。", "info");
+        }
+      } catch (error) {
+        ctx.ui.notify(textOf(error), "error");
+      }
+      return;
+    }
+    if (action === "discard-recovery") {
+      try {
+        recoveryActions.discard(taskId, confirmUnknownOutcome, ctx);
+      } catch (error) {
+        const code = typeof error === "object" && error && "code" in error && typeof error.code === "string"
+          ? error.code
+          : undefined;
+        ctx.ui.notify(`${code ? `[${code}] ` : ""}${textOf(error)}`, "error");
+      }
+      return;
+    }
     if (action === undefined || action === "status") {
       await deps.report.showWorkflowProgress(ctx);
-      if (state.workflowRestoreError) {
-        ctx.ui.notify(
-          `工作流恢复诊断（${state.workflowRestoreError.code}）：${state.workflowRestoreError.message}`,
-          "error",
-        );
-      }
+      const diagnostic = recoveryActions.diagnostic();
+      if (diagnostic) ctx.ui.notify(diagnostic, "error");
       return;
     }
     if (!state.workflowState) {
       const restoreError = state.workflowRestoreError;
       ctx.ui.notify(
         restoreError
-          ? `无法恢复工作流（${restoreError.code}）：${restoreError.message}`
+          ? recoveryActions.diagnostic() ?? `无法恢复工作流（${restoreError.code}）：${restoreError.message}`
           : "当前没有工作流。请先让架构角色调用 task_workflow(action=plan)。",
         restoreError ? "error" : "warning",
       );
@@ -168,13 +206,11 @@ export function createWorkflowActions(
       }
       if (action === "cancel") {
         const cancelled = cancelWorkflow(state.workflowState);
-        deps.report.persistWorkflowState(cancelled, ctx);
-        state.workflowDispatchInFlight = false;
-        state.workflowRestoreError = undefined;
+        persistTerminalWorkflowState(cancelled, ctx);
         ctx.ui.notify("工作流已取消。", "info");
         return;
       }
-      ctx.ui.notify("用法：/pi-init workflow [status|resume|retry <taskId> [--confirm-unknown-outcome]|cancel]", "error");
+      ctx.ui.notify("用法：/pi-init workflow [status|acknowledge|resume|retry <taskId> [--confirm-unknown-outcome]|cancel|discard-recovery <entryId> --confirm-unknown-outcome]", "error");
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
     }
@@ -186,7 +222,7 @@ export function createWorkflowActions(
     ctx: ExtensionContext,
   ): Promise<WorkflowActionResult> {
     if (signal?.aborted) {
-      return { content: [{ type: "text", text: "工作流操作已取消。" }], details: {} };
+      return { content: [{ type: "text", text: "本次工作流工具操作已中止；工作流状态未更改。" }], details: {} };
     }
     if (params.action !== "status" && !ctx.isProjectTrusted()) {
       throw new Error("task_workflow 仅允许在受信任项目中运行；请先信任当前项目");
@@ -260,13 +296,13 @@ export function createWorkflowActions(
         };
       }
       case "status": {
-        const restoreDiagnostic = state.workflowRestoreError
-          ? `\n\n工作流恢复错误：${JSON.stringify(state.workflowRestoreError)}；不会改写原记录或派发任务。可显式取消该工作流后另建计划。`
+        const restoreDiagnostic = recoveryActions.diagnostic()
+          ? `\n\n${recoveryActions.diagnostic()}；不会改写原记录或派发任务。`
           : "";
         return {
           content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}` }],
           details: state.workflowRestoreError
-            ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError }
+            ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError, recovery: recoveryActions.status() }
             : state.workflowState
               ? statusDetails(state.workflowState)
               : statusDetails({}),
@@ -335,7 +371,8 @@ export function createWorkflowActions(
         const presentation = workflowCompletionView
           ? { kind: "workflow-completion" as const, view: workflowCompletionView }
           : { kind: "task-completion" as const, view: taskCompletionView, continuation };
-        deps.report.persistWorkflowState(next, ctx);
+        if (next.status === "completed") persistTerminalWorkflowState(next, ctx);
+        else deps.report.persistWorkflowState(next, ctx);
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${notice}` }],
           details: attachWorkflowPresentation(next, presentation),
@@ -394,8 +431,7 @@ export function createWorkflowActions(
         if (!state.workflowState) throw missingWorkflowError();
         requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
         const next = cancelWorkflow(state.workflowState);
-        deps.report.persistWorkflowState(next, ctx);
-        state.workflowDispatchInFlight = false;
+        persistTerminalWorkflowState(next, ctx);
         return { content: [{ type: "text", text: "工作流已取消。" }], details: statusDetails(next), terminate: true };
       }
       default:

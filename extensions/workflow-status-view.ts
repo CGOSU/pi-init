@@ -41,7 +41,7 @@ export type WorkflowStatusTaskView = {
 
 export type WorkflowStatusView =
   | { kind: "no-workflow" }
-  | { kind: "restore-error"; code: string; message: string }
+  | { kind: "restore-error"; code: string; message: string; sourceEntryId?: string }
   | {
       kind: "workflow";
       status: WorkflowState["status"];

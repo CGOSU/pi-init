@@ -238,6 +238,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.sessionRoleConfigOverrides = {};
       runtimeState.configuredRoleNames = [];
       runtimeState.activeRole = undefined;
+      runtimeState.workflowNoticeAcknowledgement = undefined;
       roleRecovery.restore(ctx, event.reason);
       runtimeState.currentContext = ctx;
       workflowDispatch.restoreWorkflowState(ctx);
@@ -276,11 +277,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.roleContextGeneration += 1;
       runtimeState.roleTransitionGeneration += 1;
       runtimeState.activeRole = undefined;
+      runtimeState.workflowNoticeAcknowledgement = undefined;
       roleRecovery.requireConfirmation(ctx, "branch");
     } else {
       roleRecovery.restore(ctx);
     }
-    roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
+    workflowReport.updateWorkflowStatus(ctx);
   });
 
   pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: async (args, ctx) => {
@@ -313,7 +315,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           : action === "mode"
           ? ROLE_MODES
           : action === "workflow"
-            ? ["status", "resume", "retry", "cancel"]
+            ? ["status", "acknowledge", "resume", "retry", "cancel"]
             : [];
       const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
       const matches = values.filter((value) => value.startsWith(partial));

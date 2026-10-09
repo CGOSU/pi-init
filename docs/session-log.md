@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：工作流终态、历史恢复隔离与告警确认闭环
+
+- 完成内容：显式工作流取消（`/pi-init workflow cancel` 或 `task_workflow(action="cancel")`）在 `cancelled` 状态成功持久化后才退休对应续跑和提示；工具 `AbortSignal` 只中止本次工具操作，工作流状态保持不变，终态操作也不宣称 Pi 宿主压缩已终止。恢复诊断按白名单区分可隔离、可恢复和 blocked；`discard-recovery` 只对无可读/待持久化状态的不可恢复原记录，在受信任项目、Agent 空闲、精确原 entry/session/branch/error 匹配并显式确认未知外部结果后，追加版本化引用处置；原记录不改写或删除，处置失败保留恢复阻塞。`/pi-init workflow acknowledge` 只收起当前 session/branch/workflow/recovery/reason/attempt 匹配告警的前台突出提示，不改变 workflow 状态、诊断或守卫；问题身份变化、branch 切换和 reload 会重新提醒，终态清除所属标记。Pi 原生压缩、Provider 请求、工具和 cache 活动保持独立。
+- 用户文档：README 新增 `cancel`、工具中止、告警确认和历史隔离的区别、使用边界及权限/未知副作用要求。项目记忆更新当前事实和决策；未发现需要新增到 pitfalls 的可复发陷阱。
+- 验证：`node --test test/activity-status.test.js test/workflow-report.test.js test/workflow-status-view.test.js test/workflow-runtime-retirement.test.js test/workflow-persistence.test.js`，35 项通过；`npm test`（执行 `node --test`），247 项通过、0 失败、0 跳过；`npm run typecheck` 通过；`git diff --check` 通过（Git 有 LF/CRLF 转换提示）。
+- 未验证/收尾：未运行真实 Pi TUI/E2E、Provider 请求或旧长驻 Pi 实例；在本次文档收尾时尚未提交或推送。原范围的本地里程碑提交由后续独立授权任务核对并执行；不推送、发布或部署。
+
 ### 2026-10-09：将大文件行数硬门禁改为 Pi 运行时结构审阅
 
 - 完成内容：移除 `npm test` 的 500 行硬门禁；统一扫描策略和 SHA-256 内容指纹，新增超限文件扫描、错误诊断、项目/session/策略绑定的审阅状态，以及 Pi 扩展运行时队列。会话启动扫描既有超限文件，文件工具结果与 `agent_settled` 补扫；`file_review` 分页列出候选，只有完整读取当前文件版本并提交有理由的“保留”或“建议拆分”后才登记完成，内容变化后重新待审。审阅不自动修改代码，不绕过角色恢复门；扫描和持久化失败保持显式。

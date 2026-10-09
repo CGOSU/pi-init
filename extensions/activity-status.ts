@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatSessionWorkTime } from "../src/session-work-time.ts";
+import type { WorkflowActionIdentity, WorkflowHandoffIdentity, WorkflowReplanIdentity } from "../src/workflow-types.ts";
 
 export const ACTIVITY_STATUS_KEY = "pi-init-activity";
 
@@ -10,9 +11,30 @@ export type ActivityStatusRole = {
   model?: string;
 };
 
+export type ActivityStatusWorkflowNoticeSource = {
+  kind: "paused" | "replanning" | "restore-error";
+  sessionId: string;
+  contextGeneration: number;
+  workflowIdentity?: WorkflowActionIdentity;
+  handoffIdentity?: WorkflowHandoffIdentity;
+  replanIdentity?: WorkflowReplanIdentity;
+  cause?: {
+    code?: string;
+    message: string;
+    sourceEntryId?: string;
+    blockedTasks?: Array<{ taskId: string; reason: string; outcomeUnknown: boolean }>;
+  };
+};
+
 export type ActivityStatusWorkflow = {
   text: string;
   color: "accent" | "warning" | "error";
+  notice?: {
+    source: ActivityStatusWorkflowNoticeSource;
+    sourceKey: string;
+    summary: string;
+    acknowledged: boolean;
+  };
 };
 
 export type ActivityStatusOperation =
@@ -118,9 +140,17 @@ function operationSegment(operation: ActivityStatusOperation | undefined, now: n
 }
 
 export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date.now()): ActivityStatusSegment[] {
+  const workflowAcknowledged = state.workflow?.notice?.acknowledged === true;
   const workflow = state.workflow
-    ? { text: state.workflow.text, tone: state.workflow.color }
+    ? {
+        text: workflowAcknowledged && state.workflow.notice
+          ? state.workflow.notice.summary
+          : state.workflow.text,
+        tone: workflowAcknowledged ? "muted" as const : state.workflow.color,
+      }
     : undefined;
+  const workflowNeedsAttention = Boolean(workflow && !workflowAcknowledged
+    && (workflow.tone === "warning" || workflow.tone === "error"));
   const compaction = state.compaction === "stalled"
     ? { text: "⚠ 压缩等待异常", tone: "warning" as const }
     : state.compaction === "compacting"
@@ -136,11 +166,9 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
     : undefined;
   const primary = compaction?.tone === "warning"
     ? compaction
-    : workflow?.tone === "error"
+    : workflowNeedsAttention
       ? workflow
-      : workflow?.tone === "warning"
-        ? workflow
-        : alert
+      : alert
           ?? urgentCacheResult
           ?? compaction
           ?? operation

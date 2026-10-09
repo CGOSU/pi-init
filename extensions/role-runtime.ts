@@ -483,6 +483,7 @@ export function createRoleRuntime(
     setRoleStatus,
     createPendingRoleCompaction,
     startPendingRoleCompaction,
+    retireWorkflowContinuation: workflowCompaction.retireWorkflowContinuation,
     disposeWorkflowCompaction: workflowCompaction.dispose,
     applyRole,
     automaticRole,

@@ -27,6 +27,13 @@ function isOptionalString(value: unknown) {
   return value === undefined || typeof value === "string";
 }
 
+function isOptionalIdentifier(value: unknown) {
+  return value === undefined || (typeof value === "string"
+    && value.trim().length > 0
+    && value === value.trim()
+    && value.length <= 256);
+}
+
 function isOptionalTimestamp(value: unknown) {
   return value === undefined || (typeof value === "number" && Number.isFinite(value));
 }
@@ -50,7 +57,11 @@ function isCompletionTaskView(value: unknown): value is NonNullable<WorkflowComp
 function isWorkflowStatusView(value: unknown): value is WorkflowStatusView {
   if (!isRecord(value)) return false;
   if (value.kind === "no-workflow") return true;
-  if (value.kind === "restore-error") return typeof value.code === "string" && typeof value.message === "string";
+  if (value.kind === "restore-error") {
+    return typeof value.code === "string"
+      && typeof value.message === "string"
+      && isOptionalIdentifier(value.sourceEntryId);
+  }
   if (value.kind !== "workflow" || !isRecord(value.progress) || !isRecord(value.identity)) return false;
   const identity = value.identity;
   const action = identity.action;

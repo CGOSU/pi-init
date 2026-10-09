@@ -8,6 +8,7 @@ import {
   type ActiveRole,
   type ExtensionRuntimeState,
   type PendingRoleCompaction,
+  type WorkflowActionIdentity,
 } from "./runtime-state.ts";
 import type { ActivityStatusReporter } from "./activity-status.ts";
 
@@ -83,11 +84,23 @@ export function createWorkflowCompaction(
     state.roleCompactionStartedAt = undefined;
   }
 
+  function watchdogNextStep(operation: ActiveCompaction) {
+    const continuation = operation.transition.continuation;
+    if (!continuation) return "当前压缩只负责角色切换，不会派发工作流任务；等待 Pi 完成后检查角色恢复状态。";
+    if (!continuationIsCurrent(operation.transition)) {
+      return "关联的工作流身份已变化，不会继续旧交接；请查看当前工作流状态。";
+    }
+    if (continuation.kind === "workflow-review") {
+      return "工作流仍等待用户审阅；压缩完成不会自动恢复，审阅后再显式继续。";
+    }
+    return "请先查看当前工作流状态；只有身份仍匹配时才显式恢复，不要重放旧交接。";
+  }
+
   function notifyCompactionStalled(operation: ActiveCompaction) {
     if (!active || active.operationId !== operation.operationId || active.settled) return;
     state.roleCompactionPhase = "stalled";
     state.roleCompactionStalled = true;
-    const message = `上下文压缩等待超过 ${Math.ceil(watchdogMs / 1000)} 秒（操作 ${operation.operationId}）；未自动启动下一任务。请等待 Pi 完成，或执行 /reload 后使用 /pi-init workflow resume。`;
+    const message = `上下文压缩等待超过 ${Math.ceil(watchdogMs / 1000)} 秒（操作 ${operation.operationId}）；未自动启动下一任务。${watchdogNextStep(operation)}`;
     deps.activityStatus?.setCompaction(operation.ctx, "stalled");
     operation.ctx.ui.notify(message, "warning");
   }
@@ -125,6 +138,29 @@ export function createWorkflowCompaction(
     return !state.runtimeDisposed
       && state.roleContextGeneration === transition.contextGeneration
       && ctx.sessionManager.getSessionId() === transition.sessionId;
+  }
+
+  function sameWorkflowIdentity(left: WorkflowActionIdentity, right: WorkflowActionIdentity) {
+    return left.workflowId === right.workflowId
+      && left.planVersion === right.planVersion
+      && left.sessionId === right.sessionId
+      && left.recoveryGeneration === right.recoveryGeneration;
+  }
+
+  function continuationBelongsTo(transition: PendingRoleCompaction, identity: WorkflowActionIdentity) {
+    return transition.sessionId === identity.sessionId
+      && transition.contextGeneration === state.roleContextGeneration
+      && Boolean(transition.continuation && sameWorkflowIdentity(transition.continuation.identity, identity));
+  }
+
+  function retireWorkflowContinuation(identity: WorkflowActionIdentity) {
+    let retired = false;
+    for (const transition of [state.pendingRoleCompaction, active?.transition]) {
+      if (!transition || !continuationBelongsTo(transition, identity)) continue;
+      transition.continuation = undefined;
+      retired = true;
+    }
+    return retired;
   }
 
   function operationIsCurrent(operation: ActiveCompaction) {
@@ -287,6 +323,7 @@ export function createWorkflowCompaction(
   return {
     start,
     settle,
+    retireWorkflowContinuation,
     dispose,
   };
 }

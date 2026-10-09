@@ -94,6 +94,8 @@ test("长工作流在同角色任务边界不主动压缩", async () => {
     await emitExtensionEvent(harness, "agent_start");
     const second = await workflow.execute("complete-second", completeParams(harness, "second", "第二项完成"), undefined, undefined, harness.context);
     assert.equal(second.details.status, "completed");
+    const finalActivity = harness.statusCalls.filter(({ name }) => name === "pi-init-activity").at(-1)?.text;
+    assert.doesNotMatch(finalActivity ?? "", /\b\d+\/2\b/);
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(compactCalls, 0);
   });

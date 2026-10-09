@@ -18,6 +18,7 @@ import {
   validateWorkflowExecutionRoles,
 } from "../src/workflow.ts";
 import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
+import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery.ts";
 import {
   textOf,
   type ExtensionRuntimeState,
@@ -49,6 +50,12 @@ function sameIdentity(left: WorkflowActionIdentity, right: WorkflowActionIdentit
     && left.planVersion === right.planVersion
     && left.sessionId === right.sessionId
     && left.recoveryGeneration === right.recoveryGeneration;
+}
+
+function sameReplanIdentity(left: WorkflowReplanIdentity, right: WorkflowReplanIdentity) {
+  return sameIdentity(left, right)
+    && left.revisionId === right.revisionId
+    && left.handoffId === right.handoffId;
 }
 
 function isTaskCompletionContinuation(continuation: WorkflowState["continuation"]) {
@@ -145,10 +152,9 @@ export function createWorkflowDispatch(
     const previousRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     try {
       const selection = await deps.roleRuntime.automaticRole("architect", ctx);
-      if (!state.workflowState || !sameIdentity(workflowIdentity(state.workflowState), identity)) {
-        state.workflowDispatchInFlight = false;
-        return;
-      }
+      const latest = state.workflowState;
+      const latestIdentity = latest ? replanIdentity(latest) : undefined;
+      if (!latestIdentity || !sameReplanIdentity(latestIdentity, identity)) return;
       if (selection.result.role !== "architect") {
         state.workflowDispatchInFlight = false;
         ctx.ui.notify(
@@ -180,6 +186,9 @@ export function createWorkflowDispatch(
       )) return;
       deps.messages.sendWorkflowReplanMessage(ctx, identity);
     } catch (error) {
+      const latest = state.workflowState;
+      const latestIdentity = latest ? replanIdentity(latest) : undefined;
+      if (!latestIdentity || !sameReplanIdentity(latestIdentity, identity)) return;
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`工作流已暂停等待架构师重规划：${textOf(error)}`, "warning");
     }
@@ -194,20 +203,27 @@ export function createWorkflowDispatch(
     state.pendingWorkflowRecovery = undefined;
     state.workflowState = undefined;
     state.workflowRestoreError = undefined;
-    const entry = ctx.sessionManager.getBranch().findLast(
-      (item) => item.type === "custom" && item.customType === "pi-init-workflow",
-    );
+    const branch = ctx.sessionManager.getBranch();
+    const source = latestWorkflowRecoverySource(branch);
+    const { entry, entryId: sourceEntryId } = source;
+    const sessionId = ctx.sessionManager.getSessionId();
     if (entry) {
       const data = "data" in entry ? entry.data : undefined;
       const restored = hydrateWorkflowState(data);
       if (!restored.ok) {
-        state.workflowRestoreError = { code: restored.code, message: restored.message };
-        ctx.ui.notify(`无法恢复工作流状态（${restored.code}）：${restored.message}`, "error");
+        const restoreError = workflowRestoreErrorForSource(restored, branch, source, sessionId);
+        if (restoreError) {
+          state.workflowRestoreError = restoreError;
+          ctx.ui.notify(`无法恢复工作流状态（${restored.code}）：${restored.message}`, "error");
+        }
       } else {
-        const recovered = recoverWorkflowState(restored.value, ctx.sessionManager.getSessionId());
+        const recovered = recoverWorkflowState(restored.value, sessionId);
         if (!recovered.ok) {
-          state.workflowRestoreError = { code: recovered.code, message: recovered.message };
-          ctx.ui.notify(`无法安全恢复工作流（${recovered.code}）：${recovered.message}`, "error");
+          const restoreError = workflowRestoreErrorForSource(recovered, branch, source, sessionId);
+          if (restoreError) {
+            state.workflowRestoreError = restoreError;
+            ctx.ui.notify(`无法安全恢复工作流（${recovered.code}）：${recovered.message}`, "error");
+          }
         } else {
           const roleValidation = isWorkflowActive(recovered.value)
             ? validateWorkflowExecutionRoles(recovered.value.tasks, { unfinishedOnly: true })
@@ -216,7 +232,7 @@ export function createWorkflowDispatch(
             // Keep the recovered identity only in memory so an explicit cancellation can be persisted safely.
             // Do not persist or dispatch an old plan that assigns executable work to architect.
             state.workflowState = recovered.value;
-            state.workflowRestoreError = { code: roleValidation.code, message: roleValidation.message };
+            state.workflowRestoreError = { code: roleValidation.code, message: roleValidation.message, ...(sourceEntryId ? { sourceEntryId } : {}) };
             ctx.ui.notify(
               `已保存的工作流包含不可执行角色（${roleValidation.code}）：${roleValidation.message}；原记录未修改，任务不会派发。请先检查状态并显式取消旧工作流，再另建计划。`,
               "error",
@@ -299,10 +315,7 @@ export function createWorkflowDispatch(
         deps.report.persistWorkflowState(setWorkflowHandoffPhase(before, "waiting-role"), ctx);
       }
       const selection = await deps.roleRuntime.automaticRole(task.role, ctx);
-      if (!currentHandoff(identity)) {
-        state.workflowDispatchInFlight = false;
-        return;
-      }
+      if (!currentHandoff(identity)) return;
       if (selection.result.role !== task.role) {
         const paused = blockWorkflowTask(state.workflowState!, {
           taskId,
@@ -331,10 +344,7 @@ export function createWorkflowDispatch(
       deps.report.updateWorkflowStatus(ctx);
     } catch (error) {
       const current = state.workflowState;
-      if (!current || !currentHandoff(identity)) {
-        state.workflowDispatchInFlight = false;
-        return;
-      }
+      if (!current || !currentHandoff(identity)) return;
       const paused = blockWorkflowTask(current, {
         taskId,
         reason: `无法切换到 ${task.role}：${textOf(error)}`,

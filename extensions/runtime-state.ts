@@ -49,7 +49,8 @@ export type ExtensionRuntimeState = {
   controlCenterGuideShown: boolean;
   roleModeStatus: RoleMode;
   workflowModeStatus: WorkflowMode;
-  workflowRestoreError?: { code: string; message: string };
+  workflowRestoreError?: { code: string; message: string; sourceEntryId?: string };
+  workflowNoticeAcknowledgement?: { sessionId: string; contextGeneration: number; sourceKey: string };
   pendingWorkflowRecovery?: WorkflowState;
   roleRecoveryPending: boolean;
   roleRecoveryPersistenceFailed: boolean;

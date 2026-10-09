@@ -356,9 +356,18 @@ test("旧工作流中的 architect 执行任务只报告错误，不改写或派
 
     const status = await workflow.execute("invalid-role-status", { action: "status" }, undefined, undefined, harness.context);
     assert.equal(status.details.error.code, "WORKFLOW_EXECUTION_ROLE_FORBIDDEN");
+    assert.equal(status.details.recovery.kind, "recoverable");
+    assert.equal(status.details.recovery.action, "cancel-valid-state");
+    assert.equal(status.details.recovery.stateAllowsAction, true);
+    assert.match(status.content[0].text, /可执行 \/pi-init workflow cancel/);
     assert.match(status.content[0].text, /不会改写原记录或派发任务/);
     assert.equal(JSON.stringify(harness.branch[0].data), original);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 0);
+
+    const branchLength = harness.branch.length;
+    await harness.commands.get("pi-init").handler("workflow discard-recovery unrelated-entry --confirm-unknown-outcome", harness.context);
+    assert.equal(harness.branch.length, branchLength);
+    assert.match(harness.notifications.at(-1).message, /可恢复状态/);
 
     await harness.commands.get("pi-init").handler("workflow cancel", harness.context);
     assert.equal(JSON.stringify(harness.branch[0].data), original);
@@ -378,6 +387,9 @@ test("forked session 的旧 workflow 状态 fail-closed", async () => {
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
     const status = await workflow.execute("status", { action: "status" }, undefined, undefined, harness.context);
     assert.equal(status.details.error.code, "WORKFLOW_SESSION_MISMATCH");
+    assert.equal(status.details.recovery.kind, "recoverable");
+    assert.equal(status.details.recovery.action, "switch-session-or-plan");
+    assert.doesNotMatch(status.content[0].text, /discard-recovery/);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 0);
     assert.equal(harness.branch.length, 1);
 
