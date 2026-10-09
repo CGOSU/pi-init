@@ -19,6 +19,8 @@ function usage(cacheRead = 0, cacheWrite = 0) {
   };
 }
 
+let assistantMessageSequence = 0;
+
 function assistantMessage(cacheRead = 0, cacheWrite = 0, stopReason = "stop") {
   return {
     role: "assistant",
@@ -28,7 +30,7 @@ function assistantMessage(cacheRead = 0, cacheWrite = 0, stopReason = "stop") {
     model: "gpt-5.6-luna",
     usage: usage(cacheRead, cacheWrite),
     stopReason,
-    timestamp: Date.now(),
+    timestamp: Date.now() + assistantMessageSequence++,
   };
 }
 
@@ -82,10 +84,13 @@ test("cache usage parser returns normalized values and structured validation err
 
 async function beginRequest(harness) {
   await emitExtensionEvent(harness, "before_provider_request", { payload: {} });
+  harness.cacheAssistantMessage = assistantMessage();
+  await emitExtensionEvent(harness, "message_start", { message: harness.cacheAssistantMessage });
 }
 
 async function emitUpdate(harness, type, cacheRead = 0, cacheWrite = 0) {
-  const message = assistantMessage(cacheRead, cacheWrite);
+  const message = harness.cacheAssistantMessage ?? assistantMessage(cacheRead, cacheWrite);
+  message.usage = usage(cacheRead, cacheWrite);
   await emitExtensionEvent(harness, "message_update", {
     message,
     assistantMessageEvent: { type, partial: message },
@@ -93,9 +98,11 @@ async function emitUpdate(harness, type, cacheRead = 0, cacheWrite = 0) {
 }
 
 async function finishRequest(harness, cacheRead = 0, cacheWrite = 0, stopReason = "stop") {
-  await emitExtensionEvent(harness, "message_end", {
-    message: assistantMessage(cacheRead, cacheWrite, stopReason),
-  });
+  const message = harness.cacheAssistantMessage ?? assistantMessage(cacheRead, cacheWrite, stopReason);
+  message.usage = usage(cacheRead, cacheWrite);
+  message.stopReason = stopReason;
+  await emitExtensionEvent(harness, "message_end", { message });
+  harness.cacheAssistantMessage = undefined;
 }
 
 test("缓存状态共享唯一的 pi-init 活动状态出口", async () => {
@@ -139,6 +146,23 @@ test("TUI 将职责、Provider 阶段和累计时长合并到唯一活动 widget
   const completedLines = completedWidget.content({}, harness.context.ui.theme).render(80);
   assert.match(completedLines[0], /缓存 R2\.0k/);
   assert.match(completedLines[0], /累计/);
+});
+
+test("请求中将旧 usage 明确标为上次，结束后只显示本次最终结果", async () => {
+  const harness = createExtensionHarness();
+  useMarkedTheme(harness);
+
+  await beginRequest(harness);
+  await finishRequest(harness, 2048, 0);
+  assert.match(latestActivityStatus(harness), /本次缓存 R2\.0k/);
+
+  await beginRequest(harness);
+  assert.match(latestActivityStatus(harness), /上次缓存 R2\.0k/);
+  assert.doesNotMatch(latestActivityStatus(harness), /本次缓存 R2\.0k/);
+
+  await finishRequest(harness, 0, 1024);
+  assert.match(latestActivityStatus(harness), /本次缓存 W1\.0k/);
+  assert.doesNotMatch(latestActivityStatus(harness), /上次缓存/);
 });
 
 test("Provider 请求和首个输出 delta 显示不同阶段", async () => {
@@ -214,36 +238,40 @@ test("缺少缓存计数时与零值保持不同状态", async () => {
   const missingUsage = createExtensionHarness();
   useMarkedTheme(missingUsage);
   await beginRequest(missingUsage);
-  const messageWithoutUsage = assistantMessage();
+  const messageWithoutUsage = missingUsage.cacheAssistantMessage;
   messageWithoutUsage.usage = undefined;
   await emitExtensionEvent(missingUsage, "message_end", { message: messageWithoutUsage });
+  missingUsage.cacheAssistantMessage = undefined;
   assert.match(latestActivityStatus(missingUsage), /缓存 usage 未提供/);
   assert.doesNotMatch(latestActivityStatus(missingUsage), /缓存 0/);
 
   const missingFields = createExtensionHarness();
   useMarkedTheme(missingFields);
   await beginRequest(missingFields);
-  const messageWithoutCounts = assistantMessage();
+  const messageWithoutCounts = missingFields.cacheAssistantMessage;
   messageWithoutCounts.usage = { input: 120, output: 20, totalTokens: 140, cost: {} };
   await emitExtensionEvent(missingFields, "message_end", { message: messageWithoutCounts });
+  missingFields.cacheAssistantMessage = undefined;
   assert.match(latestActivityStatus(missingFields), /缓存 usage 字段不完整/);
   assert.doesNotMatch(latestActivityStatus(missingFields), /缓存 0|缓存 R|缓存 W/);
 
   const partialCounts = createExtensionHarness();
   useMarkedTheme(partialCounts);
   await beginRequest(partialCounts);
-  const messageWithPartialCounts = assistantMessage();
+  const messageWithPartialCounts = partialCounts.cacheAssistantMessage;
   messageWithPartialCounts.usage = { cacheRead: 1024 };
   await emitExtensionEvent(partialCounts, "message_end", { message: messageWithPartialCounts });
+  partialCounts.cacheAssistantMessage = undefined;
   assert.match(latestActivityStatus(partialCounts), /缓存 usage 字段不完整/);
   assert.doesNotMatch(latestActivityStatus(partialCounts), /缓存 R1\.0k/);
 
   const invalidUsage = createExtensionHarness();
   useMarkedTheme(invalidUsage);
   await beginRequest(invalidUsage);
-  const messageWithInvalidUsage = assistantMessage();
+  const messageWithInvalidUsage = invalidUsage.cacheAssistantMessage;
   messageWithInvalidUsage.usage = { cacheRead: "bad", cacheWrite: 0 };
   await emitExtensionEvent(invalidUsage, "message_end", { message: messageWithInvalidUsage });
+  invalidUsage.cacheAssistantMessage = undefined;
   assert.match(latestActivityStatus(invalidUsage), /缓存 usage 无效/);
 });
 
@@ -276,18 +304,75 @@ test("错误、中止和缺少结束事件时都清除活动高亮", async () =>
   assert.match(latestActivityStatus(unfinished), /缓存结果未到达/);
 });
 
-test("tree change 后迟到的 assistant message_end 不污染缓存状态", async () => {
+test("本次缺失、零值、无效、失败、中止或缺少结束事件不被上次成功遮蔽", async () => {
+  const scenarios = [
+    ["usage missing", /本次缓存 usage 未提供/, async (harness) => {
+      const message = harness.cacheAssistantMessage;
+      message.usage = undefined;
+      await emitExtensionEvent(harness, "message_end", { message });
+      harness.cacheAssistantMessage = undefined;
+    }],
+    ["zero unconfirmed", /本次缓存 0（来源未确认）/, (harness) => finishRequest(harness, 0, 0)],
+    ["invalid usage", /本次缓存 usage 无效/, async (harness) => {
+      const message = harness.cacheAssistantMessage;
+      message.usage = { cacheRead: "invalid", cacheWrite: 0 };
+      await emitExtensionEvent(harness, "message_end", { message });
+      harness.cacheAssistantMessage = undefined;
+    }],
+    ["request error", /本次请求失败/, (harness) => finishRequest(harness, 0, 0, "error")],
+    ["aborted", /本次请求已中止/, (harness) => finishRequest(harness, 0, 0, "aborted")],
+    ["missing message_end", /本次缓存结果未到达/, (harness) => emitExtensionEvent(harness, "agent_settled")],
+  ];
+
+  for (const [_name, expected, finishCurrent] of scenarios) {
+    const harness = createExtensionHarness();
+    useMarkedTheme(harness);
+    await beginRequest(harness);
+    await finishRequest(harness, 4096, 0);
+    await beginRequest(harness);
+    assert.match(latestActivityStatus(harness), /上次缓存 R4\.1k/);
+
+    await finishCurrent(harness);
+
+    assert.match(latestActivityStatus(harness), expected);
+    assert.doesNotMatch(latestActivityStatus(harness), /上次缓存 R4\.1k/);
+  }
+});
+
+test("tree change 后迟到的 assistant message_end 不污染新分支或新请求", async () => {
   const harness = createExtensionHarness();
   useMarkedTheme(harness);
   await beginRequest(harness);
+  const staleMessage = harness.cacheAssistantMessage;
   await emitExtensionEvent(harness, "session_tree", { oldLeafId: "old", newLeafId: "new" });
 
-  await finishRequest(harness, 2048, 0);
-  assert.doesNotMatch(latestActivityStatus(harness), /缓存 R|缓存 W/);
+  await emitExtensionEvent(harness, "message_end", { message: staleMessage });
+  assert.doesNotMatch(latestActivityStatus(harness), /本次缓存 R|本次缓存 W/);
 
   await beginRequest(harness);
+  await emitExtensionEvent(harness, "message_end", { message: staleMessage });
+  assert.doesNotMatch(latestActivityStatus(harness), /本次缓存 R|本次缓存 W/);
+
   await finishRequest(harness, 0, 1024);
-  assert.match(latestActivityStatus(harness), /缓存 W1\.0k/);
+  assert.match(latestActivityStatus(harness), /本次缓存 W1\.0k/);
+});
+
+test("模型切换使缓存来源退休，不沿用上一个模型的结果", async () => {
+  const harness = createExtensionHarness();
+  useMarkedTheme(harness);
+  await beginRequest(harness);
+  await finishRequest(harness, 2048, 0);
+  assert.match(latestActivityStatus(harness), /本次缓存 R2\.0k/);
+
+  const previousModel = harness.context.model;
+  harness.context.model = { provider: "other-provider", id: "other-model" };
+  await emitExtensionEvent(harness, "model_select", { model: harness.context.model, previousModel, source: "cycle" });
+  assert.doesNotMatch(latestActivityStatus(harness), /本次缓存 R|上次缓存 R/);
+
+  await beginRequest(harness);
+  assert.doesNotMatch(latestActivityStatus(harness), /上次缓存 R/);
+  await finishRequest(harness, 1024, 0);
+  assert.match(latestActivityStatus(harness), /本次缓存 R1\.0k/);
 });
 
 test("新会话会重置上一轮缓存状态", async () => {

@@ -235,7 +235,7 @@ test("普通角色压缩完成后不自动触发额外任务回合", () => {
   assert.deepEqual(sentMessages, []);
 });
 
-test("branch/context 变化并 dispose 后，迟到的压缩回调失效", () => {
+test("branch/context 变化阻止迟到 watchdog 提示且 dispose 后回调失效", async () => {
   const state = createExtensionRuntimeState();
   state.roleTransitionGeneration = 1;
   state.activeRole = { role: "docs-commit", provider: developerModel.provider, model: developerModel.id, thinkingLevel: "max" };
@@ -250,9 +250,10 @@ test("branch/context 变化并 dispose 后，迟到的压缩回调失效", () =>
   let completeCompaction;
   let dispatches = 0;
   let acknowledgements = 0;
+  const notifications = [];
   const ctx = {
     sessionManager: { getSessionId: () => "test-session", getBranch: () => [{ type: "user" }] },
-    ui: { setStatus() {}, notify() {} },
+    ui: { setStatus() {}, notify(message, level) { notifications.push({ message, level }); } },
     compact({ onComplete }) { completeCompaction = onComplete; },
   };
   const controller = createWorkflowCompaction({ sendMessage() {} }, state, {
@@ -263,10 +264,13 @@ test("branch/context 变化并 dispose 后，迟到的压缩回调失效", () =>
     async scheduleWorkflow() {},
     sendWorkflowReplanMessage() {},
     acknowledgeRoleRecovery() { acknowledgements++; },
-  });
+  }, { watchdogMs: 5 });
 
   assert.equal(controller.start(ctx), true);
   state.roleContextGeneration++;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(notifications.length, 0);
+  assert.equal(state.roleCompactionInFlight, true);
   controller.dispose();
   completeCompaction?.({});
   assert.equal(dispatches, 0);
@@ -325,7 +329,7 @@ test("迟到的压缩回调不能继续已更换的 workflow handoff", () => {
   assert.equal(state.roleCompactionInFlight, false);
 });
 
-test("压缩 watchdog 只告警且 dispose 清理瞬态锁", async () => {
+test("压缩长等待 watchdog 只提醒仍在压缩且 dispose 清理瞬态锁", async () => {
   const state = createExtensionRuntimeState();
   state.roleTransitionGeneration = 1;
   state.activeRole = {
@@ -343,6 +347,7 @@ test("压缩 watchdog 只告警且 dispose 清理瞬态锁", async () => {
     targetRole: state.activeRole,
   };
   const notifications = [];
+  const compactionStates = [];
   let sent = 0;
   const ctx = {
     ui: {
@@ -353,6 +358,7 @@ test("压缩 watchdog 只告警且 dispose 清理瞬态锁", async () => {
     compact() {},
   };
   const controller = createWorkflowCompaction({ sendMessage() {} }, state, {
+    activityStatus: { setCompaction(_ctx, phase, startedAt) { compactionStates.push({ phase, startedAt }); } },
     setWorkflowDispatchInFlight() {},
     getActiveRole() { return state.activeRole; },
     requireRoleRecovery() {},
@@ -364,14 +370,64 @@ test("压缩 watchdog 只告警且 dispose 清理瞬态锁", async () => {
 
   assert.equal(controller.start(ctx), true);
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(state.roleCompactionPhase, "stalled");
+  assert.equal(state.roleCompactionPhase, "compacting");
   assert.equal(state.roleCompactionInFlight, true);
+  assert.ok(Number.isFinite(state.roleCompactionStartedAt));
   assert.equal(sent, 0);
   assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, "warning");
+  assert.match(notifications[0].message, /仍在进行/);
+  assert.match(notifications[0].message, /达到 5ms 软提醒阈值/);
+  assert.match(notifications[0].message, /不代表失败/);
+  assert.deepEqual(compactionStates.map(({ phase }) => phase), ["compacting", "long-wait"]);
+  assert.ok(Number.isFinite(compactionStates[0].startedAt));
+  assert.equal(compactionStates[1].startedAt, compactionStates[0].startedAt);
   controller.dispose();
   assert.equal(state.roleCompactionPhase, "idle");
   assert.equal(state.roleCompactionInFlight, false);
   assert.equal(state.roleCompactionOperationId, undefined);
+  assert.deepEqual(compactionStates.map(({ phase }) => phase), ["compacting", "long-wait", undefined]);
+});
+
+test("长等待软提醒之后的真实压缩失败仍进入失败诊断", async () => {
+  const state = createExtensionRuntimeState();
+  state.roleTransitionGeneration = 1;
+  state.activeRole = { role: "architect", provider: architectModel.provider, model: architectModel.id, thinkingLevel: "max" };
+  state.pendingRoleCompaction = {
+    fromRole: "developer-test", toRole: "architect", sessionId: "test-session",
+    contextGeneration: 0, roleTransitionGeneration: 1, targetRole: state.activeRole,
+  };
+  const notifications = [];
+  const compactionStates = [];
+  const diagnostics = [];
+  let dispatches = 0;
+  let onError;
+  const ctx = {
+    ui: { setStatus() {}, notify(message, level) { notifications.push({ message, level }); } },
+    sessionManager: { getSessionId: () => "test-session", getBranch: () => [{ type: "user" }] },
+    compact(options) { onError = options.onError; },
+  };
+  const controller = createWorkflowCompaction({ sendMessage(message) { diagnostics.push(message); } }, state, {
+    activityStatus: { setCompaction(_ctx, phase) { compactionStates.push(phase); } },
+    setWorkflowDispatchInFlight(value) { state.workflowDispatchInFlight = value; },
+    getActiveRole: () => state.activeRole,
+    requireRoleRecovery() {},
+    sendWorkflowTaskMessage() { dispatches++; }, async scheduleWorkflow() {}, sendWorkflowReplanMessage() {}, acknowledgeRoleRecovery() {},
+  }, { watchdogMs: 5 });
+
+  assert.equal(controller.start(ctx), true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(state.roleCompactionInFlight, true);
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].message, /不代表失败/);
+  onError?.(new Error("provider failed"));
+  assert.equal(state.roleCompactionPhase, "idle");
+  assert.equal(state.roleCompactionInFlight, false);
+  assert.equal(state.workflowDispatchInFlight, false);
+  assert.deepEqual(compactionStates, ["compacting", "long-wait", undefined]);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(dispatches, 0);
+  assert.match(notifications[1].message, /压缩失败或被中止/);
 });
 
 test("Local running 工作流可安全恢复未启动任务且不重复真实执行", async () => {

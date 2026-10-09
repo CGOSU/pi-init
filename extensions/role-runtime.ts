@@ -19,7 +19,8 @@ import {
   shouldCompactOnRoleSwitch,
   unwrapRoleResult,
 } from "../src/roles.ts";
-import { workflowProgress } from "../src/workflow.ts";
+import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
 import type { RoleMode, WorkflowMode } from "../src/role-types.ts";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import {
@@ -275,28 +276,8 @@ export function createRoleRuntime(
   }
 
   function workflowStateLabel(workflowState = deps.getWorkflowState()) {
-    if (!workflowState) return inactiveWorkflowStateLabel();
-
-    const progress = workflowProgress(workflowState);
-    const current = progress.currentTaskId ? ` · 当前 ${progress.currentTaskId}` : "";
-    if (workflowState.status === "paused") return `已暂停 ${progress.completed}/${progress.total}${current}`;
-    if (workflowState.status === "replanning") return `等待重规划 ${progress.completed}/${progress.total}`;
-    if (workflowState.status === "completed") return `已完成 ${progress.completed}/${progress.total}`;
-    if (workflowState.status === "cancelled") return `已取消 ${progress.completed}/${progress.total}`;
-    if (progress.currentTaskId) {
-      const task = workflowState.tasks.find((item) => item.id === progress.currentTaskId);
-      if (task?.executionStartedAt === undefined) {
-        const phase = state.roleCompactionPhase === "stalled"
-          ? "压缩等待异常"
-          : state.roleCompactionPhase === "compacting" || state.pendingRoleCompaction
-            ? "正在压缩上下文"
-            : state.workflowDispatchInFlight
-              ? "正在交接任务"
-              : "等待任务启动";
-        return `${phase} ${progress.completed}/${progress.total}${current}`;
-      }
-    }
-    return `运行 ${progress.completed}/${progress.total}${current || " · 待调度"}`;
+    if (!workflowState || state.workflowRestoreError) return inactiveWorkflowStateLabel();
+    return formatWorkflowControlCenterLabel(createCurrentWorkflowStatusView(state, workflowState));
   }
 
   function refreshRoleStatus(ctx: ExtensionContext, mode: RoleMode) {

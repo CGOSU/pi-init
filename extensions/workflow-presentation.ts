@@ -75,6 +75,12 @@ function isWorkflowStatusView(value: unknown): value is WorkflowStatusView {
     && typeof value.progress.total === "number"
     && Number.isFinite(value.progress.total)
     && (value.progress.currentTaskId === undefined || typeof value.progress.currentTaskId === "string")
+    && (value.progress.currentTaskPosition === undefined
+      || (typeof value.progress.currentTaskPosition === "number"
+        && Number.isSafeInteger(value.progress.currentTaskPosition)
+        && value.progress.currentTaskPosition >= 1
+        && value.progress.currentTaskPosition <= value.progress.total
+        && typeof value.progress.currentTaskId === "string"))
     && isRecord(action)
     && typeof action.workflowId === "string"
     && typeof action.planVersion === "number"

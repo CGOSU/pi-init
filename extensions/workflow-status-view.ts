@@ -1,6 +1,5 @@
 import {
   getWorkflowExecutionBounds,
-  getWorkflowTask,
   getWorkflowTaskDuration,
   workflowActionIdentity,
   workflowHandoffIdentity,
@@ -9,10 +8,12 @@ import {
 } from "../src/workflow.ts";
 import type {
   WorkflowActionIdentity,
+  WorkflowHandoff,
   WorkflowHandoffIdentity,
   WorkflowHandoffPhase,
   WorkflowReplanIdentity,
   WorkflowState,
+  WorkflowTask,
   WorkflowTaskStatus,
 } from "../src/workflow-types.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
@@ -46,7 +47,7 @@ export type WorkflowStatusView =
       kind: "workflow";
       status: WorkflowState["status"];
       activity: WorkflowStatusActivity;
-      progress: { completed: number; total: number; currentTaskId?: string };
+      progress: { completed: number; total: number; currentTaskId?: string; currentTaskPosition?: number };
       startedAt?: number;
       elapsed: { kind: "available"; milliseconds: number } | { kind: "unavailable" };
       planSummary: string;
@@ -67,26 +68,94 @@ export type WorkflowStatusView =
 export type WorkflowStatusRuntime = Pick<
   ExtensionRuntimeState,
   "workflowRestoreError" | "roleCompactionPhase" | "pendingRoleCompaction" | "workflowDispatchInFlight"
->;
+> & Partial<Pick<
+  ExtensionRuntimeState,
+  "roleCompactionOperationId" | "roleContextGeneration" | "roleTransitionGeneration" | "activeRoleCompaction"
+>>;
+
+function currentTask(state: WorkflowState): { task: WorkflowTask; index: number } | undefined {
+  if (state.status !== "running" || !state.currentTaskId) return undefined;
+  const index = state.tasks.findIndex((task) => task.id === state.currentTaskId && task.status === "in_progress");
+  return index < 0 ? undefined : { task: state.tasks[index], index };
+}
+
+function currentHandoff(state: WorkflowState, task: WorkflowTask): WorkflowHandoff | undefined {
+  const handoff = state.handoff;
+  if (!handoff || task.status !== "in_progress" || state.currentTaskId !== task.id) return undefined;
+  if (handoff.workflowId !== state.workflowId
+    || handoff.planVersion !== state.planVersion
+    || handoff.sessionId !== state.sessionId
+    || handoff.recoveryGeneration !== state.recoveryGeneration
+    || handoff.taskId !== task.id
+    || !handoff.attemptId.trim()
+    || !handoff.handoffId.trim()) return undefined;
+  return handoff;
+}
+
+function hasExecutionEvidence(task: WorkflowTask, handoff: WorkflowHandoff) {
+  const startedAt = task.startedAt;
+  const executionStartedAt = task.executionStartedAt;
+  return handoff.phase === "executing"
+    && typeof startedAt === "number" && Number.isFinite(startedAt)
+    && typeof executionStartedAt === "number" && Number.isFinite(executionStartedAt)
+    && typeof handoff.startedAt === "number" && Number.isFinite(handoff.startedAt)
+    && startedAt === executionStartedAt
+    && executionStartedAt === handoff.startedAt;
+}
+
+function sameHandoff(left: WorkflowHandoff, right: WorkflowHandoffIdentity) {
+  return left.workflowId === right.workflowId
+    && left.planVersion === right.planVersion
+    && left.taskId === right.taskId
+    && left.attemptId === right.attemptId
+    && left.handoffId === right.handoffId
+    && left.sessionId === right.sessionId
+    && left.recoveryGeneration === right.recoveryGeneration;
+}
+
+function compactionMatchesCurrentHandoff(
+  state: WorkflowState,
+  task: WorkflowTask,
+  handoff: WorkflowHandoff,
+  runtime: WorkflowStatusRuntime,
+) {
+  const active = runtime.activeRoleCompaction;
+  const transition = active?.transition ?? runtime.pendingRoleCompaction;
+  if (!transition
+    || transition.sessionId !== state.sessionId
+    || transition.contextGeneration !== runtime.roleContextGeneration
+    || transition.roleTransitionGeneration !== runtime.roleTransitionGeneration) return false;
+  if (active && active.operationId !== runtime.roleCompactionOperationId) return false;
+  const continuation = transition.continuation;
+  return continuation?.kind === "workflow-task"
+    && continuation.taskId === task.id
+    && sameHandoff(handoff, continuation.identity);
+}
 
 function activityFor(
   state: WorkflowState,
   runtime: WorkflowStatusRuntime,
+  activeTask: WorkflowTask | undefined,
+  handoff: WorkflowHandoff | undefined,
 ): WorkflowStatusActivity {
   if (state.status === "replanning") return "awaiting-replan";
   if (state.status === "paused") return "paused";
   if (state.status === "completed") return "completed";
   if (state.status === "cancelled") return "cancelled";
 
-  const task = state.currentTaskId ? getWorkflowTask(state, state.currentTaskId) : undefined;
-  if (!task) return "waiting-dispatch";
-  if (task.executionStartedAt === undefined) {
-    if (runtime.roleCompactionPhase === "stalled") return "compaction-stalled";
-    if (runtime.roleCompactionPhase === "compacting" || runtime.pendingRoleCompaction) return "compacting";
-    if (runtime.workflowDispatchInFlight) return "dispatching";
-    return "waiting-task";
+  if (!state.currentTaskId || !activeTask) return "waiting-dispatch";
+  if (!handoff) return "waiting-task";
+  if (hasExecutionEvidence(activeTask, handoff)) return "executing";
+  if (handoff.phase === "compacting" && compactionMatchesCurrentHandoff(state, activeTask, handoff, runtime)) {
+    if (runtime.roleCompactionPhase === "compacting" || runtime.pendingRoleCompaction || runtime.activeRoleCompaction) {
+      return "compacting";
+    }
   }
-  return "executing";
+  if (handoff.phase === "dispatching"
+    || (runtime.workflowDispatchInFlight && (handoff.phase === "prepared" || handoff.phase === "waiting-role"))) {
+    return "dispatching";
+  }
+  return "waiting-task";
 }
 
 function elapsedFor(state: WorkflowState, now: number) {
@@ -118,18 +187,20 @@ export function createWorkflowStatusView(
   }
 
   const progress = workflowProgress(workflowState);
-  const handoff = workflowHandoffIdentity(workflowState);
-  const handoffPhase = workflowState.handoff?.phase;
+  const active = currentTask(workflowState);
+  const currentTaskHandoff = active ? currentHandoff(workflowState, active.task) : undefined;
+  const handoff = currentTaskHandoff ? workflowHandoffIdentity(workflowState) : undefined;
+  const handoffPhase = handoff ? currentTaskHandoff?.phase : undefined;
   const replan = workflowReplanIdentity(workflowState);
   const pause = createWorkflowPauseView(workflowState);
   return {
     kind: "workflow",
     status: workflowState.status,
-    activity: activityFor(workflowState, runtime),
+    activity: activityFor(workflowState, runtime, active?.task, currentTaskHandoff),
     progress: {
       completed: progress.completed,
       total: progress.total,
-      ...(progress.currentTaskId ? { currentTaskId: progress.currentTaskId } : {}),
+      ...(active ? { currentTaskId: active.task.id, currentTaskPosition: active.index + 1 } : {}),
     },
     startedAt: getWorkflowExecutionBounds(workflowState).startedAt,
     elapsed: elapsedFor(workflowState, now),
@@ -139,7 +210,7 @@ export function createWorkflowStatusView(
       ...(handoff ? { handoff } : {}),
       ...(handoffPhase ? { handoffPhase } : {}),
       ...(replan ? { replan } : {}),
-      handoffUnavailable: Boolean(workflowState.currentTaskId && !workflowState.handoff),
+      handoffUnavailable: Boolean(workflowState.status === "running" && workflowState.currentTaskId && !currentTaskHandoff),
     },
     pause,
     ...(workflowState.pauseReason ? { pauseCode: workflowState.pauseReason } : {}),
@@ -171,6 +242,10 @@ export function workflowStatusRuntimeFromState(state: ExtensionRuntimeState): Wo
     workflowRestoreError: state.workflowRestoreError,
     roleCompactionPhase: state.roleCompactionPhase,
     pendingRoleCompaction: state.pendingRoleCompaction,
+    activeRoleCompaction: state.activeRoleCompaction,
+    roleCompactionOperationId: state.roleCompactionOperationId,
+    roleContextGeneration: state.roleContextGeneration,
+    roleTransitionGeneration: state.roleTransitionGeneration,
     workflowDispatchInFlight: state.workflowDispatchInFlight,
   };
 }

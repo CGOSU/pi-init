@@ -9,7 +9,7 @@ import { classifyWorkflowRecoveryError } from "../src/workflow-recovery-disposit
 const ELAPSED_UNAVAILABLE = "不可用（工作流未记录有效的开始时间）";
 const TASK_DURATION_UNAVAILABLE = "不可用（历史任务未记录有效的开始时间）";
 
-function activityLabel(activity: WorkflowStatusActivity) {
+export function workflowStatusActivityLabel(activity: WorkflowStatusActivity) {
   switch (activity) {
     case "awaiting-replan": return "等待架构师重规划";
     case "paused": return "已暂停";
@@ -35,6 +35,9 @@ function workflowIdentityLines(view: Extract<WorkflowStatusView, { kind: "workfl
     `当前基础动作身份 JSON（后续变更动作仍须满足状态限制）：${JSON.stringify(view.identity.action)}`,
   ];
   if (view.progress.currentTaskId) lines.push(`当前任务：${view.progress.currentTaskId}`);
+  if (view.progress.currentTaskPosition !== undefined) {
+    lines.push(`当前任务位置：第 ${view.progress.currentTaskPosition}/${view.progress.total} 项`);
+  }
   if (view.identity.handoff && view.identity.handoffPhase) {
     const handoff = view.identity.handoff;
     lines.push(`当前任务结果身份 JSON（complete/block）：${JSON.stringify(handoff)}`);
@@ -70,8 +73,8 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
   }
   const lines = [
     `状态：${view.status} · workflowId：${view.identity.action.workflowId} · planVersion：${view.identity.action.planVersion} · recoveryGeneration：${view.identity.action.recoveryGeneration} · sessionId：${view.identity.action.sessionId}`,
-    `阶段：${activityLabel(view.activity)}`,
-    `进度：${view.progress.completed}/${view.progress.total}`,
+    `阶段：${workflowStatusActivityLabel(view.activity)}`,
+    `已完成任务（completed/total）：${view.progress.completed}/${view.progress.total}`,
     `总任务开始时间：${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
     `总任务已运行时间：${elapsedText(view)}`,
     `规划：${view.planSummary}`,
@@ -100,12 +103,15 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
 export function formatWorkflowStatusPanelSummary(view: WorkflowStatusView) {
   if (view.kind !== "workflow") return formatWorkflowStatusText(view);
   const lines = [
-    `状态  ${activityLabel(view.activity)} · workflowId  ${view.identity.action.workflowId} · planVersion  ${view.identity.action.planVersion} · recoveryGeneration  ${view.identity.action.recoveryGeneration}`,
-    `进度  ${view.progress.completed}/${view.progress.total}`,
+    `状态  ${workflowStatusActivityLabel(view.activity)} · workflowId  ${view.identity.action.workflowId} · planVersion  ${view.identity.action.planVersion} · recoveryGeneration  ${view.identity.action.recoveryGeneration}`,
+    `已完成任务  ${view.progress.completed}/${view.progress.total}`,
     `总任务开始时间  ${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
     `总任务已运行时间  ${elapsedText(view)}`,
     `规划  ${view.planSummary}`,
     ...(view.progress.currentTaskId ? [`当前任务  ${view.progress.currentTaskId}`] : []),
+    ...(view.progress.currentTaskPosition !== undefined
+      ? [`当前任务位置  第 ${view.progress.currentTaskPosition}/${view.progress.total} 项`]
+      : []),
     ...(view.identity.handoff && view.identity.handoffPhase
       ? [`handoff  ${view.identity.handoff.handoffId} · attempt  ${view.identity.handoff.attemptId} · ${view.identity.handoffPhase}`]
       : []),
@@ -120,6 +126,19 @@ export function formatWorkflowStatusPanelSummary(view: WorkflowStatusView) {
     ] : []),
   ];
   return lines.join("\n");
+}
+
+export function formatWorkflowControlCenterLabel(view: WorkflowStatusView) {
+  if (view.kind === "no-workflow") return "无活动工作流";
+  if (view.kind === "restore-error") return `工作流恢复失败（${view.code}）`;
+  const currentPosition = view.progress.currentTaskPosition === undefined
+    ? undefined
+    : `当前第 ${view.progress.currentTaskPosition}/${view.progress.total} 项${view.progress.currentTaskId ? ` · ${view.progress.currentTaskId}` : ""}`;
+  return [
+    workflowStatusActivityLabel(view.activity),
+    currentPosition,
+    `已完成 ${view.progress.completed}/${view.progress.total}`,
+  ].filter(Boolean).join(" · ");
 }
 
 export function workflowStatusTaskItems(view: WorkflowStatusView): SelectItem[] {
@@ -162,8 +181,11 @@ export function workflowStatusBar(view: WorkflowStatusView): { text: string; col
     : undefined;
   const parts = [
     view.status === "running" ? "⏳" : "⏸",
-    activityLabel(view.activity),
-    `${view.progress.completed}/${view.progress.total}`,
+    workflowStatusActivityLabel(view.activity),
+    ...(view.progress.currentTaskPosition !== undefined
+      ? [`当前项 ${view.progress.currentTaskPosition}/${view.progress.total}`]
+      : []),
+    `已完成 ${view.progress.completed}/${view.progress.total}`,
     elapsed ? `已运行 ${elapsed}` : undefined,
   ].filter(Boolean);
   return { text: parts.join(" · "), color: view.status === "running" ? "accent" : "warning" };
@@ -188,8 +210,8 @@ export function renderWorkflowStatusResult(view: WorkflowStatusView, expanded: b
   const color = view.status === "running" ? "accent" : view.status === "completed" ? "success" : "warning";
   const icon = view.status === "running" ? "⏳" : view.status === "completed" ? "✓" : "⏸";
   const lines = [
-    theme.fg(color, theme.bold(`${icon} 工作流 ${view.progress.completed}/${view.progress.total}`)),
-    theme.fg("muted", `${activityLabel(view.activity)}${view.progress.currentTaskId ? ` · ${view.progress.currentTaskId}` : ""}`),
+    theme.fg(color, theme.bold(`${icon} 已完成 ${view.progress.completed}/${view.progress.total}`)),
+    theme.fg("muted", `${workflowStatusActivityLabel(view.activity)}${view.progress.currentTaskPosition !== undefined ? ` · 当前项 ${view.progress.currentTaskPosition}/${view.progress.total}` : ""}${view.progress.currentTaskId ? ` · ${view.progress.currentTaskId}` : ""}`),
   ];
   if (expanded) {
     lines.push(theme.fg("accent", theme.bold("技术详情：")), formatWorkflowStatusText(view));

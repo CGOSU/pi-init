@@ -51,7 +51,7 @@ export type ActivityStatusCacheError = {
   message: string;
 };
 
-export type ActivityStatusCache =
+export type ActivityStatusCacheResult =
   | { kind: "reported"; read: number; write: number }
   | { kind: "zero-unconfirmed"; read: 0; write: 0 }
   | { kind: "unreported"; error: ActivityStatusCacheError }
@@ -59,10 +59,19 @@ export type ActivityStatusCache =
   | { kind: "request-error" }
   | { kind: "aborted" };
 
+export type ActivityStatusCache =
+  | { phase: "requesting"; previous?: ActivityStatusCacheResult }
+  | { phase: "result"; current: ActivityStatusCacheResult };
+
+export type ActivityStatusCompaction = {
+  phase: "compacting" | "long-wait";
+  startedAt?: number;
+};
+
 export type ActivityStatusSnapshot = {
   role?: ActivityStatusRole;
   workflow?: ActivityStatusWorkflow;
-  compaction?: "compacting" | "stalled";
+  compaction?: ActivityStatusCompaction;
   operation?: ActivityStatusOperation;
   alert?: ActivityStatusAlert;
   cache?: ActivityStatusCache;
@@ -70,7 +79,7 @@ export type ActivityStatusSnapshot = {
 };
 
 type ActivityStatusTone = "accent" | "warning" | "error" | "success" | "muted";
-type ActivityStatusSegment = { text: string; tone: ActivityStatusTone };
+type ActivityStatusSegment = { text: string; tone: ActivityStatusTone; auxiliary?: boolean };
 type ActivityStatusOptions = {
   now?: () => number;
   refreshIntervalMs?: number;
@@ -98,31 +107,52 @@ function roleSegments(role: ActivityStatusRole | undefined): ActivityStatusSegme
   if (!role) return [];
   return [role.role, role.mode, role.model]
     .filter((text): text is string => Boolean(text))
-    .map((text) => ({ text, tone: "muted" }));
+    .map((text) => ({ text, tone: "muted", auxiliary: true }));
 }
 
 function cacheResultSegment(cache: ActivityStatusCache | undefined): ActivityStatusSegment | undefined {
   if (!cache) return undefined;
-  if (cache.kind === "request-error") return { text: "✕ 请求失败", tone: "error" };
-  if (cache.kind === "aborted") return { text: "! 请求已中止", tone: "warning" };
-  if (cache.kind === "zero-unconfirmed") return { text: "缓存 0（来源未确认）", tone: "muted" };
-  if (cache.kind === "invalid") return { text: "缓存 usage 无效", tone: "warning" };
-  if (cache.kind === "unreported") {
-    const text = cache.error.code === "message-end-missing"
-      ? "缓存结果未到达"
-      : cache.error.code === "usage-missing"
-        ? "缓存 usage 未提供"
-        : "缓存 usage 字段不完整";
+  const source = cache.phase === "requesting" ? "上次" : "本次";
+  const result = cache.phase === "requesting" ? cache.previous : cache.current;
+  if (!result) return undefined;
+  if (result.kind === "request-error") return { text: `✕ ${source}请求失败`, tone: "error" };
+  if (result.kind === "aborted") return { text: `! ${source}请求已中止`, tone: "warning" };
+  if (result.kind === "zero-unconfirmed") return { text: `${source}缓存 0（来源未确认）`, tone: "muted" };
+  if (result.kind === "invalid") return { text: `${source}缓存 usage 无效`, tone: "warning" };
+  if (result.kind === "unreported") {
+    const text = result.error.code === "message-end-missing"
+      ? `${source}缓存结果未到达`
+      : result.error.code === "usage-missing"
+        ? `${source}缓存 usage 未提供`
+        : `${source}缓存 usage 字段不完整`;
     return { text, tone: "muted" };
   }
-  const counts = cacheCountsText(cache.read, cache.write);
-  return counts ? { text: counts, tone: "success" } : undefined;
+  const counts = cacheCountsText(result.read, result.write);
+  return counts ? { text: `${source}${counts}`, tone: "success" } : undefined;
 }
 
 function shortDuration(seconds: number) {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
   return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}m`;
+}
+
+function compactionSegment(compaction: ActivityStatusCompaction | undefined, now: number): ActivityStatusSegment | undefined {
+  if (!compaction) return undefined;
+  const startedAt = compaction.startedAt;
+  const elapsedSeconds = typeof startedAt === "number"
+    && Number.isFinite(startedAt)
+    && Number.isFinite(now)
+    && now >= startedAt
+    ? Math.floor((now - startedAt) / 1000)
+    : 0;
+  const elapsed = elapsedSeconds > 0 ? ` · ${shortDuration(elapsedSeconds)}` : "";
+  return {
+    text: compaction.phase === "long-wait"
+      ? `◌ 压缩仍在进行${elapsed}`
+      : `◌ 正在压缩上下文${elapsed}`,
+    tone: "accent",
+  };
 }
 
 function operationSegment(operation: ActivityStatusOperation | undefined, now: number): ActivityStatusSegment | undefined {
@@ -151,39 +181,35 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
     : undefined;
   const workflowNeedsAttention = Boolean(workflow && !workflowAcknowledged
     && (workflow.tone === "warning" || workflow.tone === "error"));
-  const compaction = state.compaction === "stalled"
-    ? { text: "⚠ 压缩等待异常", tone: "warning" as const }
-    : state.compaction === "compacting"
-      ? { text: "◌ 正在压缩上下文", tone: "accent" as const }
-      : undefined;
+  const compaction = compactionSegment(state.compaction, now);
   const alert = state.alert
     ? { text: state.alert.text, tone: state.alert.tone }
     : undefined;
   const operation = operationSegment(state.operation, now);
   const cacheResult = cacheResultSegment(state.cache);
-  const urgentCacheResult = cacheResult?.tone === "error" || cacheResult?.tone === "warning"
+  const urgentCurrentCache = state.cache?.phase === "result"
+    && (cacheResult?.tone === "error" || cacheResult?.tone === "warning")
     ? cacheResult
     : undefined;
-  const primary = compaction?.tone === "warning"
-    ? compaction
-    : workflowNeedsAttention
-      ? workflow
-      : alert
-          ?? urgentCacheResult
-          ?? compaction
-          ?? operation
-          ?? workflow
-          ?? cacheResult;
+  const primary = workflowNeedsAttention
+    ? workflow
+    : alert
+        ?? operation
+        ?? urgentCurrentCache
+        ?? compaction
+        ?? workflow
+        ?? cacheResult;
 
   const segments: ActivityStatusSegment[] = [];
   if (primary) segments.push(primary);
   if (workflow && primary !== workflow) segments.push(workflow);
-  segments.push(...roleSegments(state.role));
   if (operation && primary !== operation) segments.push(operation);
+  if (compaction && primary !== compaction) segments.push(compaction);
   if (cacheResult && primary !== cacheResult) segments.push(cacheResult);
+  segments.push(...roleSegments(state.role));
 
   if (state.workTimeMilliseconds !== undefined && Number.isFinite(state.workTimeMilliseconds)) {
-    segments.push({ text: `⏱ 累计 ${formatSessionWorkTime(state.workTimeMilliseconds)}`, tone: "muted" });
+    segments.push({ text: `⏱ 累计 ${formatSessionWorkTime(state.workTimeMilliseconds)}`, tone: "muted", auxiliary: true });
   }
 
   return segments;
@@ -211,13 +237,16 @@ export function renderActivityStatus(
   if (segments.length === 0) return [];
 
   let line = "";
+  let coreSegmentOmitted = false;
   for (const segment of segments) {
+    if (segment.auxiliary && coreSegmentOmitted) continue;
     const styled = theme.fg(segment.tone, segment.text);
     const candidate = line ? `${line} · ${styled}` : styled;
     if (visibleWidth(candidate) <= safeWidth) {
       line = candidate;
       continue;
     }
+    if (!segment.auxiliary) coreSegmentOmitted = true;
     if (!line) line = truncateToWidth(styled, safeWidth, "…");
   }
 
@@ -262,8 +291,13 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     ctx.ui.setStatus(ACTIVITY_STATUS_KEY, formatActivityStatusText(snapshot, 120, now()));
   }
 
+  function hasTimedActivity() {
+    return Boolean(snapshot.operation
+      || (typeof snapshot.compaction?.startedAt === "number" && Number.isFinite(snapshot.compaction.startedAt)));
+  }
+
   function startRefreshTimer(ctx: ExtensionContext) {
-    if (!snapshot.operation || !ctx.hasUI) {
+    if (!hasTimedActivity() || !ctx.hasUI) {
       stopRefreshTimer();
       return;
     }
@@ -271,7 +305,7 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     refreshContext = ctx;
     refreshTimer = setInterval(() => {
       const current = refreshContext;
-      if (!current || !snapshot.operation) {
+      if (!current || !hasTimedActivity()) {
         stopRefreshTimer();
         return;
       }
@@ -289,13 +323,19 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     if (JSON.stringify(snapshot[key]) === JSON.stringify(value)) return;
     snapshot = { ...snapshot, [key]: value };
     render(ctx);
-    if (key === "operation") startRefreshTimer(ctx);
+    if (key === "operation" || key === "compaction") startRefreshTimer(ctx);
   }
 
   return {
     setRole: (ctx: ExtensionContext, value: ActivityStatusRole | undefined) => update(ctx, "role", value),
     setWorkflow: (ctx: ExtensionContext, value: ActivityStatusWorkflow | undefined) => update(ctx, "workflow", value),
-    setCompaction: (ctx: ExtensionContext, value: ActivityStatusSnapshot["compaction"]) => update(ctx, "compaction", value),
+    setCompaction: (ctx: ExtensionContext, phase: ActivityStatusCompaction["phase"] | undefined, startedAt?: number) => update(
+      ctx,
+      "compaction",
+      phase
+        ? { phase, ...(typeof startedAt === "number" && Number.isFinite(startedAt) ? { startedAt } : {}) }
+        : undefined,
+    ),
     setOperation: (ctx: ExtensionContext, value: ActivityStatusOperation | undefined) => update(ctx, "operation", value),
     setAlert: (ctx: ExtensionContext, value: ActivityStatusAlert | undefined) => update(ctx, "alert", value),
     setCache: (ctx: ExtensionContext, value: ActivityStatusCache | undefined) => update(ctx, "cache", value),

@@ -158,6 +158,37 @@ test("AbortSignal 仅中止本次工作流工具操作，不改变暂停工作�
   });
 });
 
+test("角色代际变化后 watchdog 不提示旧压缩操作", async () => {
+  const state = createExtensionRuntimeState();
+  state.roleTransitionGeneration = 1;
+  state.activeRole = { role: "docs-commit", provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "max" };
+  state.pendingRoleCompaction = {
+    fromRole: "developer-test", toRole: "docs-commit", sessionId: "test-session",
+    contextGeneration: 0, roleTransitionGeneration: 1, targetRole: state.activeRole,
+  };
+  const notifications = [];
+  const ctx = {
+    sessionManager: { getSessionId: () => "test-session", getBranch: () => [{ type: "user" }] },
+    ui: { setStatus() {}, notify(message, level) { notifications.push({ message, level }); } },
+    compact() {},
+  };
+  const controller = createWorkflowCompaction({ sendMessage() {} }, state, {
+    setWorkflowDispatchInFlight() {},
+    getActiveRole: () => state.activeRole,
+    requireRoleRecovery() {}, sendWorkflowTaskMessage() {}, async scheduleWorkflow() {},
+    sendWorkflowReplanMessage() {}, acknowledgeRoleRecovery() {},
+  }, { watchdogMs: 5 });
+
+  assert.equal(controller.start(ctx), true);
+  state.roleTransitionGeneration++;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(notifications.length, 0);
+  assert.equal(state.roleCompactionPhase, "compacting");
+  assert.equal(state.roleCompactionInFlight, true);
+  controller.dispose();
+  assert.equal(state.roleCompactionInFlight, false);
+});
+
 test("结束工作流只撤销其压缩续跑，保留真实压缩与角色恢复", async () => {
   const workflow = startWorkflowTask(createWorkflowState({
     summary: "结束时压缩仍在运行",
@@ -207,15 +238,17 @@ test("结束工作流只撤销其压缩续跑，保留真实压缩与角色恢�
   assert.deepEqual(compactionStates, ["compacting"]);
 
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(state.roleCompactionPhase, "stalled");
+  assert.equal(state.roleCompactionPhase, "compacting");
+  assert.equal(state.roleCompactionInFlight, true);
   assert.doesNotMatch(notifications[0].message, /\/pi-init workflow resume/);
+  assert.match(notifications[0].message, /仍在进行/);
   assert.match(notifications[0].message, /不会派发工作流任务/);
   completeCompaction?.({});
 
   assert.equal(dispatches, 0);
   assert.equal(acknowledgements, 1);
   assert.equal(state.roleCompactionInFlight, false);
-  assert.deepEqual(compactionStates, ["compacting", "stalled", undefined]);
+  assert.deepEqual(compactionStates, ["compacting", "long-wait", undefined]);
 });
 
 test("迟到的重规划异常不告警旧工作流或清除新工作流调度", async () => {

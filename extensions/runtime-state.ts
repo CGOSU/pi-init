@@ -39,7 +39,7 @@ export type PendingRoleCompaction = {
   continuation?: RoleCompactionContinuation;
 };
 
-export type RoleCompactionPhase = "idle" | "compacting" | "stalled";
+export type RoleCompactionPhase = "idle" | "compacting";
 
 export type ExtensionRuntimeState = {
   activeRole?: ActiveRole;
@@ -57,8 +57,8 @@ export type ExtensionRuntimeState = {
   roleContextGeneration: number;
   roleTransitionGeneration: number;
   pendingRoleCompaction?: PendingRoleCompaction;
+  activeRoleCompaction?: { operationId: string; transition: PendingRoleCompaction };
   roleCompactionPhase: RoleCompactionPhase;
-  roleCompactionStalled: boolean;
   roleCompactionOperationId?: string;
   roleCompactionStartedAt?: number;
   roleCompactionInFlight: boolean;
@@ -81,7 +81,6 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     roleContextGeneration: 0,
     roleTransitionGeneration: 0,
     roleCompactionPhase: "idle",
-    roleCompactionStalled: false,
     roleCompactionInFlight: false,
     workflowDispatchInFlight: false,
     internalContinuationPending: false,

@@ -333,8 +333,42 @@ function createExtensionHarness(branch = [], options = {}) {
 }
 
 async function emitExtensionEvent(harness, name, event = {}) {
-  for (const handler of harness.handlers.get(name) ?? []) {
-    await handler(event, harness.context);
+  const emit = async (eventName, payload) => {
+    for (const handler of harness.handlers.get(eventName) ?? []) {
+      await handler(payload, harness.context);
+    }
+  };
+  if (name === "session_start" || name === "session_shutdown" || name === "session_tree" || name === "model_select") {
+    harness.testProviderRequestActive = false;
+    harness.testAssistantMessageStarted = false;
+  } else if (name === "before_provider_request") {
+    harness.testProviderRequestActive = true;
+    harness.testAssistantMessageStarted = false;
+  } else if (name === "message_start" && event.message?.role === "assistant") {
+    harness.testAssistantMessageStarted = true;
+  } else if (name === "agent_settled") {
+    harness.testProviderRequestActive = false;
+    harness.testAssistantMessageStarted = false;
+  }
+
+  if (name === "message_end" && event.message?.role === "assistant"
+    && harness.testProviderRequestActive && !harness.testAssistantMessageStarted) {
+    const source = event.message;
+    const message = {
+      ...source,
+      content: source.content ?? [],
+      api: source.api ?? "test-api",
+      provider: source.provider ?? harness.context.model?.provider ?? "test-provider",
+      model: source.model ?? harness.context.model?.id ?? "test-model",
+      timestamp: typeof source.timestamp === "number" ? source.timestamp : Date.now(),
+    };
+    await emit("message_start", { type: "message_start", message });
+    event = { ...event, message };
+  }
+  await emit(name, event);
+  if (name === "message_end" && event.message?.role === "assistant") {
+    harness.testProviderRequestActive = false;
+    harness.testAssistantMessageStarted = false;
   }
 }
 
@@ -408,8 +442,22 @@ async function runExternalAgent(harness, source, options = {}) {
   await emitExtensionEvent(harness, "before_agent_start");
   await emitExtensionEvent(harness, "agent_start");
   await emitExtensionEvent(harness, "before_provider_request");
-  await emitExtensionEvent(harness, "message_update", { message: { role: "assistant" } });
-  await emitExtensionEvent(harness, "message_end", { message: { role: "assistant" } });
+  const responseMessage = {
+    role: "assistant",
+    content: [],
+    api: "test-api",
+    provider: harness.context.model?.provider ?? "test-provider",
+    model: harness.context.model?.id ?? "test-model",
+    usage: { cacheRead: 0, cacheWrite: 0 },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+  await emitExtensionEvent(harness, "message_start", { message: responseMessage });
+  await emitExtensionEvent(harness, "message_update", {
+    message: responseMessage,
+    assistantMessageEvent: { type: "text_delta", partial: responseMessage },
+  });
+  await emitExtensionEvent(harness, "message_end", { message: responseMessage });
   if (options.toolName) {
     await emitExtensionEvent(harness, "tool_execution_start", {
       toolCallId: "test-tool-call",

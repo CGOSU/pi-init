@@ -1,6 +1,11 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ActivityStatusCache, ActivityStatusCacheError, ActivityStatusReporter } from "./activity-status.ts";
+import type {
+  ActivityStatusCache,
+  ActivityStatusCacheError,
+  ActivityStatusCacheResult,
+  ActivityStatusReporter,
+} from "./activity-status.ts";
 
 type CacheField = "cacheRead" | "cacheWrite";
 type CacheFieldFailure = "missing" | "type" | "format" | "range" | "precision" | "overflow";
@@ -10,9 +15,20 @@ type CacheUsageErrorCode =
   | "message-end-missing"
   | `${"cache-read" | "cache-write"}-${CacheFieldFailure}`;
 type CacheUsageError = ActivityStatusCacheError & { code: CacheUsageErrorCode };
-type CacheUsageValue = Extract<ActivityStatusCache, { kind: "reported" | "zero-unconfirmed" }>;
+type CacheUsageValue = Extract<ActivityStatusCacheResult, { kind: "reported" | "zero-unconfirmed" }>;
 type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-type CacheResult = ActivityStatusCache;
+type CacheResult = ActivityStatusCacheResult;
+type CacheScope = {
+  sessionId: string;
+  contextGeneration: number;
+  modelProvider?: string;
+  modelId?: string;
+};
+type AssistantMessageIdentity = Pick<AssistantMessage, "timestamp" | "provider" | "model" | "responseId">;
+type ActiveCacheRequest = {
+  scope: CacheScope;
+  assistantMessage?: AssistantMessageIdentity;
+};
 
 function fieldError(field: CacheField, reason: CacheFieldFailure): CacheUsageError {
   const fieldId = field === "cacheRead" ? "cache-read" : "cache-write";
@@ -57,31 +73,108 @@ export function parseCacheUsage(usage: unknown): Result<CacheUsageValue, CacheUs
 }
 
 export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStatusReporter) {
-  let requestActive = false;
+  let contextGeneration = 0;
+  let activeRequest: ActiveCacheRequest | undefined;
   let lastResult: CacheResult | undefined;
+  let lastResultScope: CacheScope | undefined;
+
+  function currentScope(ctx: ExtensionContext): CacheScope {
+    return {
+      sessionId: ctx.sessionManager.getSessionId(),
+      contextGeneration,
+      ...(ctx.model ? { modelProvider: ctx.model.provider, modelId: ctx.model.id } : {}),
+    };
+  }
+
+  function sameScope(left: CacheScope, right: CacheScope) {
+    return left.sessionId === right.sessionId
+      && left.contextGeneration === right.contextGeneration
+      && left.modelProvider === right.modelProvider
+      && left.modelId === right.modelId;
+  }
+
+  function messageIdentity(message: unknown): AssistantMessageIdentity | undefined {
+    if (typeof message !== "object" || message === null || Array.isArray(message)) return undefined;
+    const candidate = message as Partial<AssistantMessage>;
+    if (candidate.role !== "assistant"
+      || typeof candidate.provider !== "string" || !candidate.provider
+      || typeof candidate.model !== "string" || !candidate.model
+      || typeof candidate.timestamp !== "number" || !Number.isFinite(candidate.timestamp)) return undefined;
+    return {
+      timestamp: candidate.timestamp,
+      provider: candidate.provider,
+      model: candidate.model,
+      responseId: candidate.responseId,
+    };
+  }
+
+  function sameMessage(left: AssistantMessageIdentity | undefined, right: AssistantMessageIdentity | undefined) {
+    return Boolean(left && right
+      && left.timestamp === right.timestamp
+      && left.provider === right.provider
+      && left.model === right.model
+      && (left.responseId === undefined || right.responseId === undefined || left.responseId === right.responseId));
+  }
 
   function publish(ctx: ExtensionContext) {
-    if (!lastResult) {
-      activityStatus.setCache(ctx, undefined);
-      return;
+    const scope = currentScope(ctx);
+    if (activeRequest && !sameScope(activeRequest.scope, scope)) activeRequest = undefined;
+    if (lastResultScope && !sameScope(lastResultScope, scope)) {
+      lastResult = undefined;
+      lastResultScope = undefined;
     }
-    activityStatus.setCache(ctx, lastResult);
+    const cache: ActivityStatusCache | undefined = activeRequest
+      ? { phase: "requesting", ...(lastResult ? { previous: lastResult } : {}) }
+      : lastResult
+        ? { phase: "result", current: lastResult }
+        : undefined;
+    activityStatus.setCache(ctx, cache);
   }
 
   function reset(ctx: ExtensionContext) {
-    requestActive = false;
+    contextGeneration += 1;
+    activeRequest = undefined;
     lastResult = undefined;
+    lastResultScope = undefined;
     publish(ctx);
   }
 
   function beginRequest(ctx: ExtensionContext) {
-    requestActive = true;
-    lastResult = undefined;
+    const scope = currentScope(ctx);
+    if (lastResultScope && !sameScope(lastResultScope, scope)) {
+      lastResult = undefined;
+      lastResultScope = undefined;
+    }
+    activeRequest = { scope };
     publish(ctx);
   }
 
+  function startAssistantMessage(ctx: ExtensionContext, message: unknown) {
+    if (!activeRequest) return;
+    if (!sameScope(activeRequest.scope, currentScope(ctx))) {
+      activeRequest = undefined;
+      lastResult = undefined;
+      lastResultScope = undefined;
+      publish(ctx);
+      return;
+    }
+    const identity = messageIdentity(message);
+    if (identity) activeRequest.assistantMessage = identity;
+  }
+
   function finishRequest(ctx: ExtensionContext, message: AssistantMessage) {
-    requestActive = false;
+    const request = activeRequest;
+    if (!request) return;
+    if (!sameScope(request.scope, currentScope(ctx))) {
+      activeRequest = undefined;
+      lastResult = undefined;
+      lastResultScope = undefined;
+      publish(ctx);
+      return;
+    }
+    if (!sameMessage(request.assistantMessage, messageIdentity(message))) return;
+
+    activeRequest = undefined;
     if (message.stopReason === "aborted") {
       lastResult = { kind: "aborted" };
     } else if (message.stopReason === "error") {
@@ -97,6 +190,7 @@ export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStat
           : { kind: "invalid", error: parsed.error };
       }
     }
+    lastResultScope = request.scope;
     publish(ctx);
   }
 
@@ -105,16 +199,26 @@ export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStat
   pi.on("session_tree", async (_event, ctx) => reset(ctx));
   pi.on("model_select", async (_event, ctx) => reset(ctx));
   pi.on("before_provider_request", async (_event, ctx) => beginRequest(ctx));
+  pi.on("message_start", async (event, ctx) => {
+    if (event.message.role === "assistant") startAssistantMessage(ctx, event.message);
+  });
   pi.on("message_end", async (event, ctx) => {
-    if (requestActive && event.message.role === "assistant") finishRequest(ctx, event.message);
+    if (event.message.role === "assistant") finishRequest(ctx, event.message);
   });
   pi.on("agent_settled", async (_event, ctx) => {
-    if (requestActive) {
-      requestActive = false;
-      lastResult ??= {
+    const request = activeRequest;
+    if (!request) return publish(ctx);
+    if (!sameScope(request.scope, currentScope(ctx))) {
+      activeRequest = undefined;
+      lastResult = undefined;
+      lastResultScope = undefined;
+    } else {
+      activeRequest = undefined;
+      lastResult = {
         kind: "unreported",
         error: { code: "message-end-missing", message: "Provider message_end event was not received." },
       };
+      lastResultScope = request.scope;
     }
     publish(ctx);
   });

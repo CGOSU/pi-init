@@ -50,7 +50,7 @@ export function renderWorkflowPauseResult(
   const progress = view.progress;
   const lines = [
     theme.fg("warning", theme.bold("⏸ 工作流已暂停")),
-    theme.fg("muted", `进度：${progress.completed}/${progress.total}${progress.currentTaskId ? ` · 当前任务：${progress.currentTaskId}` : ""}`),
+    theme.fg("muted", `已完成任务：${progress.completed}/${progress.total}${progress.currentTaskId ? ` · 当前任务：${progress.currentTaskId}` : ""}`),
   ];
   if (view.blockedTasks.length > 0) {
     for (const task of view.blockedTasks) {

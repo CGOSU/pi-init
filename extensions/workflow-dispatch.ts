@@ -454,10 +454,7 @@ export function createWorkflowDispatch(
 
     const handoff = workflow.handoff;
     if (state.roleCompactionInFlight || state.pendingRoleCompaction) {
-      const phase = state.roleCompactionPhase === "stalled"
-        ? "上下文压缩等待异常"
-        : "上下文压缩仍在进行";
-      ctx.ui.notify(`${phase}，未重复派发任务；请等待压缩完成，或执行 /reload 后再使用 /pi-init workflow resume。`, "warning");
+      ctx.ui.notify("上下文压缩仍在进行，未重复派发任务；请等待压缩完成，或执行 /reload 后再使用 /pi-init workflow resume。", "warning");
       return "blocked-by-compaction";
     }
     if (state.internalContinuationPending) {

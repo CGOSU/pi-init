@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：可信工作流阶段、cache来源与压缩长等待软提醒收尾
+
+- 完成内容：状态视图统一供活动栏、状态工具/面板和控制中心使用；当前项位置按真实任务列表与 currentTaskId 计算一基索引，completed/total 保持实际完成数，执行阶段要求匹配 handoff 及真实启动证据。活动 cache 按 session、context generation 和 model 隔离；请求期间历史最终结果标为“上次”，仅匹配最终 assistant message_end usage 显示“本次”，零来源未确认、缺失、无效、失败、中止和缺少结束事件不被旧成功覆盖。30 秒 compaction watchdog 只发一次软提醒，阶段仍为 compacting/in-flight，不判失败、不解锁、不重派发；有效开始时间用于耗时展示，真实错误继续由 onError 表达。
+- 验证：`node --test test/workflow-compaction.test.js test/workflow-runtime-retirement.test.js test/workflow-status-view.test.js test/workflow-report.test.js test/activity-status.test.js`，44 项通过；`npm test`，257 项通过、0 失败、0 跳过；`npm run typecheck` 通过；`git diff --check` 通过（Git 输出 LF/CRLF 转换提示）。
+- 未验证/收尾：未执行真实 Pi TUI/E2E、Provider 请求或最低支持 Node 版本验证；没有耗时分布用于评价 30 秒阈值或性能。原范围本地里程碑提交 `e0e71cf03d72026dbaa61371f07e3a1833ea84cb` 保持 HEAD；后续阶段、cache、watchdog 和本次文档修改留在工作区，不再提交；未 push、发布或部署。最终 `git status --short` 显示 22 个修改路径（README、3 份项目记忆、18 个后续源码/测试文件），没有未跟踪文件；HEAD 仍是原范围提交。未执行后续 commit、push、发布或部署。详细当前事实见 [`docs/current-state.md`](current-state.md)。
+
 ### 2026-10-09：工作流终态、历史恢复隔离与告警确认闭环
 
 - 完成内容：显式工作流取消（`/pi-init workflow cancel` 或 `task_workflow(action="cancel")`）在 `cancelled` 状态成功持久化后才退休对应续跑和提示；工具 `AbortSignal` 只中止本次工具操作，工作流状态保持不变，终态操作也不宣称 Pi 宿主压缩已终止。恢复诊断按白名单区分可隔离、可恢复和 blocked；`discard-recovery` 只对无可读/待持久化状态的不可恢复原记录，在受信任项目、Agent 空闲、精确原 entry/session/branch/error 匹配并显式确认未知外部结果后，追加版本化引用处置；原记录不改写或删除，处置失败保留恢复阻塞。`/pi-init workflow acknowledge` 只收起当前 session/branch/workflow/recovery/reason/attempt 匹配告警的前台突出提示，不改变 workflow 状态、诊断或守卫；问题身份变化、branch 切换和 reload 会重新提醒，终态清除所属标记。Pi 原生压缩、Provider 请求、工具和 cache 活动保持独立。

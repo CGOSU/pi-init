@@ -76,10 +76,11 @@ export function createWorkflowCompaction(
     watchdogTimer = undefined;
   }
 
-  function clearTransientState() {
+  function clearTransientState(operationId?: string) {
+    if (state.activeRoleCompaction && state.activeRoleCompaction.operationId !== operationId) return;
     state.roleCompactionInFlight = false;
+    state.activeRoleCompaction = undefined;
     state.roleCompactionPhase = "idle";
-    state.roleCompactionStalled = false;
     state.roleCompactionOperationId = undefined;
     state.roleCompactionStartedAt = undefined;
   }
@@ -96,12 +97,32 @@ export function createWorkflowCompaction(
     return "请先查看当前工作流状态；只有身份仍匹配时才显式恢复，不要重放旧交接。";
   }
 
-  function notifyCompactionStalled(operation: ActiveCompaction) {
-    if (!active || active.operationId !== operation.operationId || active.settled) return;
-    state.roleCompactionPhase = "stalled";
-    state.roleCompactionStalled = true;
-    const message = `上下文压缩等待超过 ${Math.ceil(watchdogMs / 1000)} 秒（操作 ${operation.operationId}）；未自动启动下一任务。${watchdogNextStep(operation)}`;
-    deps.activityStatus?.setCompaction(operation.ctx, "stalled");
+  function compactionElapsed(startedAt: number | undefined, now = Date.now()) {
+    if (typeof startedAt !== "number" || !Number.isFinite(startedAt) || !Number.isFinite(now) || now < startedAt) {
+      return undefined;
+    }
+    const elapsedMilliseconds = Math.floor(now - startedAt);
+    return elapsedMilliseconds < 1000
+      ? `${elapsedMilliseconds}ms`
+      : `${Math.floor(elapsedMilliseconds / 1000)}s`;
+  }
+
+  function reminderThreshold() {
+    return watchdogMs < 1000 ? `${watchdogMs}ms` : `${Math.ceil(watchdogMs / 1000)} 秒`;
+  }
+
+  function notifyCompactionLongWait(operation: ActiveCompaction) {
+    if (!active || active.operationId !== operation.operationId || operation.settled
+      || !state.roleCompactionInFlight
+      || state.roleCompactionOperationId !== operation.operationId
+      || state.activeRoleCompaction?.operationId !== operation.operationId
+      || state.roleTransitionGeneration !== operation.transition.roleTransitionGeneration
+      || !sameRole(deps.getActiveRole(operation.ctx), operation.transition.targetRole)
+      || !contextIsCurrent(operation)) return;
+    const elapsed = compactionElapsed(state.roleCompactionStartedAt);
+    const wait = elapsed ? `（已等待 ${elapsed}）` : "（实际等待时长不可用）";
+    const message = `上下文压缩仍在进行${wait}；已达到 ${reminderThreshold()} 软提醒阈值，仅表示等待较长，不代表失败。不会停止压缩或自动重派发。${watchdogNextStep(operation)}`;
+    deps.activityStatus?.setCompaction(operation.ctx, "long-wait", state.roleCompactionStartedAt);
     operation.ctx.ui.notify(message, "warning");
   }
 
@@ -246,7 +267,7 @@ export function createWorkflowCompaction(
     active = undefined;
     clearWatchdog();
     deps.activityStatus?.setCompaction(operation.ctx, undefined);
-    clearTransientState();
+    clearTransientState(operation.operationId);
     try {
       continueAfterCompaction(operation, warning);
     } catch (error) {
@@ -258,7 +279,7 @@ export function createWorkflowCompaction(
 
   function armWatchdog(operation: ActiveCompaction) {
     clearWatchdog();
-    watchdogTimer = setTimeout(() => notifyCompactionStalled(operation), watchdogMs);
+    watchdogTimer = setTimeout(() => notifyCompactionLongWait(operation), watchdogMs);
     watchdogTimer.unref?.();
   }
 
@@ -285,12 +306,13 @@ export function createWorkflowCompaction(
     }
     state.pendingRoleCompaction = undefined;
     active = operation;
+    state.activeRoleCompaction = { operationId: operation.operationId, transition };
     state.roleCompactionInFlight = true;
     state.roleCompactionPhase = "compacting";
-    state.roleCompactionStalled = false;
     state.roleCompactionOperationId = operation.operationId;
-    state.roleCompactionStartedAt = Date.now();
-    deps.activityStatus?.setCompaction(ctx, "compacting");
+    const startedAt = Date.now();
+    state.roleCompactionStartedAt = startedAt;
+    deps.activityStatus?.setCompaction(ctx, "compacting", startedAt);
     armWatchdog(operation);
 
     if (branchHasOnlyCustomEntriesAfterCompaction(ctx)) {
@@ -316,7 +338,7 @@ export function createWorkflowCompaction(
     active = undefined;
     if (operation) deps.activityStatus?.setCompaction(operation.ctx, undefined);
     state.pendingRoleCompaction = undefined;
-    clearTransientState();
+    clearTransientState(operation?.operationId);
     deps.setWorkflowDispatchInFlight(false);
   }
 
