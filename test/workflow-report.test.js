@@ -9,6 +9,8 @@ import {
   startWorkflowTask,
 } from "../src/workflow.ts";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
+import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
+import { attachWorkflowPresentation } from "../extensions/workflow-presentation.ts";
 import { createExtensionHarness, emitExtensionEvent, workflowMessageIdentity, withTempDirectory } from "./helpers.js";
 
 function createCompletedWorkflow() {
@@ -120,6 +122,52 @@ test("暂停工具结果突出原因和恢复操作，完整技术状态仅在�
   ).render(80).join("\n");
   assert.match(expanded, /workflowId：/);
   assert.match(expanded, /recoveryGeneration：/);
+});
+
+test("工作流状态工具结果使用结构化状态视图且展开后保留完整身份与任务历史", () => {
+  const workflowState = createActiveWorkflow();
+  const harness = createExtensionHarness();
+  const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+  const result = {
+    content: [{ type: "text", text: "此处文本标题不参与展示类别判断" }],
+    details: attachWorkflowPresentation(workflowState, {
+      kind: "workflow-status",
+      view: createWorkflowStatusView(workflowState, { roleCompactionPhase: "idle", workflowDispatchInFlight: false }),
+    }),
+  };
+  const compact = workflow.renderResult(
+    result,
+    { expanded: false, isPartial: false },
+    harness.context.ui.theme,
+    { isError: false },
+  ).render(80).join("\n");
+  assert.match(compact, /工作流 1\/3/);
+  assert.doesNotMatch(compact, /当前基础动作身份 JSON/);
+
+  const expanded = workflow.renderResult(
+    result,
+    { expanded: true, isPartial: false },
+    harness.context.ui.theme,
+    { isError: false },
+  ).render(500).join("\n");
+  assert.match(expanded, /当前基础动作身份 JSON/);
+  assert.match(expanded, /当前任务结果身份 JSON（complete\/block）/);
+  assert.match(expanded, /重复展示时应隐藏的完整完成摘要/);
+});
+
+test("旧完成报告结果缺少展示元数据时保留原始工具文本", () => {
+  const state = { ...createActiveWorkflow(), status: "completed" };
+  const harness = createExtensionHarness();
+  const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+  const content = "任务完成报告\n旧会话中的原始摘要";
+  const result = workflow.renderResult(
+    { content: [{ type: "text", text: content }], details: state },
+    { expanded: false, isPartial: false },
+    harness.context.ui.theme,
+    { isError: false },
+  ).render(300).join("\n");
+  assert.match(result, /旧会话中的原始摘要/);
+  assert.doesNotMatch(result, /当前基础动作身份 JSON/);
 });
 
 test("block 工具结果精简且不会再发出重复阻塞通知", async () => {

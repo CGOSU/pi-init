@@ -21,6 +21,16 @@ import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowDispatch } from "./workflow-dispatch.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
 import { taskWorkflowParameters } from "./contracts.ts";
+import {
+  createWorkflowCompletionView,
+  createWorkflowTaskCompletionView,
+} from "./workflow-completion-view.ts";
+import {
+  formatWorkflowCompletionText,
+  formatWorkflowTaskCompletionText,
+} from "./workflow-completion-renderer.ts";
+import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import { attachWorkflowPresentation } from "./workflow-presentation.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
@@ -47,6 +57,13 @@ export function createWorkflowActions(
       );
     }
     return new Error("当前没有活动工作流");
+  }
+
+  function statusDetails(details: object, workflowState = state.workflowState) {
+    return attachWorkflowPresentation(details, {
+      kind: "workflow-status",
+      view: createCurrentWorkflowStatusView(state, workflowState),
+    });
   }
 
   function requireIdentity<T>(result: WorkflowResult<T>): T {
@@ -238,7 +255,7 @@ export function createWorkflowActions(
         }
         return {
           content: [{ type: "text", text: `已保存架构规划。\n${deps.report.formatWorkflowState(next)}${next.status === "paused" ? "\n\n当前按用户要求暂停，审阅后再执行。" : "\n\n将自动切换到第一个任务。"}` }],
-          details: next,
+          details: statusDetails(next),
           terminate: true,
         };
       }
@@ -248,10 +265,11 @@ export function createWorkflowActions(
           : "";
         return {
           content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}` }],
-          details: {
-            ...(state.workflowState ?? {}),
-            ...(state.workflowRestoreError ? { error: state.workflowRestoreError } : {}),
-          },
+          details: state.workflowRestoreError
+            ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError }
+            : state.workflowState
+              ? statusDetails(state.workflowState)
+              : statusDetails({}),
         };
       }
       case "replan": {
@@ -281,7 +299,7 @@ export function createWorkflowActions(
         state.workflowDispatchInFlight = false;
         return {
           content: [{ type: "text", text: `已应用工作流重规划。\n${deps.report.formatWorkflowState(next)}\n\n新计划将自动开始。` }],
-          details: next,
+          details: statusDetails(next),
           terminate: true,
         };
       }
@@ -301,14 +319,26 @@ export function createWorkflowActions(
           verification: params.verification,
         });
         const completedTask = next.tasks.find((item) => item.id === task.id);
-        const taskCompletionReport = deps.report.formatWorkflowTaskCompletion(completedTask);
-        const completionReport = next.status === "completed"
-          ? deps.report.formatWorkflowCompletion(next, completedTask)
-          : taskCompletionReport;
+        const taskCompletionView = createWorkflowTaskCompletionView(completedTask);
+        const workflowCompletionView = next.status === "completed"
+          ? createWorkflowCompletionView(next, completedTask)
+          : undefined;
+        const completionReport = workflowCompletionView
+          ? formatWorkflowCompletionText(workflowCompletionView)
+          : formatWorkflowTaskCompletionText(taskCompletionView);
+        const continuation: "awaiting-replan" | "next-task" = next.status === "replanning" ? "awaiting-replan" : "next-task";
+        const notice = next.status === "completed"
+          ? "工作流已完成。"
+          : next.status === "replanning"
+            ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。"
+            : "下一任务将自动开始。";
+        const presentation = workflowCompletionView
+          ? { kind: "workflow-completion" as const, view: workflowCompletionView }
+          : { kind: "task-completion" as const, view: taskCompletionView, continuation };
         deps.report.persistWorkflowState(next, ctx);
         return {
-          content: [{ type: "text", text: `${completionReport}\n\n${next.status === "completed" ? "工作流已完成。" : next.status === "replanning" ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。" : "下一任务将自动开始。"}` }],
-          details: next,
+          content: [{ type: "text", text: `${completionReport}\n\n${notice}` }],
+          details: attachWorkflowPresentation(next, presentation),
           terminate: true,
         };
       }
@@ -319,7 +349,7 @@ export function createWorkflowActions(
         const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
-        return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(next) }], details: next, terminate: true };
+        return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(next) }], details: statusDetails(next), terminate: true };
       }
       case "resume": {
         if (!state.workflowState) throw missingWorkflowError();
@@ -328,7 +358,7 @@ export function createWorkflowActions(
           await deps.dispatch.scheduleWorkflow(ctx);
           return {
             content: [{ type: "text", text: "工作流仍在等待架构师重规划；已尝试继续架构调度。" }],
-            details: state.workflowState,
+            details: statusDetails(state.workflowState),
             terminate: true,
           };
         }
@@ -343,13 +373,13 @@ export function createWorkflowActions(
           };
           return {
             content: [{ type: "text", text: messages[result] }],
-            details: state.workflowState,
+            details: statusDetails(state.workflowState),
             terminate: true,
           };
         }
         const next = resumeWorkflow(state.workflowState);
         deps.report.persistWorkflowState(next, ctx);
-        return { content: [{ type: "text", text: "工作流已恢复，下一任务将自动开始。" }], details: next, terminate: true };
+        return { content: [{ type: "text", text: "工作流已恢复，下一任务将自动开始。" }], details: statusDetails(next), terminate: true };
       }
       case "retry": {
         if (!state.workflowState) throw missingWorkflowError();
@@ -358,7 +388,7 @@ export function createWorkflowActions(
           confirmUnknownOutcome: params.confirmUnknownOutcome === true,
         });
         deps.report.persistWorkflowState(next, ctx);
-        return { content: [{ type: "text", text: `任务 ${params.taskId ?? ""} 已重新排队，工作流将自动继续。` }], details: next, terminate: true };
+        return { content: [{ type: "text", text: `任务 ${params.taskId ?? ""} 已重新排队，工作流将自动继续。` }], details: statusDetails(next), terminate: true };
       }
       case "cancel": {
         if (!state.workflowState) throw missingWorkflowError();
@@ -366,7 +396,7 @@ export function createWorkflowActions(
         const next = cancelWorkflow(state.workflowState);
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
-        return { content: [{ type: "text", text: "工作流已取消。" }], details: next, terminate: true };
+        return { content: [{ type: "text", text: "工作流已取消。" }], details: statusDetails(next), terminate: true };
       }
       default:
         throw new Error(`未知工作流动作：${params.action}`);

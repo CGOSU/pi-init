@@ -13,7 +13,6 @@ import {
   isWorkflowActive,
   appendWorkflowReplanDirection,
   requestWorkflowReplan,
-  workflowProgress,
 } from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
@@ -26,9 +25,14 @@ import { createWorkflowActions } from "./workflow-actions.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
-import { formatWorkflowOperationFailure } from "./workflow-error-renderer.ts";
 import { renderWorkflowPauseResult } from "./workflow-pause-renderer.ts";
 import { createWorkflowPauseView } from "./workflow-pause-view.ts";
+import { createRunTimingView } from "./run-timing-view.ts";
+import { renderRunTimingReport } from "./run-timing-renderer.ts";
+import { renderWorkflowOperationFailure, renderWorkflowPresentation } from "./workflow-result-renderer.ts";
+import { workflowPresentationFromDetails } from "./workflow-presentation.ts";
+import { createWorkflowStatusView } from "./workflow-status-view.ts";
+import { formatWorkflowStatusText } from "./workflow-status-renderer.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
@@ -118,7 +122,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const data = entry.data && typeof entry.data === "object"
       ? entry.data as RunTimingEntryData
       : {};
-    return new Text(workflowReport.styleReportText(workflowReport.formatRunTimingReport(data), theme), 0, 0);
+    return renderRunTimingReport(createRunTimingView(data), theme);
   });
 
   pi.on("model_select", async (event, ctx) => {
@@ -421,27 +425,27 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     renderResult(result, { expanded }, theme, context) {
       const firstContent = result.content[0];
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
-      if (context.isError) return new Text(formatWorkflowOperationFailure(contentText, theme), 0, 0);
-      if (contentText.startsWith("任务完成报告") || contentText.startsWith("工作流完成报告")) {
-        return new Text(workflowReport.styleReportText(contentText, theme), 0, 0);
-      }
+      if (context.isError) return renderWorkflowOperationFailure(contentText, theme);
+      const presentation = workflowPresentationFromDetails(result.details);
+      if (presentation) return renderWorkflowPresentation(presentation, expanded, theme);
 
       const details = result.details as import("./runtime-state.ts").WorkflowState | undefined;
       if (!details || !Array.isArray(details.tasks)) {
         return new Text(contentText || "工作流已更新", 0, 0);
       }
+      const statusView = createWorkflowStatusView(details, {
+        roleCompactionPhase: "idle",
+        workflowDispatchInFlight: false,
+      });
       if (details.status === "paused") {
-        return renderWorkflowPauseResult(createWorkflowPauseView(details), expanded, theme, workflowReport.formatWorkflowState(details));
+        return renderWorkflowPauseResult(
+          createWorkflowPauseView(details),
+          expanded,
+          theme,
+          formatWorkflowStatusText(statusView),
+        );
       }
-      const progress = workflowProgress(details);
-      const current = progress.currentTaskId ? ` · ${progress.currentTaskId}` : "";
-      const workflowLabel = details.status === "completed"
-        ? "工作流已完成"
-        : `工作流 ${progress.completed}/${progress.total}`;
-      let text = theme.fg("success", "✓ ") + theme.fg("accent", workflowLabel) + theme.fg("muted", current);
-      if (details.status === "replanning") text += theme.fg("warning", " · 等待架构师重规划");
-      if (expanded) text += `\n${details.tasks.map((task) => `  [${task.status}] ${task.id} · ${task.task}`).join("\n")}`;
-      return new Text(text, 0, 0);
+      return new Text(contentText || "工作流已更新", 0, 0);
     },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {

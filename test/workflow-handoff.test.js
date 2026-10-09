@@ -86,6 +86,8 @@ test("status 的模型可见内容包含可直接提交的当前身份且保持�
     const taskPrompt = harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message.content;
     assert.deepEqual(identityFromText(taskPrompt, "当前任务结果身份 JSON（complete/block 时按原样传回）："), identity);
     assert.equal(harness.branch.length, branchLength);
+    assert.equal(status.details.workflowPresentation.kind, "workflow-status");
+    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
     assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.handoff.phase, "queued");
   });
 });
@@ -106,12 +108,53 @@ test("queued handoff 可在匹配的结果调用中补记开始，重复或缺�
 
     const completed = await workflow.execute("complete", completeParams(identity), undefined, undefined, harness.context);
     assert.equal(completed.details.status, "completed");
+    assert.equal(completed.details.workflowPresentation.kind, "workflow-completion");
+    assert.equal(completed.details.workflowPresentation.view.finalTask.id, "first");
+    assert.match(completed.content[0].text, /^工作流完成报告/);
+    const completionTui = workflow.renderResult(
+      completed,
+      { expanded: false, isPartial: false },
+      harness.context.ui.theme,
+      { isError: false },
+    ).render(300).join("\n");
+    assert.match(completionTui, /工作流完成报告/);
+    assert.match(completionTui, /第一项完成/);
     assert.equal(completed.details.tasks[0].executionStartedAt !== undefined, true);
     assert.equal(completed.details.recoveryGeneration, identity.recoveryGeneration + 1);
+    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
     await assert.rejects(
       workflow.execute("duplicate-complete", completeParams(identity), undefined, undefined, harness.context),
       { code: "WORKFLOW_ACTION_IDENTITY_STALE" },
     );
+  });
+});
+
+test("中间任务使用显式任务完成展示类别并保留模型报告内容", async () => {
+  await withTempDirectory(async (directory) => {
+    const state = createWorkflowState({
+      summary: "两阶段完成报告",
+      tasks: [
+        { id: "first", task: "执行第一项", files: ["src/first.js"], acceptanceCriteria: ["完成"] },
+        { id: "second", task: "执行第二项", files: ["src/second.js"], acceptanceCriteria: ["完成"] },
+      ],
+    }, 100);
+    const harness = await taskHarness(directory, { state });
+    const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+    const completed = await workflow.execute("complete-first", completeParams(workflowMessageIdentity(harness)), undefined, undefined, harness.context);
+
+    assert.equal(completed.details.status, "running");
+    assert.equal(completed.details.workflowPresentation.kind, "task-completion");
+    assert.equal(completed.details.workflowPresentation.continuation, "next-task");
+    assert.equal(completed.details.workflowPresentation.view.task.id, "first");
+    assert.match(completed.content[0].text, /^任务完成报告/);
+    const rendered = workflow.renderResult(
+      completed,
+      { expanded: false, isPartial: false },
+      harness.context.ui.theme,
+      { isError: false },
+    ).render(300).join("\n");
+    assert.match(rendered, /下一任务将自动开始/);
+    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
   });
 });
 

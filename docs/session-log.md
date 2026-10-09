@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：工作流状态、完成、计时与错误展示结构化重构
+
+- 完成：为工作流状态、单任务完成、最终完成、普通执行计时和操作错误拆分类型化视图与纯文本/TUI renderer。状态视图供状态文本、状态栏、进度面板和工具结果使用，刷新/菜单交互仍留在运行层；完成报告保留明确最终任务选择和失败验证筛选；计时保留时区与不可用语义。错误解析以结构化 Result 区分普通错误、非文本/缺失详情、损坏 marker/JSON 及诊断字段错误，只把白名单身份差异和允许标量带入有效视图。
+- 边界：瞬时 `workflowPresentation` 只附加到工具结果 `details`；既有 WorkflowState/session schema、状态机与守卫未改。模型侧错误 marker/JSON 和 `isError` 保持原状；缺少展示元数据的旧结果使用原始工具文本回退。500 行单文件限制按用户授权暂免，但未改门禁，既有 `test/pi-usage.test.js` 为 509 行；未运行 `npm test`。
+- 验证：定向 `node --test test/tool-render-errors.test.js test/workflow-handoff.test.js test/workflow-report.test.js test/workflow-completion-view.test.js test/run-timing.test.js test/workflow-status-view.test.js test/workflow-protocol.test.js`：37 项通过；最终 `node --test`：196 项通过、0 失败；`npm run typecheck` 通过；`git diff --check` 通过（Git 提示部分工作文件下次写入时会做 LF/CRLF 转换）。最终全量测试覆盖了定向回归之后增加的错误 marker/输入边界断言。
+- 收尾：未改版本、依赖或行数门禁；未调用真实模型/API、未 reload，未提交或推送。工作区保留本轮未提交改动。
+- 决策见 [`docs/decisions.md`](decisions.md)，当前事实见 [`docs/current-state.md`](current-state.md)。
+
 ### 2026-10-09：工作流暂停展示改为类型化视图与双渲染器
 
 - 完成内容：新增只读 `WorkflowPauseView`，结构化表达暂停原因、阻塞原因和恢复动作；纯文本通知与 TUI 结果分别读取视图渲染，移除通过 `split`/中文前缀从摘要中推断段落和颜色的逻辑。保留原报告调用接口、折叠/展开详情与安全恢复提示；未更改状态流转和 retry 守卫。
