@@ -110,7 +110,7 @@ fork `baochunli/pi-collaborating-agents`，复用其共享工作区协作能力�
 ### 测试与验证事实
 
 - fork README 声明验证命令为 `bun test`、`npm pack --dry-run`，并列出 `docs.test.ts`、`index.test.ts`、`session-tail.test.ts` 等 focused checks；本次没有执行 fork 测试或打包。
-- 通过公开 raw 文件读取并统计固定 commit 的主要文件：`index.ts` 2,985 行、`subagent-spawn.ts` 1,935 行、`store.ts` 1,049 行、`messages-overlay.ts` 873 行、`session-tail.ts` 335 行。pi-init 的 500 物理行门禁不允许直接合入这些大文件，必须拆分或保留为受控第三方目录并明确门禁策略。
+- 通过公开 raw 文件读取并统计固定 commit 的主要文件：`index.ts` 2,985 行、`subagent-spawn.ts` 1,935 行、`store.ts` 1,049 行、`messages-overlay.ts` 873 行、`session-tail.ts` 335 行。当时 pi-init 将 500 物理行视为硬门禁；该做法已被 2026-10-09 的大文件审阅决策替代：超过 500 行触发结构审阅，不要求拆分或限制写入。
 - 本地工作区在本次文档修改后包含 `docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md` 的修改和新增 `docs/plans/`；未修改代码、未运行 fork 测试、未运行真实 Agent。
 
 ### 风险与未确认项
@@ -122,7 +122,7 @@ fork `baochunli/pi-collaborating-agents`，复用其共享工作区协作能力�
 
 ### 交给 architect 的集成接点
 
-- 保留 pi-init 的 `role-runtime`、`roleModels`、`task_workflow`、恢复门和 `edit-guard`；将 fork 的协作代码拆成不超过 500 行的模块，或明确第三方目录的行数门禁例外后再由用户确认。
+- 保留 pi-init 的 `role-runtime`、`roleModels`、`task_workflow`、恢复门和 `edit-guard`；协作代码按职责组织。超过 500 行时依据结构审阅有理由地保留或建议拆分，不作为硬门禁。
 - 修改 subagent API 为 `role` 优先；角色模型、thinkingLevel、system prompt 和 allowed tools 从 pi-init 解析，禁止 fork type/TOML 覆盖和 fallback。
 - 先接入 registry/message/session/reservation 与旧 `parallel_batch` 并存，完成共享工作区取消、失败、迟到结果和真实双 Agent 验证后，才讨论删除 gmc/worktree 代码。
 - 保留 MIT license 版权声明；对方 fork 的源仓库、固定 commit、包名/API 兼容结果和测试结果需在实现文档中追踪。

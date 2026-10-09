@@ -33,6 +33,7 @@ import { workflowPresentationFromDetails } from "./workflow-presentation.ts";
 import { createWorkflowStatusView } from "./workflow-status-view.ts";
 import { formatWorkflowStatusText } from "./workflow-status-renderer.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
+import { createFileReviewRuntime } from "./file-review-runtime.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
 import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
@@ -77,6 +78,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     scheduleWorkflow: (ctx, identity) => workflowDispatch.scheduleWorkflow(ctx, identity),
     sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
+  });
+  createFileReviewRuntime(pi, {
+    getActiveRole: roleRuntime.activeRoleFor,
+    canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
   });
   const runtimeRoutingContext = createRuntimeRoutingContext(runtimeState, {
     getActiveRole: roleRuntime.activeRoleFor,

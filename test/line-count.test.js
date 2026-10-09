@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  MAX_LINE_COUNT,
+  REVIEW_THRESHOLD,
   checkLineCount,
   countPhysicalLines,
   findCodeFiles,
@@ -46,44 +46,55 @@ test("物理行数正确处理 LF、CRLF、CR 和无末尾换行", () => {
   assert.equal(countPhysicalLines("one\r\ntwo\nthree\r"), 3);
 });
 
-test("递归扫描支持的代码扩展名并排除 .git 与 node_modules", async () => {
+test("递归扫描支持的代码扩展名并排除依赖、VCS 与生成目录", async () => {
   const directory = await mkdtemp(join(projectRoot, "line-count-test-"));
   try {
     await mkdir(join(directory, "nested"), { recursive: true });
     await mkdir(join(directory, ".git"), { recursive: true });
     await mkdir(join(directory, "node_modules", "package"), { recursive: true });
+    await mkdir(join(directory, "dist"), { recursive: true });
     await writeFile(join(directory, "root.ts"), "export {};");
     await writeFile(join(directory, "nested", "module.mts"), "export {};");
-    await writeFile(join(directory, "nested", "ignored.jsx"), "ignored");
+    await writeFile(join(directory, "nested", "module.jsx"), "export {};");
     await writeFile(join(directory, ".git", "ignored.js"), "ignored");
     await writeFile(join(directory, "node_modules", "package", "ignored.ts"), "ignored");
+    await writeFile(join(directory, "dist", "ignored.js"), "ignored");
 
     const files = await findCodeFiles(directory);
     assert.deepEqual(
       files.map((file) => relative(directory, file).replaceAll("\\", "/")),
-      ["nested/module.mts", "root.ts"],
+      ["nested/module.jsx", "nested/module.mts", "root.ts"],
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("500 行通过，501 行返回违规并报告实际路径和行数", async () => {
+test("npm test 不再串联行数硬门禁", async () => {
+  const manifest = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8"));
+  assert.equal(manifest.scripts.test, "node --test");
+  assert.equal(manifest.scripts["check:large-files"], "node scripts/check-line-count.js");
+});
+
+test("500 行不进入审阅队列，501 行报告候选但不会让扫描失败", async () => {
   const directory = await mkdtemp(join(projectRoot, "line-count-test-"));
   const file = join(directory, "too-many.js");
   try {
-    await writeFile(file, makeLines(MAX_LINE_COUNT));
-    assert.deepEqual((await checkLineCount(directory)).violations, []);
+    await writeFile(file, makeLines(REVIEW_THRESHOLD));
+    const belowThreshold = await checkLineCount(directory);
+    assert.equal(belowThreshold.ok, true);
+    assert.deepEqual(belowThreshold.candidates, []);
 
-    await writeFile(file, makeLines(MAX_LINE_COUNT + 1));
+    await writeFile(file, makeLines(REVIEW_THRESHOLD + 1));
     const result = await checkLineCount(directory);
-    assert.equal(result.violations.length, 1);
-    assert.equal(result.violations[0].lineCount, MAX_LINE_COUNT + 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0].lineCount, REVIEW_THRESHOLD + 1);
 
     const processResult = await runChecker(directory);
-    assert.equal(processResult.code, 1);
+    assert.equal(processResult.code, 0);
     assert.match(processResult.output, /too-many\.js/);
-    assert.match(processResult.output, /501 lines/);
+    assert.match(processResult.output, /501 lines; structural review recommended/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -17,8 +17,9 @@
     "THIRD-PARTY-NOTICES"
   ],
   "scripts": {
-    "test": "node scripts/check-line-count.js && node --test",
+    "test": "node --test",
     "typecheck": "tsc --noEmit",
+    "check:large-files": "node scripts/check-line-count.js",
     "postinstall": "node scripts/install-launchers.js"
   },
   "dependencies": {

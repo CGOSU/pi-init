@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：将大文件行数硬门禁改为 Pi 运行时结构审阅
+
+- 完成内容：移除 `npm test` 的 500 行硬门禁；统一扫描策略和 SHA-256 内容指纹，新增超限文件扫描、错误诊断、项目/session/策略绑定的审阅状态，以及 Pi 扩展运行时队列。会话启动扫描既有超限文件，文件工具结果与 `agent_settled` 补扫；`file_review` 分页列出候选，只有完整读取当前文件版本并提交有理由的“保留”或“建议拆分”后才登记完成，内容变化后重新待审。审阅不自动修改代码，不绕过角色恢复门；扫描和持久化失败保持显式。
+- 决策：500 个物理行是结构审阅阈值而非写入上限；`npm run check:large-files` 保留为手动候选报告，扫描错误仍失败。JS/TS 与 JSX 是首版范围，排除依赖、VCS 和明确生成目录；新决策替代旧的行数门禁决策及迁移计划中的硬性拆分要求，详见 [`docs/decisions.md`](decisions.md)。
+- 验证：`npm test` 228 项通过、0 失败；`npm run typecheck` 通过；`npm run check:large-files` 以 0 退出并报告 `extensions/index.ts`（505 行）及 `test/pi-usage.test.js`（509 行）为待审候选；`git diff --check` 通过（有 LF/CRLF 转换提示）。
+- 未执行：未 reload Pi 或运行真实 TUI/E2E；两个扫描候选尚未通过新运行时工具完成结构审阅，待 Pi 加载更新后的扩展后进入待审队列；未提交或推送。
+- 详细当前状态见 [`docs/current-state.md`](current-state.md)。
+
 ### 2026-10-09：统一活动区、公开 I/O 观察与缓存 usage 语义
 
 - 完成内容：将角色、工作流、压缩、公开 Provider 请求/delta、工具类别、cache usage 和累计 session 工作时间合并到唯一宽度感知活动状态；TUI 保留 Pi 原生 footer/working indicator/OSC 7501，只用一条活动 widget，RPC 使用同源 status，详细工作流信息仍在原详情入口。工具仅按公开事件和白名单类别呈现，不展示参数、命令、路径、URL 或结果，不推测 MCP/codemode 内部过程。
