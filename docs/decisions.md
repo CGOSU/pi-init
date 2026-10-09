@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-10-09：统一 pi-init 活动信息并升级 Pi API 约束至 1.1.0
+
+- 决定：将角色、工作流、压缩、可观测的模型请求/工具活动、缓存 usage 与 session 累计工作时间协调为单一 pi-init 活动信息；保持各业务状态源独立，仅统一选择与呈现。该单一出口取代旧的独立 `pi-cache` 状态项和计时 widget。TUI 保留 Pi 原生 footer 和 working indicator，仅显示一条 pi-init 活动 widget；RPC 使用同源简明 status，JSON/print 不依赖 UI。三个 Pi peer dependency 范围统一升级至 `^1.1.0` 并同步 lockfile。
+- 原因：多个独立 status key 与计时 widget 会造成状态竞争、重复和过载；一条按重要性和可用宽度裁减的活动信息，更适合快速判断当前动作及是否需要介入。
+- 约束：Pi 原生 footer/working indicator/OSC 7501 继续表达全局运行状态，不由扩展复制或替换。异常和用户介入优先于普通活动、职责/进度、计时及缓存辅助信息；详细工作流原因与恢复步骤保留在现有详情入口。请求/delta/工具信息仅表述公开事件可观测到的阶段，不推测 MCP/codemode 内部 I/O 或伪造进度，不显示敏感参数。Provider `cacheRead`/`cacheWrite` 是 token usage，不等于磁盘/网络 I/O；未报告、失败、中止及零值语义不得混淆。Pi 1.1.0 的公开 Usage 可能已将 Provider 未报告的缓存计数归一化为零，因此零值只标记为来源未确认，不声称 Provider 明确报告零，也不推断缓存命中或未命中；缺失、无效 usage、请求失败、中止及缺少结束事件分别表达。保持工作流状态机、身份/权限/恢复门、外部副作用确认和累计计时历史语义不变。具体实现与验证见 [`docs/session-log.md`](session-log.md)；本条记录已确认范围与边界。
+
 ### 2026-10-09：工作流状态、完成、计时与错误展示按语义分离
 
 - 决定：状态、任务完成、工作流最终完成、普通执行计时和操作错误分别使用独立展示视图与纯文本/TUI renderer；类别来自类型化结果，不从中文标题或格式化文本推断。需要 TUI 分派时，`workflowPresentation` 作为瞬时结果 `details` 元数据附加，不进入 `WorkflowState` 或 session entry；缺失元数据的旧结果保留原始工具文本。

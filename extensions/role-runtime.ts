@@ -34,8 +34,10 @@ import {
 } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
+import type { ActivityStatusReporter } from "./activity-status.ts";
 
 export type RoleRuntimeDependencies = {
+  activityStatus: ActivityStatusReporter;
   getWorkflowState: () => WorkflowState | undefined;
   setWorkflowDispatchInFlight: (value: boolean) => void;
   requireRoleRecovery: (ctx: ExtensionContext, reason: string) => void;
@@ -297,23 +299,17 @@ export function createRoleRuntime(
     return `运行 ${progress.completed}/${progress.total}${current || " · 待调度"}`;
   }
 
-  function workflowStatusLabel(workflowState = deps.getWorkflowState()) {
-    if (!workflowState || ["completed", "cancelled"].includes(workflowState.status)) {
-      return inactiveWorkflowStateLabel();
-    }
-    return workflowStateLabel(workflowState);
-  }
-
   function refreshRoleStatus(ctx: ExtensionContext, mode: RoleMode) {
     const role = activeRoleFor(ctx);
+    const modeLabel = roleModeLabel(mode).split("（", 1)[0] ?? roleModeLabel(mode);
     const model = ctx.model
       ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
-      : "未选择模型";
-    const indicator = ctx.ui.theme?.fg(ctx.isIdle() ? "muted" : "accent", "●") ?? "●";
-    ctx.ui.setStatus(
-      "pi-init",
-      `${indicator} ${roleModeLabel(mode)} · ${role ? `${roleLabel(role.role)} · ` : ""}${model} · 工作流 · ${workflowStatusLabel()}`,
-    );
+      : undefined;
+    deps.activityStatus.setRole(ctx, {
+      mode: modeLabel,
+      ...(role ? { role: roleLabel(role.role) } : {}),
+      ...(model ? { model } : {}),
+    });
   }
 
   function setRoleStatus(ctx: ExtensionContext, mode: RoleMode) {
@@ -492,7 +488,6 @@ export function createRoleRuntime(
     automaticRole,
     currentRole,
     workflowStateLabel,
-    workflowStatusLabel,
   };
 }
 

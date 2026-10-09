@@ -1,20 +1,16 @@
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getRunTimingDuration } from "../src/run-timing.ts";
 import {
   completeSessionWorkTime,
   createSessionWorkTime,
-  formatSessionWorkTime,
   getSessionWorkTime,
   startSessionWorkTime,
 } from "../src/session-work-time.ts";
 import type { RunTimingEntryData } from "./contracts.ts";
+import type { ActivityStatusReporter } from "./activity-status.ts";
 
-const SESSION_WORK_TIME_WIDGET_KEY = "pi-init-session-work-time";
 const SESSION_WORK_TIME_ENTRY_TYPE = "pi-init-session-work-time";
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
-type SessionWorkTimeTheme = Pick<Theme, "fg">;
-
 type SessionWorkTimeEntryData = {
   totalMilliseconds?: unknown;
   lastStartedAt?: unknown;
@@ -28,10 +24,6 @@ type SessionWorkTimeBranchEntry = {
 };
 
 type WorkInterval = { startedAt: number; completedAt: number };
-
-function canRender(ctx: ExtensionContext) {
-  return ctx.hasUI && ctx.mode === "tui";
-}
 
 function validNonNegativeNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -76,14 +68,10 @@ function persistedWorkTime(ctx: ExtensionContext) {
     : { totalMilliseconds: legacyTotalMilliseconds, hasWork: legacyLastRun !== undefined, lastRun: legacyLastRun };
 }
 
-function renderWorkedFor(width: number, duration: number, theme: SessionWorkTimeTheme) {
-  const safeWidth = Math.max(1, Math.floor(width));
-  const label = `─ ⏱ Worked for ${formatSessionWorkTime(duration)} `;
-  const line = `${label}${"─".repeat(Math.max(0, safeWidth - visibleWidth(label)))}`;
-  return [theme.fg("dim", truncateToWidth(line, safeWidth, ""))];
-}
-
-export function createSessionWorkTimeTracker(now = () => Date.now()) {
+export function createSessionWorkTimeTracker(
+  now = () => Date.now(),
+  activityStatus?: ActivityStatusReporter,
+) {
   let workTime = createSessionWorkTime();
   let hasCompletedWork = false;
   let lastCompletedWork: WorkInterval | undefined;
@@ -91,7 +79,7 @@ export function createSessionWorkTimeTracker(now = () => Date.now()) {
   let lastPersistedCompletedAt: number | undefined;
 
   function clear(ctx: ExtensionContext) {
-    if (canRender(ctx)) ctx.ui.setWidget(SESSION_WORK_TIME_WIDGET_KEY, undefined);
+    activityStatus?.setWorkTime(ctx, undefined);
   }
 
   function restore(ctx: ExtensionContext) {
@@ -150,12 +138,8 @@ export function createSessionWorkTimeTracker(now = () => Date.now()) {
   }
 
   function show(ctx: ExtensionContext) {
-    if (!canRender(ctx) || !hasCompletedWork || !ctx.isIdle()) return;
-    const duration = getSessionWorkTime(workTime, now());
-    ctx.ui.setWidget(SESSION_WORK_TIME_WIDGET_KEY, (_tui, theme) => ({
-      render: (width: number) => renderWorkedFor(width, duration, theme),
-      invalidate: () => {},
-    }));
+    if (!hasCompletedWork || !ctx.isIdle()) return;
+    activityStatus?.setWorkTime(ctx, getSessionWorkTime(workTime, now()));
   }
 
   function shutdown(ctx: ExtensionContext) {
@@ -165,8 +149,8 @@ export function createSessionWorkTimeTracker(now = () => Date.now()) {
   return { restore, reset, start, complete, snapshot, show, shutdown };
 }
 
-export function registerSessionWorkTime(pi: ExtensionAPI) {
-  const tracker = createSessionWorkTimeTracker();
+export function registerSessionWorkTime(pi: ExtensionAPI, activityStatus: ActivityStatusReporter) {
+  const tracker = createSessionWorkTimeTracker(Date.now, activityStatus);
   pi.registerEntryRenderer<SessionWorkTimeEntryData>(SESSION_WORK_TIME_ENTRY_TYPE, () => ({
     render: () => [],
     invalidate: () => {},

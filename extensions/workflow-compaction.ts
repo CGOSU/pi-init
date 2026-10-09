@@ -9,9 +9,9 @@ import {
   type ExtensionRuntimeState,
   type PendingRoleCompaction,
 } from "./runtime-state.ts";
+import type { ActivityStatusReporter } from "./activity-status.ts";
 
 export const WORKFLOW_COMPACTION_WATCHDOG_MS = 30_000;
-const COMPACTION_STATUS_KEY = "pi-init-compaction";
 const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
   "这是自动角色切换触发的上下文压缩。",
   "请保留后续角色继续工作所需的完整信息：用户目标与约束、关键决策及原因、已完成/进行中/阻塞事项、读取和修改的文件、实际执行的验证命令与结果、下一步。",
@@ -20,6 +20,7 @@ const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
 const ROLE_SWITCH_DIAGNOSTIC_TYPE = "pi-init-role-transition";
 
 type WorkflowCompactionDependencies = {
+  activityStatus?: ActivityStatusReporter;
   setWorkflowDispatchInFlight: (value: boolean) => void;
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   requireRoleRecovery: (ctx: ExtensionContext, reason: string) => void;
@@ -87,7 +88,7 @@ export function createWorkflowCompaction(
     state.roleCompactionPhase = "stalled";
     state.roleCompactionStalled = true;
     const message = `上下文压缩等待超过 ${Math.ceil(watchdogMs / 1000)} 秒（操作 ${operation.operationId}）；未自动启动下一任务。请等待 Pi 完成，或执行 /reload 后使用 /pi-init workflow resume。`;
-    operation.ctx.ui.setStatus(COMPACTION_STATUS_KEY, `⚠ ${message}`);
+    deps.activityStatus?.setCompaction(operation.ctx, "stalled");
     operation.ctx.ui.notify(message, "warning");
   }
 
@@ -208,7 +209,7 @@ export function createWorkflowCompaction(
     operation.settled = true;
     active = undefined;
     clearWatchdog();
-    operation.ctx.ui.setStatus(COMPACTION_STATUS_KEY, undefined);
+    deps.activityStatus?.setCompaction(operation.ctx, undefined);
     clearTransientState();
     try {
       continueAfterCompaction(operation, warning);
@@ -253,7 +254,7 @@ export function createWorkflowCompaction(
     state.roleCompactionStalled = false;
     state.roleCompactionOperationId = operation.operationId;
     state.roleCompactionStartedAt = Date.now();
-    ctx.ui.setStatus(COMPACTION_STATUS_KEY, `● 正在压缩上下文（${operation.operationId}）`);
+    deps.activityStatus?.setCompaction(ctx, "compacting");
     armWatchdog(operation);
 
     if (branchHasOnlyCustomEntriesAfterCompaction(ctx)) {
@@ -274,8 +275,10 @@ export function createWorkflowCompaction(
   }
 
   function dispose() {
+    const operation = active;
     clearWatchdog();
     active = undefined;
+    if (operation) deps.activityStatus?.setCompaction(operation.ctx, undefined);
     state.pendingRoleCompaction = undefined;
     clearTransientState();
     deps.setWorkflowDispatchInFlight(false);

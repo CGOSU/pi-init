@@ -2,6 +2,15 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：统一活动区、公开 I/O 观察与缓存 usage 语义
+
+- 完成内容：将角色、工作流、压缩、公开 Provider 请求/delta、工具类别、cache usage 和累计 session 工作时间合并到唯一宽度感知活动状态；TUI 保留 Pi 原生 footer/working indicator/OSC 7501，只用一条活动 widget，RPC 使用同源 status，详细工作流信息仍在原详情入口。工具仅按公开事件和白名单类别呈现，不展示参数、命令、路径、URL 或结果，不推测 MCP/codemode 内部过程。
+- Cache 边界：Pi 1.1.0 的公开 `Usage` 将 cache 字段定义为数值，Provider adapter 可能把缺失计数规范化为 `0`。活动区因此将全零标为“来源未确认”，不宣称 Provider 明确报告零或推断命中/未命中；结构化解析区分 usage/字段缺失、类型/格式/范围/精度/溢出错误、正数、零、请求失败、中止及缺少 `message_end`。`cacheRead`/`cacheWrite` 仍仅表示 Provider token usage，不代表磁盘/网络 I/O；字段完整有效才呈现正数，部分字段作为 usage 不完整处理且不显示部分结果。
+- 依赖：三个 Pi peerDependencies 均为 `^1.1.0`；本地锁定安装的 `pi-ai`、`pi-coding-agent`、`pi-tui` 均为 `1.1.0`。累计工作时间仍按实际 Agent 工作区间累计并从 session 恢复，不计闲置。
+- 验证：`node --test test/cache-status.test.js test/activity-status.test.js` 20 项通过；最终 `node --test` 214 项通过、0 失败；`npm run typecheck` 通过；`npm ls @earendil-works/pi-ai @earendil-works/pi-coding-agent @earendil-works/pi-tui --depth=0` 显示三包均为 `1.1.0`；`git diff --check` 通过（仅有 LF/CRLF 转换提示）。`npm test` 在执行 Node 测试前被 500 行数门禁阻断：既有 `test/pi-usage.test.js` 为 509 行；单独的 `node --test` 已运行完整测试集。
+- 未执行：真实 Pi TUI/E2E、真实 Provider 请求、全局 Pi 更新、提交或推送。测试只验证本地 Pi 1.1.0 依赖下的扩展 harness 和公开 API 类型/实现边界。
+- 当前事实见 [`docs/current-state.md`](current-state.md)，已确认的范围约束见 [`docs/decisions.md`](decisions.md)；可复发的 cache usage 归一化陷阱见 [`docs/pitfalls.md`](pitfalls.md)。
+
 ### 2026-10-09：工作流状态、完成、计时与错误展示结构化重构
 
 - 完成：为工作流状态、单任务完成、最终完成、普通执行计时和操作错误拆分类型化视图与纯文本/TUI renderer。状态视图供状态文本、状态栏、进度面板和工具结果使用，刷新/菜单交互仍留在运行层；完成报告保留明确最终任务选择和失败验证筛选；计时保留时区与不可用语义。错误解析以结构化 Result 区分普通错误、非文本/缺失详情、损坏 marker/JSON 及诊断字段错误，只把白名单身份差异和允许标量带入有效视图。

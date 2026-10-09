@@ -7,6 +7,7 @@ import {
   startSessionWorkTime,
 } from "../src/session-work-time.ts";
 import { createSessionWorkTimeTracker } from "../extensions/session-work-time.ts";
+import { createActivityStatus } from "../extensions/activity-status.ts";
 import * as helpers from "./helpers.js";
 
 const { createExtensionHarness, emitExtensionEvent } = helpers;
@@ -75,10 +76,11 @@ test("独立 session 记录恢复累计时间", () => {
   });
 });
 
-test("空闲 UI 显示累计 Worked for，开始下一轮时清除", () => {
+test("空闲 UI 将累计工作时间放入统一活动 widget，下一轮开始时清除", () => {
   let now = 1_000;
   const harness = createExtensionHarness([], { mode: "tui" });
-  const tracker = createSessionWorkTimeTracker(() => now);
+  const activityStatus = createActivityStatus();
+  const tracker = createSessionWorkTimeTracker(() => now, activityStatus);
   tracker.reset(harness.context);
   tracker.start(harness.context);
   now = 4_670_000;
@@ -86,6 +88,7 @@ test("空闲 UI 显示累计 Worked for，开始下一轮时清除", () => {
   tracker.show(harness.context);
 
   assert.equal(harness.widgets.size, 1);
+  assert.ok(harness.widgets.has("pi-init-activity"));
 
   now = 5_000_000;
   tracker.start(harness.context);
@@ -100,9 +103,11 @@ test("session 生命周期在 TUI 空闲时显示累计工作时间", async () =
   const harness = createExtensionHarness([], { mode: "tui" });
   await emitExtensionEvent(harness, "session_start");
   await emitExtensionEvent(harness, "agent_start");
-  assert.equal(harness.widgets.size, 0);
+  assert.equal(harness.widgets.size, 1);
+  assert.ok(harness.widgets.has("pi-init-activity"));
   await emitExtensionEvent(harness, "agent_settled");
   assert.equal(harness.widgets.size, 1);
+  assert.ok(harness.widgets.has("pi-init-activity"));
   assert.equal(harness.entries.filter(({ type }) => type === "pi-init-session-work-time").length, 1);
 
   await emitExtensionEvent(harness, "session_shutdown");

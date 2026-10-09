@@ -149,12 +149,10 @@ export function workflowStatusBar(view: WorkflowStatusView): { text: string; col
   const elapsed = view.status === "running" && view.elapsed.kind === "available"
     ? shortDuration(view.elapsed.milliseconds)
     : undefined;
-  const taskId = view.progress.currentTaskId;
   const parts = [
     view.status === "running" ? "⏳" : "⏸",
     activityLabel(view.activity),
     `${view.progress.completed}/${view.progress.total}`,
-    taskId && (taskId.length > 32 ? `${taskId.slice(0, 29)}...` : taskId),
     elapsed ? `已运行 ${elapsed}` : undefined,
   ].filter(Boolean);
   return { text: parts.join(" · "), color: view.status === "running" ? "accent" : "warning" };

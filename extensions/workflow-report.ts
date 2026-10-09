@@ -31,6 +31,7 @@ import {
 } from "./workflow-view-format.ts";
 import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
+import type { ActivityStatusReporter } from "./activity-status.ts";
 
 function formatWorkflowBlockLines(workflowState: WorkflowState) {
   return formatWorkflowPauseBlockLines(createWorkflowPauseView(workflowState));
@@ -41,13 +42,13 @@ function formatWorkflowPauseSummary(workflowState: WorkflowState) {
 export type WorkflowReportDependencies = {
   pi: ExtensionAPI;
   roleRuntime: RoleRuntime;
+  activityStatus?: ActivityStatusReporter;
 };
 
 export function createWorkflowReport(
   state: ExtensionRuntimeState,
   deps: WorkflowReportDependencies,
 ) {
-  const WORKFLOW_STATUS_KEY = "pi-init-workflow";
   const WORKFLOW_STATUS_REFRESH_MS = 1000;
   let workflowStatusTimer: ReturnType<typeof setInterval> | undefined;
   let workflowStatusContext: ExtensionContext | undefined;
@@ -58,10 +59,7 @@ export function createWorkflowReport(
   }
   function renderWorkflowStatus(ctx: ExtensionContext) {
     const status = workflowStatusBar(createCurrentWorkflowStatusView(state));
-    ctx.ui.setStatus(
-      WORKFLOW_STATUS_KEY,
-      status ? ctx.ui.theme?.fg?.(status.color, status.text) ?? status.text : undefined,
-    );
+    deps.activityStatus?.setWorkflow(ctx, status);
   }
 
   function updateWorkflowStatus(ctx: ExtensionContext) {
@@ -86,7 +84,7 @@ export function createWorkflowReport(
 
   function dispose(ctx?: ExtensionContext) {
     stopWorkflowStatusTimer();
-    if (ctx?.hasUI) ctx.ui.setStatus(WORKFLOW_STATUS_KEY, undefined);
+    if (ctx) deps.activityStatus?.setWorkflow(ctx, undefined);
   }
 
   function persistWorkflowState(next: WorkflowState, ctx: ExtensionContext) {

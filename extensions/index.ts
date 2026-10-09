@@ -17,8 +17,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { createRoleRuntime } from "./role-runtime.ts";
-import { createCacheStatus } from "./cache-status.ts";
-import { registerSessionWorkTime } from "./session-work-time.ts";
+import { registerActivityStatusSources } from "./activity-status-registration.ts";
 import { createArchitectBoundary } from "./architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
@@ -52,7 +51,7 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
-  createCacheStatus(pi);
+  const activityStatus = registerActivityStatusSources(pi);
   const roleRecovery = createRoleRecovery(pi, runtimeState);
   const runTimingDiagnostics = createRunTimingDiagnostics(
     pi,
@@ -69,7 +68,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     persistWorkflowState: (next, ctx) => workflowReport.persistWorkflowState(next, ctx),
   });
   const roleRuntime = createRoleRuntime(pi, runtimeState, {
-    getWorkflowState: () => runtimeState.workflowState,
+    activityStatus, getWorkflowState: () => runtimeState.workflowState,
     setWorkflowDispatchInFlight: (value) => {
       runtimeState.workflowDispatchInFlight = value;
     },
@@ -85,7 +84,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
-  workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime });
+  workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime, activityStatus });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
     messages: workflowMessages,
@@ -498,5 +497,4 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       };
     },
   });
-  registerSessionWorkTime(pi);
 }

@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-10-09：Pi AI Usage 的零缓存计数不证明 Provider 明确报告零
+
+- 日期：2026-10-09；
+- 现象：`@earendil-works/pi-ai` 1.1.0 的公开 `Usage` 把 `cacheRead`/`cacheWrite` 定义为必填数值，但 Provider adapter 会在原始计数缺失时填入 `0`；仅检查最终 `message_end` 的零值无法确认 Provider 是否报告过该字段。
+- 根因：adapter 在公开 assistant usage 到达扩展前已丢失“原始字段缺失”与“报告为零”的来源差异；例如 Completions adapter 使用 `?? 0`，Anthropic message-start 初始化使用 `|| 0`。公开 Usage 类型不携带缓存字段的报告来源标记。
+- 修复：把两个有效零值显示为“来源未确认”，不将其解释为缓存未命中或命中；usage/字段缺失、输入无效、请求失败、中止及缺少 `message_end` 使用不同结构化状态。字段必须完整且有效才呈现正数；不完整计数整体拒绝，不补零或展示部分结果。
+- 验证：检查本地 Pi 1.1.0 `dist/types.d.ts` 与 Provider adapter 归一化路径；`node --test test/cache-status.test.js test/activity-status.test.js` 20 项通过，`npm run typecheck` 通过。未执行真实 Provider 请求；详细结果见 [`docs/session-log.md`](session-log.md)。
+
 ### 2026-10-08：Pi 长驻进程的工作流导出缺失不能仅凭新进程通过判定根因已修复
 
 - 日期：2026-10-08；
