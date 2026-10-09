@@ -8,9 +8,10 @@ export const FILE_REVIEW_ENTRY_TYPE = "pi-init-file-review";
 
 export const FILE_REVIEW_CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx",
+  ".rs", ".go", ".py", ".pyi", ".php", ".phtml",
 ]);
 export const FILE_REVIEW_EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set([
-  ".git", "node_modules", "dist", "coverage", ".next", "out",
+  ".git", "node_modules", "dist", "coverage", ".next", "out", "target", "vendor", ".venv", "venv", "__pycache__", ".tox",
 ]);
 
 export type FileSnapshot = {

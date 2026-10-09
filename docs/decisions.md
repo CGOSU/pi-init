@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-10-09：扩展大文件结构审阅语言覆盖
+
+- 决定：在既有 JavaScript/TypeScript/JSX/TSX 范围上新增 Rust `.rs`、Go `.go`、Python `.py`/`.pyi` 和 PHP `.php`/`.phtml`；统一按物理行数、内容指纹与职责边界执行审阅，不依赖语言解析器。
+- 范围：500 行触发阈值、状态绑定与审阅流程不变；扫描继续排除 VCS、依赖和生成目录，并增加 Rust `target`、Go/PHP `vendor`、Python `.venv`、`venv`、`__pycache__` 与 `.tox` 等常见构建/依赖目录；未列出的扩展名仍不进入队列。
+- 原因：用户要求覆盖 Rust、Go、Python、PHP，同时保持审阅逻辑语言无关、最小化实现差异。
+
 ### 2026-10-09：工作流进度、Provider cache 来源与压缩长等待保持语义分离
 
 - 决定：状态视图从真实任务列表及 `currentTaskId` 计算一基当前项位置，`completed/total` 仍是独立的实际完成数；“执行中”须由当前任务、匹配 handoff 与真实启动时间证据共同确认。Provider 响应活动本身不证明任务已启动。

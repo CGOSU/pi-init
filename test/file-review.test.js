@@ -40,9 +40,15 @@ test("会话扫描发现原本已超限文件，不跟随链接并排除依赖�
     await mkdir(path.join(directory, "src"));
     await mkdir(path.join(directory, "node_modules", "pkg"), { recursive: true });
     await mkdir(path.join(directory, "dist"));
+    await mkdir(path.join(directory, "target"));
+    await mkdir(path.join(directory, "vendor"));
+    await mkdir(path.join(directory, ".venv", "src"), { recursive: true });
     await writeFile(path.join(directory, "src", "large.ts"), makeLines(FILE_REVIEW_THRESHOLD + 1));
     await writeFile(path.join(directory, "node_modules", "pkg", "ignored.js"), makeLines(900));
     await writeFile(path.join(directory, "dist", "generated.js"), makeLines(900));
+    await writeFile(path.join(directory, "target", "generated.rs"), makeLines(900));
+    await writeFile(path.join(directory, "vendor", "dependency.go"), makeLines(900));
+    await writeFile(path.join(directory, ".venv", "src", "installed.py"), makeLines(900));
 
     const result = await scanProjectFiles(directory);
     assert.equal(result.ok, true);
@@ -52,6 +58,32 @@ test("会话扫描发现原本已超限文件，不跟随链接并排除依赖�
     assert.deepEqual(pendingFileReviews(result.files, []).map(({ path: filePath, lineCount }) => [filePath, lineCount]), [
       ["src/large.ts", FILE_REVIEW_THRESHOLD + 1],
     ]);
+  });
+});
+
+test("扫描和单文件检查覆盖 Rust、Go、Python 与 PHP 源文件", async () => {
+  await withTempDirectory(async (directory) => {
+    const paths = [
+      "src/module.rs",
+      "src/module.go",
+      "src/module.py",
+      "src/module.pyi",
+      "src/module.php",
+      "src/module.phtml",
+    ];
+    await mkdir(path.join(directory, "src"));
+    await Promise.all(paths.map((filePath) =>
+      writeFile(path.join(directory, filePath), makeLines(FILE_REVIEW_THRESHOLD + 1)),
+    ));
+
+    const expected = [...paths].sort((left, right) => left.localeCompare(right));
+    const result = await scanProjectFiles(directory);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.files.map((file) => file.path), expected);
+    const inspected = await Promise.all(paths.map((filePath) => inspectProjectFile(directory, filePath)));
+    assert.ok(inspected.every((file) => file.ok));
+    assert.deepEqual(pendingFileReviews(result.files, []).map((file) => file.path), expected);
   });
 });
 
@@ -104,7 +136,7 @@ test("单文件检查拒绝项目外路径及未覆盖的扩展名", async () =>
     const outside = await inspectProjectFile(path.join(directory, "project"), "../outside.js");
     assert.equal(outside.ok, false);
     if (!outside.ok) assert.equal(outside.error.code, "PATH_OUTSIDE_PROJECT");
-    const unsupported = await inspectProjectFile(path.join(directory, "project"), "module.py");
+    const unsupported = await inspectProjectFile(path.join(directory, "project"), "module.txt");
     assert.equal(unsupported.ok, false);
     if (!unsupported.ok) assert.equal(unsupported.error.code, "UNSUPPORTED_FILE");
   });

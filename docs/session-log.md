@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-09：扩展大文件结构审阅的语言覆盖
+
+- 完成内容：扫描器和单文件审阅路径新增 Rust `.rs`、Go `.go`、Python `.py`/`.pyi`、PHP `.php`/`.phtml`；为避免把依赖/构建产物当作项目代码，同时排除 `target`、`vendor`、`.venv`、`venv`、`__pycache__` 与 `.tox`。阈值、指纹、持久化状态和审阅结论语义不变。
+- 验证：`node --test test/file-review.test.js test/file-review-runtime.test.js` 14 项通过；`npm test` 258 项通过、0 失败、0 跳过；`npm run typecheck` 通过；`npm run check:large-files` 以 0 退出，报告 `extensions/index.ts`（507 行）、`test/helpers.js`（547 行）、`test/pi-usage.test.js`（509 行）为原始超限候选；`git diff --check` 通过（仅有 LF/CRLF 转换提示）。
+- 未执行：未在真实 Pi 进程 reload 或验证 TUI/E2E；未提交或推送。语言扩展在下次加载更新后的扩展后生效。
+
 ### 2026-10-09：可信工作流阶段、cache来源与压缩长等待软提醒收尾
 
 - 完成内容：状态视图统一供活动栏、状态工具/面板和控制中心使用；当前项位置按真实任务列表与 currentTaskId 计算一基索引，completed/total 保持实际完成数，执行阶段要求匹配 handoff 及真实启动证据。活动 cache 按 session、context generation 和 model 隔离；请求期间历史最终结果标为“上次”，仅匹配最终 assistant message_end usage 显示“本次”，零来源未确认、缺失、无效、失败、中止和缺少结束事件不被旧成功覆盖。30 秒 compaction watchdog 只发一次软提醒，阶段仍为 compacting/in-flight，不判失败、不解锁、不重派发；有效开始时间用于耗时展示，真实错误继续由 onError 表达。
