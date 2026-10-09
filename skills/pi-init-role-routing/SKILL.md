@@ -18,7 +18,7 @@ metadata:
 2. 简单只读咨询可直接交给当前适合的非 `architect` 角色完成，不创建工作流，也不要求正式证据交接；目标明确的日常开发由 `developer-test` 一次完成调查、修改和验证。若 `before_agent_start` 注入的运行状态已确认当前职责且没有活动工作流，不调用 `task_workflow(status)`，也不重复 `switch_role`；若 `roleRecoveryPending` 且没有活动工作流、请求无需工具或新证据，可以直接回答，但不能因此解除恢复门；需要任何工具或执行时仍先 `switch_role`。
 3. 不明确、含糊、需要需求判断或跨职责的指令从 `architect` 开始，由架构师负责澄清目标、边界、非目标，并安排后续职责。
 4. 凡任务需要仓库、代码、测试、文档或外部事实取证，均由 `docs-commit` 完成，并将事实、来源、关系和限制整理成结构化证据包交回 `architect`；`architect` 不进行低风险或其他只读探索。
-5. 代码完成并真实验证后，只有产生项目文档、版本或 Git 收尾时才交给 `docs-commit`；提交和推送仍需授权。
+5. 任务完成并通过适用检查后，由 `docs-commit` 核对 diff 并默认创建中文 commit，仅提交明确归属于本任务的改动；若已有/暂存改动无法安全区分则暂停提交并说明。push 仍须用户明确授权。
 
 角色说明按需读取：
 - [`roles/architect.md`](roles/architect.md)

@@ -14,7 +14,7 @@ fork `baochunli/pi-collaborating-agents`，复用其共享工作区协作能力�
 - `architect`、`developer-test`、`docs-commit` 及公共 `pi-init-role-routing` Skill 继续负责角色专业化和职责边界。
 - `task_workflow` 继续负责规划、依赖、验收、阻塞、重试和重规划；Agent 进程完成不等于任务验收完成。
 - `edit` 的精确参数、唯一匹配、非重叠和 fail-closed 诊断继续保留。
-- 不自动 commit、push 或把共享工作区的失败修改伪装成已回滚。
+- 协作子 Agent/worker 不独立 commit 或 push，也不得把共享工作区的失败修改伪装成已回滚；主控 Agent 在整项任务完成后可按通用规则自动创建中文 commit，push 仍需用户明确授权。
 - 共享工作区不是 Git worktree 或 shell 安全沙箱；reservation 不能阻止所有未经过工具 hook 的写入。
 - fork 仓库地址、固定版本、Pi 包名/API 兼容性和实际 reservation/session 接口尚未确认。
 

@@ -4,8 +4,9 @@
 
 1. 先读取与任务直接相关的项目规则、项目记忆或代码；项目记忆优先按关键词定位相关段落，而非全量读取；
 2. 需要规则、事实、历史或风险时，按需读取 `docs/clean-code.md`、`docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md` 和 `docs/pitfalls.md`；
-3. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后使用中文提交信息并执行 `git push`；
-4. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+3. 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后可自动创建中文 commit；push 仍须用户明确授权；
+4. 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`；
+5. 本仓库任务完成并通过适用检查后，默认自动创建中文 commit，仅包含明确归属于本任务的改动；若已有/暂存改动无法安全区分，先暂停提交并说明。push 必须得到用户明确授权。
 
 ## 项目定位
 

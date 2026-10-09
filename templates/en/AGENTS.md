@@ -4,8 +4,9 @@ This file defines the long-term AI coding rules for this project. The package-pu
 
 1. Start with project-specific rules (including `docs/clean-code.md` when its Clean Code guidance applies), project memory, or code directly relevant to the task; locate relevant memory by keywords instead of reading every document;
 2. Use the project's `.pi/role-models.json` only to enable roles and configure models through `roleModels`, and do not generate or maintain a project-level role Skill;
-3. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then commit in Chinese and run `git push`;
-4. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
+3. only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then create a Chinese-language commit automatically; `git push` still requires explicit user authorization;
+4. use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository;
+5. after a task is complete and applicable checks pass, create a Chinese-language commit by default, containing only changes clearly attributable to that task; pause and explain if existing or staged changes cannot be safely separated. `git push` requires explicit user authorization.
 
 ## Project Purpose
 
