@@ -57,7 +57,6 @@ test("状态视图复用活动身份、当前阶段和单一时间快照而不�
   assert.match(panel, /handoff  .*attempt/);
   assert.match(panel, /当前任务位置  第 1\/2 项/);
   assert.match(workflowStatusBar(view)?.text ?? "", /当前项 1\/2/);
-  assert.match(workflowStatusBar(view)?.text ?? "", /已完成 0\/2/);
   assert.match(formatWorkflowControlCenterLabel(view), /当前第 1\/2 项/);
   assert.deepEqual(state, before);
 });

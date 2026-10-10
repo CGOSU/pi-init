@@ -185,7 +185,6 @@ export function workflowStatusBar(view: WorkflowStatusView): { text: string; col
     ...(view.progress.currentTaskPosition !== undefined
       ? [`当前项 ${view.progress.currentTaskPosition}/${view.progress.total}`]
       : []),
-    `已完成 ${view.progress.completed}/${view.progress.total}`,
     elapsed ? `已运行 ${elapsed}` : undefined,
   ].filter(Boolean);
   return { text: parts.join(" · "), color: view.status === "running" ? "accent" : "warning" };

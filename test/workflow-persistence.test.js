@@ -303,12 +303,18 @@ test("完成状态写入失败不返回成功或派发后续任务", async () =>
       trusted: true,
       model: developerModel,
       availableModels: [developerModel],
+      deferSendMessagePersistence: true,
       appendEntry() {
         if (failAppend) throw new Error("session entry 写入失败");
       },
     });
     await emitExtensionEvent(harness, "session_start");
+    const sentTaskMessage = harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message;
+    const taskMessage = { role: "custom", ...sentTaskMessage, timestamp: Date.now() };
     await emitExtensionEvent(harness, "agent_start");
+    await emitExtensionEvent(harness, "message_start", { type: "message_start", message: taskMessage });
+    await emitExtensionEvent(harness, "message_end", { type: "message_end", message: taskMessage });
+    harness.persistSentMessage(sentTaskMessage);
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
     const beforeDispatchCount = harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length;
     failAppend = true;

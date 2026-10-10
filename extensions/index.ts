@@ -122,6 +122,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     );
   }
   function settleExternalRunTiming() { runTimingDiagnostics.settle(); }
+  let workflowTaskConsumptionRunActive = false;
   pi.registerEntryRenderer<RunTimingEntryData>(RUN_TIMING_ENTRY_TYPE, (entry, _options, theme) => {
     const data = entry.data && typeof entry.data === "object"
       ? entry.data as RunTimingEntryData
@@ -203,14 +204,24 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    workflowTaskConsumptionRunActive = true;
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     runtimeState.internalContinuationPending = false;
     runTimingDiagnostics.agentStart();
-    workflowDispatch.markCurrentTaskStarted(ctx);
+  });
+
+  pi.on("message_start", (event, ctx) => {
+    if (!workflowTaskConsumptionRunActive) return;
+    workflowDispatch.markCurrentTaskStartedFromMessage(ctx, event.message);
+  });
+
+  pi.on("agent_end", () => {
+    workflowTaskConsumptionRunActive = false;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    workflowTaskConsumptionRunActive = false;
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     settleExternalRunTiming();
@@ -218,6 +229,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
+    workflowTaskConsumptionRunActive = false;
     runtimeState.roleContextGeneration += 1;
     runtimeState.roleTransitionGeneration += 1;
     roleRuntime.disposeWorkflowCompaction();
@@ -232,6 +244,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     try {
+      workflowTaskConsumptionRunActive = false;
       runtimeState.runtimeDisposed = false;
       runtimeState.roleContextGeneration += 1;
       runtimeState.roleTransitionGeneration += 1;
@@ -272,6 +285,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_tree", async (event, ctx) => {
+    workflowTaskConsumptionRunActive = false;
     workflowDispatch.restoreWorkflowState(ctx);
     if (event.oldLeafId !== event.newLeafId) {
       runtimeState.roleContextGeneration += 1;

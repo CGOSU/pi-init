@@ -32,12 +32,13 @@
 - `extensions/workflow-report.ts::persistWorkflowState` 先调用 `pi.appendEntry("pi-init-workflow", next)`；正常返回后才更新 runtime 内存状态、清除恢复错误并刷新状态。同步 append 异常保留旧内存状态/恢复错误。该 API 返回 void，不提供事务、磁盘 fsync 或外部副作用 exactly-once 保证。
 - `extensions/workflow-dispatch.ts::restoreWorkflowState` 在 `session_start`/`session_tree` 从当前 branch 读取最新 workflow custom entry，经 `src/workflow-hydration.js` 做 schema/身份校验；旧 session fail-closed，新 fork 可创建新 workflow，但不沿用旧身份。旧 entry 不原地改写，Runtime retired 状态仍结构化拒绝。
 - `src/workflow-model.js` v4 状态包含 workflowId、sessionId、planVersion、recoveryGeneration、task handoff 与 continuation；`src/workflow-handoff.js` 生成/校验身份，并要求 complete/block/replan 结果匹配当前 session、当前 handoff 消息及 branch。重规划结果另校验 revisionId，task retry 创建新 attempt/handoff。
-- `extensions/workflow-dispatch.ts::markCurrentTaskStarted` 只在活动 branch 中找到匹配任务消息后才持久化 agent_start；消息派发/queued 写入异常后不伪装成功。角色切换、压缩和调度 continuation 通过稳定身份防止旧 callback 派发新任务。
+- Local 任务启动证据由 `extensions/index.ts` 的当前 Agent run `message_start` 入口采集：仅当事件实际消费 `pi-init-workflow-task` 且 `extensions/workflow-start-evidence.ts` 验证完整 workflow/plan/session/recovery/task/attempt/handoff 身份匹配当前任务，`extensions/workflow-dispatch.ts` 才尝试复用统一持久化转换记录启动；当前 branch 已含同身份消息时拒绝重复推断。`agent_start` 只打开本次 run 的事件窗口，不独自证明任务启动；message_end 扩展回调早于 Pi 写入 branch，因此不能把旧 branch 检查移到该回调。消息派发/queued 写入异常仍不伪装成功，角色切换、压缩和调度 continuation 继续通过稳定身份隔离旧 callback。
 - `src/workflow-handoff.js::recoverWorkflowState` 仅允许没有启动证据且未进入派发阶段的 prepared/waiting-role/compacting 状态安全续接；已派发/启动但缺少业务结果、以及缺身份的 legacy in_progress，都变为 paused/outcomeUnknown。retry 必须显式确认外部副作用已核对（`--confirm-unknown-outcome`），不提供 exactly-once 保证。
 - direct action schema 与提示在 `extensions/contracts.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-messages.ts` 同步传递身份：基础 workflow/plan/session/recoveryGeneration；complete/block 附 taskId/attemptId/handoffId；replan 附 revisionId/handoffId。缺失身份不会从当前状态或自由文本补齐。
 
 ### 测试与剩余验证
 
+- 2026-10-10 的任务启动时序修复和实测命令见 [`docs/session-log.md`](../session-log.md)；本地宿主源码/类型及 harness 已核实 `agent_start`、`message_start` 与 branch 写入顺序，未验证真实 Pi TUI/E2E 或真实模型链路。
 - 新增 `test/workflow-handoff.test.js` 覆盖身份缺失/过期、旧 attempt/session/revision、retry unknown outcome、legacy migration、fork session、恢复安全、dispatch persist failure 与损坏阶段的启动证据；既有 workflow/compaction/protocol/lifecycle/persistence/runtime retirement 测试覆盖直接调用和兼容边界。
 - 最近相关组合：`node --test test/workflow-core.test.js test/workflow-handoff.test.js test/workflow-compaction.test.js test/workflow-persistence.test.js test/workflow-protocol.test.js test/workflow-replan-directions.test.js test/workflow-report.test.js test/workflow-runtime-retirement.test.js test/extension-lifecycle.test.js`，45 项通过。
 - `node scripts/check-line-count.js` 与 `git diff --check` 通过；后者仅输出 Windows 工作树 LF/CRLF 转换提示。全量 `npm test` 留待最终交付阶段；真实 Pi E2E、安装/reload 和 peer 依赖升级未执行。

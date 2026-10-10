@@ -300,6 +300,7 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   assert.ok(harness.handlers.has("session_start"));
   assert.ok(harness.handlers.has("input"));
   assert.ok(harness.handlers.has("agent_start"));
+  assert.ok(harness.handlers.has("message_start"));
   assert.ok(harness.handlers.has("agent_settled")); assert.ok(harness.handlers.has("tool_call"));
   assert.ok(harness.handlers.has("tool_result"));
   const state = createWorkflowState({

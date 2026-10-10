@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-10-10：任务消息消费事件早于 branch 持久化，不能用 agent_start 或 message_end 的 branch 查询判定启动
+
+- 日期：2026-10-10；
+- 现象：工作流任务已进入 Agent run，底部活动状态仍持续显示“等待任务启动”；旧测试 harness 在发送消息时立即写入 branch，因此未暴露 Pi 真实事件窗口。
+- 根因：已安装 Pi 1.1.0 的 Agent loop 在 `agent_start` 之后才发出初始任务消息的 `message_start`；`AgentSession` 先向扩展派发 `message_end`，再将 custom 消息追加到当前 branch。因而 `agent_start` 时 branch 检查过早，`message_end` 回调中的 branch 检查也仍早于持久化；branch 中后来存在消息又不能证明当前 run 实际消费了它。
+- 修复：仅在 `agent_start` 打开的当前 run 窗口内，校验 `message_start` 实际携带的任务类型及 workflow/plan/session/recovery/task/attempt/handoff 完整身份，并要求活动工作流、当前任务和 handoff 仍可启动且当前 branch 尚无同身份消息；通过统一持久化路径成功后才显示执行中。普通/仅存储消息、旧身份、已退休或已结束工作流不记启动；持久化失败保留 queued。详细决策与实现见 [`docs/decisions.md`](decisions.md) 和 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- 验证：Pi 安装源码/公开事件类型与扩展测试 harness 顺序核对；定向 106 项测试通过，最终生命周期回归 5 项通过，`npm run typecheck` 与 `git diff --check` 通过。未验证真实 Pi TUI/E2E 或真实模型链路，见 [`docs/session-log.md`](session-log.md)。
+
 ### 2026-10-09：Pi AI Usage 的零缓存计数不证明 Provider 明确报告零
 
 - 日期：2026-10-09；

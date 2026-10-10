@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-10：修复工作流任务启动事件顺序并简化底部活动栏
+
+- 完成内容：已安装 Pi 1.1.0 源码确认 agent_start 先于初始任务消息处理，扩展 message_end 回调又先于 custom 消息写入 branch；因此 Local 工作流改为仅在当前 Agent run 窗口内，按 `message_start` 实际消费的任务消息及完整 workflow/plan/session/recovery/task/attempt/handoff 身份记录启动。统一启动状态持久化失败时仍保持原状态；结果验收时已有 branch 补记路径和 complete/block 身份、branch、角色守卫及 unknown-outcome/retry 语义不变。底部 `workflowStatusBar` 仅移除完成数，内部统计、状态查询、控制中心和报告保留。
+- 文档：更新 README、当前状态、决策实施状态和 durable 工作流说明；新增事件顺序陷阱记录。此陷阱描述 Pi 源码与测试 harness 观察，不表示已在真实 Pi TUI/E2E 或模型链路验证。
+- 验证：`node --test test/workflow-start-lifecycle.test.js test/workflow-handoff.test.js test/workflow-status-view.test.js test/workflow-persistence.test.js test/workflow-runtime-retirement.test.js test/workflow-compaction.test.js test/workflow-report.test.js test/role-recovery.test.js test/extension-lifecycle.test.js test/file-review-runtime.test.js test/large-command.test.js`，106 项通过；最终 `node --test test/workflow-start-lifecycle.test.js` 5 项通过；`npm run typecheck` 通过；`git diff --check` 通过，仅输出 LF/CRLF 转换提示。未运行全量 `npm test`，未验证真实 Pi TUI/E2E、真实模型链路或长驻实例。
+- 收尾：按项目身份创建中文本地 commit，未 push；既有 `/large` 未提交增量保留且未纳入本次提交。
+
 ### 2026-10-10：为 Pi `/large` 增加主动结构审阅派发
 
 - 完成内容：`/large` 手动重扫后，仅在完整扫描且存在当前内容版本待审候选时，通过 Pi 用户消息入口尝试派发一次命令专属 AI 审阅。没有候选（包括同版本已审）、扫描失败/不完整、Agent 忙、未结束或恢复异常工作流、职责恢复持久化失败时只报告扫描，不派发、排队或抢占。手动扫描不受职责恢复 pending 或 architect 身份限制，但不确认恢复状态或放开 Agent 工具守卫；AI 审阅仍遵守 developer-test 默认职责、架构证据升级和 auto/confirm/manual 角色切换。默认自动扫描、提示注入及 `file_review` 行为不变。

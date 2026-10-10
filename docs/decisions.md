@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-10-10：工作流启动状态绑定实际任务消息，底部活动栏不重复显示完成数
+
+- 决定：工作流当前任务只有在本次运行实际消费了与当前 workflow、plan、session、recovery、task、attempt 和 handoff 身份完全匹配的任务消息后，才记录为已启动；启动记录在可验证的最早时点持久化。同一 handoff 重复收到启动证据不得重置开始时间，持久化失败不得更新内存状态或伪装成执行中。底部活动状态栏移除“已完成 x/y”，继续显示当前任务位置、活动阶段及有真实启动证据的耗时。
+- 约束：不得以 Agent 忙碌、Provider 响应或经过时间推断任务已启动；不得放宽 complete/block 身份与 branch 守卫、恢复未知结果/retry 或终态保护。内部完成统计、状态查询、控制中心、任务及工作流完成报告保持原样；本条仅约束底部活动状态栏。
+- 原因：任务消息可能在 `agent_start` 检查时尚未写入 branch，缺少执行证据会令活动状态持续显示等待；用户要求状态能反映真实执行，并简化底部进度展示，而不改变工作流业务进度和验收语义。
+- 实施状态：已按 `extensions/index.ts` 的当前 Agent run `message_start`、`extensions/workflow-start-evidence.ts` 的结构化身份校验及 `extensions/workflow-dispatch.ts` 的持久化启动路径实现；`test/workflow-start-lifecycle.test.js` 覆盖事件顺序、完整身份、幂等、branch 已存储、派发竞态和持久化失败。所选 106 项测试、最终生命周期 5 项、`npm run typecheck` 和 `git diff --check` 通过；这是宿主源码与测试 harness 验证，未验证真实 Pi TUI/E2E。
+
 ### 2026-10-10：大文件手动扫描使用 Pi `/large` 命令
 
 - 决定：移除 npm 脚本 `check:large-files`，改由 Pi 命令 `/large` 手动重扫当前项目并报告超过 500 行的代码文件。

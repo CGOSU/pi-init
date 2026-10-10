@@ -109,6 +109,19 @@ function createExtensionHarness(branch = [], options = {}) {
   const activeTools = options.activeTools ?? [];
   let context;
 
+  function persistSentMessage(message = sentMessages.at(-1)?.message) {
+    if (!message) throw new Error("没有待持久化的测试消息");
+    const entry = {
+      type: "custom_message",
+      id: `test-message-${branch.length + 1}`,
+      parentId: branch.at(-1)?.id ?? null,
+      timestamp: new Date().toISOString(),
+      ...message,
+    };
+    branch.push(entry);
+    return entry;
+  }
+
   async function completeCompaction(options = {}) {
     try {
       let extensionCompaction;
@@ -205,9 +218,10 @@ function createExtensionHarness(branch = [], options = {}) {
       }
       return true;
     },
-    async sendMessage(message, options) {
-      sentMessages.push({ message, options });
-      branch.push({ type: "custom_message", id: `test-message-${branch.length + 1}`, parentId: branch.at(-1)?.id ?? null, timestamp: new Date().toISOString(), ...message });
+    async sendMessage(message, messageOptions) {
+      sentMessages.push({ message, options: messageOptions });
+      options.beforeSendMessagePersist?.(message, { handlers, context, branch });
+      if (!options.deferSendMessagePersistence) persistSentMessage(message);
     },
     sendUserMessage(message, options) {
       sentUserMessages.push({ message, options });
@@ -328,6 +342,7 @@ function createExtensionHarness(branch = [], options = {}) {
     context,
     sentMessages,
     sentUserMessages,
+    persistSentMessage,
     completeCompaction,
   };
 }

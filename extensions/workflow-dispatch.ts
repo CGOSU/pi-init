@@ -18,6 +18,7 @@ import {
   validateWorkflowExecutionRoles,
 } from "../src/workflow.ts";
 import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
+import { validateWorkflowTaskStartMessage } from "./workflow-start-evidence.ts";
 import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery.ts";
 import {
   textOf,
@@ -260,19 +261,42 @@ export function createWorkflowDispatch(
     deps.report.updateWorkflowStatus(ctx);
   }
 
-  function markCurrentTaskStarted(ctx: ExtensionContext) {
+  function currentTaskStartCandidate(ctx: ExtensionContext) {
     const current = state.workflowState;
-    if (!current || !current.currentTaskId || !isWorkflowActive(current)) return;
+    if (state.runtimeDisposed || state.workflowRestoreError || state.pendingWorkflowRecovery
+      || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed
+      || !current || !current.currentTaskId || !isWorkflowActive(current)) return;
     const task = getWorkflowTask(current, current.currentTaskId);
     const identity = workflowHandoffIdentity(current);
-    if (!task || !identity || task.executionStartedAt !== undefined) return;
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!task || task.status !== "in_progress" || !identity
+      || typeof sessionId !== "string" || sessionId !== current.sessionId || identity.sessionId !== sessionId) return;
     if (!["dispatching", "queued"].includes(current.handoff?.phase ?? "")) return;
-    if (!workflowHandoffMessageOnBranch(ctx, identity)) return;
+    if (task.startedAt !== undefined || task.executionStartedAt !== undefined || current.handoff?.startedAt !== undefined) return;
+    return { current, task, identity };
+  }
+
+  function persistCurrentTaskStarted(ctx: ExtensionContext, candidate: NonNullable<ReturnType<typeof currentTaskStartCandidate>>) {
     try {
-      deps.report.persistWorkflowState(markWorkflowTaskStarted(current, task.id), ctx);
+      deps.report.persistWorkflowState(markWorkflowTaskStarted(candidate.current, candidate.task.id), ctx);
     } catch (error) {
-      ctx.ui.notify(`无法持久化任务 ${task.id} 的实际启动身份：${textOf(error)}；任务结果将保持未验收`, "error");
+      ctx.ui.notify(`无法持久化任务 ${candidate.task.id} 的实际启动身份：${textOf(error)}；任务结果将保持未验收`, "error");
     }
+  }
+
+  function markCurrentTaskStarted(ctx: ExtensionContext) {
+    const candidate = currentTaskStartCandidate(ctx);
+    if (!candidate || !workflowHandoffMessageOnBranch(ctx, candidate.identity)) return;
+    persistCurrentTaskStarted(ctx, candidate);
+  }
+
+  function markCurrentTaskStartedFromMessage(ctx: ExtensionContext, message: unknown) {
+    const candidate = currentTaskStartCandidate(ctx);
+    if (!candidate || !validateWorkflowTaskStartMessage(message, candidate.identity).ok) return;
+    // Pi's no-turn custom-message path appends to the branch before message_start;
+    // the active agent-loop path emits this event before the matching branch entry exists.
+    if (workflowHandoffMessageOnBranch(ctx, candidate.identity)) return;
+    persistCurrentTaskStarted(ctx, candidate);
   }
 
   function persistDispatchPause(ctx: ExtensionContext, workflowState: WorkflowState, taskId: string) {
@@ -488,6 +512,7 @@ export function createWorkflowDispatch(
     scheduleWorkflowReplan,
     restoreWorkflowState,
     markCurrentTaskStarted,
+    markCurrentTaskStartedFromMessage,
     scheduleWorkflow,
     resumeLocalWorkflow,
     resetStaleWorkflowDispatch,
