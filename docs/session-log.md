@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-10：为 Pi `/large` 增加主动结构审阅派发
+
+- 完成内容：`/large` 手动重扫后，仅在完整扫描且存在当前内容版本待审候选时，通过 Pi 用户消息入口尝试派发一次命令专属 AI 审阅。没有候选（包括同版本已审）、扫描失败/不完整、Agent 忙、未结束或恢复异常工作流、职责恢复持久化失败时只报告扫描，不派发、排队或抢占。手动扫描不受职责恢复 pending 或 architect 身份限制，但不确认恢复状态或放开 Agent 工具守卫；AI 审阅仍遵守 developer-test 默认职责、架构证据升级和 auto/confirm/manual 角色切换。默认自动扫描、提示注入及 `file_review` 行为不变。
+- 验证：`node --test test/large-command.test.js test/file-review-runtime.test.js test/extension-lifecycle.test.js`，30 项通过；`npm run typecheck` 通过；`git diff --check` 通过（Git 显示 LF/CRLF 转换提示）。
+- 遗留：未验证真实 Pi TUI/E2E、Pi 用户消息派发后的真实模型审阅或结论登记；测试覆盖扩展 harness 中的派发与保护逻辑。未运行全量 `npm test`。
+- 收尾：本任务文档单独创建中文本地 commit；未 push。
+
 ### 2026-10-10：用 Pi `/large` 命令替代大文件扫描 npm 脚本
 
 - 完成内容：移除 `package.json` 中的 `check:large-files` 脚本，新增 `/large` 手动重扫命令，报告当前项目所有超过 500 行的代码文件；复用既有跨语言扫描，保留扫描不完整的错误提示及 architect/职责恢复限制。README、当前状态、决策和测试同步更新；文件审阅状态不会因 `/large` 自动完成。
