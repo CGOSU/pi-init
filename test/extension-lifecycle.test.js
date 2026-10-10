@@ -295,6 +295,7 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   const toolNames = harness.tools.map((tool) => tool.name).sort();
   assert.deepEqual(toolNames, ["edit", "file_review", "init_project", "switch_role", "task_workflow"]);
   assert.ok(harness.commands.has("pi-init"));
+  assert.ok(harness.commands.has("large"));
   assert.equal(harness.commands.has("agents"), false);
   assert.ok(harness.handlers.has("session_start"));
   assert.ok(harness.handlers.has("input"));

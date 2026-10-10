@@ -404,6 +404,50 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     });
   }
 
+  pi.registerCommand("large", {
+    description: `扫描当前项目并报告超过 ${FILE_REVIEW_THRESHOLD} 行的代码文件`,
+    handler: async (args, ctx) => {
+      if (args.trim()) return ctx.ui.notify("用法：/large", "warning");
+      const current = session;
+      if (!current) return ctx.ui.notify("当前 Pi session 尚未完成大文件扫描。", "warning");
+      if (!deps.canReview()) return ctx.ui.notify("职责恢复或工具安全门尚未解除；请先完成角色确认。", "warning");
+      if (deps.getActiveRole(ctx)?.role === "architect") {
+        return ctx.ui.notify("architect 不执行大文件扫描；请切换到 developer-test 或 docs-commit。", "warning");
+      }
+
+      try {
+        const refreshed = await scanCurrent(ctx, [], true);
+        if (!refreshed.ok && refreshed.code !== "PARTIAL_SCAN") {
+          return ctx.ui.notify(`大文件扫描失败 [${refreshed.code}]：${refreshed.message}`, "error");
+        }
+        const currentSession = session;
+        if (!currentSession) return ctx.ui.notify("大文件扫描失败：当前 Pi session 已变化。", "error");
+        const files = [...currentSession.inventory.values()]
+          .filter((file) => file.lineCount > FILE_REVIEW_THRESHOLD)
+          .sort((left, right) => left.path.localeCompare(right.path));
+        const lines = [refreshed.ok
+          ? `扫描完成：发现 ${files.length} 个超过 ${FILE_REVIEW_THRESHOLD} 行的代码文件。`
+          : `扫描不完整：${refreshed.message}；以下结果可能不完整。`];
+        for (const file of files.slice(0, MAX_LIST_FILES)) {
+          lines.push(`- ${file.path} · ${file.lineCount} 行`);
+        }
+        if (files.length === 0) lines.push("未发现超过阈值的代码文件。");
+        if (files.length > MAX_LIST_FILES) lines.push(`另有 ${files.length - MAX_LIST_FILES} 个文件未显示。`);
+        if (!refreshed.ok) {
+          for (const error of currentSession.errors.slice(0, MAX_SECTION_FILES)) {
+            lines.push(`- [${error.code}] ${error.path || "."}: ${error.message}`);
+          }
+          if (currentSession.errors.length > MAX_SECTION_FILES) {
+            lines.push(`另有 ${currentSession.errors.length - MAX_SECTION_FILES} 个扫描错误未显示。`);
+          }
+        }
+        ctx.ui.notify(lines.join("\n"), refreshed.ok ? "info" : "warning");
+      } catch (error) {
+        ctx.ui.notify(`大文件扫描失败：${normalizeFileReviewError(error)}`, "error");
+      }
+    },
+  });
+
   pi.registerTool({
     name: "file_review",
     label: "Review Large File",

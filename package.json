@@ -19,7 +19,6 @@
   "scripts": {
     "test": "node --test",
     "typecheck": "tsc --noEmit",
-    "check:large-files": "node scripts/check-line-count.js",
     "postinstall": "node scripts/install-launchers.js"
   },
   "dependencies": {

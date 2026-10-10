@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-10：用 Pi `/large` 命令替代大文件扫描 npm 脚本
+
+- 完成内容：移除 `package.json` 中的 `check:large-files` 脚本，新增 `/large` 手动重扫命令，报告当前项目所有超过 500 行的代码文件；复用既有跨语言扫描，保留扫描不完整的错误提示及 architect/职责恢复限制。README、当前状态、决策和测试同步更新；文件审阅状态不会因 `/large` 自动完成。
+- 验证：`node --test test/file-review-runtime.test.js test/extension-lifecycle.test.js test/line-count.test.js`，25 项通过、0 失败；`npm run typecheck` 通过；`git diff --check` 通过（有 LF/CRLF 转换提示）。未运行全量 `npm test`，未验证真实 Pi TUI/E2E。
+- 收尾：按项目规则创建本任务中文本地 commit；未 push。
+
 ### 2026-10-10：更新提交授权规则
 
 - 完成内容：同步全局规则、项目 `AGENTS.md`、中英文生成模板及公共职责路由 Skill：任务完成并通过适用检查后默认以中文创建本任务 commit；只纳入明确归属当前任务的改动，无法区分既有/暂存改动时暂停。push 仍需用户明确授权；协作子 Agent/worker 不独立提交或推送。更新当前状态和决策记录，并澄清知识库 push 的授权要求。

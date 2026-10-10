@@ -70,10 +70,10 @@ test("递归扫描支持的代码扩展名并排除依赖、VCS 与生成目录"
   }
 });
 
-test("npm test 不再串联行数硬门禁", async () => {
+test("大文件扫描不再通过 npm 脚本暴露", async () => {
   const manifest = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8"));
   assert.equal(manifest.scripts.test, "node --test");
-  assert.equal(manifest.scripts["check:large-files"], "node scripts/check-line-count.js");
+  assert.equal(manifest.scripts["check:large-files"], undefined);
 });
 
 test("500 行不进入审阅队列，501 行报告候选但不会让扫描失败", async () => {

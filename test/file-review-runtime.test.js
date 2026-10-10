@@ -62,6 +62,23 @@ test("session 启动发现已有超限文件并向 Pi 注入待审阅版本", as
   });
 });
 
+test("/large 手动重扫并报告当前项目的多语言超限文件", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await mkdir(path.join(directory, "rust"));
+    await writeFile(path.join(directory, "rust", "main.rs"), makeFile("rust"));
+
+    await harness.commands.get("large").handler("", harness.context);
+
+    const report = harness.notifications.at(-1);
+    assert.equal(report.level, "info");
+    assert.match(report.message, /扫描完成：发现 2 个超过 500 行的代码文件/);
+    assert.match(report.message, /src\/large\.ts · 501 行/);
+    assert.match(report.message, /rust\/main\.rs · 501 行/);
+  });
+});
+
 test("非代码文件的 read 结果不触发大文件扫描错误提示", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory });
