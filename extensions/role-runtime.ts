@@ -20,6 +20,7 @@ import {
   unwrapRoleResult,
 } from "../src/roles.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import type { CoordinationHandoffIdentity } from "../src/coordination-runtime-types.ts";
 import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
 import type { RoleMode, WorkflowMode } from "../src/role-types.ts";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
@@ -45,6 +46,7 @@ export type RoleRuntimeDependencies = {
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: WorkflowHandoffIdentity) => void;
   scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity) => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
+  sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
 };
 

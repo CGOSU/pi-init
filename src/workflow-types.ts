@@ -1,3 +1,4 @@
+import type { WorkflowTaskContract } from "./coordination-types.ts";
 import type { WorkflowExecutor } from "./role-types.ts";
 export type { WorkflowExecutor } from "./role-types.ts";
 
@@ -20,6 +21,22 @@ export type WorkflowTaskDelegation = {
   completedAt?: number;
 };
 
+export type WorkflowClarificationCategory = "missing-fact" | "contract-conflict" | "business-decision";
+export type WorkflowSideEffectStatus = "none" | "occurred" | "unknown";
+
+export type WorkflowTaskClarification = {
+  issueId: string;
+  category: WorkflowClarificationCategory;
+  question: string;
+  impact: string;
+  checkedFacts: string[];
+  completedWork: string[];
+  verification: string[];
+  sideEffects: { status: WorkflowSideEffectStatus; details: string[] };
+  handoff: WorkflowHandoffIdentity;
+  createdAt: number;
+};
+
 export type WorkflowTask = {
   id: string;
   task: string;
@@ -27,6 +44,8 @@ export type WorkflowTask = {
   files: string[];
   acceptanceCriteria: string[];
   dependsOn: string[];
+  contract?: WorkflowTaskContract;
+  clarification?: WorkflowTaskClarification;
   status: WorkflowTaskStatus;
   startedAt?: number;
   executionStartedAt?: number;
@@ -162,7 +181,7 @@ export type WorkflowRoleValidationOptions = { unfinishedOnly?: boolean };
 export type WorkflowTextListOptions = { required?: boolean };
 export type WorkflowTaskNormalizationOptions = { allowSuperseded?: boolean };
 export type WorkflowModelError = Error & { code?: string; details?: unknown };
-export type WorkflowStateVersion = 1 | 2 | 3 | 4;
+export type WorkflowStateVersion = 1 | 2 | 3 | 4 | 5;
 export type WorkflowStateRecord = Record<string, unknown>;
 export type WorkflowLegacyState = Partial<WorkflowState> & Record<string, unknown>;
 export type WorkflowRevisionRecord = Record<string, unknown>;

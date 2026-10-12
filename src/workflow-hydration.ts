@@ -1,5 +1,6 @@
 import {
   WORKFLOW_STATE_VERSION,
+  WORKFLOW_IDENTITY_STATE_VERSION,
   WORKFLOW_STATUSES,
   WORKFLOW_TASK_STATUSES,
   WORKFLOW_AUDIT_TASK_STATUSES,
@@ -21,6 +22,8 @@ import {
   requireTimestamp,
   requireText,
 } from "./workflow-model.ts";
+import { validateWorkflowTaskContract } from "./workflow-task-contract.ts";
+import { validateWorkflowTaskClarification } from "./workflow-clarification.ts";
 import type {
   HydratedWorkflowState,
   WorkflowHydrationResult,
@@ -156,6 +159,19 @@ function normalizeHydratedTask(
   if (task.outcomeUnknown === true && status !== "blocked") {
     throw new Error(`已保存的工作流任务 ${task.id} outcomeUnknown=true 时必须处于 blocked 状态`);
   }
+  const contract = task.contract === undefined ? undefined : validateWorkflowTaskContract(task.contract);
+  if (contract && !contract.ok) {
+    throw Object.assign(new Error(contract.message), { code: contract.code });
+  }
+  const clarification = task.clarification === undefined ? undefined : validateWorkflowTaskClarification(task.clarification);
+  if (clarification && !clarification.ok) {
+    throw Object.assign(new Error(clarification.message), { code: clarification.code });
+  }
+  if (clarification?.ok && status !== "blocked" && status !== "superseded") {
+    throw Object.assign(new Error(`已保存的工作流任务 ${task.id} 含澄清记录但状态不是 blocked/superseded`), {
+      code: "WORKFLOW_CLARIFICATION_TASK_STATE_INVALID",
+    });
+  }
   const completionSummary = task.completionSummary === undefined
     ? undefined
     : requireText(task.completionSummary, `已保存的工作流任务 ${task.id ?? index + 1} 的 completionSummary`);
@@ -181,6 +197,8 @@ function normalizeHydratedTask(
       { required: true },
     ),
     dependsOn: normalizeTextList(task.dependsOn, `已保存的工作流任务 ${task.id} 的 dependsOn`),
+    ...(contract?.ok ? { contract: contract.value } : {}),
+    ...(clarification?.ok ? { clarification: clarification.value } : {}),
     status,
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(executionStartedAt !== undefined ? { executionStartedAt } : {}),
@@ -201,7 +219,7 @@ function normalizeHydratedTask(
 
 function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflowState {
   const version = state.version ?? 1;
-  const supportedVersions = [1, 2, 3, WORKFLOW_STATE_VERSION] as const satisfies readonly WorkflowStateVersion[];
+  const supportedVersions = [1, 2, 3, WORKFLOW_IDENTITY_STATE_VERSION, WORKFLOW_STATE_VERSION] as const satisfies readonly WorkflowStateVersion[];
   if (!isOneOf(supportedVersions, version)) {
     throw new Error(`不支持的工作流状态版本：${version}`);
   }
@@ -241,7 +259,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflow
   const pendingRevision = state.pendingRevision === undefined
     ? undefined
     : normalizePendingRevision(state.pendingRevision);
-  const legacy = version < WORKFLOW_STATE_VERSION;
+  const legacy = version < WORKFLOW_IDENTITY_STATE_VERSION;
   const workflowId = legacy ? undefined : normalizeIdentityToken(state.workflowId, "已保存的工作流 workflowId");
   const sessionId = legacy ? undefined : normalizeIdentityToken(state.sessionId, "已保存的工作流 sessionId");
   const planVersion = legacy ? undefined : normalizePlanVersion(state.planVersion, "已保存的工作流 planVersion");

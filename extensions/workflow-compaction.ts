@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
+import type { CoordinationHandoffIdentity } from "../src/coordination-runtime-types.ts";
 import {
   textOf,
   type ActiveRole,
@@ -28,6 +29,7 @@ type WorkflowCompactionDependencies = {
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: import("./runtime-state.ts").WorkflowHandoffIdentity) => void;
   scheduleWorkflow: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowActionIdentity) => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowReplanIdentity) => void;
+  sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
 };
 
@@ -89,7 +91,12 @@ export function createWorkflowCompaction(
     const continuation = operation.transition.continuation;
     if (!continuation) return "当前压缩只负责角色切换，不会派发工作流任务；等待 Pi 完成后检查角色恢复状态。";
     if (!continuationIsCurrent(operation.transition)) {
-      return "关联的工作流身份已变化，不会继续旧交接；请查看当前工作流状态。";
+      return continuation.kind === "coordination-evidence"
+        ? "关联的取证协作身份已变化，不会继续旧交接；请查看当前协调状态。"
+        : "关联的工作流身份已变化，不会继续旧交接；请查看当前工作流状态。";
+    }
+    if (continuation.kind === "coordination-evidence") {
+      return "取证交接仍在等待 Pi 完成压缩；不会自动重派发，完成后核对当前协调状态。";
     }
     if (continuation.kind === "workflow-review") {
       return "工作流仍等待用户审阅；压缩完成不会自动恢复，审阅后再显式继续。";
@@ -135,9 +142,24 @@ export function createWorkflowCompaction(
   }
 
   function continuationIsCurrent(transition: PendingRoleCompaction) {
-    const current = state.workflowState;
     const continuation = transition.continuation;
     if (!continuation) return true;
+    if (continuation.kind === "coordination-evidence") {
+      const current = state.coordinationRuntimeState;
+      const handoff = current?.handoff;
+      return Boolean(current && handoff
+        && current.coordination.coordinationId === continuation.identity.coordinationId
+        && current.coordination.version === continuation.identity.coordinationVersion
+        && current.sessionId === continuation.identity.sessionId
+        && current.recoveryGeneration === continuation.identity.recoveryGeneration
+        && handoff.requestId === continuation.identity.requestId
+        && handoff.role === continuation.identity.role
+        && handoff.kind === continuation.identity.kind
+        && handoff.attemptId === continuation.identity.attemptId
+        && handoff.handoffId === continuation.identity.handoffId
+        && handoff.reportId === continuation.identity.reportId);
+    }
+    const current = state.workflowState;
     if (!current) return false;
     if (continuation.kind === "workflow-task") {
       const identity = workflowHandoffIdentity(current);
@@ -169,9 +191,11 @@ export function createWorkflowCompaction(
   }
 
   function continuationBelongsTo(transition: PendingRoleCompaction, identity: WorkflowActionIdentity) {
-    return transition.sessionId === identity.sessionId
+    const continuation = transition.continuation;
+    return continuation?.kind !== "coordination-evidence"
+      && transition.sessionId === identity.sessionId
       && transition.contextGeneration === state.roleContextGeneration
-      && Boolean(transition.continuation && sameWorkflowIdentity(transition.continuation.identity, identity));
+      && Boolean(continuation && sameWorkflowIdentity(continuation.identity, identity));
   }
 
   function retireWorkflowContinuation(identity: WorkflowActionIdentity) {
@@ -201,9 +225,11 @@ export function createWorkflowCompaction(
       operationId: operation.operationId,
       nextAction: operation.transition.continuation?.kind === "workflow-review"
         ? "查看工作流状态并等待用户明确完成架构审阅；不得自动 resume。"
-        : operation.transition.continuation
-          ? "检查当前工作流身份与状态；确认仍是同一交接后，再显式执行 /pi-init workflow resume。"
-          : "后续仅在用户继续请求且任务仍未完成时恢复工作；不要重复已经完成的工作。",
+        : operation.transition.continuation?.kind === "coordination-evidence"
+          ? "检查当前协作状态；结果未知时不得自动重放取证 handoff，只有 architect 核对后可显式请求新 attempt。"
+          : operation.transition.continuation
+            ? "检查当前工作流身份与状态；确认仍是同一交接后，再显式执行 /pi-init workflow resume。"
+            : "后续仅在用户继续请求且任务仍未完成时恢复工作；不要重复已经完成的工作。",
     };
     try {
       pi.sendMessage(
@@ -254,6 +280,10 @@ export function createWorkflowCompaction(
       case "workflow-replan":
         deps.setWorkflowDispatchInFlight(false);
         deps.sendWorkflowReplanMessage(ctx, transition.continuation.identity);
+        return;
+      case "coordination-evidence":
+        void deps.sendCoordinationMessage(ctx, transition.continuation.identity)
+          .catch((error) => ctx.ui.notify(`协作自动交接失败：${textOf(error)}`, "error"));
         return;
       default:
         ctx.ui.notify("角色切换和上下文压缩已完成；普通任务不会因此额外自动启动新回合。", "info");

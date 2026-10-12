@@ -254,7 +254,7 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
   });
 
   const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(applied))).value;
-  assert.equal(restored.version, 4);
+  assert.equal(restored.version, 5);
   assert.deepEqual(restored.tasks, applied.tasks);
   assert.deepEqual(restored.revisions, applied.revisions);
 });
@@ -395,12 +395,12 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
     updatedAt: 20,
   };
   const restored = hydrateWorkflowState(legacy).value;
-  assert.equal(restored.version, 4);
+  assert.equal(restored.version, 5);
   assert.deepEqual(restored.revisions, []);
   assert.equal(restored.executor, "local");
   assert.equal(restored.currentTaskId, "legacy-task");
   const restoredV2 = hydrateWorkflowState({ ...legacy, version: 2, executor: "local" }).value;
-  assert.equal(restoredV2.version, 4);
+  assert.equal(restoredV2.version, 5);
   assert.deepEqual(restoredV2.revisions, []);
   assert.equal(restored.tasks[0].status, "in_progress");
   assert.equal(restored.tasks[0].startedAt, undefined);

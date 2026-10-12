@@ -3,3 +3,8 @@ export * from "./workflow-hydration.ts";
 export * from "./workflow-replan.ts";
 export * from "./workflow-transitions.ts";
 export * from "./workflow-handoff.ts";
+export * from "./coordination-types.ts";
+export * from "./coordination-validation.ts";
+export * from "./coordination.ts";
+export * from "./workflow-task-contract.ts";
+export * from "./workflow-clarification.ts";

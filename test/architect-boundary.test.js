@@ -29,7 +29,7 @@ function assertArchitectBlocked(result, toolName) {
   assert.equal(result?.block, true, toolName);
 }
 
-test("architect 仅允许职责切换和 task_workflow 规划控制", async () => {
+test("architect 仅允许职责切换、规划及纯协调控制", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
   await harness.tools.find((tool) => tool.name === "switch_role").execute(
@@ -37,11 +37,11 @@ test("architect 仅允许职责切换和 task_workflow 规划控制", async () =
   );
 
   assert.equal(await callToolCall(harness, "switch_role", { role: "docs-commit" }), undefined);
-  for (const action of ["plan", "replan", "status"]) {
+  for (const action of ["plan", "replan", "status", "request-evidence", "review-evidence"]) {
     assert.equal(await callToolCall(harness, "task_workflow", { action }), undefined, action);
   }
 
-  for (const action of ["complete", "block", "resume", "retry", "cancel", "unknown", ""]) {
+  for (const action of ["complete", "block", "resume", "retry", "cancel", "report-evidence", "clarify", "unknown", ""]) {
     assertArchitectBlocked(await callToolCall(harness, "task_workflow", { action }), `task_workflow:${action}`);
   }
   assertArchitectBlocked(await callToolCall(harness, "task_workflow"), "task_workflow:missing-action");

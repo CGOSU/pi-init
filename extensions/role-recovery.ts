@@ -1,4 +1,4 @@
-import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ContextEvent, ContextEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isWorkflowActive } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
@@ -16,7 +16,11 @@ function isPendingEntry(entry: unknown) {
   return data !== null && typeof data === "object" && (data as { status?: unknown }).status === "pending";
 }
 
-export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeState) {
+export function createRoleRecovery(
+  pi: ExtensionAPI,
+  state: ExtensionRuntimeState,
+  contextView?: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | undefined,
+) {
   function enterPending(reason: string) {
     state.roleRecoveryPending = true;
     try {
@@ -79,9 +83,10 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
     }
   }
 
-  function context(event: ContextEvent) {
-    if (!state.roleRecoveryPending) return undefined;
-    const messages = event.messages.filter((message) => {
+  function context(event: ContextEvent, ctx: ExtensionContext) {
+    const view = state.roleRecoveryPending ? undefined : contextView?.(event, ctx);
+    if (!state.roleRecoveryPending) return view;
+    const messages = (view?.messages ?? event.messages).filter((message) => {
       const candidate = message as { customType?: unknown };
       return candidate.customType !== ROLE_RECOVERY_MESSAGE_TYPE;
     });
@@ -127,7 +132,7 @@ export function createRoleRecovery(pi: ExtensionAPI, state: ExtensionRuntimeStat
   }
 
   pi.on("session_compact", (event, ctx) => afterCompact(event, ctx));
-  pi.on("context", (event) => context(event));
+  pi.on("context", (event, ctx) => context(event, ctx));
   pi.on("tool_call", (event) => guardToolCall(event));
 
   return {

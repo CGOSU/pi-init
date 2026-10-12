@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { checkTaskContractAgainstCoordination } from "../src/coordination.ts";
 import {
   blockWorkflowTask,
   cloneState,
@@ -57,6 +58,40 @@ function sameReplanIdentity(left: WorkflowReplanIdentity, right: WorkflowReplanI
   return sameIdentity(left, right)
     && left.revisionId === right.revisionId
     && left.handoffId === right.handoffId;
+}
+
+function workflowCoordinationReadiness(current: WorkflowState, state: ExtensionRuntimeState) {
+  const unfinishedTasks = current.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded");
+  const hasContracts = unfinishedTasks.some((task) => task.contract !== undefined);
+  if (state.coordinationRestoreError) {
+    return hasContracts
+      ? { ok: false as const, code: state.coordinationRestoreError.code, message: state.coordinationRestoreError.message }
+      : { ok: true as const };
+  }
+  const coordination = state.coordinationRuntimeState;
+  if (!coordination) {
+    return hasContracts
+      ? { ok: false as const, code: "COORDINATION_STATE_MISSING", message: "协调任务缺少已恢复的证据账本" }
+      : { ok: true as const };
+  }
+  const link = coordination.coordination.workflowLink;
+  const linkMatches = Boolean(link && link.workflowId === current.workflowId && link.planVersion === current.planVersion
+    && link.recoveryGeneration === current.recoveryGeneration);
+  if (!hasContracts && !linkMatches) return { ok: true as const };
+  if (!linkMatches) {
+    return { ok: false as const, code: "COORDINATION_WORKFLOW_LINK_MISMATCH", message: "协作证据未绑定当前 workflow revision" };
+  }
+  for (const task of unfinishedTasks) {
+    if (!task.contract) {
+      return { ok: false as const, code: "TASK_CONTRACT_REQUIRED", message: `协调任务 ${task.id} 缺少结构化任务契约` };
+    }
+    if (task.contract.requirementSources.length === 0) {
+      return { ok: false as const, code: "TASK_CONTRACT_REQUIREMENT_SOURCE_MISSING", message: `协调任务 ${task.id} 缺少需求来源` };
+    }
+    const readiness = checkTaskContractAgainstCoordination(task.contract, coordination.coordination);
+    if (!readiness.ok) return readiness;
+  }
+  return { ok: true as const };
 }
 
 function isTaskCompletionContinuation(continuation: WorkflowState["continuation"]) {
@@ -420,6 +455,12 @@ export function createWorkflowDispatch(
       return;
     }
     if (!isWorkflowActive(current)) return;
+    const coordinationReadiness = workflowCoordinationReadiness(current, state);
+    if (!coordinationReadiness.ok) {
+      state.workflowDispatchInFlight = false;
+      ctx.ui.notify(`协调开发任务未通过就绪门（${coordinationReadiness.code}）：${coordinationReadiness.message}；不会派发。`, "error");
+      return;
+    }
     if (current.currentTaskId) {
       const handoff = current.handoff;
       if (!handoff) return;

@@ -106,6 +106,28 @@ export const workflowTaskRoleSchema = Type.String({
   description: "任务执行角色 ID；必须是小写字母、数字和单连字符，默认使用 developer-test",
 });
 
+const taskContractSchema = Type.Object({
+  version: Type.Literal(1),
+  outcome: Type.String({ description: "任务预期的业务结果" }),
+  requirementSources: Type.Array(Type.String(), { minItems: 1, description: "需求来源及已接受事实出处；不要把推断写成来源" }),
+  expectedBehavior: Type.Array(Type.String(), { minItems: 1, description: "对用户可观察的预期行为" }),
+  evidence: Type.Array(Type.Object({ findingId: Type.String(), sourceId: Type.String(), sourceVersion: Type.String() }), {
+    description: "必须是当前协调状态中明确接受且来源版本匹配的证据引用",
+  }),
+  fixedDecisions: Type.Array(Type.String(), { description: "已确认决策；没有则显式给空数组" }),
+  invariants: Type.Array(Type.String(), { description: "实现不得破坏的不变量；没有则显式给空数组" }),
+  nonGoals: Type.Array(Type.String(), { description: "明确排除的目标；没有则显式给空数组" }),
+  blockingQuestions: Type.Array(Type.String(), { description: "影响正确性/验收的未决问题；不为空时计划不就绪" }),
+  engineeringDiscretion: Type.Array(Type.String(), { description: "开发者可自主决定的普通、可逆工程细节" }),
+  verification: Type.Array(Type.String(), { description: "本任务实际需要的验证；没有则显式给空数组" }),
+  clarificationResolutions: Type.Array(Type.Object({
+    issueId: Type.String(),
+    resolutionKind: StringEnum(["evidence", "contract", "decision"] as const),
+    resolution: Type.String(),
+    sideEffectDisposition: StringEnum(["none", "reconciled", "no-replay"] as const),
+  }), { description: "重规划时逐项回应此前澄清；无澄清时为空数组" }),
+});
+
 export const workflowTaskSchema = Type.Object({
   id: Type.String({ description: "唯一任务 ID，小写字母、数字、点、下划线或连字符" }),
   task: Type.String({ description: "任务目标和实现范围" }),
@@ -119,12 +141,90 @@ export const workflowTaskSchema = Type.Object({
   }),
   role: Type.Optional(workflowTaskRoleSchema),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
+  contract: Type.Optional(taskContractSchema),
+});
+
+const coordinationIdentitySchema = Type.Object({
+  coordinationId: Type.String({ description: "持久协作记录 ID" }),
+  coordinationVersion: Type.Integer({ minimum: 1, description: "协作协议版本" }),
+  sessionId: Type.String({ description: "当前 Pi session 身份" }),
+  recoveryGeneration: Type.Integer({ minimum: 0, description: "当前协作恢复代次" }),
+  requestId: Type.String({ description: "当前证据请求 ID" }),
+  role: StringEnum(["docs-commit", "architect"] as const, { description: "派发的协作角色" }),
+  kind: StringEnum(["evidence", "review"] as const, { description: "当前协作 handoff 类型" }),
+  attemptId: Type.String({ description: "当前协作 attempt 身份" }),
+  handoffId: Type.String({ description: "当前协作 handoff 身份" }),
+  reportId: Type.Optional(Type.String({ description: "当前待审阅的报告 ID" })),
+});
+
+const evidenceRequestSchema = Type.Object({
+  requestId: Type.Optional(Type.String()),
+  questionId: Type.String({ description: "稳定的问题 ID" }),
+  question: Type.String({ description: "需要由取证明确回答的问题" }),
+  rationale: Type.String({ description: "为什么此问题影响架构或开发就绪" }),
+  scope: Type.Array(Type.String(), { minItems: 1, description: "必须核对的文件、符号、调用方或测试范围" }),
+  exclusions: Type.Optional(Type.Array(Type.String())),
+  completionCriteria: Type.Array(Type.String(), { minItems: 1, description: "取证完成条件" }),
+  addressesGaps: Type.Optional(Type.Array(Type.String(), { description: "明确回应 more 审阅指出的缺口" })),
+  followUpOfRequestId: Type.Optional(Type.String()),
+  refreshReason: Type.Optional(Type.String({ description: "重新核实已接受证据时的来源变化或理由" })),
+});
+
+const evidenceSourceSchema = Type.Object({
+  id: Type.String(),
+  location: Type.String(),
+  version: Type.String({ description: "来源版本、内容指纹或可复核的当前基线" }),
+});
+
+const evidenceReportSchema = Type.Object({
+  reportId: Type.Optional(Type.String()),
+  requestId: Type.String(),
+  findings: Type.Array(Type.Object({
+    findingId: Type.String(),
+    questionId: Type.String(),
+    classification: StringEnum(["fact", "inference", "unconfirmed", "conflict"] as const),
+    statement: Type.String(),
+    sources: Type.Array(evidenceSourceSchema),
+  }), { description: "逐问题列出事实、推断、未确认项或冲突；每项注明来源" }),
+  inspectedScope: Type.Array(Type.String(), { minItems: 1 }),
+  testsLocated: Type.Optional(Type.Array(Type.String(), { description: "已定位但未必逐行阅读的测试" })),
+  testsRun: Type.Optional(Type.Array(Type.Object({ command: Type.String(), result: Type.String() }), {
+    description: "实际执行的检查命令及结果；未运行时留空，不得伪称通过",
+  })),
+  unresolved: Type.Optional(Type.Array(Type.String())),
+});
+
+const workflowTaskClarificationSchema = Type.Object({
+  category: StringEnum(["missing-fact", "contract-conflict", "business-decision"] as const),
+  question: Type.String({ description: "具体缺失事实、契约冲突或业务决策问题" }),
+  impact: Type.String({ description: "为何影响当前任务结果或正确性" }),
+  checkedFacts: Type.Array(Type.String(), { description: "开发者已核查的观察；不自动成为 architect 接受的证据" }),
+  completedWork: Type.Array(Type.String(), { description: "已经完成的改动或可保留成果" }),
+  verification: Type.Array(Type.String(), { description: "实际执行过的验证及结果；未运行时为空数组" }),
+  sideEffects: Type.Object({
+    status: StringEnum(["none", "occurred", "unknown"] as const),
+    details: Type.Array(Type.String(), { description: "可能、已发生或已核实无影响的副作用说明" }),
+  }),
+});
+
+const evidenceReviewSchema = Type.Object({
+  reviewId: Type.Optional(Type.String()),
+  reportId: Type.String(),
+  decision: StringEnum(["accept", "more", "block"] as const),
+  acceptedEvidence: Type.Optional(Type.Array(Type.Object({ findingId: Type.String(), sourceId: Type.String(), sourceVersion: Type.String() }))),
+  gaps: Type.Optional(Type.Array(Type.String())),
+  reason: Type.Optional(Type.String()),
 });
 
 export const taskWorkflowParameters = Type.Object({
-  action: StringEnum(["plan", "status", "complete", "block", "replan", "resume", "retry", "cancel"] as const, {
-    description: "工作流动作",
+  action: StringEnum(["plan", "status", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "request-evidence", "report-evidence", "review-evidence"] as const, {
+    description: "工作流或架构协作动作",
   }),
+  coordinationIdentity: Type.Optional(coordinationIdentitySchema),
+  request: Type.Optional(evidenceRequestSchema),
+  report: Type.Optional(evidenceReportSchema),
+  review: Type.Optional(evidenceReviewSchema),
+  clarification: Type.Optional(workflowTaskClarificationSchema),
   summary: Type.Optional(Type.String({ description: "架构规划摘要（plan/replan 必填）" })),
   constraints: Type.Optional(Type.Array(Type.String(), { description: "架构约束和不可改变的决定" })),
   revisionId: Type.Optional(Type.String({ description: "当前待应用重规划的 revisionId（replan 必填）" })),

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isValidRoleId, normalizeRoleId, unwrapRoleResult } from "./roles.ts";
+import { cloneWorkflowTaskContract, validateWorkflowTaskContract } from "./workflow-task-contract.ts";
+import { cloneWorkflowTaskClarification } from "./workflow-clarification.ts";
 import type {
   WorkflowContinuation, WorkflowContinuationPhase, WorkflowContinuationReason, WorkflowExecutionBounds,
   WorkflowExecutor, WorkflowHandoff, WorkflowHandoffPhase, WorkflowModelError,
@@ -9,7 +11,8 @@ import type {
   WorkflowTaskTimestampReducer, WorkflowTextListOptions,
 } from "./workflow-types.ts";
 
-export const WORKFLOW_STATE_VERSION = 4;
+export const WORKFLOW_STATE_VERSION = 5;
+export const WORKFLOW_IDENTITY_STATE_VERSION = 4;
 export const WORKFLOW_MAX_TASKS = 12;
 export const WORKFLOW_HANDOFF_PHASES = [
   "prepared",
@@ -203,6 +206,8 @@ export function cloneTask(task: WorkflowTask): WorkflowTask {
     acceptanceCriteria: [...task.acceptanceCriteria],
     dependsOn: [...task.dependsOn],
     ...(task.verification ? { verification: [...task.verification] } : {}),
+    ...(task.contract ? { contract: cloneWorkflowTaskContract(task.contract) } : {}),
+    ...(task.clarification ? { clarification: cloneWorkflowTaskClarification(task.clarification) } : {}),
     ...(task.delegation ? { delegation: { ...task.delegation } } : {}),
   };
 }
@@ -275,6 +280,11 @@ export function normalizeTask(task: unknown, index = 0): WorkflowTask {
     { required: true },
   );
   const dependsOn = normalizeTextList(source.dependsOn, `工作流任务 ${id} 的 dependsOn`);
+  const contract = source.contract === undefined ? undefined : validateWorkflowTaskContract(source.contract);
+  if (contract && !contract.ok) throw workflowError(contract.code, contract.message);
+  if (source.clarification !== undefined) {
+    throw workflowError("WORKFLOW_CLARIFICATION_INPUT_FORBIDDEN", "新任务不能伪造或复制历史澄清记录");
+  }
 
   return {
     id,
@@ -283,6 +293,7 @@ export function normalizeTask(task: unknown, index = 0): WorkflowTask {
     files,
     acceptanceCriteria,
     dependsOn,
+    ...(contract?.ok ? { contract: contract.value } : {}),
     status: "pending",
   };
 }

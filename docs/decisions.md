@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-10-12：证据协作复用 Local workflow，模型上下文视图与 session 持久历史分离
+
+- 决定：在现有 `task_workflow` 中保存受身份校验的 request/report/review/clarify 协调记录，不另建执行队列或 executor；architect 只发起取证请求和审阅报告，docs-commit 核实并报告，developer-test 对关键契约缺口发起澄清。协调任务仅在关键证据已显式接受且来源版本仍有效时进入开发派发。
+- 决定：公开 Pi `context` 钩子只为当前请求形成局部消息视图，原 session/branch 记录不删除或改写；Pi 持有的 system/tool 状态不交由扩展处理。无法可靠识别 handoff、branch 或工具调用配对时保留完整输入并报告未裁剪。
+- 原因：复用已有 local 顺序执行和身份恢复保持执行权威唯一；明确证据审阅和任务契约边界，避免关键事实猜测，并让上下文裁剪不破坏恢复审计或工具协议。
+- 实施状态、协议字段、兼容、验证结果及未执行的真实 Provider/TUI/缓存费用验证见 [`docs/plans/role-coordination.md`](plans/role-coordination.md)。
+
 ### 2026-10-10：工作流启动状态绑定实际任务消息，底部活动栏不重复显示完成数
 
 - 决定：工作流当前任务只有在本次运行实际消费了与当前 workflow、plan、session、recovery、task、attempt 和 handoff 身份完全匹配的任务消息后，才记录为已启动；启动记录在可验证的最早时点持久化。同一 handoff 重复收到启动证据不得重置开始时间，持久化失败不得更新内存状态或伪装成执行中。底部活动状态栏移除“已完成 x/y”，继续显示当前任务位置、活动阶段及有真实启动证据的耗时。

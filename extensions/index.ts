@@ -21,6 +21,7 @@ import { registerActivityStatusSources } from "./activity-status-registration.ts
 import { createArchitectBoundary } from "./architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
+import { createCoordinationRuntime, type CoordinationRuntime } from "./coordination-runtime.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
@@ -36,6 +37,7 @@ import { createEditGuardTool } from "./edit-guard.ts";
 import { createFileReviewRuntime } from "./file-review-runtime.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
+import { createRoleContextView } from "./role-context-view.ts";
 import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
 import { createRuntimeRoutingContext } from "./runtime-routing-context.ts";
 import {
@@ -53,7 +55,8 @@ const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
   const activityStatus = registerActivityStatusSources(pi);
-  const roleRecovery = createRoleRecovery(pi, runtimeState);
+  const roleContextView = createRoleContextView(runtimeState);
+  const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context);
   const runTimingDiagnostics = createRunTimingDiagnostics(
     pi,
     () => Boolean(runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)),
@@ -61,6 +64,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.registerTool(createEditGuardTool());
   let workflowDispatch: WorkflowDispatch;
   let workflowReport: ReturnType<typeof createWorkflowReport>;
+  let coordinationRuntime: CoordinationRuntime;
   const workflowMessages = createWorkflowMessages(runtimeState, {
     pi,
     setInternalContinuationPending: (value) => {
@@ -77,6 +81,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowTaskMessage: (ctx, taskId, note, identity) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note, identity),
     scheduleWorkflow: (ctx, identity) => workflowDispatch.scheduleWorkflow(ctx, identity),
     sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
+    sendCoordinationMessage: (ctx, identity) => coordinationRuntime.sendCoordinationMessage(ctx, identity),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
   });
   createFileReviewRuntime(pi, {
@@ -89,6 +94,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
+  coordinationRuntime = createCoordinationRuntime(runtimeState, {
+    pi,
+    roleRuntime,
+    setInternalContinuationPending: (value) => {
+      runtimeState.internalContinuationPending = value;
+    },
+  });
   workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime, activityStatus });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
@@ -102,6 +114,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
+    coordination: coordinationRuntime,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;
@@ -146,7 +159,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.refreshRoleStatus(ctx, roleRuntime.effectiveRoleMode(config));
   });
 
-  function captureWorkflowRevisionInput(
+  async function persistWorkflowDirection(next: NonNullable<typeof runtimeState.workflowState>, ctx: ExtensionContext) {
+    const previous = runtimeState.workflowState;
+    if (previous && coordinationRuntime.isLinkedToWorkflow(previous)) coordinationRuntime.linkWorkflow(next, ctx);
+    workflowReport.persistWorkflowState(next, ctx);
+    if (next.status === "replanning") await workflowDispatch.scheduleWorkflow(ctx);
+  }
+
+  async function captureWorkflowRevisionInput(
     event: { text?: unknown; source?: unknown },
     ctx: ExtensionContext,
   ) {
@@ -163,9 +183,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const revision = runtimeState.workflowState.pendingRevision;
       try {
         const next = appendWorkflowReplanDirection(runtimeState.workflowState, event.text.trim());
-        workflowReport.persistWorkflowState(next, ctx);
+        await persistWorkflowDirection(next, ctx);
         ctx.ui.notify(
-          `已将新指令合并到待处理 revision ${revision.revisionId}，将在任务边界交给架构师重规划。`,
+          next.status === "replanning"
+            ? `已将新指令合并到待处理 revision ${revision.revisionId}，并重新交给架构师重规划。`
+            : `已将新指令合并到待处理 revision ${revision.revisionId}，将在任务边界交给架构师重规划。`,
           "info",
         );
       } catch (error) {
@@ -175,8 +197,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
 
     try {
-      const next = requestWorkflowReplan(runtimeState.workflowState, { direction: event.text.trim() });
-      workflowReport.persistWorkflowState(next, ctx);
+      const previous = runtimeState.workflowState;
+      if (!previous) return false;
+      const next = requestWorkflowReplan(previous, { direction: event.text.trim() });
+      await persistWorkflowDirection(next, ctx);
       ctx.ui.notify(
         next.currentTaskId
           ? `已记录工作流方向变更，将在当前任务 ${next.currentTaskId} 完成后交给架构师重规划。`
@@ -193,7 +217,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (typeof event.text === "string" && event.text.trim().startsWith("/")) {
       return { action: "continue" };
     }
-    if (captureWorkflowRevisionInput(event, ctx)) return { action: "handled" };
+    if (await captureWorkflowRevisionInput(event, ctx)) return { action: "handled" };
     if (!runTimingDiagnostics.captureInput(event.source)) return { action: "continue" };
     return { action: "continue" };
   });
@@ -212,6 +236,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("message_start", (event, ctx) => {
+    coordinationRuntime.markCurrentHandoffStartedFromMessage(ctx, event.message);
     if (!workflowTaskConsumptionRunActive) return;
     workflowDispatch.markCurrentTaskStartedFromMessage(ctx, event.message);
   });
@@ -226,6 +251,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     settleExternalRunTiming();
     roleRuntime.startPendingRoleCompaction(ctx);
+    await coordinationRuntime.schedule(ctx);
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -238,6 +264,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runTimingDiagnostics.reset();
     runtimeState.internalContinuationPending = false;
     roleRecovery.reset();
+    runtimeState.coordinationRuntimeState = undefined;
+    runtimeState.coordinationRestoreError = undefined;
     runtimeState.configuredRoleNames = [];
     runtimeState.currentContext = undefined;
   });
@@ -254,6 +282,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.workflowNoticeAcknowledgement = undefined;
       roleRecovery.restore(ctx, event.reason);
       runtimeState.currentContext = ctx;
+      coordinationRuntime.restore(ctx);
       workflowDispatch.restoreWorkflowState(ctx);
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       runtimeState.currentContext = ctx;
@@ -278,6 +307,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           "info",
         );
       }
+      await coordinationRuntime.schedule(ctx);
       await workflowDispatch.scheduleWorkflow(ctx);
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
@@ -286,6 +316,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_tree", async (event, ctx) => {
     workflowTaskConsumptionRunActive = false;
+    coordinationRuntime.restore(ctx);
     workflowDispatch.restoreWorkflowState(ctx);
     if (event.oldLeafId !== event.newLeafId) {
       runtimeState.roleContextGeneration += 1;
@@ -297,6 +328,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       roleRecovery.restore(ctx);
     }
     workflowReport.updateWorkflowStatus(ctx);
+    await coordinationRuntime.schedule(ctx);
   });
 
   pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: async (args, ctx) => {

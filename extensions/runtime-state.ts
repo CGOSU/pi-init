@@ -1,6 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RoleMode, ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
 import type {
+  CoordinationHandoffIdentity,
+  CoordinationRestoreError,
+  CoordinationRuntimeState,
+} from "../src/coordination-runtime-types.ts";
+import type {
   WorkflowActionIdentity,
   WorkflowContinuation,
   WorkflowHandoff,
@@ -8,6 +13,7 @@ import type {
   WorkflowReplanIdentity,
   WorkflowState,
 } from "../src/workflow-types.ts";
+export type { CoordinationHandoffIdentity, CoordinationRuntimeState } from "../src/coordination-runtime-types.ts";
 export type {
   WorkflowActionIdentity,
   WorkflowContinuation,
@@ -27,7 +33,8 @@ export type RoleCompactionContinuation =
   | { kind: "workflow-task"; taskId: string; identity: WorkflowHandoffIdentity }
   | { kind: "workflow-schedule"; identity: WorkflowActionIdentity }
   | { kind: "workflow-review"; identity: WorkflowActionIdentity }
-  | { kind: "workflow-replan"; identity: WorkflowReplanIdentity };
+  | { kind: "workflow-replan"; identity: WorkflowReplanIdentity }
+  | { kind: "coordination-evidence"; identity: CoordinationHandoffIdentity };
 
 export type PendingRoleCompaction = {
   fromRole: string;
@@ -50,6 +57,8 @@ export type ExtensionRuntimeState = {
   roleModeStatus: RoleMode;
   workflowModeStatus: WorkflowMode;
   workflowRestoreError?: { code: string; message: string; sourceEntryId?: string };
+  coordinationRuntimeState?: CoordinationRuntimeState;
+  coordinationRestoreError?: CoordinationRestoreError;
   workflowNoticeAcknowledgement?: { sessionId: string; contextGeneration: number; sourceKey: string };
   pendingWorkflowRecovery?: WorkflowState;
   roleRecoveryPending: boolean;

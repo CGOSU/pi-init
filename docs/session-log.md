@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-12：完成架构师主导的持久化角色协作闭环
+
+- 完成：新增可恢复的取证请求/报告/审阅状态、版本化开发任务契约和证据就绪门、身份绑定的 developer 澄清/replan 回路，以及公开 Pi `context` hook 上的角色/任务局部输入视图。复用既有 Local workflow、session append/branch 和恢复身份；不增添 executor、不改写 session 原文。具体协议、模块和行为边界集中记录在 [`docs/plans/role-coordination.md`](plans/role-coordination.md)。
+- Context 边界：通过扩展 harness 测试实际 context 返回值、工具调用/结果配对、后续用户指令以及 session/branch 保持；不可靠边界时保留完整输入并返回诊断。Pi 的 system/tool 状态由宿主保留，未使用 `context_with_system`。
+- 验证：`npm test` 300 项通过、0 失败；`npm run typecheck` 通过；`git diff --check` 通过（Git 提示工作区文件下次写入时可能从 LF 转为 CRLF）。
+- 未验证：未调用真实 Provider/MCP，未执行 Pi TUI/E2E，未测量跨模型缓存命中或费用收益；harness 结果不代表真实宿主/provider 链路。
+- Git 收尾：六个 EOF 空行已由 developer-test 移除并重新暂存；`git diff --cached --check`、`git diff --check` 与提交内容检查均通过。仅将本次角色协作成果创建为中文 commit；既有 `/large` 文件及共用文件原有 hunks 保持未提交；未 push。
+
 ### 2026-10-10：修复工作流任务启动事件顺序并简化底部活动栏
 
 - 完成内容：已安装 Pi 1.1.0 源码确认 agent_start 先于初始任务消息处理，扩展 message_end 回调又先于 custom 消息写入 branch；因此 Local 工作流改为仅在当前 Agent run 窗口内，按 `message_start` 实际消费的任务消息及完整 workflow/plan/session/recovery/task/attempt/handoff 身份记录启动。统一启动状态持久化失败时仍保持原状态；结果验收时已有 branch 补记路径和 complete/block 身份、branch、角色守卫及 unknown-outcome/retry 语义不变。底部 `workflowStatusBar` 仅移除完成数，内部统计、状态查询、控制中心和报告保留。

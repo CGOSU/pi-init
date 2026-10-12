@@ -12,7 +12,8 @@ import {
   normalizeTextList,
   requireText,
 } from "./workflow-model.ts";
-import type { WorkflowPlanSummary, WorkflowState, WorkflowTask } from "./workflow-types.ts";
+import type { WorkflowPlanSummary, WorkflowResult, WorkflowState, WorkflowTask } from "./workflow-types.ts";
+import { validateClarificationResolutionCoverage, type WorkflowTaskClarificationDraft } from "./workflow-clarification.ts";
 
 type WorkflowReplanRequest = { revisionId?: unknown; direction?: unknown };
 type WorkflowReplanApplication = {
@@ -134,6 +135,81 @@ export function appendWorkflowReplanDirection(state: WorkflowState, direction: u
   return result;
 }
 
+export function requestWorkflowTaskClarification(
+  state: WorkflowState,
+  draft: WorkflowTaskClarificationDraft,
+  now = Date.now(),
+): WorkflowResult<WorkflowState> {
+  const taskId = state?.currentTaskId;
+  const task = taskId ? state.tasks.find((item) => item.id === taskId) : undefined;
+  const handoff = state?.handoff;
+  if (!state || state.status !== "running" || !taskId || !task || task.status !== "in_progress"
+    || !handoff || handoff.taskId !== taskId || handoff.phase !== "executing") {
+    return { ok: false, code: "WORKFLOW_CLARIFICATION_HANDOFF_STALE", message: "澄清必须由当前真实启动的任务 handoff 提交" };
+  }
+  if (!task.contract) {
+    return { ok: false, code: "WORKFLOW_CLARIFICATION_CONTRACT_MISSING", message: "只有携带任务契约的协调任务可以提交结构化澄清" };
+  }
+  const issueId = `clarification-${randomUUID()}`;
+  const direction = `开发任务 ${taskId} 退回澄清 ${issueId}（${draft.category}）：${draft.question}`;
+  let requested: WorkflowState;
+  try {
+    requested = state.pendingRevision
+      ? appendWorkflowReplanDirection(state, direction, now)
+      : requestWorkflowReplan(state, { revisionId: issueId, direction }, now);
+  } catch (error) {
+    return {
+      ok: false,
+      code: "WORKFLOW_CLARIFICATION_REVISION_INVALID",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const result = cloneState(requested, now);
+  const clarifiedTask = result.tasks.find((item) => item.id === taskId);
+  if (!clarifiedTask || !result.pendingRevision) {
+    return { ok: false, code: "WORKFLOW_CLARIFICATION_STATE_INVALID", message: "澄清状态缺少当前任务或 revision" };
+  }
+  clarifiedTask.status = "blocked";
+  clarifiedTask.blockReason = `等待 architect 处理澄清：${draft.question}`;
+  clarifiedTask.clarification = {
+    ...draft,
+    issueId,
+    handoff: {
+      workflowId: state.workflowId,
+      planVersion: state.planVersion,
+      sessionId: state.sessionId,
+      recoveryGeneration: state.recoveryGeneration,
+      taskId,
+      attemptId: handoff.attemptId,
+      handoffId: handoff.handoffId,
+    },
+    createdAt: now,
+  };
+  result.currentTaskId = undefined;
+  delete result.handoff;
+  result.status = "replanning";
+  result.pauseReason = "workflow-replan";
+  delete result.taskPauseReason;
+  result.recoveryGeneration += 1;
+  result.continuation = {
+    kind: "replan",
+    revisionId: result.pendingRevision.revisionId,
+    handoffId: randomUUID(),
+    phase: "pending",
+    reason: "replan-requested",
+  };
+  result.pendingRevision.requestedFromTaskId ??= taskId;
+  const revision = result.revisions.find((item) =>
+    item.revisionId === result.pendingRevision?.revisionId && item.status === "requested",
+  );
+  if (!revision) {
+    return { ok: false, code: "WORKFLOW_CLARIFICATION_REVISION_MISSING", message: "澄清无法关联到待处理 revision" };
+  }
+  revision.direction = result.pendingRevision.direction;
+  result.nudgeCount = 0;
+  return { ok: true, value: result };
+}
+
 export function applyWorkflowReplan(
   state: WorkflowState,
   { revisionId, summary, constraints, tasks, retainTaskIds, preserveTaskIds }: WorkflowReplanApplication = {},
@@ -150,6 +226,10 @@ export function applyWorkflowReplan(
     throw new Error(`工作流重规划 revisionId 已过期或不匹配：${id}`);
   }
   const plan = normalizeReplanPlan({ summary, constraints, tasks });
+  const clarificationReadiness = validateClarificationResolutionCoverage(plan.tasks, state.tasks);
+  if (!clarificationReadiness.ok) {
+    throw Object.assign(new Error(clarificationReadiness.message), { code: clarificationReadiness.code });
+  }
   const requestedRetainedIds = retainTaskIds !== undefined && preserveTaskIds !== undefined
     ? (() => { throw new Error("只能指定一种保留任务 ID 列表"); })()
     : retainTaskIds ?? preserveTaskIds;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { cloneState } from "./workflow-model.ts";
+import { cloneState, WORKFLOW_STATE_VERSION } from "./workflow-model.ts";
 import type {
   HydratedWorkflowState,
   WorkflowActionIdentity,
@@ -397,7 +397,7 @@ export function recoverWorkflowState(
     sessionId,
     planVersion,
     recoveryGeneration: (state.recoveryGeneration ?? 0) + 1,
-    version: 4,
+    version: WORKFLOW_STATE_VERSION,
   };
   delete migrated.legacySourceVersion;
   const currentTask = migrated.currentTaskId

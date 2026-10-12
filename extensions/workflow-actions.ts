@@ -13,15 +13,20 @@ import {
   validateWorkflowReplanIdentity,
   validateWorkflowPlan,
   workflowActionIdentity,
+  requestWorkflowTaskClarification,
 } from "../src/workflow.ts";
 import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
 import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowMode } from "../src/role-types.ts";
-import type { WorkflowHandoffIdentity, WorkflowResult } from "../src/workflow-types.ts";
+import type { WorkflowHandoffIdentity, WorkflowResult, WorkflowTask } from "../src/workflow-types.ts";
+import type { AcceptedEvidenceReference } from "../src/coordination-types.ts";
+import { checkWorkflowTaskContractReadiness } from "../src/workflow-task-contract.ts";
+import { parseWorkflowTaskClarificationInput } from "../src/workflow-clarification.ts";
 import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowDispatch } from "./workflow-dispatch.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
+import type { CoordinationRuntime } from "./coordination-runtime.ts";
 import { taskWorkflowParameters } from "./contracts.ts";
 import {
   createWorkflowCompletionView,
@@ -38,6 +43,7 @@ export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
   dispatch: WorkflowDispatch;
   report: WorkflowReport;
+  coordination: CoordinationRuntime;
 };
 
 type WorkflowActionResult = {
@@ -88,6 +94,32 @@ export function createWorkflowActions(
       });
     }
     return result.value;
+  }
+
+  function requireTaskContractsReady(
+    tasks: WorkflowTask[],
+    acceptedEvidence: AcceptedEvidenceReference[],
+    coordinated: boolean,
+  ) {
+    for (const task of tasks) {
+      if (coordinated && !task.contract) {
+        throw Object.assign(new Error(`协调任务 ${task.id} 缺少结构化任务契约`), { code: "TASK_CONTRACT_REQUIRED" });
+      }
+      if (!coordinated && task.contract) {
+        throw Object.assign(new Error(`任务 ${task.id} 携带契约但当前没有关联的协调证据状态`), { code: "TASK_CONTRACT_REQUIRES_COORDINATION" });
+      }
+      if (!task.contract) continue;
+      if (coordinated && task.contract.requirementSources.length === 0) {
+        throw Object.assign(new Error(`协调任务 ${task.id} 必须显式列出需求来源`), { code: "TASK_CONTRACT_REQUIREMENT_SOURCE_MISSING" });
+      }
+      const readiness = checkWorkflowTaskContractReadiness(task.contract, acceptedEvidence);
+      if (!readiness.ok) {
+        throw Object.assign(new Error(`[PI-INIT_TASK_CONTRACT_ERROR] ${JSON.stringify(readiness)}`), {
+          code: readiness.code,
+          details: readiness,
+        });
+      }
+    }
   }
 
   function shouldOrchestrateConfiguredWorkflow(mode: WorkflowMode, taskCount: number) {
@@ -236,8 +268,88 @@ export function createWorkflowActions(
       && !mayStartFreshSessionWorkflow && !mayCancelInvalidExecutionRole) {
       throw missingWorkflowError();
     }
+    if (params.action !== "status" && state.coordinationRestoreError) {
+      throw Object.assign(new Error(`无法恢复协作状态（${state.coordinationRestoreError.code}）：${state.coordinationRestoreError.message}`), {
+        code: state.coordinationRestoreError.code,
+        details: { ok: false, ...state.coordinationRestoreError },
+      });
+    }
 
     switch (params.action) {
+      case "request-evidence": {
+        const result = deps.coordination.requestEvidence(params.request, params.coordinationIdentity, ctx);
+        return {
+          content: [{ type: "text", text: `已持久化取证请求 ${result.request.requestId}（${result.request.questionId}）；将自动派发 docs-commit。` }],
+          details: { coordination: deps.coordination.status(), request: result.request },
+          terminate: true,
+        };
+      }
+      case "report-evidence": {
+        const result = deps.coordination.reportEvidence(params.report, params.coordinationIdentity, ctx);
+        return {
+          content: [{ type: "text", text: `已持久化取证报告 ${result.report.reportId}；将自动返还 architect 审阅。` }],
+          details: { coordination: deps.coordination.status(), report: result.report },
+          terminate: true,
+        };
+      }
+      case "review-evidence": {
+        const result = deps.coordination.reviewEvidence(params.review, params.coordinationIdentity, ctx);
+        const decision = result.review?.decision;
+        return {
+          content: [{ type: "text", text: decision === "accept"
+            ? "证据审阅已接受；关键证据就绪，可由 architect 规划开发任务。"
+            : decision === "more"
+              ? "已记录补查缺口；architect 必须使用当前 handoff identity 创建明确回应缺口的新 request-evidence，期间不会派发开发任务。"
+              : "已记录证据阻塞决定；不会派发开发任务。" }],
+          details: { coordination: deps.coordination.status(), review: result.review },
+          terminate: decision === "block",
+        };
+      }
+      case "clarify": {
+        if (!state.workflowState) throw missingWorkflowError();
+        const identity = requireTaskHandoffIdentity(params, ctx);
+        const task = state.workflowState.tasks.find((item) => item.id === identity.taskId);
+        if (!task) throw Object.assign(new Error(`澄清任务不存在：${identity.taskId}`), { code: "WORKFLOW_CLARIFICATION_TASK_MISSING" });
+        if (task.role !== "developer-test" || deps.roleRuntime.activeRoleFor(ctx)?.role !== "developer-test") {
+          throw Object.assign(new Error("clarify 只能由当前 developer-test 执行任务提交"), { code: "WORKFLOW_CLARIFICATION_ROLE_FORBIDDEN" });
+        }
+        const parsed = parseWorkflowTaskClarificationInput(params.clarification);
+        if (!parsed.ok) {
+          throw Object.assign(new Error(parsed.message), { code: parsed.code, details: parsed });
+        }
+        if (!task.contract) {
+          throw Object.assign(new Error("普通非协调任务没有澄清契约；使用既有 block 流程，不得伪造协调状态"), {
+            code: "WORKFLOW_CLARIFICATION_CONTRACT_MISSING",
+          });
+        }
+        if (!deps.coordination.isLinkedToWorkflow(state.workflowState)) {
+          throw Object.assign(new Error("协调账本未绑定当前 workflow revision；澄清不会推进或派发"), {
+            code: "COORDINATION_WORKFLOW_LINK_MISMATCH",
+          });
+        }
+        markQueuedTaskStarted(params, ctx);
+        const next = requireIdentity(requestWorkflowTaskClarification(state.workflowState, parsed.value));
+        try {
+          deps.coordination.linkWorkflow(next, ctx);
+          deps.report.persistWorkflowState(next, ctx);
+        } catch (error) {
+          const message = textOf(error);
+          state.workflowRestoreError ??= { code: "WORKFLOW_CLARIFICATION_PERSIST_FAILED", message };
+          state.workflowDispatchInFlight = false;
+          ctx.ui.notify(`澄清状态持久化失败（${message}）；当前执行将停止，恢复前不会派发或重放。`, "error");
+          return {
+            content: [{ type: "text", text: `无法持久化澄清；当前执行将停止，且不会自动重放副作用：${message}` }],
+            details: { ok: false, code: "WORKFLOW_CLARIFICATION_PERSIST_FAILED", message },
+            terminate: true,
+          };
+        }
+        state.workflowDispatchInFlight = false;
+        return {
+          content: [{ type: "text", text: `已保存澄清 ${next.tasks.find((item) => item.id === identity.taskId)?.clarification?.issueId}；任务未标记完成，当前 revision 已交回 architect。不得继续按未决规则实现或重放副作用。` }],
+          details: statusDetails(next),
+          terminate: true,
+        };
+      }
       case "plan": {
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") {
           throw new Error("只有架构角色可以创建工作流；请先调用 switch_role(role=architect)");
@@ -255,12 +367,15 @@ export function createWorkflowActions(
           reviewRequired: params.reviewRequired,
         });
         assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
+        const coordinatedPlan = deps.coordination.isRelevantForNewWorkflowPlan();
+        const acceptedEvidence: AcceptedEvidenceReference[] = coordinatedPlan ? deps.coordination.assertReadyForWorkflow() : [];
+        requireTaskContractsReady(plan.tasks, acceptedEvidence, coordinatedPlan);
         if (config.workflowMode === "off") {
           throw new Error(
             "task_workflow 当前策略为 off；请先执行 /pi-init config workflow 选择 on 或 auto，或在 .pi/role-models.json 中将 workflowMode 设为 on/auto",
           );
         }
-        if (!shouldOrchestrateConfiguredWorkflow(config.workflowMode, plan.tasks.length)) {
+        if (!coordinatedPlan && !shouldOrchestrateConfiguredWorkflow(config.workflowMode, plan.tasks.length)) {
           return {
             content: [{
               type: "text",
@@ -275,6 +390,7 @@ export function createWorkflowActions(
           executor: "local",
           sessionId: ctx.sessionManager.getSessionId(),
         });
+        if (coordinatedPlan) deps.coordination.linkWorkflow(next, ctx);
         deps.report.persistWorkflowState(next, ctx);
         state.workflowRestoreError = undefined;
         const identity: WorkflowActionIdentity = {
@@ -299,13 +415,18 @@ export function createWorkflowActions(
         const restoreDiagnostic = recoveryActions.diagnostic()
           ? `\n\n${recoveryActions.diagnostic()}；不会改写原记录或派发任务。`
           : "";
+        const coordinationStatus = deps.coordination.status();
+        const coordinationText = coordinationStatus ? `\n\n${deps.coordination.summary()}` : "";
         return {
-          content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}` }],
-          details: state.workflowRestoreError
-            ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError, recovery: recoveryActions.status() }
-            : state.workflowState
-              ? statusDetails(state.workflowState)
-              : statusDetails({}),
+          content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}${coordinationText}` }],
+          details: {
+            ...(state.workflowRestoreError
+              ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError, recovery: recoveryActions.status() }
+              : state.workflowState
+                ? statusDetails(state.workflowState)
+                : statusDetails({})),
+            ...(coordinationStatus ? { coordination: coordinationStatus } : {}),
+          },
         };
       }
       case "replan": {
@@ -324,6 +445,8 @@ export function createWorkflowActions(
         });
         assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
         requireIdentity(validateWorkflowReplanIdentity(state.workflowState, params, ctx));
+        const coordinatedPlan = deps.coordination.isLinkedToWorkflow(state.workflowState);
+        const acceptedEvidence: AcceptedEvidenceReference[] = coordinatedPlan ? deps.coordination.assertReadyForWorkflow() : [];
         const next = applyWorkflowReplan(state.workflowState, {
           revisionId: params.revisionId,
           summary: params.summary,
@@ -331,6 +454,12 @@ export function createWorkflowActions(
           tasks: params.tasks,
           retainTaskIds: params.retainTaskIds,
         });
+        requireTaskContractsReady(
+          next.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"),
+          acceptedEvidence,
+          coordinatedPlan,
+        );
+        if (coordinatedPlan) deps.coordination.linkWorkflow(next, ctx);
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
         return {

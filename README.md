@@ -175,7 +175,14 @@ pi-usage
 
 完整的读取、精确编辑、证据门控和验证规则统一遵循随 package 发布的公共 `pi-init-role-routing` Skill；README 不重复维护细节。简单只读咨询可直接由适合的非 `architect` 角色完成；目标明确的低风险开发由 `developer-test` 直接调查、实现和验证，不因普通实现选择建立工作流。需要仓库、代码、测试、文档或外部事实取证时，统一由 `docs-commit` 完成并结构化交接给 `architect`；只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问。
 
-`architect` 只负责思考、分析、决策、规划和安排。其运行时除 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status")` 外不得调用任何工具，不得连接或调用 MCP；`read`、搜索、shell、编辑、浏览器、脚本、协作和未知工具均由运行时 fail-closed 阻断。提示层只用于降低错误率，运行时守卫仍对无效或歧义调用 fail-closed，正常合法调用不新增工具 schema 或模型调用。
+`architect` 只负责思考、分析、决策、规划和安排。其运行时仅允许 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status"/"request-evidence"/"review-evidence")`；后两项是纯协议规划/审阅动作，不授权读取仓库、运行取证或执行开发。`report-evidence`、`clarify`、`complete`、`block`、`resume`、`retry`、`cancel`，以及 `read`、搜索、shell、编辑、浏览器、脚本、协作和未知工具均由运行时 fail-closed 阻断。提示层只用于降低错误率，运行时守卫负责权限执行。
+
+### 证据协作、开发契约与模型上下文
+
+- `request-evidence` / `review-evidence` 由 architect 创建问题并明确接受、补查或阻塞；受派发的 `docs-commit` 用 `report-evidence` 回报事实、推断或未知、来源及版本、检查范围、测试位置和实际执行验证。取证报告不会自动变成已接受证据；docs 取证阶段不例行 commit。
+- 协调任务的开发契约记录用户可观察结果、固定决策/不变量、非目标、有效证据引用、关键未决问题、普通工程自由度和验证要求。关键问题未解决或证据缺失/过期时不派发开发；已有普通无契约工作流保持兼容，不强制为简单任务常驻创建协调账本。开发者发现关键业务、权限或公共契约缺口时，以当前身份调用 `clarify` 保存问题、观察、已完成工作/验证与副作用状态，再由 architect 显式处置并生成新 revision；未知副作用不会自动重放。
+- 协调状态复用 Pi 当前 session 的 append/branch 和既有 local task executor；协调记录本身不是 architect 执行任务，不新增第二个 executor，也不占用开发任务额度。
+- 扩展通过公开 `context` 钩子为当前交接裁剪实际模型输入，保留原 session/branch 历史；Pi 管理的 system/tool state 不由扩展接管，不使用 `context_with_system`。边界可靠时保留当前角色工作窗口、真实工具调用与结果配对和新用户指令；交接、branch 或压缩映射不确定时保留完整输入并明确报告未裁剪。测试 harness 结果不代表已验证真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益。
 
 角色、模型和模式的关系：
 
