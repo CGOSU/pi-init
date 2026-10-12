@@ -8,6 +8,11 @@
 
 ## 已确认决策
 
+### 2026-10-12：活动栏在 Agent 请求间隙保留通用运行状态
+
+- 决定：活动栏从 `agent_start` 到 `agent_settled` 显示 Agent 正在运行；具体 Provider、工具、压缩和工作流状态优先，Agent 状态仅填补其间隙。Pi 原生 Working、footer 和 OSC 7501 不由此改变。
+- 原因：用户复现中，角色切换/压缩后的界面看似空闲，但新消息被 Pi 加入对话队列；旧活动栏只显示 Provider、工具或压缩等具体事件，无法表达 Agent run 仍活跃。
+
 ### 2026-10-12：证据协作复用 Local workflow，模型上下文视图与 session 持久历史分离
 
 - 决定：在现有 `task_workflow` 中保存受身份校验的 request/report/review/clarify 协调记录，不另建执行队列或 executor；architect 只发起取证请求和审阅报告，docs-commit 核实并报告，developer-test 对关键契约缺口发起澄清。协调任务仅在关键证据已显式接受且来源版本仍有效时进入开发派发。

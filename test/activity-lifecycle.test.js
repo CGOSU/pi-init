@@ -60,6 +60,27 @@ test("Provider 请求显示阶段，delta 合并后只刷新一次且不保留�
   harness.activityStatus.clear(harness.context);
 });
 
+test("Agent 活跃期间的间隙仍显示运行状态，直到最终 settle 才清除", async () => {
+  const harness = createLifecycleHarness();
+  await harness.emit("agent_start");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(harness.latestStatus(), /Agent 正在运行/);
+
+  await harness.emit("before_provider_request");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(harness.latestStatus(), /等待模型/);
+
+  await harness.emit("message_end", { message: { role: "assistant" } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(harness.latestStatus(), /Agent 正在运行/);
+
+  await harness.emit("agent_end");
+  assert.match(harness.latestStatus(), /Agent 正在运行/);
+  await harness.emit("agent_settled");
+  assert.equal(harness.latestStatus(), undefined);
+  harness.lifecycle.clear(harness.context);
+});
+
 test("并发工具以 toolCallId 独立计数，只显示分类不泄露参数或结果", async () => {
   const harness = createLifecycleHarness();
   await harness.emit("tool_execution_start", {

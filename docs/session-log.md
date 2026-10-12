@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-12：修复 Agent 活跃但活动栏看似空闲
+
+- 完成：活动栏在 `agent_start` 后、`agent_settled` 前显示通用 Agent 运行状态；Provider、工具、压缩和工作流状态仍优先显示。用户提供的消息排队现象说明界面空闲外观与宿主队列状态不一致；没有修改 Pi 原生 Working 控件。
+- 验证：`node --test test/activity-lifecycle.test.js test/activity-status.test.js`（18 项通过）、`npm run typecheck`、`git diff --check` 均通过。未在真实 Pi TUI 中复现或执行 E2E。
+- 遗留：需在用户实际 Pi 会话确认新活动栏是否消除此种界面误判；队列可能来自 Agent streaming 或 compaction，未获取当时宿主事件日志以判定具体分支。
+
 ### 2026-10-12：完成架构师主导的持久化角色协作闭环
 
 - 完成：新增可恢复的取证请求/报告/审阅状态、版本化开发任务契约和证据就绪门、身份绑定的 developer 澄清/replan 回路，以及公开 Pi `context` hook 上的角色/任务局部输入视图。复用既有 Local workflow、session append/branch 和恢复身份；不增添 executor、不改写 session 原文。具体协议、模块和行为边界集中记录在 [`docs/plans/role-coordination.md`](plans/role-coordination.md)。

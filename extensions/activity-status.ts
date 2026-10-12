@@ -38,6 +38,7 @@ export type ActivityStatusWorkflow = {
 };
 
 export type ActivityStatusOperation =
+  | { kind: "agent"; startedAt: number }
   | { kind: "provider"; phase: "request" | "streaming"; startedAt: number }
   | { kind: "tool"; label: string; count: number; startedAt: number };
 
@@ -157,9 +158,11 @@ function compactionSegment(compaction: ActivityStatusCompaction | undefined, now
 
 function operationSegment(operation: ActivityStatusOperation | undefined, now: number): ActivityStatusSegment | undefined {
   if (!operation) return undefined;
-  const label = operation.kind === "provider"
-    ? operation.phase === "streaming" ? "↓ 模型响应" : "↑ 等待模型"
-    : operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label;
+  const label = operation.kind === "agent"
+    ? "◌ Agent 正在运行"
+    : operation.kind === "provider"
+      ? operation.phase === "streaming" ? "↓ 模型响应" : "↑ 等待模型"
+      : operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label;
   const elapsedSeconds = Number.isFinite(operation.startedAt)
     ? Math.max(0, Math.floor((now - operation.startedAt) / 1000))
     : 0;
@@ -186,6 +189,8 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
     ? { text: state.alert.text, tone: state.alert.tone }
     : undefined;
   const operation = operationSegment(state.operation, now);
+  const agentOperation = state.operation?.kind === "agent" ? operation : undefined;
+  const specificOperation = state.operation?.kind === "agent" ? undefined : operation;
   const cacheResult = cacheResultSegment(state.cache);
   const urgentCurrentCache = state.cache?.phase === "result"
     && (cacheResult?.tone === "error" || cacheResult?.tone === "warning")
@@ -194,17 +199,19 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
   const primary = workflowNeedsAttention
     ? workflow
     : alert
-        ?? operation
+        ?? specificOperation
         ?? urgentCurrentCache
         ?? compaction
         ?? workflow
+        ?? agentOperation
         ?? cacheResult;
 
   const segments: ActivityStatusSegment[] = [];
   if (primary) segments.push(primary);
   if (workflow && primary !== workflow) segments.push(workflow);
-  if (operation && primary !== operation) segments.push(operation);
+  if (specificOperation && primary !== specificOperation) segments.push(specificOperation);
   if (compaction && primary !== compaction) segments.push(compaction);
+  if (agentOperation && primary !== agentOperation) segments.push(agentOperation);
   if (cacheResult && primary !== cacheResult) segments.push(cacheResult);
   segments.push(...roleSegments(state.role));
 

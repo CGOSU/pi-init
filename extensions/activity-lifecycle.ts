@@ -44,6 +44,7 @@ export function createActivityLifecycle(
   const tools = new Map<string, ActiveTool>();
   const retiredToolIds = new Set<string>();
   let generation = 0;
+  let agentStartedAt: number | undefined;
   let provider: Extract<ActivityStatusOperation, { kind: "provider" }> | undefined;
   let pendingOperationTimer: ReturnType<typeof setTimeout> | undefined;
   let alertTimer: ReturnType<typeof setTimeout> | undefined;
@@ -83,7 +84,8 @@ export function createActivityLifecycle(
         startedAt: Math.min(...active.map(({ startedAt }) => startedAt)),
       };
     }
-    return provider;
+    if (provider) return provider;
+    return typeof agentStartedAt === "number" ? { kind: "agent", startedAt: agentStartedAt } : undefined;
   }
 
   function publishOperation(ctx: ExtensionContext) {
@@ -134,6 +136,7 @@ export function createActivityLifecycle(
     clearPendingOperationTimer();
     for (const toolCallId of tools.keys()) rememberRetiredToolId(toolCallId);
     tools.clear();
+    agentStartedAt = undefined;
     provider = undefined;
     shownOperationSignature = undefined;
     activityStatus.setOperation(ctx, undefined);
@@ -179,7 +182,11 @@ export function createActivityLifecycle(
     publishOperation(ctx);
   });
 
-  pi.on("agent_start", (_event, ctx) => clearOperations(ctx));
+  pi.on("agent_start", (_event, ctx) => {
+    clearOperations(ctx);
+    agentStartedAt = now();
+    publishOperation(ctx);
+  });
   pi.on("agent_settled", (_event, ctx) => clearOperations(ctx));
   pi.on("session_start", (_event, ctx) => clearOperations(ctx));
   pi.on("session_tree", (_event, ctx) => clearOperations(ctx));

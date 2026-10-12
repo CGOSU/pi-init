@@ -47,6 +47,12 @@ test("压缩长等待保持进行状态，真实异常和活动优先于辅助�
 
   const fullLine = renderActivityStatus(snapshot, 80, theme, 2_000).join("");
   assert.match(fullLine, /压缩仍在进行 · 2s/);
+  const agentDuringCompaction = activityStatusSegments({
+    ...snapshot,
+    operation: { kind: "agent", startedAt: 0 },
+  }, 2_000);
+  assert.match(agentDuringCompaction[0].text, /压缩仍在进行/);
+  assert.ok(agentDuringCompaction.some(({ text }) => /Agent 正在运行/.test(text)));
   const lines = renderActivityStatus(snapshot, 14, theme, 2_000);
 
   assert.equal(lines.length, 1);
