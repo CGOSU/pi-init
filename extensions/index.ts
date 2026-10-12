@@ -87,6 +87,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   createFileReviewRuntime(pi, {
     getActiveRole: roleRuntime.activeRoleFor,
     canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
+    roleRecoveryPending: () => runtimeState.roleRecoveryPending,
+    getDispatchBlockReason: (ctx) => {
+      if (runtimeState.roleRecoveryPersistenceFailed) return "职责恢复记录持久化失败；扫描结果已保留，未启动 AI 审阅。";
+      if (runtimeState.workflowRestoreError) return `工作流恢复失败（${runtimeState.workflowRestoreError.code}）；未启动 AI 审阅。`;
+      if (runtimeState.pendingWorkflowRecovery) return "有待处理的工作流恢复；未启动 AI 审阅。";
+      if (runtimeState.workflowState && !["completed", "cancelled"].includes(runtimeState.workflowState.status)) return "当前有未结束的工作流；未启动 AI 审阅。";
+      if (runtimeState.workflowDispatchInFlight) return "工作流正在派发；未启动 AI 审阅。";
+      if (!ctx.isIdle()) return "Agent 正忙；未启动或排队 AI 审阅。";
+      return undefined;
+    },
   });
   const runtimeRoutingContext = createRuntimeRoutingContext(runtimeState, {
     getActiveRole: roleRuntime.activeRoleFor,

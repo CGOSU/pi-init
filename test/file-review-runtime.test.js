@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   createExtensionHarness,
+  createWorkflowState,
   emitExtensionEvent,
 } from "./helpers.js";
 
@@ -76,6 +77,65 @@ test("/large 手动重扫并报告当前项目的多语言超限文件", async (
     assert.match(report.message, /扫描完成：发现 2 个超过 500 行的代码文件/);
     assert.match(report.message, /src\/large\.ts · 501 行/);
     assert.match(report.message, /rust\/main\.rs · 501 行/);
+    assert.equal(harness.sentUserMessages.length, 1);
+    assert.match(harness.sentUserMessages[0].message, /用户通过 \/large 明确启动/);
+  });
+});
+
+test("/large 在职责恢复 pending 时仍扫描并将恢复门交给审阅请求处理", async () => {
+  await withTempDirectory(async (directory) => {
+    const branch = [{ type: "custom", customType: "pi-init-role-recovery", data: { status: "pending" } }];
+    const harness = createExtensionHarness(branch, { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+
+    await harness.commands.get("large").handler("", harness.context);
+
+    assert.equal(harness.sentUserMessages.length, 1);
+    assert.match(harness.sentUserMessages[0].message, /职责恢复待确认：是/);
+    assert.match(harness.sentUserMessages[0].message, /恢复门未确认时必须先完成角色确认/);
+    assert.equal(branch.findLast((entry) => entry.customType === "pi-init-role-recovery").data.status, "pending");
+    assert.equal(branch.filter((entry) => entry.customType === "pi-init-file-review").length, 0);
+  });
+});
+
+test("/large 在职责恢复持久化失败时仍扫描但不启动 AI", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      appendEntry(type) {
+        if (type === "pi-init-role-recovery") throw new Error("recovery entry failed");
+      },
+    });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await mkdir(path.join(directory, "rust"));
+    await writeFile(path.join(directory, "rust", "main.rs"), makeFile("rust"));
+    await emitExtensionEvent(harness, "session_compact", { reason: "manual" });
+
+    await harness.commands.get("large").handler("", harness.context);
+
+    assert.equal(harness.sentUserMessages.length, 0);
+    assert.match(harness.notifications.at(-1).message, /rust\/main\.rs · 501 行/);
+    assert.match(harness.notifications.at(-1).message, /职责恢复记录持久化失败/);
+  });
+});
+
+test("/large 不会在暂停中的工作流期间派发审阅", async () => {
+  await withTempDirectory(async (directory) => {
+    const workflow = createWorkflowState({
+      summary: "阻止主动大文件审阅",
+      reviewRequired: true,
+      tasks: [{ id: "task", task: "待确认", files: ["src"], acceptanceCriteria: ["已确认"] }],
+    });
+    const branch = [{ type: "custom", customType: "pi-init-workflow", data: workflow }];
+    const harness = createExtensionHarness(branch, { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+
+    await harness.commands.get("large").handler("", harness.context);
+
+    assert.equal(harness.sentUserMessages.length, 0);
+    assert.equal(harness.notifications.at(-1).level, "warning");
+    assert.match(harness.notifications.at(-1).message, /未结束的工作流/);
+    assert.equal(branch.findLast((entry) => entry.customType === "pi-init-workflow").data.status, "paused");
   });
 });
 

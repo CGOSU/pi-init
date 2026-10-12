@@ -22,6 +22,14 @@
 - 原因：任务消息可能在 `agent_start` 检查时尚未写入 branch，缺少执行证据会令活动状态持续显示等待；用户要求状态能反映真实执行，并简化底部进度展示，而不改变工作流业务进度和验收语义。
 - 实施状态：已按 `extensions/index.ts` 的当前 Agent run `message_start`、`extensions/workflow-start-evidence.ts` 的结构化身份校验及 `extensions/workflow-dispatch.ts` 的持久化启动路径实现；`test/workflow-start-lifecycle.test.js` 覆盖事件顺序、完整身份、幂等、branch 已存储、派发竞态和持久化失败。所选 106 项测试、最终生命周期 5 项、`npm run typecheck` 和 `git diff --check` 通过；这是宿主源码与测试 harness 验证，未验证真实 Pi TUI/E2E。
 
+### 2026-10-10：`/large` 显式启动审阅，默认自动流程保持不变
+
+- 决定：`/large` 是用户主动启动结构审阅的入口。命令先重扫；只有扫描完整且存在当前内容版本的未审候选时，才启动一次命令专属的 AI 审阅请求。无候选、同版本已审、扫描失败或扫描不完整时不启动 AI；Agent 忙碌或存在未结束/恢复异常的工作流时，不派发、不排队、不抢占任务。
+- 职责：局部审阅默认由 `developer-test` 完成；涉及跨模块职责、公共契约、共享状态或依赖方向时，先由 `docs-commit` 核对最新实现、直接调用方和测试，再交 `architect` 决策。`architect` 不读取源码，也不调用 `file_review` 登记结论；由适当的非 architect 角色在完整读取且 fingerprint 匹配后记录结论。
+- 约束：手动扫描本身不依赖职责恢复状态或当前角色，但只适用于用户调用 `/large`，不放开 Agent 工具守卫、不确认恢复门。AI 审阅仍遵守恢复门及 auto/confirm/manual 角色切换语义。仅提出“保留”或“建议拆分”，不自动修改、重构或运行测试，不创建例行工作流。既有自动扫描、提示注入和 `file_review` 行为保持不变。
+- 替代：本条替代前一条“Pi `/large` 只报告文件”的命令行为决策；实现完成前，当前命令仍只扫描并报告，不应描述为已支持主动审阅。
+- 原因：用户显式运行命令应能直接启动一次有边界的审阅，同时隔离自动默认流程与手动入口，避免改动既有自动审阅行为或将行数阈值变成自动整改指令。
+
 ### 2026-10-10：大文件手动扫描使用 Pi `/large` 命令
 
 - 决定：移除 npm 脚本 `check:large-files`，改由 Pi 命令 `/large` 手动重扫当前项目并报告超过 500 行的代码文件。
