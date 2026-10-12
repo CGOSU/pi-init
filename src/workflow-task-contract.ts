@@ -185,3 +185,4 @@ export function checkWorkflowTaskContractReadiness(
     }
   }
   return { ok: true, value: { ready: true } };
+}
