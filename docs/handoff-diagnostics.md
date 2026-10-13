@@ -37,6 +37,8 @@ Get-Content .pi/logs/handoff.jsonl -Tail 30 -Wait
 5. agent.continuation 区分内部续跑与非内部回合；handoff.message_consumed 仅代表消息被观察到，实际启动状态以持久状态记录为准。
 6. compaction.started、compaction.long_wait、compaction.settled 关联 operationId。只有 started 而无 settled 表示本次压缩尚未观察到收敛；通用 compaction.event 不等价于确认该操作成功。
 
+真实轮内切角新增 role.handoff_prepared、role.handoff_dispatched 事件；同一 handoffId 应从旧 run 交接到新的 run。role.handoff_dispatch_unknown 表示结果未知且不自动重放，role.handoff_discarded 表示身份已过期或中止，role.handoff_blocked_by_recovery 表示恢复门仍未确认。交接元数据还追加到 session 的 pi-init-role-handoff-state 记录；reload 不自动重放该记录。
+
 问题、范围、缺口、方向、澄清和错误正文只保存指纹，便于识别重复内容，不保存用户提示、模型回复、工具命令或结果正文。标识符和模型名称仍会记录；分享日志前请检查敏感信息。跨重启的指纹可比较，但重启会创建新 runtimeId。
 
 日志异步写入，不触发模型回合，也不进入会话上下文。待写记录最多 128 条，超过时丢弃，后续记录的 dropped 字段报告丢弃数。写入失败只提醒一次并停止后续收集，不阻止任务执行。正常 shutdown 等待已排队日志写入；进程强制退出可能丢失末尾记录。

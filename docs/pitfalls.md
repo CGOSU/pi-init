@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-10-13：轮内切模型不会刷新 before_agent_start 的职责系统段
+
+- 日期：2026-10-13。
+- 现象：同一 Agent run 内角色反复在 architect/docs-commit 之间切换，工作流仍停在同一重规划身份。切到 docs-commit 后，旧系统段依旧写“当前职责：架构设计”。
+- 已确认根因：extensions/runtime-routing-context.ts 只在 before_agent_start 写入当前职责；旧 switch_role 只更新真实角色/模型，没有结束当前 run，因此后续模型请求仍属于旧职责系统段。独立复现确认此同步缺陷；不能仅凭交接日志认定它是实际往返的唯一原因。
+- 修复：真实轮内切角保存交接并 terminate，等 agent_settled 后单次续跑，在新 run 中刷新职责段；同职责确认和闲置切角不额外启动回合，原任务身份不改写。过期或未知派发结果不重放，内部续跑不能提前结束原请求计时。
+- 验证：node --test test/role-handoff.test.js test/role-handoff-recovery.test.js 覆盖换角、提示刷新、replanning、计时和恢复失败；npm test 329 项通过，npm run typecheck 与差异检查通过。未验证真实 Pi/Provider/TUI/E2E。
+
 ### 2026-10-10：任务消息消费事件早于 branch 持久化，不能用 agent_start 或 message_end 的 branch 查询判定启动
 
 - 日期：2026-10-10；

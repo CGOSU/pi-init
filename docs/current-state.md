@@ -36,6 +36,7 @@
 - Git 收尾规则：任务完成并通过适用检查后，默认创建中文 commit，仅纳入明确归属于当前任务的改动；发现无法安全区分的既有/暂存改动时暂停并说明。push 仍须用户明确授权；协作子 Agent/worker 不自行提交或推送，由主控任务收尾。
 - 测试和断言遵循全局 Test Value Gate：默认不锁定纯文案、样式、布局、渲染结构、简单存在性和内部临时字段，优先保留权限安全、公共数据、状态流转、持久化、幂等、并发和历史缺陷回归；生成模板关键规则、工具元数据和状态语义仍按稳定契约保留。最近一次完整验证为 `npm test`（执行 `node --test`）300 项通过、0 项失败、0 项跳过；`npm run typecheck` 通过。真实 Pi TUI/E2E、真实 Provider 请求和历史长驻 Pi 实例尚未验证，详见 [`docs/session-log.md`](session-log.md)。
 - 公共 Skill 在架构师、开发测试工程师、文档与收尾工程师之间选择最少角色；明确对应某个职责的指令直接从对应角色开始，不明确归类、含糊或跨职责的指令默认从 `architect` 开始；简单只读咨询和低风险开发由适合的非 architect 角色直接完成，凡需仓库、代码、测试、文档或外部事实取证均由 `docs-commit` 收集并交接包含事实、来源、相关符号、调用关系、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只负责思考、分析、决策、规划和安排，不修改文件、不执行命令、不连接 MCP，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status`/`request-evidence`/`review-evidence` 外不调用工具；后两项只记录规划请求或审阅决定，不授权 architect 执行取证或代码。开发测试工程师负责自主实现/验证且不写项目 Markdown，文档与收尾工程师不写代码；仅遇到业务/契约冲突、权限/凭据、不可逆或外部状态、已有改动无法安全合并或真实验证阻塞时才暂停。
+- 活动 Agent 回合内 `switch_role` 的真实职责/模型变化使用 `terminate` 结束旧回合，保存绑定 session、上下文/角色代次和业务身份的交接记录；`agent_settled` 后仅派发一次 `pi-init-role-handoff`，在新的 `before_agent_start` 重建当前职责系统段。普通职责切换不触发压缩，同职责确认和闲置切角不额外启动回合；身份失效、保存失败或派发结果未知不自动重放。
 - `switch_role` 工具和 `/pi-init role` 读取项目默认配置及当前会话暂存覆盖，按 `auto`、`confirm` 或 `manual` 模式切换职责；`/pi-init mode` 和 `/pi-init config` 的运行时变更只影响当前会话，执行 `/pi-init save` 才持久化职责配置。`manual` 模式下原生 `/model` 切换不会被扩展回滚；只有活动角色已有显式映射且项目受信任时才写回该映射。使用会话默认模型的标准职责不会生成固定映射；内部 `/pi-init role` 触发的 `model_select` 不会写回旧角色，无活动角色或非受信任项目只提示不写。外部/普通 `session_compact`、reload/resume/fork/startup 恢复会写入 `pi-init-role-recovery` pending；当前角色自动交接的压缩由专属回调处理。操作绑定 operation、目标角色、session/branch 上下文代次及工作流身份，只有当前操作回调能确认；失败不自动触发任务回合，过期回调不续跑。branch 实际变化使旧 acknowledged 和内存角色确认失效，必须基于当前职责重新确认；manual 模式不能验证当前角色时指引用户执行 `/pi-init role <role>`。new 或空会话不额外上锁。
 - `before_agent_start` 通过 `sections.pi_init_runtime` 注入当前有效角色、Provider/模型/推理强度、恢复门和活动工作流摘要；职责已确认且无活动工作流时，简单无工具问答不调用 `task_workflow(status)` 或重复 `switch_role`。恢复 pending 且无活动工作流时允许无需工具或新证据的简单回答，但不自动解除恢复门；需要执行时仍先切换职责。该快速通道不做文本启发式分类、不自动切模型、不削弱 `tool_call` 守卫。
 - 自动模式把主动压缩移到任务交接边界：先持久化完成结果与 continuation，再按上下文使用率 50% 阈值判断；压缩完成前保留源角色，下一任务仍为 pending，完成后才切模型并派发。同角色任务也按阈值判断，普通 switch_role 不登记压缩。工作流、重规划和证据交接共用绑定操作 ID、源角色及 session/branch/业务身份的压缩控制器；只接受该操作自己的 onComplete/onError，通用 session_compact 不确认交接。失败或恢复时未确认收敛会保留结果并暂停，工作流显式 resume 重试，协作已确认尚未派发的压缩失败可由用户执行 `/pi-init coordination resume`，未知执行结果仍禁止重放。30 秒 watchdog 仍仅提醒，不取消、不解锁或重派发；shutdown/reload 清理瞬态锁并隔离旧回调。
@@ -63,6 +64,8 @@
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
+
+- 2026-10-13：修复轮内 switch_role 后职责系统段不更新：保存交接并 terminate，settled 后单次新职责续跑；同职责确认/闲置不增加回合，过期或未知结果不重放。全量测试 329 项、类型检查及差异检查通过；未验证真实 Pi/Provider/E2E，详见 [`docs/session-log.md`](session-log.md)。
 
 - 2026-10-12：修复自动角色切换/压缩后活动栏缺少 Agent 运行标记的问题；状态在 `agent_start` 至 `agent_settled` 期间显示通用运行标记，具体 Provider、工具、压缩和工作流状态优先。18 项定向测试、类型检查和差异检查通过；未进行真实 Pi TUI/E2E。详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-12：完成 architect 主导的证据协作、任务契约/澄清与 Pi `context` 请求视图；协调任务通过版本化证据就绪门，context 边界不确定时保留完整输入并诊断，原 session 不修改。`npm test` 300 项、`npm run typecheck`、`git diff --check` 通过；真实 Provider、Pi TUI/E2E、跨模型缓存和费用收益未验证。实现状态见 [`docs/plans/role-coordination.md`](plans/role-coordination.md)，验证记录见 [`docs/session-log.md`](session-log.md)。

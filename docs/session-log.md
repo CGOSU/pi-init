@@ -2,6 +2,16 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-13：修复轮内切角后的职责系统提示不同步
+
+- 现象与复现：用户日志中同一 Agent run 内 architect/docs-commit 往返六次，重规划未推进。独立 harness 确认 switch_role 更新了角色，但旧 before_agent_start 系统段仍写架构职责，只有新的 Agent run 才刷新；这不证明该缺陷是实际往返的唯一原因。
+- 完成：新增 extensions/role-handoff.ts；真实轮内角色或模型切换先保存绑定身份的交接记录，再用 terminate 结束旧回合，agent_settled 后仅派发一次新职责续跑。工作流/协调结果验收身份与计划保持不变；同职责确认、闲置切角不额外启动回合，也不触发压缩。
+- 恢复与观测：session/branch、角色或业务身份变化会丢弃旧交接；保存失败、派发结果未知或恢复门未确认不自动重放。新增 role.handoff_* 日志事件及 pi-init-role-handoff-state 会话记录，reload 不自动重放该记录。内部续跑沿用原外部请求计时，不在切角时提前报告完成。
+- 文档：同步 README、公共职责 Skill、当前状态、交接日志说明、设计决策和踩坑记录。
+- 验证：npm test 329 项通过、0 失败、0 跳过；npm run typecheck 通过；git diff --check 通过（存在 LF/CRLF 转换提示）。回归覆盖新职责提示、replanning 不重复派发、同职责/闲置行为、过期身份、失败不重放及计时连续性。
+- 未验证：未在用户实际 Pi/Provider 会话重放、未执行真实 Pi TUI/E2E；不宣称已消除所有角色往返或修复底层压缩无回调。
+- 授权：用户明确要求更新文档、commit 和 push；仅纳入本任务改动，保留既有 .gitignore 与 .pi-graph/。
+
 ### 2026-10-12：修复 Agent 活跃但活动栏看似空闲
 
 - 完成：活动栏在 `agent_start` 后、`agent_settled` 前显示通用 Agent 运行状态；Provider、工具、压缩和工作流状态仍优先显示。用户提供的消息排队现象说明界面空闲外观与宿主队列状态不一致；没有修改 Pi 原生 Working 控件。

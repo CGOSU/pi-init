@@ -48,6 +48,7 @@ import {
   type RunTimingEntryData,
 } from "./contracts.ts";
 import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
+import { createRoleHandoff } from "./role-handoff.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -88,6 +89,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     finishWorkflowBoundary: (ctx, identity, failed) => workflowDispatch.finishWorkflowBoundary(ctx, identity, failed),
     continueCoordinationBoundary: (ctx, identity, failed) => coordinationRuntime.continueCoordinationBoundary(ctx, identity, failed),
   });
+  const roleHandoff = createRoleHandoff(pi, runtimeState, { getActiveRole: roleRuntime.activeRoleFor, requireRecovery: roleRecovery.requireConfirmation });
   createFileReviewRuntime(pi, {
     getActiveRole: roleRuntime.activeRoleFor,
     canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
@@ -243,6 +245,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    runtimeState.agentRunActive = true;
     workflowTaskConsumptionRunActive = true;
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
@@ -257,19 +260,27 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", () => {
+    runtimeState.agentRunActive = false;
     workflowTaskConsumptionRunActive = false;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    runtimeState.agentRunActive = false;
     workflowTaskConsumptionRunActive = false;
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
+    if (await roleHandoff.schedule(ctx)) {
+      if (runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed) settleExternalRunTiming();
+      return;
+    }
     settleExternalRunTiming();
     roleRuntime.startPendingRoleCompaction(ctx);
     await coordinationRuntime.schedule(ctx);
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
+    runtimeState.agentRunActive = false;
+    roleHandoff.reset();
     workflowTaskConsumptionRunActive = false;
     runtimeState.roleContextGeneration += 1;
     runtimeState.roleTransitionGeneration += 1;
@@ -286,6 +297,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    runtimeState.agentRunActive = false;
+    roleHandoff.reset();
     try {
       workflowTaskConsumptionRunActive = false;
       runtimeState.runtimeDisposed = false;
@@ -330,6 +343,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_tree", async (event, ctx) => {
+    runtimeState.agentRunActive = false;
+    roleHandoff.reset();
     workflowTaskConsumptionRunActive = false;
     coordinationRuntime.restore(ctx);
     workflowDispatch.restoreWorkflowState(ctx);
@@ -533,6 +548,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptSnippet: "Switch model and reasoning level for a configured project role",
     promptGuidelines: [
       "Call switch_role when entering a responsibility selected by the project's role-routing Skill or crossing a role boundary; do not repeat it within the same responsibility.",
+      "A real role/model change during an active run ends that run; the runtime resumes unfinished work in a fresh run with the new role system prompt. Do not continue the old-role run after switching.",
       "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before resuming implementation, tests, docs, or shell work when the role is not already re-established.",
       "Use the role ID required by the current task; architect only thinks, analyzes, decides, plans, and arranges responsibilities, while other configured role IDs may execute their assigned work. Architect must not gather evidence, execute commands, or connect to MCP.",
       "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
@@ -556,17 +572,20 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "角色切换已取消。" }], details: {} };
       }
+      const source = roleHandoff.capture(ctx);
       const selection = await roleRuntime.automaticRole(params.role, ctx);
+      const transition = roleHandoff.finishSwitch(ctx, source, selection.result, signal?.aborted);
       const result = selection.result;
       const prefix = selection.requestedRole === result.role ? "已切换到" : `已按确认选择切换到 ${result.role}（建议为 ${selection.requestedRole}）`;
       return {
         content: [
           {
             type: "text",
-            text: `${prefix}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}`,
+            text: `${prefix}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${transition.terminate ? transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`,
           },
         ],
-        details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole },
+        details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole, ...transition },
+        terminate: transition.terminate,
       };
     },
   });

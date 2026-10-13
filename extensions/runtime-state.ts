@@ -52,6 +52,7 @@ export type RoleCompactionPhase = "idle" | "compacting";
 
 export type ExtensionRuntimeState = {
   traceHandoff?: (ctx: ExtensionContext, event: string, data?: Record<string, unknown>) => void;
+  agentRunActive: boolean;
   activeRole?: ActiveRole;
   sessionModeOverride?: RoleMode;
   sessionRoleConfigOverrides: Record<string, unknown>;
@@ -83,6 +84,7 @@ export type ExtensionRuntimeState = {
 
 export function createExtensionRuntimeState(): ExtensionRuntimeState {
   return {
+    agentRunActive: false,
     sessionRoleConfigOverrides: {},
     configuredRoleNames: [],
     controlCenterGuideShown: false,
