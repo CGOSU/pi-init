@@ -570,13 +570,15 @@ test("跨角色取证 handoff 在自动压缩完成后只派发一次", async ()
     });
 
     await emitExtensionEvent(harness, "agent_settled");
-    assert.equal(harness.context.model.id, docs.id);
+    assert.equal(harness.context.model.id, architect.id);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === COORDINATION_EVIDENCE_MESSAGE_TYPE).length, 0);
     assert.equal(latestCoordination(harness).handoff.phase, "dispatching");
     assert.equal(typeof completeCompaction, "function");
 
     completeCompaction();
-    await new Promise((resolve) => setImmediate(resolve));
+    const deadline = Date.now() + 2000;
+    while (latestCoordination(harness).handoff.phase !== "queued" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(harness.context.model.id, docs.id);
     assert.equal(latestCoordination(harness).handoff.phase, "queued");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === COORDINATION_EVIDENCE_MESSAGE_TYPE).length, 1);
   });
@@ -600,5 +602,33 @@ test("不同 session 的协作记录不恢复或续跑", async () => {
     assert.equal(second.sentMessages.length, 0);
     const status = await execute(second, { action: "status" });
     assert.equal(status.details.coordination.error.code, "COORDINATION_SESSION_MISMATCH");
+  });
+});
+
+test("证据审阅边界压缩失败停在源角色，用户恢复后才派发 architect", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = await makeHarness(directory);
+    await execute(harness, { action: "request-evidence", request: { questionId: "input-boundary", question: "检查输入", rationale: "核对", scope: ["src/input.ts"], completionCriteria: ["有证据"] } });
+    await emitExtensionEvent(harness, "agent_settled");
+    const identity = await startCurrentHandoff(harness, COORDINATION_EVIDENCE_MESSAGE_TYPE);
+    await execute(harness, { action: "report-evidence", coordinationIdentity: identity, report: reportFor(identity.requestId, { findingId: "fact-1", sourceVersion: "v1", statement: "已检查" }) });
+    harness.context.getContextUsage = () => ({ percent: 90 });
+    harness.context.compact = ({ onError }) => onError(new Error("review boundary failed"));
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.context.model.id, docs.id);
+    assert.equal(latestCoordination(harness).handoff.phase, "blocked");
+    assert.equal(latestCoordination(harness).handoff.failure.code, "COORDINATION_COMPACTION_FAILED");
+    const oldHandoffId = latestCoordination(harness).handoff.handoffId;
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.sentMessages.some(({ message }) => message.customType === COORDINATION_REVIEW_MESSAGE_TYPE), false);
+    harness.context.compact = ({ onComplete }) => onComplete();
+    await harness.commands.get("pi-init").handler("coordination resume", harness.context);
+    const deadline = Date.now() + 2000;
+    while (latestCoordination(harness).handoff.phase !== "queued" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(harness.context.model.id, architect.id);
+    assert.equal(latestCoordination(harness).handoff.phase, "queued");
+    assert.notEqual(latestCoordination(harness).handoff.handoffId, oldHandoffId);
+    assert.equal(harness.sentMessages.filter(({ message }) => message.customType === COORDINATION_REVIEW_MESSAGE_TYPE).length, 1);
+    await emitExtensionEvent(harness, "session_shutdown");
   });
 });

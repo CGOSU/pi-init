@@ -400,6 +400,12 @@ export function recoverWorkflowState(
     version: WORKFLOW_STATE_VERSION,
   };
   delete migrated.legacySourceVersion;
+  if (!migrated.handoff && migrated.continuation?.kind !== "review"
+    && migrated.continuation?.phase === "compacting" && migrated.status !== "paused") {
+    migrated.status = "paused";
+    migrated.pauseReason = "boundary-compaction-interrupted";
+    migrated.taskPauseReason = "任务边界压缩在恢复前未确认完成；结果已保留，核对后执行 /pi-init workflow resume。";
+  }
   const currentTask = migrated.currentTaskId
     ? migrated.tasks.find((task) => task.id === migrated.currentTaskId)
     : undefined;

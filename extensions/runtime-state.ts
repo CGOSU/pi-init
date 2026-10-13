@@ -30,6 +30,8 @@ export type ActiveRole = {
 };
 
 export type RoleCompactionContinuation =
+  | { kind: "workflow-boundary"; identity: WorkflowActionIdentity }
+  | { kind: "coordination-boundary"; identity: CoordinationHandoffIdentity }
   | { kind: "workflow-task"; taskId: string; identity: WorkflowHandoffIdentity }
   | { kind: "workflow-schedule"; identity: WorkflowActionIdentity }
   | { kind: "workflow-review"; identity: WorkflowActionIdentity }
@@ -49,6 +51,7 @@ export type PendingRoleCompaction = {
 export type RoleCompactionPhase = "idle" | "compacting";
 
 export type ExtensionRuntimeState = {
+  traceHandoff?: (ctx: ExtensionContext, event: string, data?: Record<string, unknown>) => void;
   activeRole?: ActiveRole;
   sessionModeOverride?: RoleMode;
   sessionRoleConfigOverrides: Record<string, unknown>;

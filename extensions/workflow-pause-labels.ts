@@ -6,6 +6,9 @@ export function workflowPauseReasonLabel(reason: string | undefined): string {
       return "任务执行结果未知；先核对可能的外部副作用";
     case "legacy-execution-outcome-unknown":
       return "旧任务执行结果未知；先核对可能的外部副作用";
+    case "boundary-compaction-failed":
+    case "boundary-compaction-interrupted":
+      return "任务边界压缩未完成；检查后执行 /pi-init workflow resume 重试";
     case "task-blocked":
       return "任务受阻；请查看阻塞原因";
     case "workflow-replan":

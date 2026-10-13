@@ -16,7 +16,6 @@ import {
   resolveRoleModel,
   roleLabel,
   roleModeLabel,
-  shouldCompactOnRoleSwitch,
   unwrapRoleResult,
 } from "../src/roles.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
@@ -48,6 +47,8 @@ export type RoleRuntimeDependencies = {
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
   sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
+  finishWorkflowBoundary: (ctx: ExtensionContext, identity: WorkflowActionIdentity, failed?: boolean) => Promise<void>;
+  continueCoordinationBoundary: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity, failed?: boolean) => Promise<void>;
 };
 
 export function workflowModeLabel(mode: WorkflowMode) {
@@ -305,8 +306,8 @@ export function createRoleRuntime(
     toRole: string,
   ): PendingRoleCompaction {
     const targetRole = activeRoleFor(ctx);
-    if (!targetRole || targetRole.role !== toRole) {
-      throw new Error(`无法为角色 ${toRole} 建立压缩交接：当前活动角色不匹配`);
+    if (!targetRole || targetRole.role !== fromRole) {
+      throw new Error(`无法为任务边界建立压缩交接：当前活动角色不是 ${fromRole}`);
     }
     return {
       fromRole,
@@ -390,21 +391,8 @@ export function createRoleRuntime(
     unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
     const mode = state.sessionModeOverride ?? config.mode;
     if (mode === "auto") {
-      const previousRole = activeRoleFor(ctx)?.role;
-      const compactAfterSwitch = shouldCompactOnRoleSwitch({
-        mode,
-        previousRole,
-        nextRole: normalizedRole,
-        contextUsage: ctx.getContextUsage(),
-      });
       const result = await applyRole(normalizedRole, ctx);
-      const transition = compactAfterSwitch && previousRole
-        ? { fromRole: previousRole, toRole: result.role }
-        : undefined;
-      if (transition) {
-        state.pendingRoleCompaction = createPendingRoleCompaction(ctx, transition.fromRole, transition.toRole);
-      }
-      return { mode, requestedRole: normalizedRole, result, transition };
+      return { mode, requestedRole: normalizedRole, result };
     }
     if (mode === "manual") {
       const result = currentRole(normalizedRole, ctx);

@@ -227,7 +227,9 @@ export function createWorkflowActions(
           await deps.dispatch.resumeLocalWorkflow(ctx);
           return;
         }
-        deps.report.persistWorkflowState(resumeWorkflow(state.workflowState), ctx);
+        const resumed = resumeWorkflow(state.workflowState);
+        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(resumed, ctx);
+        deps.report.persistWorkflowState(resumed, ctx);
         await deps.dispatch.scheduleWorkflow(ctx);
         return;
       }
@@ -544,6 +546,7 @@ export function createWorkflowActions(
           };
         }
         const next = resumeWorkflow(state.workflowState);
+        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(next, ctx);
         deps.report.persistWorkflowState(next, ctx);
         return { content: [{ type: "text", text: "工作流已恢复，下一任务将自动开始。" }], details: statusDetails(next), terminate: true };
       }

@@ -247,7 +247,7 @@ test("工作流允许未映射的标准角色并拒绝未启用的自定义角�
   });
 });
 
-test("角色切换压缩等待 agent 完全结束而不是回合结束", async () => {
+test("普通角色切换不再触发上下文压缩", async () => {
   const architectModel = { provider: "test-provider", id: "session-model" };
   const harness = createExtensionHarness([], {
     model: architectModel,
@@ -264,11 +264,11 @@ test("角色切换压缩等待 agent 完全结束而不是回合结束", async (
   await emitExtensionEvent(harness, "turn_end");
   assert.equal(compactCalls, 0);
   await emitExtensionEvent(harness, "agent_settled");
-  assert.equal(compactCalls, 1);
+  assert.equal(compactCalls, 0);
   assert.equal(harness.entries.length, 0);
 });
 
-test("无映射角色切换遇到 Pi 已完成的自动压缩时不重复压缩", async () => {
+test("Pi 自动压缩仍要求职责恢复，普通角色切换不自动确认压缩", async () => {
   const architectModel = { provider: "test-provider", id: "session-model" };
   const harness = createExtensionHarness([], {
     model: architectModel,
@@ -287,6 +287,8 @@ test("无映射角色切换遇到 Pi 已完成的自动压缩时不重复压缩"
   assert.equal(compactCalls, 0);
   assert.equal(harness.context.model.id, architectModel.id);
   assert.equal(harness.branch.at(-1).customType, "pi-init-role-recovery");
+  assert.equal(harness.branch.at(-1).data.status, "pending");
+  await switchRole.execute("restore-role", { role: "developer-test" }, undefined, undefined, harness.context);
   assert.equal(harness.branch.at(-1).data.status, "acknowledged");
 });
 

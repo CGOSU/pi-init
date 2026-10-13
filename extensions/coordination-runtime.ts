@@ -35,6 +35,7 @@ import {
   requireCoordinationResult,
   sameCoordinationIdentity as sameIdentity,
 } from "./coordination-runtime-protocol.ts";
+import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
 
 export type CoordinationRuntimeDependencies = {
   pi: ExtensionAPI;
@@ -47,6 +48,7 @@ export function createCoordinationRuntime(
   deps: CoordinationRuntimeDependencies,
 ) {
   let localScheduleInFlight = false;
+  let continuationDispatchInFlight = false;
   const statusView = createCoordinationStatus(state);
   const { requireCurrentIdentity } = createCoordinationHandoffValidator(
     () => state.coordinationRuntimeState,
@@ -57,6 +59,7 @@ export function createCoordinationRuntime(
     deps.pi.appendEntry(COORDINATION_ENTRY_TYPE, next);
     state.coordinationRuntimeState = next;
     state.coordinationRestoreError = undefined;
+    state.traceHandoff?.(ctx, "coordination.persisted");
     return next;
   }
 
@@ -89,9 +92,6 @@ export function createCoordinationRuntime(
     };
   }
 
-  function pendingRoleCompaction() {
-    return state.pendingRoleCompaction;
-  }
 
   function activeWorkflowIsLinked(coordination: CoordinationRuntimeState, workflow: WorkflowState) {
     const link = coordination.coordination.workflowLink;
@@ -196,12 +196,45 @@ export function createCoordinationRuntime(
     }
   }
 
+  async function continueCoordinationBoundary(ctx: ExtensionContext, identity: CoordinationHandoffIdentity, failed = false) {
+    const current = state.coordinationRuntimeState;
+    if (!current || !sameIdentity(handoffIdentity(current), identity) || current.handoff?.phase !== "dispatching") return;
+    if (failed) {
+      persist(withPhase(current, "blocked", { code: "COORDINATION_COMPACTION_FAILED", message: "协作任务边界压缩失败；角色尚未切换，未派发任务。检查后由用户执行 /pi-init coordination resume 重试边界。" }), ctx);
+      state.workflowDispatchInFlight = false;
+      return;
+    }
+    continuationDispatchInFlight = true;
+    state.workflowDispatchInFlight = true;
+    try {
+      const selection = await deps.roleRuntime.automaticRole(identity.role, ctx);
+      const latest = state.coordinationRuntimeState;
+      if (!latest || !sameIdentity(handoffIdentity(latest), identity) || latest.handoff?.phase !== "dispatching") return;
+      if (selection.result.role !== identity.role) {
+        blockUnknownDispatch(ctx, latest, `角色运行时返回 ${selection.result.role}，预期 ${identity.role}`);
+        ctx.ui.notify(`协作已暂停：当前角色不匹配 ${identity.role}，未派发证据任务。`, "warning");
+        return;
+      }
+      await sendCoordinationMessage(ctx, identity);
+    } catch (error) {
+      const latest = state.coordinationRuntimeState;
+      if (latest && sameIdentity(handoffIdentity(latest), identity)) {
+        blockUnknownDispatch(ctx, latest, `协作角色切换或派发准备失败：${textOf(error)}`);
+      }
+      ctx.ui.notify(`协作派发失败并已 fail-closed：${textOf(error)}`, "error");
+    } finally {
+      continuationDispatchInFlight = false;
+      state.workflowDispatchInFlight = false;
+    }
+  }
+
   async function schedule(ctx: ExtensionContext) {
+    state.traceHandoff?.(ctx, "coordination.schedule");
     const current = state.coordinationRuntimeState;
     if (!current || state.coordinationRestoreError || current.handoff?.phase !== "prepared") return;
     if (state.runtimeDisposed || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed
       || state.workflowDispatchInFlight || state.roleCompactionInFlight || state.pendingRoleCompaction
-      || localScheduleInFlight) return;
+      || localScheduleInFlight || !ctx.isIdle()) return;
     const workflow = state.workflowState;
     if (workflow && !["completed", "cancelled"].includes(workflow.status)) {
       if (!activeWorkflowIsLinked(current, workflow) || (workflow.status === "running" && workflow.currentTaskId)) return;
@@ -211,33 +244,43 @@ export function createCoordinationRuntime(
     const identity = handoffIdentity(current);
     try {
       if (!identity) return;
-      const dispatching = withPhase(current, "dispatching");
-      persist(dispatching, ctx);
-      const selection = await deps.roleRuntime.automaticRole(identity.role, ctx);
-      const latest = state.coordinationRuntimeState;
-      if (!latest || !sameIdentity(handoffIdentity(latest), identity) || latest.handoff?.phase !== "dispatching") return;
-      if (selection.result.role !== identity.role) {
-        blockUnknownDispatch(ctx, latest, `角色运行时返回 ${selection.result.role}，预期 ${identity.role}`);
-        ctx.ui.notify(`协作已暂停：当前角色不匹配 ${identity.role}，未派发证据任务。`, "warning");
-        return;
-      }
-      const pendingCompaction = pendingRoleCompaction();
-      if (selection.transition && pendingCompaction) {
-        pendingCompaction.continuation = { kind: "coordination-evidence", identity };
+      persist(withPhase(current, "dispatching"), ctx);
+      const fromRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
+      if (fromRole && shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) {
+        state.pendingRoleCompaction = deps.roleRuntime.createPendingRoleCompaction(ctx, fromRole, identity.role);
+        state.pendingRoleCompaction.continuation = { kind: "coordination-boundary", identity };
         deps.roleRuntime.startPendingRoleCompaction(ctx);
         return;
       }
-      await sendCoordinationMessage(ctx, identity);
+      await continueCoordinationBoundary(ctx, identity);
     } catch (error) {
       const latest = state.coordinationRuntimeState;
       if (identity && latest && sameIdentity(handoffIdentity(latest), identity)) {
-        blockUnknownDispatch(ctx, latest, `协作角色切换或派发准备失败：${textOf(error)}`);
+        blockUnknownDispatch(ctx, latest, `协作边界准备失败：${textOf(error)}`);
       }
       ctx.ui.notify(`协作派发失败并已 fail-closed：${textOf(error)}`, "error");
     } finally {
       localScheduleInFlight = false;
-      if (!state.roleCompactionInFlight && !state.pendingRoleCompaction) state.workflowDispatchInFlight = false;
+      if (!state.roleCompactionInFlight && !state.pendingRoleCompaction && !continuationDispatchInFlight) state.workflowDispatchInFlight = false;
     }
+  }
+
+  async function resumeBoundary(ctx: ExtensionContext) {
+    const current = state.coordinationRuntimeState;
+    if (!ctx.isProjectTrusted() || !ctx.isIdle() || state.roleCompactionInFlight || state.pendingRoleCompaction || state.workflowDispatchInFlight) {
+      throw coordinationError("COORDINATION_RESUME_BUSY", "恢复协作边界要求项目可信且 Agent 空闲；不得并发压缩或派发。");
+    }
+    if (state.coordinationRestoreError || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) {
+      throw coordinationError("COORDINATION_RESUME_RECOVERY_REQUIRED", "先检查恢复错误，并通过 /pi-init role <role> 明确恢复当前职责。");
+    }
+    const handoff = current?.handoff;
+    if (!current || current.sessionId !== getSessionId(ctx) || !handoff
+      || handoff.phase !== "blocked" || handoff.failure?.code !== "COORDINATION_COMPACTION_FAILED") {
+      throw coordinationError("COORDINATION_RESUME_NOT_SAFE", "只能重试已确认尚未派发的压缩失败；未知执行结果不得用此命令重放。");
+    }
+    const next: CoordinationRuntimeState = { ...current, recoveryGeneration: current.recoveryGeneration + 1, handoff: createHandoff(handoff.role, handoff.kind, handoff.requestId, handoff.reportId) };
+    persist(next, ctx);
+    await schedule(ctx);
   }
 
   function restore(ctx: ExtensionContext) {
@@ -515,6 +558,8 @@ export function createCoordinationRuntime(
   return {
     restore,
     schedule,
+    continueCoordinationBoundary,
+    resumeBoundary,
     sendCoordinationMessage,
     markCurrentHandoffStartedFromMessage,
     requestEvidence,

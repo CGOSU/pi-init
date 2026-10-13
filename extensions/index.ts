@@ -47,6 +47,8 @@ import {
   type ResolvedRoleConfig,
   type RunTimingEntryData,
 } from "./contracts.ts";
+import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
+
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
@@ -83,6 +85,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
     sendCoordinationMessage: (ctx, identity) => coordinationRuntime.sendCoordinationMessage(ctx, identity),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
+    finishWorkflowBoundary: (ctx, identity, failed) => workflowDispatch.finishWorkflowBoundary(ctx, identity, failed),
+    continueCoordinationBoundary: (ctx, identity, failed) => coordinationRuntime.continueCoordinationBoundary(ctx, identity, failed),
   });
   createFileReviewRuntime(pi, {
     getActiveRole: roleRuntime.activeRoleFor,
@@ -232,7 +236,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return { action: "continue" };
   });
 
-  pi.on("before_agent_start", (_event) => {
+  pi.on("before_agent_start", (_event, ctx) => {
+    runtimeState.traceHandoff?.(ctx, "agent.continuation", { internal: runtimeState.internalContinuationPending });
     runTimingDiagnostics.beforeAgentStart(runtimeState.internalContinuationPending);
     runtimeState.internalContinuationPending = false;
   });
@@ -359,7 +364,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "sync", "config", "save", "role", "mode", "workflow"];
+        const values = ["init", "advanced", "sync", "config", "save", "role", "mode", "workflow", "coordination"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -372,7 +377,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           ? ROLE_MODES
           : action === "workflow"
             ? ["status", "acknowledge", "resume", "retry", "cancel"]
-            : [];
+            : action === "coordination" ? ["resume"] : [];
       const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
       const matches = values.filter((value) => value.startsWith(partial));
       return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
@@ -393,11 +398,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         }
         if (action === "role") { await (await loadControlCenter()).switchRole(tokens[0], ctx); return; }
         if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
+        if (action === "coordination") {
+          if (tokens.length !== 1 || tokens[0] !== "resume") throw new Error("用法：/pi-init coordination resume");
+          await coordinationRuntime.resumeBoundary(ctx);
+          return;
+        }
         if (action === "workflow") {
           await workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));
           return;
         }
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|coordination] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");
       }
@@ -560,4 +570,5 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       };
     },
   });
+  createHandoffDiagnostics(pi, runtimeState);
 }

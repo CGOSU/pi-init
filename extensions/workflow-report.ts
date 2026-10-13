@@ -232,6 +232,7 @@ export function createWorkflowReport(
     deps.pi.appendEntry("pi-init-workflow", next);
     state.workflowState = next;
     state.workflowRestoreError = undefined;
+    state.traceHandoff?.(ctx, "workflow.persisted");
     updateWorkflowStatus(ctx);
     return next;
   }

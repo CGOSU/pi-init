@@ -138,6 +138,21 @@ function activityFor(
   activeTask: WorkflowTask | undefined,
   handoff: WorkflowHandoff | undefined,
 ): WorkflowStatusActivity {
+  if (state.status === "running" || state.status === "replanning") {
+    const transition = runtime.activeRoleCompaction?.transition ?? runtime.pendingRoleCompaction;
+    const continuation = transition?.continuation;
+    if (continuation?.kind === "workflow-boundary"
+      && state.continuation?.kind !== "review" && state.continuation?.phase === "compacting"
+      && transition?.contextGeneration === runtime.roleContextGeneration
+      && transition?.roleTransitionGeneration === runtime.roleTransitionGeneration
+      && continuation.identity.workflowId === state.workflowId
+      && continuation.identity.planVersion === state.planVersion
+      && continuation.identity.sessionId === state.sessionId
+      && continuation.identity.recoveryGeneration === state.recoveryGeneration) {
+      return "compacting";
+    }
+    if (state.continuation?.kind !== "review" && state.continuation?.phase === "compacting") return "compaction-stalled";
+  }
   if (state.status === "replanning") return "awaiting-replan";
   if (state.status === "paused") return "paused";
   if (state.status === "completed") return "completed";

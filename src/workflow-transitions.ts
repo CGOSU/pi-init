@@ -231,6 +231,16 @@ export function retryWorkflowTask(
 
 export function resumeWorkflow(state: WorkflowState, now = Date.now()): WorkflowState {
   if (!state || state.status !== "paused") throw new Error("工作流当前不在暂停状态");
+  if (["boundary-compaction-failed", "boundary-compaction-interrupted"].includes(state.pauseReason ?? "")) {
+    const result = cloneState(state, now);
+    if (!result.continuation || result.continuation.kind === "review") throw new Error("任务边界缺少可恢复的交接身份");
+    result.status = result.pendingRevision ? "replanning" : "running";
+    delete result.pauseReason;
+    delete result.taskPauseReason;
+    result.recoveryGeneration += 1;
+    result.continuation = { ...result.continuation, phase: "pending" };
+    return result;
+  }
   if (state.pauseReason !== "architecture-review") {
     throw new Error("任务因阻塞或未完成暂停，请先使用 retry 重试任务或重新规划");
   }

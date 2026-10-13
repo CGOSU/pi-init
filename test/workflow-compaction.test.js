@@ -60,7 +60,7 @@ function completeParams(harness, taskId, summary) {
   };
 }
 
-test("长工作流在同角色任务边界不主动压缩", async () => {
+test("同角色任务在上下文达到阈值时于任务边界压缩", async () => {
   await withTempDirectory(async (directory) => {
     await writeWorkflowConfig(directory, "local");
     const branch = [{
@@ -88,7 +88,7 @@ test("长工作流在同角色任务边界不主动压缩", async () => {
     assert.equal(first.details.status, "running");
 
     await emitExtensionEvent(harness, "agent_settled");
-    assert.equal(compactCalls, 0);
+    assert.equal(compactCalls, 1);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
 
     await emitExtensionEvent(harness, "agent_start");
@@ -97,7 +97,7 @@ test("长工作流在同角色任务边界不主动压缩", async () => {
     const finalActivity = harness.statusCalls.filter(({ name }) => name === "pi-init-activity").at(-1)?.text;
     assert.doesNotMatch(finalActivity ?? "", /\b\d+\/2\b/);
     await emitExtensionEvent(harness, "agent_settled");
-    assert.equal(compactCalls, 0);
+    assert.equal(compactCalls, 1);
   });
 });
 
@@ -162,6 +162,10 @@ test("无归属的 session_compact 信号不能确认压缩交接，只有本次
     await harness.completeCompaction();
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
     completeCompaction?.({});
+    const deadline = Date.now() + 2000;
+    while (harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length !== 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
   });
 });
