@@ -108,13 +108,16 @@ function parseEvidenceReferences(value: unknown, field: string): AcceptedEvidenc
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new CoordinationError("COORDINATION_FIELD_TYPE", `${field} 必须是数组`, field);
   const references = value.map((item, index) => parseEvidenceReference(item, `${field}[${index}]`));
-  const keys = new Set<string>();
+  // 仅按完全一致的 findingId/sourceId/sourceVersion 无损合并并保留首次出现顺序；类别、版本与缺口校验仍逐项执行。
+  const seen = new Set<string>();
+  const unique: AcceptedEvidenceReference[] = [];
   for (const reference of references) {
     const key = `${reference.findingId}\0${reference.sourceId}\0${reference.sourceVersion}`;
-    if (keys.has(key)) throw new CoordinationError("COORDINATION_EVIDENCE_DUPLICATE", `${field} 包含重复证据引用`, field);
-    keys.add(key);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(reference);
   }
-  return references;
+  return unique;
 }
 
 export function parseEvidenceRequest(input: EvidenceRequestInput, now: number, round = 1): CoordinationResult<EvidenceRequest> {
@@ -186,14 +189,35 @@ function normalizeFinding(input: unknown, index: number, questionId: string): Ev
   if (!Array.isArray(source.sources)) {
     throw new CoordinationError(source.sources === undefined ? "COORDINATION_FIELD_MISSING" : "COORDINATION_FIELD_TYPE", `${field}.sources 必须是数组`, `${field}.sources`);
   }
-  const sources = source.sources.map((item, sourceIndex) => parseSource(item, `${field}.sources[${sourceIndex}]`));
-  if (classification !== "unconfirmed" && sources.length === 0) {
+  const parsedSources = source.sources.map((item, sourceIndex) => parseSource(item, `${field}.sources[${sourceIndex}]`));
+  if (classification !== "unconfirmed" && parsedSources.length === 0) {
     throw new CoordinationError("COORDINATION_EVIDENCE_SOURCE_MISSING", `${field} 的 ${classification} 结论必须有来源`, `${field}.sources`);
   }
-  const sourceIds = new Set<string>();
-  for (const item of sources) {
-    if (sourceIds.has(item.id)) throw new CoordinationError("COORDINATION_EVIDENCE_SOURCE_DUPLICATE", `${field}.sources 包含重复 source id`, `${field}.sources`);
-    sourceIds.add(item.id);
+  // 单条 finding 内先完成全部字段校验，再按规范化后的 id/location/version 无损合并且保留首次出现顺序；
+  // 同 id 不同版本或同版本不同位置仍分别失败，非法重复项不因去重被跳过。
+  const sourcesById = new Map<string, EvidenceSource>();
+  const sources: EvidenceSource[] = [];
+  for (const [sourceIndex, item] of parsedSources.entries()) {
+    const previous = sourcesById.get(item.id);
+    if (!previous) {
+      sourcesById.set(item.id, item);
+      sources.push(item);
+      continue;
+    }
+    if (previous.version !== item.version) {
+      throw new CoordinationError(
+        "COORDINATION_SOURCE_VERSION_CONFLICT",
+        `${field} 的来源 ${item.id} 同时报告了版本 ${previous.version} 和 ${item.version}`,
+        `${field}.sources[${sourceIndex}].version`,
+      );
+    }
+    if (previous.location !== item.location) {
+      throw new CoordinationError(
+        "COORDINATION_SOURCE_LOCATION_CONFLICT",
+        `${field} 的来源 ${item.id} 在版本 ${item.version} 下报告了不同位置：${previous.location} / ${item.location}`,
+        `${field}.sources[${sourceIndex}].location`,
+      );
+    }
   }
   return {
     findingId: identifier(source.findingId, `${field}.findingId`),

@@ -184,7 +184,9 @@ sh ./scripts/install-launchers.sh
 ### 证据协作、开发契约与模型上下文
 
 - `request-evidence` / `review-evidence` 由 architect 创建问题并明确接受、补查或阻塞；受派发的 `docs-commit` 用 `report-evidence` 回报事实、推断或未知、来源及版本、检查范围、测试位置和实际执行验证。取证报告不会自动变成已接受证据；docs 取证阶段不例行 commit。
-- 协调任务的开发契约记录用户可观察结果、固定决策/不变量、非目标、有效证据引用、关键未决问题、普通工程自由度和验证要求。关键问题未解决或证据缺失/过期时不派发开发；已有普通无契约工作流保持兼容，不强制为简单任务常驻创建协调账本。开发者发现关键业务、权限或公共契约缺口时，以当前身份调用 `clarify` 保存问题、观察、已完成工作/验证与副作用状态，再由 architect 显式处置并生成新 revision；未知副作用不会自动重放。
+- 需要身份的协调动作优先回传运行时交接消息给出的 `coordinationHandoffId` 短引用（如 `task_workflow(action="report-evidence", coordinationHandoffId="...", report={...})`）；完整 `coordinationIdentity` 仍然兼容。短引用只能来自运行时当前签发的 handoff：不得自造、不得从任务文本补齐，省略身份也不会套用当前状态，显式提交已过期引用会失败而不回退。两者同时提供时必须指向同一 handoff，否则返回 `COORDINATION_HANDOFF_REFERENCE_CONFLICT`。成功提交后该 handoff 短引用即被消费，旧引用不能再次推进状态。
+- 报告输入校验失败（来源版本/位置冲突、重复 acceptedEvidence、未解决缺口等）且尚未持久化时，可在同一有效 handoff 内用同一身份修正后重提，不新建 attempt、不自动重试、不重新取证；权限失败、身份过期、恢复失败、持久化结果未知或已提交成功的动作不属于可直接重提。单条 finding 内 `id`/`location`/`version` 完全一致的来源会去重保留首次顺序，同 `id` 不同版本或位置仍拒绝；`acceptedEvidence` 只合并完全一致的三元引用，不会自动接受任何未明确引用的结论。
+- 协调任务的开发契约记录用户可观察结果、固定决策/不变量、非目标、有效证据引用、关键未决问题、普通工程自由度和验证要求。契约与协调状态是双向门控：携带契约必须有绑定当前 workflow revision 且已接受、未过期的协调证据，关键问题未解决或证据缺失/过期时不派发开发；没有协调证据的普通计划不要附带契约，普通低风险任务也不因协议被强制创建协调账本。开发者发现关键业务、权限或公共契约缺口时，以当前身份调用 `clarify` 保存问题、观察、已完成工作/验证与副作用状态，再由 architect 显式处置并生成新 revision；未知副作用不会自动重放。
 - 协调状态复用 Pi 当前 session 的 append/branch 和既有 local task executor；协调记录本身不是 architect 执行任务，不新增第二个 executor，也不占用开发任务额度。
 - 扩展通过公开 `context` 钩子为当前交接裁剪实际模型输入，保留原 session/branch 历史；Pi 管理的 system/tool state 不由扩展接管，不使用 `context_with_system`。边界可靠时保留当前角色工作窗口、真实工具调用与结果配对和新用户指令；交接、branch 或压缩映射不确定时保留完整输入并明确报告未裁剪。测试 harness 结果不代表已验证真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益。
 

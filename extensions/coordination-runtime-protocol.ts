@@ -1,4 +1,5 @@
 import { hydrateCoordinationState } from "../src/coordination.ts";
+import type { CoordinationFailure } from "../src/coordination-types.ts";
 import type {
   CoordinationHandoff,
   CoordinationHandoffIdentity,
@@ -24,15 +25,39 @@ export function coordinationFailure(code: string, message: string) {
   return { ok: false as const, code, message };
 }
 
-export function coordinationError(code: string, message: string) {
-  return Object.assign(new Error(`[PI-INIT_COORDINATION_ERROR] ${JSON.stringify({ code, message })}`), {
+export type CoordinationErrorDetails = {
+  field?: string;
+  retryable?: boolean;
+  nextAction?: string;
+};
+
+const REPORT_INPUT_RETRY_GUIDANCE =
+  "修正当前 report 输入后，在原 handoff 仍有效时用同一身份重提 task_workflow(action=report-evidence)，可传回当前 coordinationHandoffId 或完整 coordinationIdentity；不需要新建 attempt、重新取证或复用已消费身份。";
+
+/** 保留 domain 的 field/retryable 定位，避免只重组 code/message 丢失现场。 */
+export function coordinationError(code: string, message: string, extra: CoordinationErrorDetails = {}) {
+  const details = {
+    ok: false as const,
     code,
-    details: { ok: false, code, message },
+    message,
+    ...(extra.field ? { field: extra.field } : {}),
+    ...(extra.retryable ? { retryable: true } : {}),
+    ...(extra.nextAction ? { nextAction: extra.nextAction } : {}),
+  };
+  return Object.assign(new Error(`[PI-INIT_COORDINATION_ERROR] ${JSON.stringify(details)}`), {
+    code,
+    details,
   });
 }
 
-export function requireCoordinationResult<T>(result: { ok: true; value: T } | { ok: false; code: string; message: string }): T {
-  if (!result.ok) throw coordinationError(result.code, result.message);
+/** 仅当 domain 确认该失败属于尚未持久化的可重提输入错误时才附带就地重提指引。 */
+export function requireCoordinationResult<T>(result: { ok: true; value: T } | CoordinationFailure): T {
+  if (!result.ok) {
+    throw coordinationError(result.code, result.message, {
+      ...(result.field ? { field: result.field } : {}),
+      ...(result.retryable ? { retryable: true, nextAction: REPORT_INPUT_RETRY_GUIDANCE } : {}),
+    });
+  }
   return result.value;
 }
 

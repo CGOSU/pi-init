@@ -101,22 +101,53 @@ export function createWorkflowActions(
     acceptedEvidence: AcceptedEvidenceReference[],
     coordinated: boolean,
   ) {
+    // 任务契约与协调状态是双向门控：契约错误必须带上 taskId、前置条件和下一步指引，
+    // 且不得建议通过改环境权限或删除契约绕过。
+    const contractError = (code: string, taskId: string, message: string, extra: Record<string, unknown>) => {
+      const details = { ok: false, code, message, taskId, ...extra };
+      return Object.assign(new Error(`[PI-INIT_TASK_CONTRACT_ERROR] ${JSON.stringify(details)}`), { code, details });
+    };
     for (const task of tasks) {
       if (coordinated && !task.contract) {
-        throw Object.assign(new Error(`协调任务 ${task.id} 缺少结构化任务契约`), { code: "TASK_CONTRACT_REQUIRED" });
+        throw contractError(
+          "TASK_CONTRACT_REQUIRED",
+          task.id,
+          `协调任务 ${task.id} 缺少结构化任务契约`,
+          {
+            precondition: "协调计划中每个可执行任务必须携带版本 1 的结构化任务契约，且契约 evidence 必须指向当前已接受且未过期的协调证据",
+            nextAction: `由 architect 为任务 ${task.id} 补全契约（outcome、requirementSources、expectedBehavior、evidence、clarificationResolutions、fixedDecisions、invariants、nonGoals、blockingQuestions、engineeringDiscretion、verification），再使用当前身份重新提交 plan/replan；不得通过调整权限或接受门设置规避契约要求。`,
+          },
+        );
       }
       if (!coordinated && task.contract) {
-        throw Object.assign(new Error(`任务 ${task.id} 携带契约但当前没有关联的协调证据状态`), { code: "TASK_CONTRACT_REQUIRES_COORDINATION" });
+        throw contractError(
+          "TASK_CONTRACT_REQUIRES_COORDINATION",
+          task.id,
+          `任务 ${task.id} 携带契约但当前没有关联的协调证据状态`,
+          {
+            precondition: "任务契约必须与当前 workflow revision 已接受且未过期的协调证据同时存在",
+            nextAction: `先完成与该 workflow revision 绑定的取证链路（request-evidence → report-evidence → review-evidence 接受），再由 architect 使用当前身份重新提交携带契约的 plan/replan；不得通过调整权限、改写契约证据或绕过接受门来规避该前置条件。`,
+          },
+        );
       }
       if (!task.contract) continue;
       if (coordinated && task.contract.requirementSources.length === 0) {
-        throw Object.assign(new Error(`协调任务 ${task.id} 必须显式列出需求来源`), { code: "TASK_CONTRACT_REQUIREMENT_SOURCE_MISSING" });
+        throw contractError(
+          "TASK_CONTRACT_REQUIREMENT_SOURCE_MISSING",
+          task.id,
+          `协调任务 ${task.id} 必须显式列出需求来源`,
+          {
+            precondition: "协调任务的 requirementSources 必须至少列出一条已确认的需求来源",
+            nextAction: `由 architect 为任务 ${task.id} 补充 requirementSources 后重新提交 plan/replan。`,
+          },
+        );
       }
       const readiness = checkWorkflowTaskContractReadiness(task.contract, acceptedEvidence);
       if (!readiness.ok) {
-        throw Object.assign(new Error(`[PI-INIT_TASK_CONTRACT_ERROR] ${JSON.stringify(readiness)}`), {
-          code: readiness.code,
-          details: readiness,
+        throw contractError(readiness.code, task.id, readiness.message, {
+          ...(readiness.field ? { field: readiness.field } : {}),
+          precondition: "契约引用必须指向当前已接受且未过期的证据，且不得包含关键未决问题",
+          nextAction: `先按诊断修正任务 ${task.id} 的契约证据引用或未决问题，由 architect 使用当前身份重新提交 plan/replan。`,
         });
       }
     }
@@ -279,7 +310,7 @@ export function createWorkflowActions(
 
     switch (params.action) {
       case "request-evidence": {
-        const result = deps.coordination.requestEvidence(params.request, params.coordinationIdentity, ctx);
+        const result = deps.coordination.requestEvidence(params.request, params.coordinationIdentity, params.coordinationHandoffId, ctx);
         return {
           content: [{ type: "text", text: `已持久化取证请求 ${result.request.requestId}（${result.request.questionId}）；将自动派发 docs-commit。` }],
           details: { coordination: deps.coordination.status(), request: result.request },
@@ -287,7 +318,7 @@ export function createWorkflowActions(
         };
       }
       case "report-evidence": {
-        const result = deps.coordination.reportEvidence(params.report, params.coordinationIdentity, ctx);
+        const result = deps.coordination.reportEvidence(params.report, params.coordinationIdentity, params.coordinationHandoffId, ctx);
         return {
           content: [{ type: "text", text: `已持久化取证报告 ${result.report.reportId}；将自动返还 architect 审阅。` }],
           details: { coordination: deps.coordination.status(), report: result.report },
@@ -295,13 +326,13 @@ export function createWorkflowActions(
         };
       }
       case "review-evidence": {
-        const result = deps.coordination.reviewEvidence(params.review, params.coordinationIdentity, ctx);
+        const result = deps.coordination.reviewEvidence(params.review, params.coordinationIdentity, params.coordinationHandoffId, ctx);
         const decision = result.review?.decision;
         return {
           content: [{ type: "text", text: decision === "accept"
             ? "证据审阅已接受；关键证据就绪，可由 architect 规划开发任务。"
             : decision === "more"
-              ? "已记录补查缺口；architect 必须使用当前 handoff identity 创建明确回应缺口的新 request-evidence，期间不会派发开发任务。"
+              ? "已记录补查缺口；architect 必须使用当前 handoff 身份（coordinationHandoffId 或完整 coordinationIdentity）创建明确回应缺口的新 request-evidence，期间不会派发开发任务。"
               : "已记录证据阻塞决定；不会派发开发任务。" }],
           details: { coordination: deps.coordination.status(), review: result.review },
           terminate: decision === "block",

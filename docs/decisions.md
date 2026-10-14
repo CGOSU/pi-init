@@ -8,6 +8,20 @@
 
 ## 已确认决策
 
+### 2026-10-14：协调协议最小兼容简化，handoff 短引用替代机械身份回传
+
+- 决定：在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下，仅实施五项已确认的输入简化，不重做协议。
+- 决定（短引用）：新增公开可选输入 `coordinationHandoffId`，取值为运行时当前已签发且仍有效的 `handoffId`。完整 `coordinationIdentity` 继续兼容；两者只省略机械重复的身份字段，不改变完整身份语义。单独省略引用不得自动套用当前身份（无身份即拒绝）；显式给出已过期的旧引用必须失败，不得回退为当前身份；两种输入同时提供时必须指向同一 handoff，冲突即拒绝。
+- 决定（来源去重）：单条 finding 内只合并规范化后 `id`、`location`、`version` 三项完全相同的来源，保留首次出现顺序；同 `id` 但版本或位置不同的来源继续明确拒绝。不同 finding 引用同 `id` 同版本保持既有合法行为。
+- 决定（审阅引用去重）：`acceptedEvidence` 仅合并完全一致的 `findingId`/`sourceId`/`sourceVersion` 引用，不因去重自动接受全部 fact、推断、未确认项或冲突项；事实类别、来源版本匹配、未决问题和任务契约就绪门保持不变。
+- 决定（错误重提指引）：报告输入校验失败后，可在同一有效 handoff 内修正后重提，不创建新 attempt、不自动重试、不重新取证。结构化诊断保留 `field`、冲突定位与安全的下一步。权限失败、过期身份、状态恢复失败、持久化结果未知或已提交成功的动作不属于可直接重提，仍分别处理。
+- 决定（能力声明与前置条件）：统一 `architect` 的能力声明，明确 `request-evidence`/`review-evidence` 是纯协议规划与审阅动作，并说明 contract 与协调状态的双向前置条件。
+- 不变项：当前 session、协议版本、恢复代次、活动角色、handoff 阶段、请求/报告关联及 branch 匹配消息的校验；未知执行结果禁止自动重放、旧 attempt 拒绝和首次请求原有合法路径；持久化格式与版本、handoff/attempt 生成与恢复策略、内部消息 `details` 中的完整身份。短引用只是当前完整身份的引用，不是新的权限凭证。协调状态选择机制、`local` 串行执行、`workflowMode=auto` 的 2 任务阈值及任务数量软建议不变，普通任务不因协议被强制升级为正式协调。
+- 非目标：不新增配置、依赖、全局来源登记中心、第二套协调协议、自动接受模式或其他简化；不更新版本号、模型配置、已安装 package 或启动器。
+- 原因：机械身份回传、重复来源与重复引用增加了模型侧出错面，而现有职责分离、证据接受门和防重放语义应完整保留；用户已确认该最小兼容简化方案。
+- 实施状态：行为变更已实现并验证。`extensions/coordination-handoff-validation.ts` 新增 `assertHandoffReference`，只接受与当前运行时已签发 `handoffId` 精确匹配的非空文本，并在解析完整身份后复用同一条 session/协议版本/恢复代次/角色/kind/请求-报告关联/阶段/branch 守卫；`extensions/contracts.ts` 暴露可选 `coordinationHandoffId` 而完整 `coordinationIdentity` 保持不变；`src/coordination-validation.ts` 按规范化 `id`/`location`/`version` 无损合并同 finding 来源（版本/位置冲突分别为 `COORDINATION_SOURCE_VERSION_CONFLICT`、`COORDINATION_SOURCE_LOCATION_CONFLICT`），`acceptedEvidence` 只合并完全一致的三元引用；`src/coordination.ts` 与 `extensions/coordination-runtime-protocol.ts` 仅在尚未持久化的报告输入校验失败上标记 `retryable` 并给出就地重提指引；`extensions/architect-boundary.ts` 单一导出 `ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS`/`ARCHITECT_ALLOWED_ACTIONS_TEXT` 同时驱动运行时边界、工具 description/promptGuidelines 与角色交接指导，允许集合未放宽。验证与边界见 [`docs/session-log.md`](session-log.md)。
+- 未执行/边界：未在真实 Pi 会话验证 `coordinationHandoffId` 的模型遵循；运行中的旧 Pi 实例仍持有旧工具 schema/指导，需 reload 或重启后才生效。`scripts/pi-usage.*` 与 `test/pi-usage.test.js` 未改动，其基线失败与本条目无关。
+
 ### 2026-10-14：取消工作流任务数量 12 的硬限制，改为规划规模建议
 
 - 决定：移除初始规划任务数、单次重规划新增任务数以及重规划后累计任务数三处的 12 任务硬上限，并移除对外工具 schema 中对应的 `maxItems` 约束。12 不再作为校验上限，仅保留为规划规模的软建议。

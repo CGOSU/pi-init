@@ -18,7 +18,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { registerActivityStatusSources } from "./activity-status-registration.ts";
-import { createArchitectBoundary } from "./architect-boundary.ts";
+import { createArchitectBoundary, ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
 import { createCoordinationRuntime, type CoordinationRuntime } from "./coordination-runtime.ts";
@@ -493,12 +493,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "task_workflow",
     label: "Task Workflow",
     description:
-      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
+      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker. Task contracts are optional for ordinary plans; a task may carry contract only together with accepted, non-stale coordination evidence for the current workflow revision, so ordinary tasks keep a contract-free path.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",
       "Never assign architect as an executable task role; planning validation rejects it, retained architect tasks cannot be applied by replan, and old active plans with architect execution tasks are not recovered or dispatched.",
       "Architect 不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；architect 不得读取、搜索、浏览、运行 shell、编辑、写入或调用任何其他工具。需要最新实现、直接调用方或测试等结构化证据时，先 switch_role 到 docs-commit，由 docs-commit 核对 latest implementation, direct callers, and tests 后再交回 architect 规划。fresh structured evidence from docs-commit 必须由 docs-commit 提供，architect 不得自行完成低风险只读检查。",
+      `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；请求与审阅证据是纯协议动作，可传回当前 coordinationHandoffId 短引用，report-evidence 等执行动作仍被阻断。`,
+      "task contract 与协调状态是双向门控：携带 contract 的任务必须有绑定当前 workflow revision 且已接受、未过期的协调证据，contract.evidence 必须引用该账本；没有协调证据的普通计划不要附带 contract，否则会被拒。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
       "After completion, continue only to the next ready task; with a pending revision, wait for architect to replan. Only architect may call replan with the exact revisionId and valid retained task IDs; architect may call only plan, replan, or status on task_workflow.",

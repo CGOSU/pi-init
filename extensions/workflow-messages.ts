@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
 import {
   cloneState,
   getWorkflowTask,
@@ -18,7 +19,7 @@ import { textOf } from "./runtime-state.ts";
 
 const GENERIC_TASK_TOOL_GUIDANCE = "遵循公共 pi-init-role-routing Skill 的读写与安全边界；只修改当前任务允许范围。关键事实、业务契约或业务决策缺失时，developer-test 必须调用 task_workflow(action=\"clarify\") 并停止，不得猜测；普通可逆工程细节按工程自由度自主决定，实际验证并报告真实结果。";
 const ARCHITECT_RUNTIME_GUIDANCE =
-  "架构师不取证、不执行、不连接 MCP，只负责思考、决策、规划和安排；运行时仅可调用 switch_role，以及 task_workflow 的 plan、replan、status、request-evidence、review-evidence。需要最新事实时，先通过 request-evidence 交由 docs-commit 查证；architect 不得调用 clarify、complete、block、resume、retry 或 cancel。";
+  `架构师不取证、不执行、不连接 MCP，只负责思考、决策、规划和安排；运行时仅可调用 switch_role，以及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}（后两者是纯协议规划/审阅动作）。需要最新事实时，先通过 request-evidence 交由 docs-commit 查证；architect 不得调用 clarify、complete、block、resume、retry 或 cancel。`;
 
 function taskRoleGuidance(role: string) {
   if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;

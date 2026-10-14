@@ -126,6 +126,8 @@ const taskContractSchema = Type.Object({
     resolution: Type.String(),
     sideEffectDisposition: StringEnum(["none", "reconciled", "no-replay"] as const),
   }), { description: "重规划时逐项回应此前澄清；无澄清时为空数组" }),
+}, {
+  description: "结构化任务契约。只在存在与当前 workflow revision 绑定、已接受且未过期的协调证据时允许携带，evidence 必须引用该账本中的已接受来源；普通任务保持无 contract 路径，不因协调协议被强制升级。",
 });
 
 export const workflowTaskSchema = Type.Object({
@@ -221,6 +223,9 @@ export const taskWorkflowParameters = Type.Object({
     description: "工作流或架构协作动作",
   }),
   coordinationIdentity: Type.Optional(coordinationIdentitySchema),
+  coordinationHandoffId: Type.Optional(Type.String({
+    description: "当前运行时签发的协作 handoff 短引用；需要身份的协调动作（report-evidence、review-evidence、后续 request-evidence）可用它替代完整 coordinationIdentity。缺失引用不会套用当前状态；两种输入同时提供时必须指向同一 handoff。",
+  })),
   request: Type.Optional(evidenceRequestSchema),
   report: Type.Optional(evidenceReportSchema),
   review: Type.Optional(evidenceReviewSchema),

@@ -113,6 +113,8 @@ export type CoordinationFailure = {
   code: string;
   message: string;
   field?: string;
+  /** 仅表示同一有效身份下修正输入后可重提；权限、身份、恢复或未知持久化结果不得标记。 */
+  retryable?: boolean;
 };
 
 export type CoordinationResult<T> = { ok: true; value: T } | CoordinationFailure;

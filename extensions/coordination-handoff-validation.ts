@@ -20,15 +20,42 @@ export function createCoordinationHandoffValidator(
   getState: () => CoordinationRuntimeState | undefined,
   roleRuntime: RoleRuntime,
 ) {
+  /** 短引用只能精确匹配当前运行时签发的 handoffId；空值、错误类型、过期或缺失一律拒绝，不从历史猜身份。 */
+  function assertHandoffReference(current: CoordinationRuntimeState | undefined, handoffReference: unknown) {
+    if (typeof handoffReference !== "string" || !handoffReference.trim()) {
+      throw coordinationError("COORDINATION_HANDOFF_REFERENCE_INVALID", "coordinationHandoffId 必须是非空文本");
+    }
+    const expected = current ? coordinationHandoffIdentity(current) : undefined;
+    if (!expected || handoffReference.trim() !== expected.handoffId) {
+      throw coordinationError("COORDINATION_HANDOFF_IDENTITY_STALE", "coordinationHandoffId 不是当前运行时签发且仍有效的 handoff；旧引用不能推进状态");
+    }
+  }
+
   function requireCurrentIdentity(
     input: unknown,
     ctx: ExtensionContext,
     expectedRole: CoordinationRole,
     expectedKind: CoordinationHandoff["kind"],
     expectedReportId?: string,
+    handoffReference?: unknown,
   ): CoordinationHandoffIdentity {
     const current = getState();
     if (!current) throw coordinationError("COORDINATION_STATE_MISSING", "当前没有可验证的持久协作状态");
+    const currentHandoff = coordinationHandoffIdentity(current);
+    const hasReference = handoffReference !== undefined && handoffReference !== null;
+    const hasFullIdentity = isRecord(input) && Object.keys(input).length > 0;
+    if (!hasReference && !hasFullIdentity) {
+      throw coordinationError("COORDINATION_HANDOFF_IDENTITY_MISSING", "协作动作缺少 coordinationIdentity 或 coordinationHandoffId");
+    }
+    // 先校验短引用，再解析完整身份；两种输入同时存在时以完整身份参与原有守卫，但仍须与短引用指向同一 handoff。
+    if (hasReference) assertHandoffReference(current, handoffReference);
+    if (!hasFullIdentity) {
+      // 只给短引用（或空 identity 对象）时解析为当前完整身份，后续 session、角色、阶段、请求/报告、版本及 branch 守卫完全一致。
+      if (hasReference && currentHandoff) {
+        return requireCurrentIdentity(currentHandoff, ctx, expectedRole, expectedKind, expectedReportId, undefined);
+      }
+      throw coordinationError("COORDINATION_HANDOFF_IDENTITY_MISSING", "协作动作缺少 coordinationIdentity");
+    }
     if (!isRecord(input)) throw coordinationError("COORDINATION_HANDOFF_IDENTITY_MISSING", "协作动作缺少 coordinationIdentity");
     const identity: CoordinationHandoffIdentity = {
       coordinationId: nonEmptyText(input.coordinationId, "coordinationId"),
@@ -42,6 +69,9 @@ export function createCoordinationHandoffValidator(
       handoffId: nonEmptyText(input.handoffId, "handoffId"),
       ...(input.reportId === undefined ? {} : { reportId: nonEmptyText(input.reportId, "reportId") }),
     };
+    if (hasReference && identity.handoffId !== (handoffReference as string).trim()) {
+      throw coordinationError("COORDINATION_HANDOFF_REFERENCE_CONFLICT", "coordinationHandoffId 与 coordinationIdentity.handoffId 不一致；两种输入不得混用为不同 handoff");
+    }
     if (!Number.isSafeInteger(identity.coordinationVersion) || identity.coordinationVersion < 1
       || !Number.isSafeInteger(identity.recoveryGeneration) || identity.recoveryGeneration < 0) {
       throw coordinationError("COORDINATION_HANDOFF_IDENTITY_INVALID", "协作 identity 版本或恢复代次格式无效");
@@ -90,5 +120,5 @@ export function createCoordinationHandoffValidator(
     return expected;
   }
 
-  return { requireCurrentIdentity };
+  return { requireCurrentIdentity, assertHandoffReference };
 }

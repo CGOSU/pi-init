@@ -82,7 +82,14 @@ function workflowCoordinationReadiness(current: WorkflowState, state: ExtensionR
   }
   for (const task of unfinishedTasks) {
     if (!task.contract) {
-      return { ok: false as const, code: "TASK_CONTRACT_REQUIRED", message: `协调任务 ${task.id} 缺少结构化任务契约` };
+      return {
+        ok: false as const,
+        code: "TASK_CONTRACT_REQUIRED",
+        message: `协调任务 ${task.id} 缺少结构化任务契约`,
+        taskId: task.id,
+        precondition: "协调计划中每个可执行任务必须携带结构化任务契约，且契约 evidence 必须指向当前已接受且未过期的协调证据",
+        nextAction: `由 architect 为任务 ${task.id} 补全契约后，使用当前身份重新提交 plan/replan。`,
+      };
     }
     if (task.contract.requirementSources.length === 0) {
       return { ok: false as const, code: "TASK_CONTRACT_REQUIREMENT_SOURCE_MISSING", message: `协调任务 ${task.id} 缺少需求来源` };

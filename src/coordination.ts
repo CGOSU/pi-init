@@ -22,8 +22,8 @@ import {
 } from "./coordination-validation.ts";
 import { checkWorkflowTaskContractReadiness } from "./workflow-task-contract.ts";
 
-function failure<T>(code: string, message: string, field?: string): CoordinationResult<T> {
-  return { ok: false, code, message, ...(field ? { field } : {}) };
+function failure<T>(code: string, message: string, field?: string, retryable = false): CoordinationResult<T> {
+  return { ok: false, code, message, ...(field ? { field } : {}), ...(retryable ? { retryable: true } : {}) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -164,17 +164,19 @@ export function reportEvidence(
   const state = hydrated.value;
   const timeFailure = validNextTimestamp(now, state);
   if (timeFailure) return timeFailure;
-  if (!isRecord(input)) return failure("COORDINATION_INPUT_TYPE", "证据报告必须是对象");
-  if (input.requestId === undefined || input.requestId === null) return failure("COORDINATION_FIELD_MISSING", "证据报告 requestId 缺失", "requestId");
-  if (typeof input.requestId !== "string") return failure("COORDINATION_FIELD_TYPE", "证据报告 requestId 必须是文本", "requestId");
+  // 报告输入校验失败发生在任何持久化之前，且原请求仍为 pending；只有这些失败可标记 retryable，
+  // 已消费请求、时间戳倒退、状态恢复失败等仍按不可重提处理。
+  if (!isRecord(input)) return failure("COORDINATION_INPUT_TYPE", "证据报告必须是对象", undefined, true);
+  if (input.requestId === undefined || input.requestId === null) return failure("COORDINATION_FIELD_MISSING", "证据报告 requestId 缺失", "requestId", true);
+  if (typeof input.requestId !== "string") return failure("COORDINATION_FIELD_TYPE", "证据报告 requestId 必须是文本", "requestId", true);
   const request = state.requests.find((candidate) => candidate.requestId === input.requestId);
   if (!request || request.status !== "pending") {
     return failure("COORDINATION_REQUEST_NOT_PENDING", "证据报告没有匹配的待处理请求", "requestId");
   }
   const parsed = parseEvidenceReport(input, request, now);
-  if (!parsed.ok) return parsed;
+  if (!parsed.ok) return { ...parsed, retryable: true };
   if (state.reports.some((candidate) => candidate.reportId === parsed.value.reportId)) {
-    return failure("COORDINATION_REPORT_DUPLICATE", `reportId 已存在：${parsed.value.reportId}`, "reportId");
+    return failure("COORDINATION_REPORT_DUPLICATE", `reportId 已存在：${parsed.value.reportId}`, "reportId", true);
   }
   request.status = "reported";
   const requests = [...state.requests];

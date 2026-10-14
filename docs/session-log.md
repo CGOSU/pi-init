@@ -2,6 +2,16 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-14：协调协议最小兼容简化（handoff 短引用、去重与重提指引）
+
+- 需求与决策：用户确认在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下做五项输入简化；契约与边界见 [`docs/decisions.md`](decisions.md) 的 2026-10-14 条目，实现状态见 [`docs/plans/role-coordination.md`](plans/role-coordination.md) 的“简化补充”。
+- 完成：`extensions/coordination-handoff-validation.ts` 新增 `assertHandoffReference`，只接受与当前运行时已签发 `handoffId` 精确匹配的非空文本，并在解析后递归复用同一条 session/协议版本/恢复代次/角色/kind/请求-报告关联/阶段/branch 守卫（缺失身份 → `COORDINATION_HANDOFF_IDENTITY_MISSING`，空值/类型 → `COORDINATION_HANDOFF_REFERENCE_INVALID`，旧引用 → `..._IDENTITY_STALE`，两种输入冲突 → `COORDINATION_HANDOFF_REFERENCE_CONFLICT`）；`extensions/contracts.ts` 新增可选 `coordinationHandoffId` 并保持 `coordinationIdentity`，`extensions/workflow-actions.ts` 向 request/report/review 透传，request-evidence 的已阻塞路径须精确匹配当前引用才允许显式新 attempt。
+- 完成：`src/coordination-validation.ts` 单条 finding 内按规范化 `id`/`location`/`version` 无损合并来源并保留首次顺序，同 `id` 不同版本/位置分别为 `COORDINATION_SOURCE_VERSION_CONFLICT`/`COORDINATION_SOURCE_LOCATION_CONFLICT`；`acceptedEvidence` 只合并完全一致三元引用；`src/coordination-types.ts`、`src/coordination.ts` 与 `extensions/coordination-runtime-protocol.ts` 仅在尚未持久化的报告输入校验失败上标记 `retryable` 并给出就地重提指引；`extensions/architect-boundary.ts` 单一导出 `ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS`/`ARCHITECT_ALLOWED_ACTIONS_TEXT`，运行时 reason、工具 description/promptGuidelines 与角色交接指导共用同一份；`extensions/contracts.ts` 与 `extensions/index.ts` 显式说明 contract 与协调状态的双向门控。未重做状态机，未新增配置/依赖/第二套协议/自动接受，未改持久化格式与版本、handoff 生成/恢复策略、内部 `details` 完整身份及 `workflowMode=auto` 2 任务阈值。
+- 测试：新增 `test/coordination-simplification.test.js`（792 行，11 项）覆盖来源无损合并与冲突、acceptedEvidence 去重与未决缺口拒绝、报告输入就地重提及旧身份不能再消费、schema 暴露 `coordinationHandoffId`、短引用 report/review 闭环与冲突/缺失/过期拒绝、短引用驱动补查后完成带契约规划、来源版本过期阻断、角色/branch/阶段守卫与跨 session 短引用，并新增 `startEvidenceHandoff`/`completeEvidenceRound`/`startCurrentHandoff`/`runtimeReport` 复用夹具；`test/architect-boundary.test.js` 新增“单一定义同时驱动运行时边界与工具/契约指导”；`test/task-contract-runtime.test.js` 新增双向门控诊断断言。
+- 验证：`npm run typecheck` 通过（exit 0，无输出错误）；`node --test test/coordination-domain.test.js test/coordination-runtime.test.js test/task-contract-runtime.test.js test/coordination-simplification.test.js test/architect-boundary.test.js test/task-contract.test.js test/handoff-diagnostics.test.js test/role-context-view.test.js` 53 项通过、0 失败；`npm test` 351 项中 350 通过、1 失败；`git diff --check` exit 0（有 LF/CRLF 转换提示）。结构审阅已按最终内容版本登记：`extensions/coordination-runtime.ts`、`extensions/index.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-dispatch.ts`、`src/coordination-validation.ts`、`test/coordination-runtime.test.js`、`test/coordination-simplification.test.js` 均为保留；本任务同时完整读取并保留 `test/pi-usage.test.js`。
+- 基线失败与未执行：唯一失败 `test/pi-usage.test.js`「npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录」为基线既有问题——本次改动未触及 `scripts/` 与 `test/pi-usage.test.js`，单独运行该文件仍复现同一断言失败（`test/pi-usage.test.js:98`，`installLaunchers(...) !== true`），与前次记录一致，与本任务无关。未在真实 Pi 会话验证 `coordinationHandoffId` 的模型遵循，未执行 TUI/E2E、真实 Provider 调用或 MCP 验证；当前运行中的 Pi 实例仍持有本会话已加载的旧工具 schema/指导，须 reload 或重启后才能加载更新后的扩展，未声称安装副本已更新。
+- 环境与 Git：本仓库 Git 身份为 `CGOSU` / `dev@cgosu.com`；只暂存本工作流的代码、测试与必要文档，预存 `.pi-graph/` 不修改、不暂存，未 push、未部署、未更新版本号或模型配置。
+
 ### 2026-10-14：取消工作流任务数量 12 的硬限制，改为规划规模软建议
 
 - 需求：用户确认将 12 从硬限制改为建议，同时保留其余全部校验和现有串行状态机；契约与边界记录在 [`docs/decisions.md`](decisions.md) 的 2026-10-14 条目。

@@ -67,7 +67,19 @@
 - `extensions/workflow-actions.ts`、`extensions/workflow-dispatch.ts`、`src/workflow-task-contract.ts` 和 `src/workflow-clarification.ts` 实现契约就绪门与 `clarify` 回路。有效证据、关键未决项和来源版本变化会影响协调计划派发；普通无契约历史任务保持兼容。澄清以新 revision 显式处置，未知副作用不自动重放。
 - `extensions/role-context-view.ts` 通过 Pi 公开 `context` hook 选择实际请求消息；`extensions/workflow-messages.ts` 与 `extensions/coordination-messages.ts` 编译最小交接包。边界不可靠时返回完整输入及诊断；session 历史未删除或改写，不用 `context_with_system`，Pi system/tool state 不由扩展接管。
 - `test/coordination-runtime.test.js`、`test/task-contract-runtime.test.js`、`test/role-context-view.test.js` 等 harness 回归覆盖两轮取证、审阅后派发、澄清/replan、恢复/旧身份/重复回调、持久化失败、普通任务兼容和工具调用配对。最终 `npm test` 300 项通过、0 失败；`npm run typecheck` 与 `git diff --check` 通过。
+- 2026-10-14 最小兼容简化已实现（下述“简化补充”）。基础闭环的 `npm test`（300 项）为 2026-10-12 基线；本次简化后的验证结果以“简化补充”及 [`docs/session-log.md`](session-log.md) 为准。
 - 未执行真实 Provider、Pi TUI/E2E、跨模型 cache 或费用测量；不得把扩展 harness 测试描述为这些真实链路验证。
+
+## 简化补充（2026-10-14）
+
+在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下，仅做以下已确认的输入简化（实现状态与验证边界见 [`docs/decisions.md`](decisions.md) 与 [`docs/session-log.md`](session-log.md)）：
+
+- 需要身份的协调动作（`report-evidence`、`review-evidence`、后续 `request-evidence`）新增公开可选输入 `coordinationHandoffId`：只接受与当前运行时已签发 `handoffId` 精确匹配的非空文本，解析后仍复用同一条 session/协议版本/恢复代次/角色/kind/请求-报告关联/阶段/branch 守卫。完整 `coordinationIdentity` 继续兼容；省略身份不得套用当前状态，显式旧引用失败不回退，两种输入冲突返回 `COORDINATION_HANDOFF_REFERENCE_CONFLICT`。
+- 单条 finding 内 `id`/`location`/`version` 规范化后完全一致的来源无损合并并保留首次出现顺序，同 `id` 不同版本或位置分别拒绝；`acceptedEvidence` 只合并完全一致的三元引用，不自动接受 fact/推断/未确认项/冲突项。
+- 报告输入校验失败且尚未持久化时可在同一有效 handoff 内修正后重提；权限失败、过期身份、恢复失败、未知持久化结果和已成功提交不在此列。
+- `architect` 允许动作改为 `extensions/architect-boundary.ts` 单点导出，运行时边界、工具 description/promptGuidelines 与角色交接指导共用同一份，允许集合未放宽；contract 与协调状态的双向门控只做显式文档化。
+
+下表及后文描述协议权限与就绪门本身，仍适用于当前实现；身份回传按上节短引用规则执行。
 
 ## 协作协议
 
@@ -75,9 +87,9 @@
 
 | 动作 | 允许角色 | 输入/输出与持久状态 | 不允许的隐式行为 |
 |---|---|---|---|
-| `request-evidence` | architect | 问题 ID、待回答问题、理由、限定范围/排除范围、完成条件、引用的已知资料；持久为待处理请求及身份 | 不允许直接读文件/工具执行；不允许把推测写成事实或自动派开发 |
-| `report-evidence` | 当前请求指定的 docs-commit 执行角色 | 按问题 ID 返回发现、事实/推断/未知分类、来源位置及版本、检查范围、测试源码与实际运行结果、冲突/风险；保留报告历史 | 不允许替 architect 接受证据、决定方案或自动宣布“足够” |
-| `review-evidence` | architect | 针对当前报告明确接受、要求补查（指出 gap 并生成新 request）、或阻塞并说明决策缺口；只在接受所有关键项后标记 evidence ready | 不允许 architect 通过状态字段伪造缺失证据；接受结论不能消除其来源/版本 |
+| `request-evidence` | architect | 问题 ID、待回答问题、理由、限定范围/排除范围、完成条件、引用的已知资料；持久为待处理请求及身份（可按当前 `coordinationHandoffId` 短引用或完整身份提交） | 不允许直接读文件/工具执行；不允许把推测写成事实或自动派开发；短引用必须是运行时当前签发 |
+| `report-evidence` | 当前请求指定的 docs-commit 执行角色 | 按问题 ID 返回发现、事实/推断/未知分类、来源位置及版本、检查范围、测试源码与实际运行结果、冲突/风险；保留报告历史 | 不允许替 architect 接受证据、决定方案或自动宣布“足够”；不得自造短引用或用旧引用重复提交 |
+| `review-evidence` | architect | 针对当前报告明确接受、要求补查（指出 gap 并生成新 request）、或阻塞并说明决策缺口；只在接受所有关键项后标记 evidence ready | 不允许 architect 通过状态字段伪造缺失证据；接受结论不能消除其来源/版本；`acceptedEvidence` 去重不等于自动接受 |
 | `clarify` | 当前执行任务的 developer-test | 当前 task/attempt 身份、具体缺失问题、已核实事实、已改动/验证、潜在副作用；转交 architect 按事实取证、架构选择或用户决定分类 | 不允许继续实现关键未决规则；不允许清空已完成成果或自动重放不确定副作用 |
 
 协调记录只服务于请求、证据审阅、澄清和任务就绪；可与 workflow 计划通过稳定身份引用，但不能创建第二个可执行队列。协调记录应可按当前 branch 持久化和恢复，运行时临时锁/定时器仍只保存在内存。API `appendEntry/sendMessage` 返回 void，不应被描述为事务、磁盘 fsync 或 exactly-once。
@@ -123,6 +135,7 @@
 5. [x] 实现并测试 context 请求视图与工具调用配对保护（developer-test）。
 6. [x] 完成集成回归、类型检查和静态 diff 检查；完整读取受影响的 >500 行文件并审阅当前 fingerprint（developer-test）。
 7. [x] docs-commit 已对照真实实现更新 Skill、README、项目状态/会话记忆和本设计状态；EOF 空行已清理且暂存差异检查通过，仅将可明确归属本任务的内容创建为中文提交，保留既有 `/large` 改动未提交；不 push。
+8. [x] 2026-10-14 按已确认的最小兼容简化方案实现并验证“简化补充”（handoff 短引用、来源/接受引用去重、报告输入就地重提、architect 能力单点声明与 contract 前置条件文档化）；文档与 Git 收尾已同步，详见 [`docs/decisions.md`](decisions.md) 与 [`docs/session-log.md`](session-log.md)。
 
 必须覆盖：多轮取证仅补缺口；未知/冲突证据不就绪；architect 和 docs-commit 权限不越界；开发澄清、补证据和 revision 后继续；旧 identity/重复 callback 不推进；session 重载恢复准确阶段；持久化/派发失败不伪完成；普通旧任务兼容；context 过滤完整保留工具调用结果配对、当前任务工作窗口和后续用户指令；没有安全边界时回退完整输入。最终应运行项目全量 `npm test`、`npm run typecheck`、`git diff --check` 并报告真实结果；不调用真实 Provider/MCP，不声称已验证真实 TUI/E2E 或跨模型缓存。
 

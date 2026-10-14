@@ -136,15 +136,45 @@ async function prepareEvidence(harness) {
   return { evidence: { findingId: "caller-behavior-v2", sourceId: "src-input-callers", sourceVersion: "sha-v2" } };
 }
 
+test("无协调证据的普通计划携带契约时返回双向门控诊断", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = await makeHarness(directory);
+    const evidence = { findingId: "caller-behavior-v2", sourceId: "src-input-callers", sourceVersion: "sha-v2" };
+    await assert.rejects(execute(harness, taskParams(evidence)), (error) => {
+      assert.equal(error.code, "TASK_CONTRACT_REQUIRES_COORDINATION");
+      assert.equal(error.details.taskId, "input-implementation");
+      assert.match(error.details.precondition, /协调证据/);
+      assert.match(error.details.nextAction, /取证链路/);
+      assert.doesNotMatch(error.details.nextAction, /删除契约|环境权限/);
+      return true;
+    });
+    assert.equal(latestWorkflow(harness), undefined);
+    assert.equal(harness.branch.some((entry) => entry.type === "custom" && entry.customType === COORDINATION_ENTRY_TYPE), false);
+  });
+});
+
 test("协调 plan/replan 强制任务契约；clarify 退回 architect，补证据后仅以新 revision 继续", async () => {
   await withTempDirectory(async (directory) => {
     const harness = await makeHarness(directory);
     const { evidence } = await prepareEvidence(harness);
 
-    await assert.rejects(execute(harness, taskParams(evidence, null)), (error) => error.code === "TASK_CONTRACT_REQUIRED");
+    await assert.rejects(execute(harness, taskParams(evidence, null)), (error) => {
+      assert.equal(error.code, "TASK_CONTRACT_REQUIRED");
+      assert.equal(error.details.taskId, "input-implementation");
+      assert.match(error.details.precondition, /结构化任务契约/);
+      assert.match(error.details.nextAction, /重新提交 plan\/replan/);
+      assert.doesNotMatch(error.details.nextAction, /删除契约|环境权限/);
+      return true;
+    });
     await assert.rejects(execute(harness, taskParams(evidence, contract(evidence, {
       blockingQuestions: ["尚未确认失败后是否回滚副作用"],
-    }))), (error) => error.code === "TASK_CONTRACT_BLOCKING_QUESTIONS");
+    }))), (error) => {
+      assert.equal(error.code, "TASK_CONTRACT_BLOCKING_QUESTIONS");
+      assert.equal(error.details.taskId, "input-implementation");
+      assert.equal(error.details.field, "blockingQuestions");
+      assert.match(error.details.precondition, /未决问题/);
+      return true;
+    });
     assert.equal(latestWorkflow(harness), undefined, "缺契约或存在关键未决问题时不得保存/派发计划");
 
     await execute(harness, taskParams(evidence));
