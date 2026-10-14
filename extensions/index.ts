@@ -9,7 +9,7 @@ import {
   roleLabel,
 } from "../src/roles.ts";
 import {
-  WORKFLOW_MAX_TASKS,
+  WORKFLOW_RECOMMENDED_TASKS,
   isWorkflowActive,
   appendWorkflowReplanDirection,
   requestWorkflowReplan,
@@ -493,7 +493,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "task_workflow",
     label: "Task Workflow",
     description:
-      `Manage an architecture-led sequential task workflow with up to ${WORKFLOW_MAX_TASKS} tasks. The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
+      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",

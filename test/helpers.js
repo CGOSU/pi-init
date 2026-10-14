@@ -44,7 +44,6 @@ import {
 } from "../src/roles.ts";
 import {
   WORKFLOW_MAX_NUDGES,
-  WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,
@@ -528,7 +527,6 @@ export {
   shouldCompactOnRoleSwitch,
   shouldCompactAfterWorkflowTask,
   WORKFLOW_MAX_NUDGES,
-  WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,

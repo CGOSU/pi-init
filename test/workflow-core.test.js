@@ -38,7 +38,6 @@ const {
   shouldOrchestrateWorkflow,
   shouldCompactOnRoleSwitch,
   WORKFLOW_MAX_NUDGES,
-  WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,
@@ -313,7 +312,7 @@ test("工作流重规划在当前任务结束后才切换状态并拒绝过期�
   );
 });
 
-test("工作流重规划拒绝复用任务 ID、悬空依赖、循环和超出数量限制", () => {
+test("工作流重规划拒绝复用任务 ID、悬空依赖和循环", () => {
   const base = createWorkflowState({
     summary: "校验重规划",
     tasks: [
@@ -347,31 +346,6 @@ test("工作流重规划拒绝复用任务 ID、悬空依赖、循环和超出�
       { id: "cycle-b", task: "循环 B", files: ["src/b.js"], acceptanceCriteria: ["完成"], dependsOn: ["cycle-a"] },
     ]),
     /循环/,
-  );
-
-  const manyTasks = Array.from({ length: 12 }, (_, index) => ({
-    id: `task-${index}`,
-    task: `任务 ${index}`,
-    files: [`src/task-${index}.js`],
-    acceptanceCriteria: ["完成"],
-  }));
-  const manyState = createWorkflowState({ summary: "数量", tasks: manyTasks });
-  const manyCompleted = completeWorkflowTask(
-    markWorkflowTaskStarted(startWorkflowTask(manyState, "task-0"), "task-0"),
-    { taskId: "task-0", completionSummary: "完成", implementationRationale: "先完成首个任务以验证数量边界", verification: ["通过"] },
-  );
-  const manyRequested = requestWorkflowReplan(manyCompleted, { revisionId: "revision-count", direction: "增加任务" });
-  assert.throws(
-    () => applyWorkflowReplan(manyRequested, {
-      revisionId: "revision-count",
-      summary: "超出数量",
-      retainTaskIds: manyTasks.slice(1).map((task) => task.id),
-      tasks: [
-        { id: "extra-a", task: "额外 A", files: ["src/extra-a.js"], acceptanceCriteria: ["完成"] },
-        { id: "extra-b", task: "额外 B", files: ["src/extra-b.js"], acceptanceCriteria: ["完成"] },
-      ],
-    }),
-    /最多支持 12 个活动任务/,
   );
 });
 

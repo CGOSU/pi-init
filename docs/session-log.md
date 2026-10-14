@@ -2,6 +2,15 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-14：取消工作流任务数量 12 的硬限制，改为规划规模软建议
+
+- 需求：用户确认将 12 从硬限制改为建议，同时保留其余全部校验和现有串行状态机；契约与边界记录在 [`docs/decisions.md`](decisions.md) 的 2026-10-14 条目。
+- 完成：`src/workflow-model.ts` 将 `WORKFLOW_MAX_TASKS` 重命名为 `WORKFLOW_RECOMMENDED_TASKS`（值仍为 12，仅用于提示），删除 `validateWorkflowPlan` 的数量拒绝分支并保留非空校验；`src/workflow-replan.ts` 删除 `normalizeReplanPlan` 的单次新增数量拒绝和 `applyWorkflowReplan` 的合并后活动任务数量拒绝，保留 ID 唯一性、历史 ID 禁止复用、依赖存在且无环、角色边界等校验；`extensions/contracts.ts` 的 `tasks` 移除 `maxItems` 并保留 `minItems: 1`；`extensions/index.ts` 工具 description 和 `extensions/control-center.ts` 的 `on` 策略文案改为建议语义。未新增配置、依赖、调度器、嵌套工作流或自动续批，未改状态 schema 版本、local 串行执行和 `auto` 的 2 任务阈值。
+- 测试：删除旧超限拒绝用例与纯常量断言，5 个文件移除 `WORKFLOW_MAX_TASKS` 解构/再导出，新增 `test/workflow-task-count.test.js`（8 项）覆盖 16 任务初始规划与依赖顺序、工具 schema 无 `maxItems` 且空任务/缺字段仍被拒、经工具入口的 14 任务真实规划、单次新增 14 且总数 27 的重规划保留已完成摘要/实现原因/验证/依赖、无保留全量替换后仍超 12、16 任务状态 hydrate 恢复且版本与依赖不变、超 12 时空任务/重复 ID/悬空依赖/architect 执行角色仍被拒、超 12 时历史 ID 复用与缺失身份仍被拒。仅断言 schema 无 `maxItems` 与非法任务被拒，不锁定描述文案或建议常量数值。
+- 验证：`node --test test/workflow-core.test.js test/workflow-protocol.test.js test/workflow-task-count.test.js test/extension-lifecycle.test.js test/scaffold.test.js` 46 项通过、0 失败；`node --test test/workflow-task-count.test.js` 8 项通过、0 失败；`npm run typecheck` exit 0；`npm test` 338 项中 337 通过、1 失败；`git diff --check` exit 0。
+- 未验证与基线失败：唯一失败 `test/pi-usage.test.js`「npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录」为基线既有问题——用 `git stash` 移除本次全部改动后单独运行该文件仍失败，与本任务改动无关。未在真实 Pi 安装/reload、TUI/E2E 中验证，也未对异常规模任务测量串行执行时间与状态体积（移除 12 后不再有替代容量上限，风险已在决策条目披露）。
+- 环境与 Git：为运行测试执行了 `npm ci --ignore-scripts` 安装 gitignored 的 `node_modules`，`package.json` 与 `package-lock.json` 未修改；未 push，未自动更新已安装 package、模型配置或版本号。
+
 ### 2026-10-14：修复 POSIX 手动安装后的 pi-usage 缺失支持模块
 
 - 用户报告：macOS 上出现“大文件扫描不完整”提示（355 个路径无法扫描），并且 `pi-usage` 无法使用。

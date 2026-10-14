@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_MODES } from "../src/roles.ts";
 import type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
 export type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
-import { WORKFLOW_MAX_TASKS } from "../src/workflow.ts";
+import { WORKFLOW_RECOMMENDED_TASKS } from "../src/workflow.ts";
 
 export type RunTimingEntryData = {
   source?: unknown;
@@ -231,8 +231,7 @@ export const taskWorkflowParameters = Type.Object({
   retainTaskIds: Type.Optional(Type.Array(Type.String(), { description: "重规划时保留的未开始任务 ID" })),
   tasks: Type.Optional(Type.Array(workflowTaskSchema, {
     minItems: 1,
-    maxItems: WORKFLOW_MAX_TASKS,
-    description: `按顺序拆分的开发测试任务，最多 ${WORKFLOW_MAX_TASKS} 个`,
+    description: `按顺序拆分的开发测试任务，建议不超过 ${WORKFLOW_RECOMMENDED_TASKS} 个（软建议，不是硬上限）`,
   })),
   reviewRequired: Type.Optional(Type.Boolean({
     description: "只有用户一开始明确要求先审阅架构时才设为 true；默认 false 自动推进",

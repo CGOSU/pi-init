@@ -8,6 +8,15 @@
 
 ## 已确认决策
 
+### 2026-10-14：取消工作流任务数量 12 的硬限制，改为规划规模建议
+
+- 决定：移除初始规划任务数、单次重规划新增任务数以及重规划后累计任务数三处的 12 任务硬上限，并移除对外工具 schema 中对应的 `maxItems` 约束。12 不再作为校验上限，仅保留为规划规模的软建议。
+- 保留的不变量：任务列表仍须非空，字段有效性、任务 ID 唯一性、依赖存在且无环、历史 ID 禁止复用、角色边界、任务契约、身份与恢复校验全部不变；`local` 串行执行、`workflowMode=auto` 的不超过 2 个任务阈值及状态持久化格式保持不变。
+- 非目标：不新增配置项、依赖、调度器、嵌套工作流、自动跨阶段续接，也不以删除历史或取消工作流的方式规避任务数量问题；已确认任务及其真实结果、验证和依赖继续保留。
+- 风险边界：移除数量上限后不再有 12 任务这一容量保护；当合法计划或重规划规模异常增大时，串行执行时间与状态体积将由用户和规划质量自行约束，本次不引入替代性上限。
+- 实施状态：行为变更已实现并验证。`src/workflow-model.ts` 的 `WORKFLOW_MAX_TASKS` 重命名为仅用于提示的 `WORKFLOW_RECOMMENDED_TASKS`（值仍为 12），删除 `validateWorkflowPlan` 的数量拒绝分支；`src/workflow-replan.ts` 删除单次新增数量与合并后活动任务数量的拒绝分支；`extensions/contracts.ts` 移除 `tasks` 的 `maxItems` 并保留 `minItems: 1`；`extensions/index.ts` 工具 description 与 `extensions/control-center.ts` 的 `on` 策略文案改为建议语义。验证与验证边界见 [`docs/session-log.md`](session-log.md)。
+- 原因：用户明确要求将 12 从硬限制改为建议，同时保留其余全部校验与现有串行状态机。
+
 ### 2026-10-13：真实轮内切角通过新 Agent 回合刷新职责系统段
 
 - 决定：活动 Agent run 内角色、模型或推理级别实际改变时，switch_role 保存交接并返回 terminate；等旧 run 完全 settled 后，通过单次 pi-init-role-handoff 消息启动新 run，由正常 before_agent_start 重建当前职责系统段。

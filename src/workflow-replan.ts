@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  WORKFLOW_MAX_TASKS,
   assertAcyclic,
   assertWorkflowExecutionRoles,
   clonePlan,
@@ -39,10 +38,6 @@ function normalizeReplanPlan(input: unknown): NormalizedReplanPlan {
   if (!isUnknownArray(input.tasks) || input.tasks.length === 0) {
     throw new Error("工作流重规划至少需要一个新增任务");
   }
-  if (input.tasks.length > WORKFLOW_MAX_TASKS) {
-    throw new Error(`工作流重规划最多支持 ${WORKFLOW_MAX_TASKS} 个新增任务`);
-  }
-
   const tasks = input.tasks.map((task: unknown, index: number) => normalizeTask(task, index));
   const ids = new Set<string>();
   for (const task of tasks) {
@@ -268,9 +263,6 @@ export function applyWorkflowReplan(
     ...plan.tasks.map(cloneTask),
   ];
   assertWorkflowExecutionRoles(activeTasks, { unfinishedOnly: true });
-  if (activeTasks.length > WORKFLOW_MAX_TASKS) {
-    throw new Error(`应用重规划后工作流最多支持 ${WORKFLOW_MAX_TASKS} 个活动任务`);
-  }
   const activeIds = new Set<string>();
   for (const task of activeTasks) {
     if (activeIds.has(task.id)) throw new Error(`应用重规划后任务 id 重复：${task.id}`);

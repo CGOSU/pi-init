@@ -13,7 +13,7 @@
 - `architect` 只分析、决策、计划、审阅证据和安排职责；不得读写仓库、运行命令、连接 MCP、执行任务或收集证据。它可以发出纯协议动作 `request-evidence`、`review-evidence`、`clarify`，但不能调用执行结果/恢复类动作。
 - `docs-commit` 核实最新实现、直接调用方、测试及其他指定事实；报告事实、来源、检查范围、测试和未知项，不替 architect 做架构或业务决策。证据取证不自动触发例行 docs 更新或 Git commit。
 - `developer-test` 实现、验证任务，并在关键事实/业务规则/公共契约不清时提交带依据的澄清，不猜测后继续。普通、可逆的实现细节（如局部 helper 拆分）留给开发者决定。
-- 已有 `task_workflow` 仍是开发任务规划、依赖、完成、阻塞、重试及重规划的唯一业务权威。证据循环是协调阶段，不是 architect 可执行 task，不新增 executor，不挤占最多 12 个开发任务。
+- 已有 `task_workflow` 仍是开发任务规划、依赖、完成、阻塞、重试及重规划的唯一业务权威。证据循环是协调阶段，不是 architect 可执行 task，不新增 executor，也不挤占开发任务的规划额度（开发任务数量没有硬上限，12 仅为规划规模软建议）。
 - 普通微任务、旧 workflow entry 和未启用协调协议的历史任务继续兼容；不得要求简单任务常驻创建完整取证/协调状态。
 - 仅依赖已核实的公开 Pi Extension API；不接入未公开 AgentHarness/durable runtime API，不复活 retired `runtime` executor。
 - 使用 session append/branch 保存协议状态；写入/读取/恢复失败明确报告并 fail-closed。没有可靠派发/执行身份时不得自动重放可能有外部副作用的操作。

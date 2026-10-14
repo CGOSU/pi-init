@@ -38,7 +38,6 @@ const {
   shouldOrchestrateWorkflow,
   shouldCompactOnRoleSwitch,
   WORKFLOW_MAX_NUDGES,
-  WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,
@@ -174,7 +173,6 @@ test("架构工作流拒绝重复任务、未知依赖和循环依赖", () => {
     }),
     /循环/,
   );
-  assert.equal(WORKFLOW_MAX_TASKS, 12);
   assert.throws(
     () => cancelWorkflow({ status: "completed" }),
     /已经结束/,

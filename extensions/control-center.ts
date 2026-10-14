@@ -138,7 +138,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       {
         value: "on",
         label: config.workflowMode === "on" ? "保持始终编排" : "始终编排",
-        description: "所有合法的 1 至 12 个任务都创建并自动推进工作流",
+        description: "所有合法的任务计划都创建并自动推进工作流",
       },
       {
         value: "auto",

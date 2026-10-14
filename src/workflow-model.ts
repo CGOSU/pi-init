@@ -13,7 +13,8 @@ import type {
 
 export const WORKFLOW_STATE_VERSION = 5;
 export const WORKFLOW_IDENTITY_STATE_VERSION = 4;
-export const WORKFLOW_MAX_TASKS = 12;
+// 规划规模建议：仅用于工具描述和规划提示，不参与任务数量校验。
+export const WORKFLOW_RECOMMENDED_TASKS = 12;
 export const WORKFLOW_HANDOFF_PHASES = [
   "prepared",
   "waiting-role",
@@ -334,10 +335,6 @@ export function validateWorkflowPlan(input: unknown): WorkflowPlan {
   if (!isUnknownArray(rawTasks) || rawTasks.length === 0) {
     throw new Error("工作流至少需要一个任务");
   }
-  if (rawTasks.length > WORKFLOW_MAX_TASKS) {
-    throw new Error(`工作流最多支持 ${WORKFLOW_MAX_TASKS} 个任务`);
-  }
-
   const tasks = rawTasks.map((task, index) => normalizeTask(task, index));
   const ids = new Set();
   for (const task of tasks) {

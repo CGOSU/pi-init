@@ -43,7 +43,6 @@ const {
   shouldOrchestrateWorkflow,
   shouldCompactOnRoleSwitch,
   WORKFLOW_MAX_NUDGES,
-  WORKFLOW_MAX_TASKS,
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,
