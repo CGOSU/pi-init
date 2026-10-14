@@ -20,6 +20,7 @@ import {
 } from "../src/workflow.ts";
 import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
 import { validateWorkflowTaskStartMessage } from "./workflow-start-evidence.ts";
+import type { HydratedWorkflowState } from "../src/workflow-types.ts";
 import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery.ts";
 import {
   textOf,
@@ -38,6 +39,7 @@ export type WorkflowDispatchDependencies = {
   messages: WorkflowMessages;
   report: WorkflowReport;
   setCurrentContext: (ctx: ExtensionContext) => void;
+  onWorkflowRecovered?: (previous: HydratedWorkflowState, recovered: WorkflowState, ctx: ExtensionContext) => void;
 };
 
 function workflowIdentity(state: WorkflowState): WorkflowActionIdentity {
@@ -274,6 +276,9 @@ export function createWorkflowDispatch(
                 message: textOf(error),
               };
               ctx.ui.notify(`无法持久化工作流恢复状态：${textOf(error)}`, "error");
+            }
+            if (state.workflowState === recovered.value) {
+              deps.onWorkflowRecovered?.(restored.value, recovered.value, ctx);
             }
           }
         }

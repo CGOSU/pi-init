@@ -14,6 +14,15 @@
 
 ## 已知问题
 
+### 2026-10-14：恢复工作流必须同步同一计划的 evidence link 代次
+
+- 日期：2026-10-14。
+- 现象：扩展恢复后，活动 workflow 与已接受协调账本看起来都存在，但 `request-evidence` 返回 `COORDINATION_WORKFLOW_ACTIVE`，带契约重规划也无法通过协调门。只看旧 status 无法判断链接是缺失还是 generation 落后。
+- 根因：`recoverWorkflowState` 为隔离旧 callback 推进 workflow `recoveryGeneration`；若只持久化恢复后的 workflow 而不更新 coordination 内的 `workflowLink`，即使 workflowId 和 planVersion 未变，链接 generation 仍与活动 workflow 不匹配。重复加载可继续扩大代次差距。
+- 修复：workflow 恢复 entry 持久化成功后，仅对已有且 session/workflowId/planVersion 匹配的链接同步代次；链接代次不得领先于恢复前 workflow。缺失或身份不符不自动绑定，append 失败不更新内存链接并保持 fail-closed。`task_workflow status` 暴露链接 tuple，便于诊断。
+- 验证：`node --test test/task-contract-runtime.test.js test/coordination-runtime.test.js test/coordination-simplification.test.js test/workflow-handoff.test.js` 37 项通过，`npm run typecheck` 与 `git diff --check` 通过。
+- 边界：未检查用户当前运行 session 中原有 link 的具体值，也未真实 reload Pi；旧运行实例不会因源码修改自动修复，需加载新扩展后由恢复路径处理。不可用该机制为缺失或其他计划的证据 ledger 补造绑定。
+
 ### 2026-10-14：用 platform 参数模拟其他平台时，真实文件系统仍按宿主平台解析
 
 - 日期：2026-10-14。

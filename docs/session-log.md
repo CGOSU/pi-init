@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-14：修复工作流恢复后的协调证据链接代次失配
+
+- 根因：`recoverWorkflowState` 恢复活动 workflow 时推进 `recoveryGeneration`，但 session_start/session_tree 恢复链没有同步 `coordination.workflowLink`。同一 workflow/plan 的既有链接因此落后，`request-evidence` 将活动 workflow 视为未关联并拒绝；重规划的 contract 门也无法利用该协调账本。此前 status 未输出 workflowLink，不能据旧状态单独判断实际是缺失还是过期。
+- 修复：workflow 恢复状态成功 append 后通知协调 runtime。只在恢复前后 session、workflowId、planVersion 相同、generation 已递增且既有链接不领先于恢复前状态时同步链接；证据账本的 findings/reviews/handoff 原样保留，不自动接受证据。缺失或身份不符的 link 不自动补绑；协调 append 失败保留旧状态并 fail-closed。协调 status details 与模型可见摘要增加链接 tuple。
+- 验证：`node --test test/task-contract-runtime.test.js test/coordination-runtime.test.js test/coordination-simplification.test.js test/workflow-handoff.test.js`，37 项通过、0 失败；`npm run typecheck` 通过；`git diff --check` 通过。回归覆盖旧恢复代次落后时同一链接被同步、正常证据请求继续、审计/接受记录保持不变，以及缺失或指向其他 workflow 的链接继续被拒绝。
+- 未验证：未运行全量 `npm test`，未执行真实 Pi 安装/reload、TUI/E2E 或真实 Provider 请求；当前运行中 Pi 与 adapter 迁移 workflow 均未修改或重载。当前会话原始协调 entry 的旧 workflowLink tuple 未被检查；修复仅在新代码加载后执行恢复时生效。
+
 ### 2026-10-14：修复 pi-usage PATH 遮蔽用例的跨平台宿主断言
 
 - 背景：`npm test` 长期存在唯一失败 `test/pi-usage.test.js`「npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录」，之前只被标记为基线既有问题，未定位根因。

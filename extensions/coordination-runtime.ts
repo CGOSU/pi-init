@@ -14,7 +14,7 @@ import type {
   CoordinationRuntimeState,
 } from "../src/coordination-runtime-types.ts";
 import type { EvidenceReportInput, EvidenceRequestInput, EvidenceReviewInput } from "../src/coordination-types.ts";
-import type { WorkflowState } from "../src/workflow-types.ts";
+import type { HydratedWorkflowState, WorkflowState } from "../src/workflow-types.ts";
 import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import { compileCoordinationMessage } from "./coordination-messages.ts";
@@ -560,10 +560,7 @@ export function createCoordinationRuntime(
     return [...readiness.value.acceptedEvidence];
   }
 
-  function linkWorkflow(workflow: WorkflowState, ctx: ExtensionContext) {
-    const current = state.coordinationRuntimeState;
-    if (!current) return undefined;
-    const ready = assertReadyForWorkflow();
+  function persistWorkflowLink(current: CoordinationRuntimeState, workflow: WorkflowState, ctx: ExtensionContext) {
     const coordination = hydrateCoordinationState({
       ...current.coordination,
       workflowLink: {
@@ -575,7 +572,46 @@ export function createCoordinationRuntime(
     });
     const next = { ...current, coordination: requireCoordinationResult(coordination) };
     persist(next, ctx);
+    return next;
+  }
+
+  function linkWorkflow(workflow: WorkflowState, ctx: ExtensionContext) {
+    const current = state.coordinationRuntimeState;
+    if (!current) return undefined;
+    const ready = assertReadyForWorkflow();
+    const next = persistWorkflowLink(current, workflow, ctx);
     return { state: next, acceptedEvidence: ready };
+  }
+
+  function reconcileWorkflowRecovery(previous: HydratedWorkflowState, recovered: WorkflowState, ctx: ExtensionContext) {
+    const current = state.coordinationRuntimeState;
+    const link = current?.coordination.workflowLink;
+    if (!current || state.coordinationRestoreError || state.workflowRestoreError
+      || state.workflowState !== recovered || !link) return;
+
+    let sessionId: string;
+    try {
+      sessionId = getSessionId(ctx);
+    } catch {
+      return;
+    }
+    const previousGeneration = previous.recoveryGeneration;
+    const recoveredGeneration = recovered.recoveryGeneration;
+    if (typeof previousGeneration !== "number" || !Number.isSafeInteger(previousGeneration)
+      || !Number.isSafeInteger(recoveredGeneration)
+      || current.sessionId !== sessionId || previous.sessionId !== sessionId || recovered.sessionId !== sessionId
+      || previous.workflowId !== recovered.workflowId || previous.planVersion !== recovered.planVersion
+      || recoveredGeneration <= previousGeneration
+      || link.workflowId !== previous.workflowId || link.planVersion !== previous.planVersion
+      || link.recoveryGeneration > previousGeneration
+      || ["completed", "cancelled"].includes(recovered.status)) return;
+
+    // A matching prior link proves the same plan; recovery only rotates callback identity.
+    try {
+      persistWorkflowLink(current, recovered, ctx);
+    } catch (error) {
+      ctx.ui.notify(`恢复工作流后无法同步证据绑定；仍保持 fail-closed：${textOf(error)}`, "warning");
+    }
   }
 
   return {
@@ -595,6 +631,7 @@ export function createCoordinationRuntime(
     isRelevantForNewWorkflowPlan,
     isLinkedToWorkflow,
     linkWorkflow,
+    reconcileWorkflowRecovery,
   };
 }
 

@@ -42,6 +42,27 @@ async function makeHarness(directory) {
   return harness;
 }
 
+function restartHarness(branch, directory) {
+  return createExtensionHarness(branch, {
+    cwd: directory,
+    trusted: true,
+    model: architect,
+    availableModels: [architect, docs, developer],
+    sessionId: "task-contract-session",
+    isIdle: false,
+  });
+}
+
+async function switchToArchitect(harness) {
+  await harness.tools.find((tool) => tool.name === "switch_role").execute(
+    "recovery-test-architect",
+    { role: "architect" },
+    undefined,
+    undefined,
+    harness.context,
+  );
+}
+
 function execute(harness, params) {
   const tool = harness.tools.find((item) => item.name === "task_workflow");
   return tool.execute("task-contract-runtime-test", params, undefined, undefined, harness.context);
@@ -374,4 +395,90 @@ test("协调 plan/replan 强制任务契约；clarify 退回 architect，补证�
     assert.notEqual(newTaskIdentity.handoffId, oldTaskIdentity.handoffId);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
   });
+});
+
+test("恢复已绑定工作流时同步 evidence link 的 recoveryGeneration", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = await makeHarness(directory);
+    const { evidence } = await prepareEvidence(harness);
+    await execute(harness, taskParams(evidence));
+
+    const initialWorkflow = latestWorkflow(harness);
+    const previousCoordination = latestCoordination(harness).coordination;
+    const previousLink = previousCoordination.workflowLink;
+    assert.equal(previousLink.workflowId, initialWorkflow.workflowId);
+    assert.equal(previousLink.planVersion, initialWorkflow.planVersion);
+    assert.equal(previousLink.recoveryGeneration, initialWorkflow.recoveryGeneration);
+
+    // Simulate generations persisted by the old recovery path without link synchronization.
+    const workflowEntry = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow");
+    workflowEntry.data.recoveryGeneration += 3;
+    const previousWorkflow = latestWorkflow(harness);
+    assert.ok(previousWorkflow.recoveryGeneration > previousLink.recoveryGeneration);
+
+    const restarted = restartHarness(harness.branch, directory);
+    await emitExtensionEvent(restarted, "session_start");
+    await switchToArchitect(restarted);
+
+    const recoveredWorkflow = latestWorkflow(restarted);
+    const expectedLink = {
+      workflowId: recoveredWorkflow.workflowId,
+      planVersion: recoveredWorkflow.planVersion,
+      recoveryGeneration: recoveredWorkflow.recoveryGeneration,
+    };
+    assert.equal(recoveredWorkflow.recoveryGeneration, previousWorkflow.recoveryGeneration + 1);
+    assert.deepEqual(latestCoordination(restarted).coordination.workflowLink, expectedLink);
+    assert.deepEqual(latestCoordination(restarted).coordination.reviews, previousCoordination.reviews);
+    const status = await execute(restarted, { action: "status" });
+    assert.deepEqual(status.details.coordination.workflowLink, expectedLink);
+    assert.ok(status.content[0].text.includes(
+      `workflowLink ${expectedLink.workflowId}/${expectedLink.planVersion}/${expectedLink.recoveryGeneration}`,
+    ));
+
+    await execute(restarted, {
+      action: "request-evidence",
+      request: {
+        questionId: "post-recovery-binding",
+        question: "恢复后的工作流是否仍绑定同一证据账本？",
+        rationale: "确认恢复不会把活动工作流变成无法继续取证的孤立状态。",
+        scope: ["extensions/coordination-runtime.ts", "test/task-contract-runtime.test.js"],
+        completionCriteria: ["证据请求被当前绑定接受"],
+      },
+    });
+    assert.deepEqual(latestCoordination(restarted).coordination.workflowLink, expectedLink);
+  });
+});
+
+test("恢复不自动改绑缺失或指向其他工作流的 evidence link", async () => {
+  for (const linkMode of ["missing", "different-workflow"]) {
+    await withTempDirectory(async (directory) => {
+      const harness = await makeHarness(directory);
+      const { evidence } = await prepareEvidence(harness);
+      await execute(harness, taskParams(evidence));
+
+      const coordinationEntry = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === COORDINATION_ENTRY_TYPE);
+      if (linkMode === "missing") {
+        delete coordinationEntry.data.coordination.workflowLink;
+      } else {
+        coordinationEntry.data.coordination.workflowLink.workflowId = "another-workflow";
+      }
+      const restarted = restartHarness(harness.branch, directory);
+      await emitExtensionEvent(restarted, "session_start");
+      await switchToArchitect(restarted);
+
+      const recoveredLink = latestCoordination(restarted).coordination.workflowLink;
+      if (linkMode === "missing") assert.equal(recoveredLink, undefined);
+      else assert.equal(recoveredLink.workflowId, "another-workflow");
+      await assert.rejects(execute(restarted, {
+        action: "request-evidence",
+        request: {
+          questionId: "must-not-rebind",
+          question: "错误或缺失的 workflow link 是否可自动补齐？",
+          rationale: "缺少先前绑定证明时必须保持 fail-closed。",
+          scope: ["extensions/coordination-runtime.ts"],
+          completionCriteria: ["错误链接被拒绝"],
+        },
+      }), (error) => error.code === "COORDINATION_WORKFLOW_ACTIVE");
+    });
+  }
 });

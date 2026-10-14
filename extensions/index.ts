@@ -125,6 +125,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     setCurrentContext: (ctx) => {
       runtimeState.currentContext = ctx;
     },
+    onWorkflowRecovered: (previous, recovered, ctx) =>
+      coordinationRuntime.reconcileWorkflowRecovery(previous, recovered, ctx),
   });
   const workflowActions = createWorkflowActions(runtimeState, {
     roleRuntime,

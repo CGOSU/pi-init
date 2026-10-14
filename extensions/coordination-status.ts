@@ -10,6 +10,7 @@ export function createCoordinationStatus(state: ExtensionRuntimeState) {
       coordinationVersion: current.coordination.version,
       sessionId: current.sessionId,
       recoveryGeneration: current.recoveryGeneration,
+      workflowLink: current.coordination.workflowLink ? { ...current.coordination.workflowLink } : undefined,
       phase: current.coordination.phase,
       handoff: current.handoff ? {
         role: current.handoff.role,
@@ -47,7 +48,10 @@ export function createCoordinationStatus(state: ExtensionRuntimeState) {
     const value = status();
     if (!value) return "当前没有持久协作状态。";
     if ("error" in value && value.error) return `协作恢复失败（${value.error.code}）：${value.error.message}`;
-    return `协作 ${value.coordinationId} · ${value.phase} · 请求 ${value.requests.map((request) => `${request.questionId}:${request.status}`).join("，") || "无"} · handoff ${value.handoff?.phase ?? "无"}`;
+    const workflowLink = value.workflowLink
+      ? `${value.workflowLink.workflowId}/${value.workflowLink.planVersion}/${value.workflowLink.recoveryGeneration}`
+      : "无";
+    return `协作 ${value.coordinationId} · ${value.phase} · workflowLink ${workflowLink} · 请求 ${value.requests.map((request) => `${request.questionId}:${request.status}`).join("，") || "无"} · handoff ${value.handoff?.phase ?? "无"}`;
   }
 
   return { status, summary };

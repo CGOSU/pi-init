@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-10-14：工作流恢复只同步有既有身份依据的协调证据链接
+
+- 决定：恢复后的工作流状态成功持久化后，如协调账本已有链接，且链接与恢复前工作流属于同一 session、workflowId 和 planVersion、链接 recoveryGeneration 不领先于恢复前代次，则将链接代次同步到恢复后的 workflow recoveryGeneration。该操作只保留既有证据账本绑定，不接受或重写 finding/review。
+- 安全边界：工作流恢复代次必须递增；恢复前后的 session、workflowId 和 planVersion 必须相同；链接缺失、指向其他 workflow/plan、代次领先、工作流状态未成功持久化或同步 append 失败时不自动补绑/回退。失败保留旧链接并 fail-closed。coordination status 和模型可见摘要报告链接 tuple，支持区分缺失与不匹配。
+- 原因：`recoverWorkflowState` 推进 workflow recoveryGeneration 以隔离旧 callback，但原恢复路径未同步同计划的 `workflowLink`，导致后续取证把活动 workflow 误判为未关联；仅按可证明的既有 workflow/plan 关系续接，避免将任意 ready 证据账本绑定到活动计划。
+- 验证与剩余边界见 [`docs/session-log.md`](session-log.md)。未验证真实 Pi 安装、reload 或 TUI/E2E；不表示当前运行中的扩展状态已更新。
+
 ### 2026-10-14：协调协议最小兼容简化，handoff 短引用替代机械身份回传
 
 - 决定：在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下，仅实施五项已确认的输入简化，不重做协议。
