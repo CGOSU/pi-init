@@ -55,6 +55,11 @@ test("Pi package 更新时自动刷新 pi-usage 启动器", async () => {
 
 test("npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录", async () => {
   await withTempDirectory(async (directory) => {
+    // 跨平台文件系统行为必须在宿主平台上验证：用 POSIX 目录配 path.win32 会拼出宿主无法命中的路径，
+    // 使 findPiPath 直接返回 undefined，从而掩盖真正的 PATH 排除逻辑。
+    const platform = process.platform;
+    const commandName = platform === "win32" ? "pi.cmd" : "pi";
+    const pathSeparator = platform === "win32" ? ";" : ":";
     const packageDir = path.join(directory, "package");
     const sourceDir = path.join(packageDir, "scripts");
     const localBinDir = path.join(packageDir, "node_modules", ".bin");
@@ -92,14 +97,14 @@ test("npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录", 
         await readFile(path.join(supportSourceDir, supportFile), "utf8"),
       );
     }
-    await writeFile(path.join(localBinDir, "pi.cmd"), "local npm shim");
-    await writeFile(path.join(actualPiDir, "pi.cmd"), "actual Pi CLI");
+    await writeFile(path.join(localBinDir, commandName), "local npm shim");
+    await writeFile(path.join(actualPiDir, commandName), "actual Pi CLI");
 
     assert.equal(
       await installLaunchers({
         sourceDir,
-        platform: "win32",
-        pathValue: [localBinDir, actualPiDir].join(";"),
+        platform,
+        pathValue: [localBinDir, actualPiDir].join(pathSeparator),
       }),
       true,
     );

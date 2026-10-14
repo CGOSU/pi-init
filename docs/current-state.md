@@ -61,11 +61,12 @@
 ## 待处理
 
 - `extensions/index.ts` 与 `test/pi-usage.test.js` 的当前内容版本均已通过 `file_review` 完成结构审阅并建议保留。Pi 扩展运行时的队列状态尚未通过 reload 核实；本会话已加载的工具 schema/指导需 reload 或重启后才更新。
-- Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
+- Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；pi-usage 的 PATH 遮蔽用例已在 macOS 宿主验证，但未在真实 Windows 宿主执行。第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
 
-- 2026-10-14：协调协议最小兼容简化：新增可选输入 `coordinationHandoffId` 短引用（精确匹配当前 handoff，完整 `coordinationIdentity` 保持兼容），单条 finding 内完全一致的来源与完全一致的 `acceptedEvidence` 三元引用无损去重（冲突仍拒绝），报告输入校验失败可在同一有效 handoff 就地重提，architect 允许动作与 contract 前置条件改为单点声明。定向测试 53 项、`npm run typecheck` 与 `git diff --check` 通过；`npm test` 351 项中 1 项失败为基线既有问题（`test/pi-usage.test.js`，本次改动未触及该文件与 `scripts/`）。未验证真实 Pi 会话中的短引用遵循、TUI/E2E 与真实 Provider，详见 [`docs/session-log.md`](session-log.md)。
+- 2026-10-14：修复 pi-usage PATH 遮蔽用例的跨平台宿主断言：该用例在 macOS 上用 POSIX 真实目录配 `platform: "win32"`，`findPiPath` 用 `path.win32` 拼出的路径宿主无法命中，导致 `installLaunchers` 恒返回 `false`。现已改为 `platform: process.platform` 并随平台选择 shim 名与分隔符，只改测试、未改产品代码；突变验证确认用例仍有判别力。`npm test` 首次全绿 351 项、0 失败，`npm run typecheck` 与 `git diff --check` 通过。未在真实 Windows 宿主执行，详见 [`docs/session-log.md`](session-log.md)。
+- 2026-10-14：协调协议最小兼容简化：新增可选输入 `coordinationHandoffId` 短引用（精确匹配当前 handoff，完整 `coordinationIdentity` 保持兼容），单条 finding 内完全一致的来源与完全一致的 `acceptedEvidence` 三元引用无损去重（冲突仍拒绝），报告输入校验失败可在同一有效 handoff 就地重提，architect 允许动作与 contract 前置条件改为单点声明。定向测试 53 项、`npm run typecheck` 与 `git diff --check` 通过；`npm test` 当时 351 项中 1 项基线失败已由本条修复。未验证真实 Pi 会话中的短引用遵循、TUI/E2E 与真实 Provider，详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-14：取消工作流任务数量 12 的硬限制，改为仅用于提示的规划规模软建议：删除初始规划、单次重规划和重规划累计三处拒绝分支，移除工具 schema 的 `maxItems`，重命名常量为 `WORKFLOW_RECOMMENDED_TASKS`，其余非空/字段/ID/依赖/角色/契约/身份校验及 `auto` 2 任务阈值不变。定向测试 46 项、新增 `test/workflow-task-count.test.js` 8 项、`npm run typecheck` 与 `git diff --check` 通过；`npm test` 338 项中 1 项失败为基线既有问题（`test/pi-usage.test.js` 在 `git stash` 后仍失败）。未验证真实 Pi 安装/reload、TUI/E2E 及大规模任务性能，详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-14：修复 POSIX 手动安装脚本未复制 `pi-usage` 支持模块的问题：现委托共享 Node 安装器写入完整 CLI 文件集。定向安装器测试通过；扩展依赖缺失导致相关旧测试文件无法加载。macOS 扫描不完整提示的具体错误路径和原因仍待诊断，详见 [`docs/session-log.md`](session-log.md) 与 [`docs/pitfalls.md`](pitfalls.md)。
 - 2026-10-13：修复轮内 switch_role 后职责系统段不更新：保存交接并 terminate，settled 后单次新职责续跑；同职责确认/闲置不增加回合，过期或未知结果不重放。全量测试 329 项、类型检查及差异检查通过；未验证真实 Pi/Provider/E2E，详见 [`docs/session-log.md`](session-log.md)。

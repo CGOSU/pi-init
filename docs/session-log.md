@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-14：修复 pi-usage PATH 遮蔽用例的跨平台宿主断言
+
+- 背景：`npm test` 长期存在唯一失败 `test/pi-usage.test.js`「npm 生命周期 PATH 中的本地 pi shim 不会遮蔽实际 Pi 目录」，之前只被标记为基线既有问题，未定位根因。
+- 现象与根因：该用例在非 Windows 宿主（macOS）上创建真实 POSIX 临时目录，却传 `platform: "win32"` 与 `;` 分隔符。`findPiPath` 因此改用 `path.win32` 拼接候选路径（形如 `\var\folders\...\pi-bin\pi.cmd`），而 `existsSync` 按宿主 POSIX 语义解析，两个真实文件（本地 `node_modules/.bin/pi.cmd` 与实际 `pi-bin/pi.cmd`）都命不中，函数直接返回 `undefined`，`installLaunchers` 返回 `false`，`assert.equal(..., true)` 恒失败。生产路径未受影响：真实 `postinstall` 在宿主上 `platform` 与文件系统一致（已核实 `platform: "linux"` + POSIX 目录返回 `true` 且启动器落在实际 Pi 目录、npm shim 目录不被写入）。
+- 修复：只改测试，不改产品代码。该用例的 `platform` 改为 `process.platform`，shim 名（`pi.cmd`/`pi`）与 PATH 分隔符（`;`/`:`）随之选择，使「跳过本地 `.bin`」这一文件系统行为在宿主平台上真实执行，两个平台都保留覆盖。
+- 验证：突变测试确认该用例仍具判别力——临时注释掉 `install-launchers.js` 中的 `isInside` 排除分支后用例失败（13 通过/1 失败），还原后 `node --test test/pi-usage.test.js` 14 项全部通过；`npm test` 首次全绿 351 项通过、0 失败；`npm run typecheck` exit 0；`git diff --check` exit 0。产品代码未变（`git status` 仅 `test/pi-usage.test.js` 被修改）。
+- 未验证：未在真实 Windows 宿主执行该用例（本地为 macOS），Windows 分支的 shim 名与分隔符选择仍由 CI 矩阵覆盖。
+
 ### 2026-10-14：协调协议最小兼容简化（handoff 短引用、去重与重提指引）
 
 - 需求与决策：用户确认在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下做五项输入简化；契约与边界见 [`docs/decisions.md`](decisions.md) 的 2026-10-14 条目，实现状态见 [`docs/plans/role-coordination.md`](plans/role-coordination.md) 的“简化补充”。

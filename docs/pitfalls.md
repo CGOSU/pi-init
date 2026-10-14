@@ -14,6 +14,15 @@
 
 ## 已知问题
 
+### 2026-10-14：用 platform 参数模拟其他平台时，真实文件系统仍按宿主平台解析
+
+- 日期：2026-10-14。
+- 现象：`test/pi-usage.test.js` 的「本地 pi shim 不会遮蔽实际 Pi 目录」在 macOS 上长期失败（`installLaunchers(...) !== true`），之前只被当作基线噪音。
+- 根因：该用例创建的是真实 POSIX 临时目录，却在 macOS 上传 `platform: "win32"`。被调用方按 `platform` 选路径语义（`path.win32`，对 PATH 内容是正确的），于是拼出含反斜杠的 Windows 风格路径；但 `existsSync` 始终按宿主平台解析，两个真实文件都命不中，`findPiPath` 返回 `undefined`，用例断言必然失败。这类失败容易被误读为“产品逻辑坏了”，实际是测试自相矛盾。
+- 修复：库函数本身的“按目标平台选路径语义”设计不变；测试改为 `platform: process.platform`，并随平台选择 shim 名（`pi.cmd`/`pi`）与 PATH 分隔符（`;`/`:`），使文件系统行为在宿主平台真实执行。
+- 验证：临时禁用 `install-launchers.js` 的 `isInside` 排除分支后该用例失败（突变验证确认仍有判别力），还原后 `node --test test/pi-usage.test.js` 14 项通过、`npm test` 351 项全绿。
+- 其余边界：未在真实 Windows 宿主执行；若今后要为其他平台做真实文件系统测试，应使用对应平台的路径语法与运行环境，而不是在宿主上伪造 `platform` 参数。
+
 ### 2026-10-14：POSIX 手动安装 pi-usage 必须复制共享支持模块
 
 - 日期：2026-10-14。
