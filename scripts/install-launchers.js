@@ -121,8 +121,9 @@ export function installLaunchers({
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   try {
-    if (installLaunchers()) {
-      console.log("已自动更新 pi-usage 启动器。");
+    const targetDir = process.argv[2] === "--target-dir" ? process.argv[3] : undefined;
+    if (installLaunchers({ targetDir })) {
+      console.log(targetDir ? `已安装到：${targetDir}\n统计用量：pi-usage` : "已自动更新 pi-usage 启动器。");
     } else {
       console.warn("未找到 pi，跳过 pi-usage 启动器更新；可稍后手动运行安装脚本。");
     }

@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-14：修复 POSIX 手动安装后的 pi-usage 缺失支持模块
+
+- 用户报告：macOS 上出现“大文件扫描不完整”提示（355 个路径无法扫描），并且 `pi-usage` 无法使用。
+- 已确认：大文件提示来自项目目录扫描器报告的文件/目录错误；当前仅有错误计数，没有首批诊断中的错误码和路径，因此 macOS 上具体失败位置及其原因未确认。权限/TCC 或扫描目录范围只能作为待核对假设，详见 [`docs/pitfalls.md`](pitfalls.md)。
+- 修复：POSIX 安装脚本原先只复制 shell 启动器与 `pi-usage.js`，未复制该 CLI 导入的 `pi-usage-lib` 支持模块。现在脚本委托共享 Node 安装器，并传入已选定的目标目录，保证复制完整模块和嵌入版本信息。
+- 验证：`node --test test/pi-usage-installer.test.js` 1 项通过；`git diff --check` 通过。另尝试 `node --test test/pi-usage-installer.test.js test/pi-usage.test.js`，新测试通过，但 `test/pi-usage.test.js` 在执行前因缺少 peer dependency `@earendil-works/pi-coding-agent` 导入 `extensions/index.ts` 失败；Node 版本为 v26.11.1。
+- 未执行：未运行全量测试、未安装/更新实际 Pi 启动器、未 reload Pi；用户 macOS 扫描提示仍需首批错误码和路径才能精确诊断。未 push。
+
 ### 2026-10-13：修复轮内切角后的职责系统提示不同步
 
 - 现象与复现：用户日志中同一 Agent run 内 architect/docs-commit 往返六次，重规划未推进。独立 harness 确认 switch_role 更新了角色，但旧 before_agent_start 系统段仍写架构职责，只有新的 Agent run 才刷新；这不证明该缺陷是实际往返的唯一原因。

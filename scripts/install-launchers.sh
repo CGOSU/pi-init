@@ -18,6 +18,4 @@ if [ ! -w "$pi_dir" ]; then
   esac
 fi
 
-install -m 755 "$source_dir/pi-usage.sh" "$pi_dir/pi-usage"
-install -m 644 "$source_dir/pi-usage.js" "$pi_dir/pi-usage.js"
-printf '已安装到：%s\n统计用量：pi-usage\n' "$pi_dir"
+node "$source_dir/install-launchers.js" --target-dir "$pi_dir"
