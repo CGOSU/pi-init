@@ -312,8 +312,10 @@ export function parseEvidenceReview(
       }
     }
     if (decision === "accept") {
-      if (gaps.length > 0 || report.unresolved.length > 0) {
-        throw new CoordinationError("COORDINATION_EVIDENCE_INCOMPLETE", "存在未解决缺口，不能接受为证据充分", "gaps");
+      // report.unresolved 是取证者披露的未知项；architect 通过 review.gaps 明确标记哪些未知项阻塞本轮。
+      // accept 且 gaps 为空表示其余 unresolved 已被判断为非阻塞，不抹去报告中的原始披露。
+      if (gaps.length > 0) {
+        throw new CoordinationError("COORDINATION_EVIDENCE_INCOMPLETE", "审阅仍有阻塞缺口，不能接受为证据充分", "gaps");
       }
       if (acceptedEvidence.length === 0) {
         throw new CoordinationError("COORDINATION_ACCEPT_WITHOUT_FACTS", "必须明确接受至少一条来源可追溯的事实", "acceptedEvidence");

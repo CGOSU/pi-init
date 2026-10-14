@@ -339,6 +339,7 @@ export function createCoordinationRuntime(
           recoveryGeneration,
           handoff: {
             ...oldHandoff,
+            handoffId: randomUUID(),
             phase: "blocked",
             failure: {
               code: "COORDINATION_DISPATCH_OUTCOME_UNKNOWN",
@@ -356,7 +357,7 @@ export function createCoordinationRuntime(
         return;
       }
       if (recovered.handoff?.phase === "blocked" && recovered.handoff.kind === "evidence") {
-        ctx.ui.notify(`证据取证结果未知（${recovered.handoff.failure?.code}）；不会自动重放。架构师可核对后用 request-evidence 对同一 requestId 和 refreshReason 显式创建新 attempt。`, "warning");
+        ctx.ui.notify(`证据取证结果未知（${recovered.handoff.failure?.code}）；不会自动重放。架构师核对副作用后，可使用当前 coordinationHandoffId 或完整 coordinationIdentity，对同一请求内容及 refreshReason 显式创建新 attempt。`, "warning");
       }
       return;
     }
@@ -381,16 +382,23 @@ export function createCoordinationRuntime(
       return;
     }
     if (handoff.role === "architect" && handoff.kind === "review") {
-      requireCurrentIdentity(input, ctx, "architect", "review", handoff.reportId, handoffReference);
-      return;
+      return requireCurrentIdentity(input, ctx, "architect", "review", handoff.reportId, handoffReference);
     }
     if (handoff.phase === "blocked" && handoff.kind === "evidence" && handoff.role === "docs-commit") {
-      // 未知结果的证据 handoff 不可消费；只有精确匹配当前已阻塞 handoff 的短引用才与首次请求语义一致。
-      if (hasReference) {
-        assertHandoffReference(current, handoffReference);
-        return;
+      // 未知结果的 evidence handoff 不可消费；显式重试必须关联当前阻塞身份，但不要求模型抄写内部 requestId。
+      const suppliedIdentity = isRecord(input) && Object.keys(input).length > 0 ? input : undefined;
+      if (!hasReference && !suppliedIdentity) {
+        throw coordinationError("COORDINATION_HANDOFF_IDENTITY_MISSING", "重试未知结果必须提供当前 coordinationHandoffId 或完整 coordinationIdentity");
       }
-      return;
+      if (hasReference) assertHandoffReference(current, handoffReference);
+      const expected = handoffIdentity(current);
+      if (!expected || (suppliedIdentity && !sameIdentity(suppliedIdentity, expected))) {
+        throw coordinationError("COORDINATION_HANDOFF_IDENTITY_STALE", "未知结果重试身份与当前阻塞 handoff 不匹配");
+      }
+      if (current.sessionId !== getSessionId(ctx)) {
+        throw coordinationError("COORDINATION_SESSION_MISMATCH", "未知结果重试身份不属于当前 Pi session");
+      }
+      return undefined;
     }
     throw coordinationError("COORDINATION_REQUEST_IN_FLIGHT", "当前协作 handoff 尚未完成；不得创建并行取证请求");
   }
@@ -403,14 +411,17 @@ export function createCoordinationRuntime(
     const requestInput = isRecord(input) ? input : undefined;
     if (!requestInput) throw coordinationError("COORDINATION_REQUEST_INVALID_TYPE", "request 必须是对象");
     let current = state.coordinationRuntimeState;
+    let verifiedReviewIdentity: CoordinationHandoffIdentity | undefined;
     if (state.coordinationRestoreError) throw coordinationError(state.coordinationRestoreError.code, state.coordinationRestoreError.message);
     assertNoUnrelatedWorkflow(current);
 
     if (current) {
-      validateRequestIdentityIfNeeded(current, identity, ctx, handoffReference);
+      verifiedReviewIdentity = validateRequestIdentityIfNeeded(current, identity, ctx, handoffReference);
       const handoff = current.handoff;
       if (handoff?.phase === "blocked" && handoff.kind === "evidence") {
-        const requestedId = nonEmptyText(requestInput.requestId, "request.requestId");
+        const requestedId = requestInput.requestId === undefined
+          ? handoff.requestId
+          : nonEmptyText(requestInput.requestId, "request.requestId");
         const refreshReason = nonEmptyText(requestInput.refreshReason, "request.refreshReason");
         const pending = current.coordination.requests.find((item) => item.requestId === handoff.requestId && item.status === "pending");
         const textList = (value: unknown) => value === undefined
@@ -429,7 +440,7 @@ export function createCoordinationRuntime(
           && JSON.stringify(textList(requestInput.addressesGaps)) === JSON.stringify(pending.addressesGaps)
           && (requestInput.followUpOfRequestId ?? undefined) === pending.followUpOfRequestId);
         if (!pending || !requestMatches) {
-          throw coordinationError("COORDINATION_RETRY_REQUEST_MISMATCH", "未知结果只能用原 requestId 和未改变的请求内容显式创建新 attempt");
+          throw coordinationError("COORDINATION_RETRY_REQUEST_MISMATCH", "未知结果只能在核对当前 handoff 后，使用未改变的原请求内容显式创建新 attempt");
         }
         const activeWorkflow = state.workflowState;
         const keepWorkflowLink = Boolean(activeWorkflow && !["completed", "cancelled"].includes(activeWorkflow.status)
@@ -456,9 +467,17 @@ export function createCoordinationRuntime(
       };
     }
 
+    const currentReview = verifiedReviewIdentity && current.handoff?.reportId
+      ? current.coordination.reviews.find((review) => review.reportId === current.handoff?.reportId)
+      : undefined;
+    const normalizedRequestInput = verifiedReviewIdentity
+      && currentReview?.decision === "more"
+      && requestInput.followUpOfRequestId === undefined
+      ? { ...requestInput, followUpOfRequestId: verifiedReviewIdentity.requestId }
+      : requestInput;
     const recordedCoordination = requireCoordinationResult(recordEvidenceRequest(
       current.coordination,
-      requestInput as unknown as EvidenceRequestInput,
+      normalizedRequestInput as unknown as EvidenceRequestInput,
     ));
     const activeWorkflow = state.workflowState;
     const keepWorkflowLink = Boolean(activeWorkflow && !["completed", "cancelled"].includes(activeWorkflow.status)
@@ -494,10 +513,13 @@ export function createCoordinationRuntime(
     // 身份先于输入形状校验：过期或被消费的 handoff 一律返回身份错误，不得被标为可重提。
     const identity = requireCurrentIdentity(identityInput, ctx, "docs-commit", "evidence", undefined, handoffReference);
     if (!isRecord(input)) throw coordinationError("COORDINATION_REPORT_INVALID_TYPE", "report 必须是对象", reportInputRetry);
-    if (input.requestId !== identity.requestId) {
+    const normalizedInput = input.requestId === undefined
+      ? { ...input, requestId: identity.requestId }
+      : input;
+    if (normalizedInput.requestId !== identity.requestId) {
       throw coordinationError("COORDINATION_REQUEST_ID_MISMATCH", "报告 requestId 与当前派发身份不一致", reportInputRetry);
     }
-    const nextCoordination = requireCoordinationResult(recordEvidenceReport(current.coordination, input as unknown as EvidenceReportInput));
+    const nextCoordination = requireCoordinationResult(recordEvidenceReport(current.coordination, normalizedInput as unknown as EvidenceReportInput));
     const report = nextCoordination.reports.at(-1);
     if (!report || report.requestId !== identity.requestId) throw coordinationError("COORDINATION_REPORT_NOT_CREATED", "证据报告未能写入当前请求");
     const next: CoordinationRuntimeState = {

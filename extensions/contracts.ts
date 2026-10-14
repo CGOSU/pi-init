@@ -180,7 +180,7 @@ const evidenceSourceSchema = Type.Object({
 
 const evidenceReportSchema = Type.Object({
   reportId: Type.Optional(Type.String()),
-  requestId: Type.String(),
+  requestId: Type.Optional(Type.String({ description: "若省略，运行时仅在当前 evidence handoff 身份验证成功后补入对应请求 ID" })),
   findings: Type.Array(Type.Object({
     findingId: Type.String(),
     questionId: Type.String(),

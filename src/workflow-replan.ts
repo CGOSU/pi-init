@@ -14,7 +14,12 @@ import {
 import type { WorkflowPlanSummary, WorkflowResult, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 import { validateClarificationResolutionCoverage, type WorkflowTaskClarificationDraft } from "./workflow-clarification.ts";
 
-type WorkflowReplanRequest = { revisionId?: unknown; direction?: unknown };
+type WorkflowReplanRequest = {
+  revisionId?: unknown;
+  direction?: unknown;
+  kind?: "replan" | "nested";
+  childGoal?: unknown;
+};
 type WorkflowReplanApplication = {
   revisionId?: unknown;
   summary?: unknown;
@@ -63,7 +68,7 @@ function workflowHistoricalTaskIds(state: WorkflowState): Set<string> {
 
 export function requestWorkflowReplan(
   state: WorkflowState,
-  { revisionId, direction }: WorkflowReplanRequest = {},
+  { revisionId, direction, kind = "replan", childGoal }: WorkflowReplanRequest = {},
   now = Date.now(),
 ): WorkflowState {
   if (!state || state.status !== "running") {
@@ -79,11 +84,15 @@ export function requestWorkflowReplan(
     throw new Error(`工作流重规划 revisionId 重复：${id}`);
   }
 
+  const normalizedDirection = requireText(direction, "工作流重规划方向");
   const pendingRevision = {
     revisionId: id,
-    direction: requireText(direction, "工作流重规划方向"),
+    direction: normalizedDirection,
     requestedAt: now,
     ...(state.currentTaskId ? { requestedFromTaskId: state.currentTaskId } : {}),
+    ...(kind === "nested"
+      ? { kind, childGoal: requireText(childGoal ?? normalizedDirection, "嵌套工作流目标") }
+      : {}),
   };
   const result = cloneState(state, now);
   result.pendingRevision = pendingRevision;
@@ -95,6 +104,14 @@ export function requestWorkflowReplan(
     result.continuation = { kind: "replan", revisionId: id, phase: "pending", reason: "replan-requested" };
   }
   return result;
+}
+
+export function requestWorkflowNestedGoal(
+  state: WorkflowState,
+  { revisionId, direction }: Omit<WorkflowReplanRequest, "kind" | "childGoal"> = {},
+  now = Date.now(),
+): WorkflowState {
+  return requestWorkflowReplan(state, { revisionId, direction, kind: "nested", childGoal: direction }, now);
 }
 
 function mergeReplanDirections(directions: string[]): string {
@@ -112,6 +129,9 @@ export function appendWorkflowReplanDirection(state: WorkflowState, direction: u
   if (!pendingRevision) throw new Error("工作流没有待处理的重规划请求");
   const merged = mergeReplanDirections([pendingRevision.direction, text]);
   pendingRevision.direction = merged;
+  if (pendingRevision.kind === "nested") {
+    pendingRevision.childGoal = mergeReplanDirections([pendingRevision.childGoal ?? pendingRevision.direction, text]);
+  }
   if (result.status === "replanning") {
     result.recoveryGeneration += 1;
     result.continuation = {
@@ -127,6 +147,7 @@ export function appendWorkflowReplanDirection(state: WorkflowState, direction: u
   );
   if (!revision) throw new Error("工作流重规划 revisionId 已应用或不存在");
   revision.direction = merged;
+  if (pendingRevision.kind === "nested") revision.childGoal = pendingRevision.childGoal;
   return result;
 }
 
@@ -217,6 +238,9 @@ export function applyWorkflowReplan(
 
   const id = normalizeRevisionId(revisionId, "工作流重规划的 revisionId");
   const pendingRevision = state.pendingRevision;
+  if (pendingRevision?.kind === "nested") {
+    throw Object.assign(new Error("嵌套目标必须创建子工作流，不能覆盖父计划"), { code: "WORKFLOW_NESTED_REPLAN_FORBIDDEN" });
+  }
   if (!pendingRevision || pendingRevision.revisionId !== id) {
     throw new Error(`工作流重规划 revisionId 已过期或不匹配：${id}`);
   }

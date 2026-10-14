@@ -14,6 +14,17 @@
 
 ## 已知问题
 
+### 2026-10-15：嵌套子工作流会失效的父层身份与恢复后仍可消费的短引用
+
+- 日期：2026-10-15。
+- 现象一：新增嵌套子工作流后，子层完成时若不先断言父层已到达安全任务边界，父层仍可能带 `currentTaskId`/`handoff` 被快照，恢复后会得到一个“有进行中任务但没有活动交接”的不可调度状态；同时直接改父计划会丢失已完成任务与进度。
+- 根因一：`replan` 名义上可以修改任意 `pendingRevision`，但嵌套目标语义是“新子状态”，不能复用 `applyWorkflowReplan` 的覆盖路径（该路径会 `superseded` 未保留任务并 `planVersion += 1`）；父层身份必须在同一时间点被挂起并冻结，而不是在原位保留。
+- 现象二：协调未知结果 handoff 在 `session_start` 恢复到 `blocked` 时若只改 `phase` 而保留原 `handoffId`，恢复前签发的 `coordinationHandoffId` 短引用会成为可重复消费的旧凭据；同理，要求模型抄写内部 `requestId` 会让恢复重试在模型侧断链。
+- 根因二：`handoffId` 是防重放身份而非稳定外部键；恢复必须轮换该身份，重试关联应从“抄写 requestId”改为“当前 handoff 身份 + 未改变的请求内容”。
+- 修复：新增 `src/workflow-nesting.ts` 在安全边界快照父层为 `paused`/`waiting-child-workflow` 并创建新 `workflowId` 子状态（深度 32），返回时递增 `recoveryGeneration` 并记录 child 历史；`applyWorkflowReplan` 对 `kind === "nested"` 直接 `WORKFLOW_NESTED_REPLAN_FORBIDDEN`；hydration 逐层校验父帧身份/session/暂停原因，且 `parentStack` 仅允许 v6。协作侧在 restored blocked 时轮换 `handoffId`，report `requestId` 可选且仅在身份验证成功后补入，重试改以 `coordinationHandoffId`/完整身份关联。
+- 验证：`npm test` 363 项通过、0 失败，`npm run typecheck` 与 `git diff --check` 通过；`test/workflow-nested-lifecycle.test.js` 覆盖“子层迟到结果被拒 + 父层从原位置继续”，`test/coordination-runtime.test.js` 覆盖 restored 后旧短引用被拒与新引用重试成功。
+- 边界：未验证真实 Pi TUI/Provider abort 与恢复生命周期；恢复后 blocked handoff 的 `attemptId` 仍保留原值以标识同一次未知执行，只有 `handoffId` 轮换。`report.unresolved` 与 `review.gaps` 分离后，取证披露不会被自动升为阻塞，也不应被静默清除。
+
 ### 2026-10-14：恢复工作流必须同步同一计划的 evidence link 代次
 
 - 日期：2026-10-14。

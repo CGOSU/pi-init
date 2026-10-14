@@ -12,10 +12,12 @@ import {
   WORKFLOW_RECOMMENDED_TASKS,
   isWorkflowActive,
   appendWorkflowReplanDirection,
+  requestWorkflowNestedGoal,
   requestWorkflowReplan,
 } from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
+import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput } from "../src/workflow-input-intent.ts";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { registerActivityStatusSources } from "./activity-status-registration.ts";
 import { createArchitectBoundary, ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
@@ -197,15 +199,24 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       event.text.trim().startsWith("/")
     ) return false;
 
+    // Ordinary continuation is not a direction change. Preserve the saved plan and let the
+    // existing settled/recovery path resume whichever task or replan boundary is active.
+    if (isWorkflowContinuationInput(event.text)) return false;
+
     if (runtimeState.workflowState.pendingRevision) {
       const revision = runtimeState.workflowState.pendingRevision;
       try {
         const next = appendWorkflowReplanDirection(runtimeState.workflowState, event.text.trim());
         await persistWorkflowDirection(next, ctx);
+        const nested = revision.kind === "nested";
         ctx.ui.notify(
           next.status === "replanning"
-            ? `已将新指令合并到待处理 revision ${revision.revisionId}，并重新交给架构师重规划。`
-            : `已将新指令合并到待处理 revision ${revision.revisionId}，将在任务边界交给架构师重规划。`,
+            ? nested
+              ? `已将新目标合并到待处理的子工作流 ${revision.revisionId}，并交由架构师规划；父工作流保持不变。`
+              : `已将新指令合并到待处理 revision ${revision.revisionId}，并重新交给架构师重规划。`
+            : nested
+              ? `已将新目标合并到待处理的子工作流 ${revision.revisionId}，将在当前任务边界规划；父工作流保持不变。`
+              : `已将新指令合并到待处理 revision ${revision.revisionId}，将在任务边界交给架构师重规划。`,
           "info",
         );
       } catch (error) {
@@ -217,12 +228,20 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     try {
       const previous = runtimeState.workflowState;
       if (!previous) return false;
-      const next = requestWorkflowReplan(previous, { direction: event.text.trim() });
+      const direction = event.text.trim();
+      const explicitReplan = isExplicitWorkflowReplanInput(direction);
+      const next = explicitReplan
+        ? requestWorkflowReplan(previous, { direction })
+        : requestWorkflowNestedGoal(previous, { direction });
       await persistWorkflowDirection(next, ctx);
       ctx.ui.notify(
-        next.currentTaskId
-          ? `已记录工作流方向变更，将在当前任务 ${next.currentTaskId} 完成后交给架构师重规划。`
-          : "已记录工作流方向变更，等待架构师重规划。",
+        explicitReplan
+          ? next.currentTaskId
+            ? `已记录父工作流重规划，将在当前任务 ${next.currentTaskId} 完成后交给架构师。`
+            : "已记录父工作流重规划，等待架构师处理。"
+          : next.currentTaskId
+            ? `已创建子工作流目标，将在当前任务 ${next.currentTaskId} 完成后规划；父工作流进度保留。`
+            : "已创建子工作流目标，等待架构师规划；父工作流进度保留。",
         "info",
       );
     } catch (error) {

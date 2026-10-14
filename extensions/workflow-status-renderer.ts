@@ -78,6 +78,18 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
     `总任务开始时间：${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
     `总任务已运行时间：${elapsedText(view)}`,
     `规划：${view.planSummary}`,
+    ...(view.lineage.length > 1
+      ? [
+          "工作流层级（由外向内）：",
+          ...view.lineage.map((item, index) => `  ${index + 1}. ${item.workflowId} · ${item.planSummary}${item.parentTaskId ? `（子目标由父任务 ${item.parentTaskId} 触发）` : ""}${index < view.lineage.length - 1 ? " · 等待子工作流返回" : " · 当前层"}`),
+        ]
+      : []),
+    ...(view.subworkflows.length > 0
+      ? [
+          "已返回的子工作流历史（保留真实终态）：",
+          ...view.subworkflows.map((item) => `  - [${item.status}] ${item.workflowId} · ${item.summary} · completed ${item.completed}/${item.total} · 父工作流 ${item.parentWorkflowId}${item.parentTaskId ? ` · 父任务 ${item.parentTaskId}` : ""}`),
+        ]
+      : []),
     ...workflowIdentityLines(view),
   ];
   if (view.pauseCode) lines.push(`暂停类别：${view.pauseCode}`);
@@ -108,6 +120,12 @@ export function formatWorkflowStatusPanelSummary(view: WorkflowStatusView) {
     `总任务开始时间  ${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
     `总任务已运行时间  ${elapsedText(view)}`,
     `规划  ${view.planSummary}`,
+    ...(view.lineage.length > 1
+      ? [`层级  ${view.lineage.map((item) => item.workflowId).join(" → ")}`, `父层任务  ${view.lineage.slice(0, -1).map((item) => item.parentTaskId).filter(Boolean).join(" → ") || "无"}`]
+      : []),
+    ...(view.subworkflows.length > 0
+      ? [`已返回子工作流  ${view.subworkflows.filter((item) => item.status === "completed").length}/${view.subworkflows.length} 完成；${view.subworkflows.filter((item) => item.status === "cancelled").length} 取消`, ...view.subworkflows.map((item) => `${item.workflowId} ← ${item.parentWorkflowId}${item.parentTaskId ? ` · ${item.parentTaskId}` : ""}`)]
+      : []),
     ...(view.progress.currentTaskId ? [`当前任务  ${view.progress.currentTaskId}`] : []),
     ...(view.progress.currentTaskPosition !== undefined
       ? [`当前任务位置  第 ${view.progress.currentTaskPosition}/${view.progress.total} 项`]

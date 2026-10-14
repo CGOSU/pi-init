@@ -8,6 +8,27 @@
 
 ## 已确认决策
 
+### 2026-10-15：可递归嵌套的持久工作流，父层在安全任务边界挂起并恢复
+
+- 决定：工作流运行期间出现的新目标不再覆盖父计划，而是创建独立子工作流。协议层复用现有 `pendingRevision`/`replan` 身份与提交路径，但 `pendingRevision.kind === "nested"` 时由运行时创建新 `workflowId` 的子状态，不改写父任务列表。
+- 决定（边界与深度）：父层必须已到达安全任务边界（无 `currentTaskId`、无活动 handoff）；父状态作为 `parentStack` frame 挂起为 `paused`/`waiting-child-workflow`，其计划、任务、已完成摘要、审计 revision 与子工作流历史原样保留。嵌套深度上限 32。
+- 决定（恢复）：子工作流完成或取消后逐层返回父层：恢复父层任务与计划进度、递增 `recoveryGeneration`、写入 `child-completed`/`child-cancelled` continuation，并把子工作流摘要追加到父层 `subworkflowHistory`。返回使用父层原 `workflowId`/`planVersion`；子层身份与任务 attempt 全部失效，迟到结果按既有身份校验拒绝。
+- 决定（意图区分）：只有显式重规划指令（如“重规划/修改当前计划/replan”）修改父计划；普通新目标创建子工作流；明确的“继续/恢复”短句不是方向变更，保留为普通输入并沿原计划调度。
+- 决定（未知结果）：子层任务结果未知时仍保留整个层级与父层，按既有策略暂停并要求核对，不自动重放副作用。
+- 决定（持久化与展示）：状态 schema 升至 v6；hydration 继续接受 v1–v5 并按版本校验，`parentStack` 只允许出现在 v6，且逐层校验父子身份、session、暂停原因、parentTaskId 与 `subworkflowHistory` 顺序。状态与完成视图展示当前嵌套路径（由外向内）与已返回子工作流的真实历史，completed/cancelled 不伪装。
+- 非目标：不引入并行或后台执行、不新增 executor、不提供 exactly-once；不改变 `workflowMode` 阈值、local 顺序执行与 `task_workflow` 作为验收唯一权威。
+- 原因：用户要求新目标可独立推进而不丢失父层已确认进度，同时中断恢复必须回到原层级而不是重置或盲目重放。
+- 未验证：真实 Pi TUI/E2E 中断、Provider abort 生命周期与其他 provider 行为未验证；单元测试不等同真实宿主验证。验证与剩余边界见 [`docs/session-log.md`](session-log.md)。
+
+### 2026-10-15：协作关联字段可选，unresolved 披露与阻塞缺口分离
+
+- 决定：`report-evidence` 的 `report.requestId` 改为可选；运行时只在当前 evidence handoff 身份验证成功后补入对应 requestId。显式提供的 requestId 仍必须与当前 handoff 匹配，否则 `COORDINATION_REQUEST_ID_MISMATCH`。
+- 决定：未知结果重试不再要求模型抄写内部 requestId。重试必须提供当前 `coordinationHandoffId` 或完整 `coordinationIdentity`，且请求内容（问题、范围、完成条件、缺口回应、followUp 关联）必须与原请求逐项一致，仅 `refreshReason` 说明重新核实理由；缺失身份为 `COORDINATION_HANDOFF_IDENTITY_MISSING`，旧引用或不匹配为 `COORDINATION_HANDOFF_IDENTITY_STALE`。
+- 决定：恢复到未知结果时轮换 blocked handoff 的 `handoffId`，避免恢复前签发的短引用在恢复后仍可消费。
+- 决定：`report.unresolved` 是取证者披露的未知项，保留在报告中；只有 architect 在 `review.gaps` 明确列出的阻塞项才阻止 `accept`。`accept` 且 `gaps` 为空表示其余 unresolved 已被判断为非阻塞，不抹去原始披露。
+- 原因：模型侧机械抄写内部关联 ID 曾造成共享协作协议断点；披露与阻塞分离可让 architect 显式决策，而不是把每条未确认项一律升级为阻塞。
+- 未验证：未在真实 Pi 会话验证模型对可选 requestId 与短引用的遵循。此前的证据报告 `report-fixed-pipeline-follow-up-1` 曾被拒绝并进入 more；本次未通过旧工作流继续该审阅，也不声明该报告已获接受。
+
 ### 2026-10-14：工作流恢复只同步有既有身份依据的协调证据链接
 
 - 决定：恢复后的工作流状态成功持久化后，如协调账本已有链接，且链接与恢复前工作流属于同一 session、workflowId 和 planVersion、链接 recoveryGeneration 不领先于恢复前代次，则将链接代次同步到恢复后的 workflow recoveryGeneration。该操作只保留既有证据账本绑定，不接受或重写 finding/review。

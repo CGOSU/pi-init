@@ -31,6 +31,7 @@ export type WorkflowCompletionView = {
   kind: "workflow-completion";
   summary: string;
   progress: { completed: number; total: number };
+  subworkflows: { workflowId: string; parentWorkflowId: string; summary: string; status: "completed" | "cancelled"; parentTaskId?: string; completed: number; total: number }[];
   finalTask: WorkflowCompletionTaskView | undefined;
   startedAt: number | undefined;
   completedAt: number | undefined;
@@ -77,6 +78,15 @@ export function createWorkflowCompletionView(
     kind: "workflow-completion",
     summary: workflowState.plan.summary,
     progress: { completed: progress.completed, total: progress.total },
+    subworkflows: (workflowState.subworkflowHistory ?? []).map((child) => ({
+      workflowId: child.workflowId,
+      parentWorkflowId: child.parentWorkflowId,
+      summary: child.summary,
+      status: child.status,
+      ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
+      completed: child.tasks.filter((task) => task.status === "completed").length,
+      total: child.tasks.length,
+    })),
     finalTask: completedTask ? completionTaskView(completedTask) : undefined,
     startedAt: bounds.startedAt,
     completedAt: bounds.completedAt,

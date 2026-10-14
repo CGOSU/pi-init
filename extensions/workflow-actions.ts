@@ -2,6 +2,8 @@ import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/
 import type { Static } from "typebox";
 import {
   applyWorkflowReplan,
+  createNestedWorkflowState,
+  returnFromNestedWorkflow,
   blockWorkflowTask,
   cancelWorkflow,
   completeWorkflowTask,
@@ -480,13 +482,16 @@ export function createWorkflowActions(
         requireIdentity(validateWorkflowReplanIdentity(state.workflowState, params, ctx));
         const coordinatedPlan = deps.coordination.isLinkedToWorkflow(state.workflowState);
         const acceptedEvidence: AcceptedEvidenceReference[] = coordinatedPlan ? deps.coordination.assertReadyForWorkflow() : [];
-        const next = applyWorkflowReplan(state.workflowState, {
-          revisionId: params.revisionId,
-          summary: params.summary,
-          constraints: params.constraints,
-          tasks: params.tasks,
-          retainTaskIds: params.retainTaskIds,
-        });
+        const nested = state.workflowState.pendingRevision?.kind === "nested";
+        const next = nested
+          ? createNestedWorkflowState(state.workflowState, plan)
+          : applyWorkflowReplan(state.workflowState, {
+              revisionId: params.revisionId,
+              summary: params.summary,
+              constraints: params.constraints,
+              tasks: params.tasks,
+              retainTaskIds: params.retainTaskIds,
+            });
         requireTaskContractsReady(
           next.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"),
           acceptedEvidence,
@@ -496,7 +501,7 @@ export function createWorkflowActions(
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
         return {
-          content: [{ type: "text", text: `已应用工作流重规划。\n${deps.report.formatWorkflowState(next)}\n\n新计划将自动开始。` }],
+          content: [{ type: "text", text: `${nested ? "已创建嵌套子工作流，父工作流计划与进度保留。" : "已应用工作流重规划。"}\n${deps.report.formatWorkflowState(next)}\n\n新计划将自动开始。` }],
           details: statusDetails(next),
           terminate: true,
         };
@@ -521,23 +526,32 @@ export function createWorkflowActions(
         const workflowCompletionView = next.status === "completed"
           ? createWorkflowCompletionView(next, completedTask)
           : undefined;
+        const completedNested = next.status === "completed" && Boolean(next.parentStack?.length);
+        const activeNext = completedNested ? returnFromNestedWorkflow(next, "completed") ?? next : next;
+        if (completedNested) {
+          const childIdentity = workflowActionIdentity(next);
+          if (childIdentity) deps.roleRuntime.retireWorkflowContinuation(childIdentity);
+          if (deps.coordination.isLinkedToWorkflow(next)) deps.coordination.linkWorkflow(activeNext, ctx);
+        }
         const completionReport = workflowCompletionView
           ? formatWorkflowCompletionText(workflowCompletionView)
           : formatWorkflowTaskCompletionText(taskCompletionView);
-        const continuation: "awaiting-replan" | "next-task" = next.status === "replanning" ? "awaiting-replan" : "next-task";
-        const notice = next.status === "completed"
-          ? "工作流已完成。"
-          : next.status === "replanning"
-            ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。"
-            : "下一任务将自动开始。";
+        const continuation: "awaiting-replan" | "next-task" = activeNext.status === "replanning" ? "awaiting-replan" : "next-task";
+        const notice = completedNested
+          ? "子工作流已完成，已返回父工作流；父工作流将从原位置继续。"
+          : activeNext.status === "completed"
+            ? "工作流已完成。"
+            : activeNext.status === "replanning"
+              ? "当前任务已完成，等待架构师重规划，不会启动旧的后续任务。"
+              : "下一任务将自动开始。";
         const presentation = workflowCompletionView
           ? { kind: "workflow-completion" as const, view: workflowCompletionView }
           : { kind: "task-completion" as const, view: taskCompletionView, continuation };
-        if (next.status === "completed") persistTerminalWorkflowState(next, ctx);
-        else deps.report.persistWorkflowState(next, ctx);
+        if (activeNext.status === "completed" || activeNext.status === "cancelled") persistTerminalWorkflowState(activeNext, ctx);
+        else deps.report.persistWorkflowState(activeNext, ctx);
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${notice}` }],
-          details: attachWorkflowPresentation(next, presentation),
+          details: attachWorkflowPresentation(activeNext, presentation),
           terminate: true,
         };
       }
@@ -593,9 +607,23 @@ export function createWorkflowActions(
       case "cancel": {
         if (!state.workflowState) throw missingWorkflowError();
         requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        const next = cancelWorkflow(state.workflowState);
-        persistTerminalWorkflowState(next, ctx);
-        return { content: [{ type: "text", text: "工作流已取消。" }], details: statusDetails(next), terminate: true };
+        const cancelled = cancelWorkflow(state.workflowState);
+        const returnedToParent = cancelled.parentStack?.length
+          ? returnFromNestedWorkflow(cancelled, "cancelled")
+          : undefined;
+        if (returnedToParent) {
+          const childIdentity = workflowActionIdentity(cancelled);
+          if (childIdentity) deps.roleRuntime.retireWorkflowContinuation(childIdentity);
+          if (deps.coordination.isLinkedToWorkflow(cancelled)) deps.coordination.linkWorkflow(returnedToParent, ctx);
+          deps.report.persistWorkflowState(returnedToParent, ctx);
+          return {
+            content: [{ type: "text", text: `子工作流已取消，已返回父工作流并保留其进度。\n${deps.report.formatWorkflowState(returnedToParent)}` }],
+            details: statusDetails(returnedToParent),
+            terminate: true,
+          };
+        }
+        persistTerminalWorkflowState(cancelled, ctx);
+        return { content: [{ type: "text", text: "工作流已取消。" }], details: statusDetails(cancelled), terminate: true };
       }
       default:
         throw new Error(`未知工作流动作：${params.action}`);

@@ -54,17 +54,23 @@ export function formatWorkflowTaskCompletionText(view: WorkflowTaskCompletionVie
 }
 
 export function formatWorkflowCompletionText(view: WorkflowCompletionView) {
+  const taskSection = view.subworkflows.length > 0 ? "3. 最终任务" : "2. 最终任务";
+  const timeSection = view.subworkflows.length > 0 ? "4. 时间" : "3. 时间";
   return [
     "工作流完成报告",
     "",
     "1. 总览",
     `   - 目标：${view.summary}`,
     `   - 已完成任务：${view.progress.completed}/${view.progress.total}`,
+    ...(view.subworkflows.length > 0
+      ? ["", "2. 子工作流历史（独立状态与结果）：", ...view.subworkflows.map((child) =>
+          `   - [${child.status}] ${child.workflowId} · ${child.summary} · ${child.completed}/${child.total} · 父工作流 ${child.parentWorkflowId}${child.parentTaskId ? ` · 父任务 ${child.parentTaskId}` : ""}`)]
+      : []),
     "",
-    "2. 最终任务",
+    taskSection,
     ...taskReportLines(view.finalTask).map((line) => `   - ${line}`),
     "",
-    "3. 时间",
+    timeSection,
     `   - 开始时间：${formatWorkflowTimestamp(view.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
     `   - 结束时间：${formatWorkflowTimestamp(view.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
     `   - 总耗时：${durationText(view.duration, "不可用（工作流缺少有效的整体开始或结束时间）")}`,
@@ -120,11 +126,19 @@ export function renderWorkflowCompletion(view: WorkflowCompletionView, theme: Re
     section(theme, "1. 总览"),
     theme.fg("success", `   - 目标：${view.summary}`),
     theme.fg("success", `   - 已完成任务：${view.progress.completed}/${view.progress.total}`),
+    ...(view.subworkflows.length > 0
+      ? [
+          "",
+          section(theme, "2. 子工作流历史（独立状态与结果）"),
+          ...view.subworkflows.map((child) => theme.fg(child.status === "completed" ? "success" : "warning",
+            `   - [${child.status}] ${child.workflowId} · ${child.summary} · ${child.completed}/${child.total} · 父工作流 ${child.parentWorkflowId}${child.parentTaskId ? ` · 父任务 ${child.parentTaskId}` : ""}`)),
+        ]
+      : []),
     "",
-    section(theme, "2. 最终任务"),
+    section(theme, view.subworkflows.length > 0 ? "3. 最终任务" : "2. 最终任务"),
     ...taskLines,
     "",
-    section(theme, "3. 时间"),
+    section(theme, view.subworkflows.length > 0 ? "4. 时间" : "3. 时间"),
     theme.fg("accent", `   - 开始时间：${formatWorkflowTimestamp(view.startedAt, "不可用（工作流未记录有效的开始时间）")}`),
     theme.fg("accent", `   - 结束时间：${formatWorkflowTimestamp(view.completedAt, "不可用（工作流未记录有效的结束时间）")}`),
     theme.fg("warning", `   - 总耗时：${durationText(view.duration, "不可用（工作流缺少有效的整体开始或结束时间）")}`),

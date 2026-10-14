@@ -7,7 +7,7 @@ export type WorkflowTaskStatus = "pending" | "in_progress" | "completed" | "bloc
 export type WorkflowRevisionStatus = "requested" | "applied";
 export type WorkflowHandoffPhase = "prepared" | "waiting-role" | "compacting" | "dispatching" | "queued" | "executing" | "uncertain";
 export type WorkflowContinuationPhase = "pending" | "compacting" | "dispatching" | "queued";
-export type WorkflowContinuationReason = "plan-created" | "task-completed" | "replan-applied" | "retry" | "resume" | "replan-requested";
+export type WorkflowContinuationReason = "plan-created" | "task-completed" | "replan-applied" | "retry" | "resume" | "replan-requested" | "child-completed" | "child-cancelled";
 
 export type WorkflowTaskDelegation = {
   status: "spawning" | "running" | "stop-requested" | "completed" | "failed";
@@ -78,6 +78,8 @@ export type WorkflowPendingRevision = {
   direction: string;
   requestedAt: number;
   requestedFromTaskId?: string;
+  kind?: "replan" | "nested";
+  childGoal?: string;
 };
 
 export type WorkflowRevision = WorkflowPendingRevision & {
@@ -121,7 +123,26 @@ export type WorkflowContinuation =
   | { kind: "replan"; revisionId: string; handoffId?: string; phase: WorkflowContinuationPhase; reason?: WorkflowContinuationReason }
   | { kind: "review" };
 
-export type WorkflowState = {
+export type WorkflowSubworkflowTaskSummary = {
+  id: string;
+  task: string;
+  status: WorkflowTaskStatus;
+  completionSummary?: string;
+};
+
+export type WorkflowSubworkflowSummary = {
+  workflowId: string;
+  parentWorkflowId: string;
+  parentTaskId?: string;
+  planVersion: number;
+  summary: string;
+  status: "completed" | "cancelled";
+  tasks: WorkflowSubworkflowTaskSummary[];
+  startedAt?: number;
+  completedAt?: number;
+};
+
+export type WorkflowStateCore = {
   version: number;
   workflowId: string;
   sessionId: string;
@@ -140,11 +161,21 @@ export type WorkflowState = {
   pendingRevision?: WorkflowPendingRevision;
   handoff?: WorkflowHandoff;
   continuation?: WorkflowContinuation;
+  subworkflowHistory?: WorkflowSubworkflowSummary[];
   createdAt?: number;
   updatedAt?: number;
   startedAt?: number;
   completedAt?: number;
   legacySourceVersion?: number;
+};
+
+export type WorkflowParentFrame = {
+  parentTaskId?: string;
+  state: WorkflowStateCore;
+};
+
+export type WorkflowState = WorkflowStateCore & {
+  parentStack?: WorkflowParentFrame[];
 };
 
 export type HydratedWorkflowState = Omit<WorkflowState, "workflowId" | "sessionId" | "planVersion" | "recoveryGeneration"> &
@@ -181,7 +212,7 @@ export type WorkflowRoleValidationOptions = { unfinishedOnly?: boolean };
 export type WorkflowTextListOptions = { required?: boolean };
 export type WorkflowTaskNormalizationOptions = { allowSuperseded?: boolean };
 export type WorkflowModelError = Error & { code?: string; details?: unknown };
-export type WorkflowStateVersion = 1 | 2 | 3 | 4 | 5;
+export type WorkflowStateVersion = 1 | 2 | 3 | 4 | 5 | 6;
 export type WorkflowStateRecord = Record<string, unknown>;
 export type WorkflowLegacyState = Partial<WorkflowState> & Record<string, unknown>;
 export type WorkflowRevisionRecord = Record<string, unknown>;

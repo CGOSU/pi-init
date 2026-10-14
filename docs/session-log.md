@@ -2,6 +2,20 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-15：可递归嵌套持久工作流与协作关联规范化
+
+- 目标：新目标进入独立子工作流，父层计划、进度与返回位置保留；中断后恢复原层级而非重置或盲目重放；动态视图只反映真实持久状态。同时修复已发现的共享协作协议断点。
+- 完成（嵌套状态）：新增 `src/workflow-nesting.ts`，实现 `createNestedWorkflowState`（父层到达安全任务边界后快照为 `paused`/`waiting-child-workflow` 的 `parentStack` frame，标记其 revision 为 applied，创建同 session/executor 的新 `workflowId` 子状态，深度上限 32）与 `returnFromNestedWorkflow`（恢复父层、`recoveryGeneration += 1`、写入 `child-completed`/`child-cancelled` continuation，并把子摘要 merge 进 `subworkflowHistory`）。
+- 完成（类型与 hydration）：`src/workflow-types.ts` 新增 `WorkflowStateCore`/`WorkflowParentFrame`/`WorkflowSubworkflowSummary`，`WorkflowState = WorkflowStateCore & { parentStack? }`；`src/workflow-model.ts` 状态版本升至 6，`cloneWorkflowStateCore`/`cloneWorkflowParentFrame` 拆出，新增 `child-completed`/`child-cancelled` reason；`src/workflow-hydration.ts` 接受 v1–v6，逐层校验父帧身份/session/暂停原因/parentTaskId/子历史顺序/parentTaskId 归属，且 `parentStack` 仅允许 v6。
+- 完成（意图与重规划）：`src/workflow-replan.ts` 新增 `requestWorkflowNestedGoal`、`kind`/`childGoal` 持久化与审计、`applyWorkflowReplan` 对 nested 目标 fail-closed（`WORKFLOW_NESTED_REPLAN_FORBIDDEN`）；新增 `src/workflow-input-intent.ts` 区分明确重规划指令与明确继续短句。
+- 完成（动作入口）：`extensions/workflow-actions.ts` 的 `replan` 按 `pendingRevision.kind` 分流创建子工作流，`complete` 在子工作流完成后 `returnFromNestedWorkflow` 并退休子层续跑、重绑协调链接，`cancel` 取消子层后返回父层；`extensions/index.ts` 按 `isExplicitWorkflowReplanInput`/`isWorkflowContinuationInput` 路由普通输入。
+- 完成（提示与视图）：`extensions/workflow-messages.ts` 区分父层重规划与子工作流规划提示；`workflow-status-view.ts`/`workflow-status-renderer.ts`/`workflow-completion-view.ts`/`workflow-completion-renderer.ts` 展示嵌套路径与已返回子工作流真实历史；`extensions/workflow-report.ts` 打开的进度面板按 `WORKFLOW_STATUS_REFRESH_MS` 动态重算视图与任务集合并尽量保留当前选择（新增 `handleMouse` 转发）。
+- 完成（协作协议）：`extensions/contracts.ts` 的 evidence report `requestId` 改为可选；`extensions/coordination-runtime.ts` 仅在当前 handoff 身份验证成功后补入 requestId，未知结果重试改以 `coordinationHandoffId`/完整身份关联（不再要求模型抄写 requestId），恢复到 blocked 时轮换 `handoffId`；`src/coordination-validation.ts` 将 `report.unresolved`（披露，保留）与 `review.gaps`（阻塞）分离。
+- 测试：新增 `test/workflow-nesting.test.js`（3 项：独立持久化与递归 hydrate、nested unknown-outcome fail-closed、grandchild 取消/返回后仍回 root）、`test/workflow-nesting-view.test.js`、`test/workflow-nested-lifecycle.test.js`（端到端：新目标→子工作流→返回父层→继续 `parent-second`，并断言迟到子层结果被拒）、`test/workflow-input-resume.test.js`、`test/workflow-live-view.test.js`、`test/coordination-association-normalization.test.js`；同步更新 `test/coordination-runtime.test.js`、`test/coordination-simplification.test.js`、`test/workflow-core.test.js`、`test/task-contract.test.js`。
+- 验证：`npm test`（`node --test`）363 项通过、0 失败、0 取消、0 跳过；`npm run typecheck` 通过（exit 0，无输出）；`git diff --check` 通过（无输出）。定向协调测试 22 项、嵌套相关测试均通过。
+- 结构审阅：`extensions/coordination-runtime.ts`、`extensions/index.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-dispatch.ts`、`src/coordination-validation.ts`、`src/workflow-model.ts`、`src/workflow-hydration.ts`、`test/coordination-runtime.test.js`、`test/coordination-simplification.test.js`、`test/extension-lifecycle.test.js`、`test/helpers.js`、`test/pi-usage.test.js` 的当前内容版本均已通过 `file_review` 登记为保留。
+- 未验证：未执行真实 Pi TUI/Provider abort 与恢复生命周期、其他 provider 行为与真实模型链路；unknown handoff 的 fail-closed 仅为单元测试。旧报告 `report-fixed-pipeline-follow-up-1` 曾被拒绝并进入 more，本次未创建后续补查请求，也未声明其已接受。`.pi-graph/` 为未跟踪工具产物，不纳入提交。
+
 ### 2026-10-14：修复工作流恢复后的协调证据链接代次失配
 
 - 根因：`recoverWorkflowState` 恢复活动 workflow 时推进 `recoveryGeneration`，但 session_start/session_tree 恢复链没有同步 `coordination.workflowLink`。同一 workflow/plan 的既有链接因此落后，`request-evidence` 将活动 workflow 视为未关联并拒绝；重规划的 contract 门也无法利用该协调账本。此前 status 未输出 workflowLink，不能据旧状态单独判断实际是缺失还是过期。

@@ -401,6 +401,7 @@ test("docs 派发恢复时结果未知则不自动重放；旧 identity 被拒�
     const recovered = latestCoordination(harness);
     assert.equal(recovered.handoff.phase, "blocked");
     assert.equal(recovered.handoff.failure.code, "COORDINATION_DISPATCH_OUTCOME_UNKNOWN");
+    assert.notEqual(recovered.handoff.handoffId, oldIdentity.handoffId, "恢复到未知结果时必须轮换短引用身份");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === COORDINATION_EVIDENCE_MESSAGE_TYPE).length, 1);
     await assert.rejects(
       execute(harness, {
@@ -415,10 +416,33 @@ test("docs 派发恢复时结果未知则不自动重放；旧 identity 被拒�
 
     const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
     await switchRole.execute("retry-as-architect", { role: "architect" }, undefined, undefined, harness.context);
-    const explicitRetry = await execute(harness, {
+    await assert.rejects(execute(harness, {
+      action: "request-evidence",
+      coordinationHandoffId: oldIdentity.handoffId,
+      request: {
+        questionId: "input-boundary",
+        question: "核实输入来源",
+        rationale: "开发依赖准确事实",
+        scope: ["src/input.ts"],
+        completionCriteria: ["找到当前来源版本"],
+        refreshReason: "核对上一 handoff 未知结果后，架构师明确授权创建新 attempt。",
+      },
+    }), (error) => error.code === "COORDINATION_HANDOFF_IDENTITY_STALE");
+    await assert.rejects(execute(harness, {
       action: "request-evidence",
       request: {
-        requestId: oldIdentity.requestId,
+        questionId: "input-boundary",
+        question: "核实输入来源",
+        rationale: "开发依赖准确事实",
+        scope: ["src/input.ts"],
+        completionCriteria: ["找到当前来源版本"],
+        refreshReason: "核对上一 handoff 未知结果后，架构师明确授权创建新 attempt。",
+      },
+    }), (error) => error.code === "COORDINATION_HANDOFF_IDENTITY_MISSING");
+    const explicitRetry = await execute(harness, {
+      action: "request-evidence",
+      coordinationHandoffId: recovered.handoff.handoffId,
+      request: {
         questionId: "input-boundary",
         question: "核实输入来源",
         rationale: "开发依赖准确事实",

@@ -73,8 +73,8 @@ function taskToolGuidance(role: string) {
 
 function taskDirectionGuidance(role: string) {
   return role === "architect"
-    ? "如果用户在本工作流期间提出会改变后续方向或新增后续工作，架构师不得派发旧计划的下一任务；只能通过 task_workflow(action=\"replan\") 重新规划，或调用 switch_role 将执行交给对应角色。"
-    : "如果用户在本工作流期间提出会改变后续方向或新增后续工作的普通描述，不要自行派发旧计划的下一任务；扩展会先记录重规划请求，当前任务完成后交给架构师重规划。若必须立即停止当前任务，使用现有 cancel 流程。";
+    ? "用户在工作流期间提出新目标时，必须将其规划为嵌套子工作流，保留父工作流和已完成成果；只有用户明确要求修改现有计划时才重规划父层。不得派发旧计划的下一任务；使用 task_workflow(action=\"replan\") 处理当前带身份的请求。"
+    : "用户在工作流期间提出新目标时，扩展会将其记录为嵌套子工作流，父工作流进度保留并在安全任务边界交给架构师规划。明确要求修改现有计划时才进入父层重规划。不要自行派发旧计划下一任务；若必须立即停止当前任务，使用现有 cancel 流程。";
 }
 
 function taskCompletionGuidance(role: string, identity: WorkflowHandoffIdentity, hasContract: boolean) {
@@ -231,20 +231,34 @@ export function createWorkflowMessages(
       });
 
     return [
-      "[PI-INIT 工作流重规划]",
-      `当前重规划身份 JSON（replan 时按原样传回）：${JSON.stringify(identity)}`,
+      request.kind === "nested" ? "[PI-INIT 嵌套子工作流规划]" : "[PI-INIT 工作流重规划]",
+      request.kind === "nested"
+        ? `当前子工作流规划身份 JSON（replan 时按原样传回）：${JSON.stringify(identity)}`
+        : `当前重规划身份 JSON（replan 时按原样传回）：${JSON.stringify(identity)}`,
       `工作流当前 revisionId：${request.revisionId}`,
-      `用户新增方向或需求（按提交顺序合并的全部指令）：\n${request.direction.split("\n").map((item) => `- ${item}`).join("\n")}`,
+      request.kind === "nested"
+        ? `新子工作流目标（不得覆盖或重置父工作流）：\n${request.childGoal ?? request.direction}`
+        : `用户新增方向或需求（按提交顺序合并的全部指令）：\n${request.direction.split("\n").map((item) => `- ${item}`).join("\n")}`,
       `当前工作流目标：${workflowState.plan.summary}`,
       workflowState.plan.constraints.length > 0 ? `原架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `未完成任务直接依赖的已完成成果：\n${completed.join("\n")}` : "",
       pending.length > 0 ? `旧计划中尚未开始的任务：\n${pending.join("\n")}` : "无旧的未开始任务",
       relevantEvidence.length > 0 ? `未完成任务相关的已接受证据：\n${relevantEvidence.join("\n")}` : "",
-      clarifications.length > 0 ? `开发者正式退回的澄清（必须逐项处置）：\n${clarifications.join("\n")}` : "",
+      clarifications.length > 0
+        ? request.kind === "nested"
+          ? `父工作流仍保留的澄清与副作用记录（属于父层，不要求子计划代替解决）：\n${clarifications.join("\n")}`
+          : `开发者正式退回的澄清（必须逐项处置）：\n${clarifications.join("\n")}`
+        : "",
       "规划边界：architect 不直接取证、不执行代码、不连接 MCP；允许通过 request-evidence 安排 docs-commit 查证，并通过 review-evidence 接受、补查或阻塞。缺关键事实时先取证；契约冲突应依据已接受证据/明确需求解决；业务决策缺失必须向用户确认，不能猜测或应用含 blockingQuestions 的计划。",
-      "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。旧任务的 completedWork 与验证已持久化在澄清报告中，不得将被澄清任务伪报完成。副作用为 occurred/unknown 时不得自动重放；新任务契约必须通过 clarificationResolutions 明确说明处理方式，未核实则不得派发。",
-      "若只是新增后续工作，把仍有效的旧任务 ID 放入 retainTaskIds；新增 tasks 必须使用从未出现过的新 ID。若替换旧任务，不要把被替换任务 ID 放进新 tasks，也不要让新任务依赖被替换任务。",
-      `开发契约必须逐任务列出 requirementSources、expectedBehavior、evidence、fixedDecisions、invariants、nonGoals、blockingQuestions、engineeringDiscretion、verification 和 clarificationResolutions；任何关键未决问题都必须留在 blockingQuestions 并阻止 replan。规划完成后，必须调用 task_workflow(action="replan", workflowId="${identity.workflowId}", planVersion=${identity.planVersion}, sessionId="${identity.sessionId}", recoveryGeneration=${identity.recoveryGeneration}, revisionId="${request.revisionId}", handoffId="${identity.handoffId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,
+      request.kind === "nested"
+        ? "只规划 childGoal 对应的独立子工作流；不要覆盖父层计划或把父层未完成任务搬入子层。父层任务、澄清、身份与已完成成果会被原样挂起，子层完成后由运行时恢复父层。不得重放父层副作用为 occurred/unknown 的任务。"
+        : "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。旧任务的 completedWork 与验证已持久化在澄清报告中，不得将被澄清任务伪报完成。副作用为 occurred/unknown 时不得自动重放；新任务契约必须通过 clarificationResolutions 明确说明处理方式，未核实则不得派发。",
+      request.kind === "nested"
+        ? "子层 task ID 只须在新子工作流内唯一；不要继承、替换或重写父层任务 ID。"
+        : "若只是新增后续工作，把仍有效的旧任务 ID 放入 retainTaskIds；新增 tasks 必须使用从未出现过的新 ID。若替换旧任务，不要把被替换任务 ID 放进新 tasks，也不要让新任务依赖被替换任务。",
+      request.kind === "nested"
+        ? `子工作流契约仍须逐任务完整列出 requirementSources、expectedBehavior、evidence、fixedDecisions、invariants、nonGoals、blockingQuestions、engineeringDiscretion、verification 和 clarificationResolutions；任何关键未决问题都必须留在 blockingQuestions 并阻止提交。规划完成后调用 task_workflow(action="replan", workflowId="${identity.workflowId}", planVersion=${identity.planVersion}, sessionId="${identity.sessionId}", recoveryGeneration=${identity.recoveryGeneration}, revisionId="${request.revisionId}", handoffId="${identity.handoffId}", summary=..., constraints=[...], tasks=[...])。运行时会将该计划创建为独立子工作流，父计划、任务和身份不变；不要传 retainTaskIds。只有架构角色可以提交该动作。`
+        : `开发契约必须逐任务列出 requirementSources、expectedBehavior、evidence、fixedDecisions、invariants、nonGoals、blockingQuestions、engineeringDiscretion、verification 和 clarificationResolutions；任何关键未决问题都必须留在 blockingQuestions 并阻止 replan。规划完成后，必须调用 task_workflow(action="replan", workflowId="${identity.workflowId}", planVersion=${identity.planVersion}, sessionId="${identity.sessionId}", recoveryGeneration=${identity.recoveryGeneration}, revisionId="${request.revisionId}", handoffId="${identity.handoffId}", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])。只有架构角色可以提交该动作。`,
       "不要调用 complete、block 或 cancel 来代替 replan；如果无法形成可靠的新计划，说明真正阻塞原因并保持当前重规划状态。",
     ].filter(Boolean).join("\n\n");
   }

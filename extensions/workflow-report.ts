@@ -263,31 +263,54 @@ export function createWorkflowReport(
       return;
     }
 
-    const initialView = createCurrentWorkflowStatusView(state);
     let stopLiveRefresh: (() => void) | undefined;
     await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
       const summary = new Text("", 0, 0);
-      const refreshSummary = () => {
-        summary.setText(theme.fg("text", formatWorkflowStatusPanelSummary(createCurrentWorkflowStatusView(state))));
+      const listTheme = {
+        selectedPrefix: (text: string) => theme.bg("selectedBg", theme.fg("accent", text)),
+        selectedText: (text: string) => theme.bg("selectedBg", theme.fg("text", text)),
+        description: (text: string) => theme.fg("muted", text),
+        scrollInfo: (text: string) => theme.fg("dim", text),
+        noMatch: (text: string) => theme.fg("warning", text),
       };
-      const taskItems: SelectItem[] = workflowStatusTaskItems(initialView);
+      const makeList = (items: SelectItem[], selectedValue?: string) => {
+        const nextList = new SelectList(items, Math.min(items.length, 5), listTheme, {
+          minPrimaryColumnWidth: 26,
+          maxPrimaryColumnWidth: 32,
+        });
+        nextList.onSelect = () => done();
+        nextList.onCancel = () => done();
+        const selectedIndex = selectedValue ? items.findIndex((item) => item.value === selectedValue) : 0;
+        nextList.setSelectedIndex(Math.max(0, selectedIndex));
+        return nextList;
+      };
+      const initialView = createCurrentWorkflowStatusView(state);
+      const initialItems = workflowStatusTaskItems(initialView);
+      let list = makeList(initialItems, initialView.kind === "workflow" ? initialView.progress.currentTaskId : undefined);
+      let listItemsKey = JSON.stringify(initialItems);
+      const refreshView = () => {
+        const view = createCurrentWorkflowStatusView(state);
+        summary.setText(theme.fg("text", formatWorkflowStatusPanelSummary(view)));
+        const items = workflowStatusTaskItems(view);
+        const nextItemsKey = JSON.stringify(items);
+        if (nextItemsKey !== listItemsKey) {
+          const selectedValue = view.kind === "workflow"
+            ? view.progress.currentTaskId ?? list.getSelectedItem()?.value
+            : list.getSelectedItem()?.value;
+          list = makeList(items, selectedValue);
+          listItemsKey = nextItemsKey;
+        }
+      };
+      const dynamicList = {
+        render: (width: number) => list.render(width),
+        invalidate: () => list.invalidate(),
+        handleInput: (data: string) => list.handleInput(data),
+        handleMouse: (event: Parameters<SelectList["handleMouse"]>[0]) => list.handleMouse(event),
+      };
 
-      const list = new SelectList(taskItems, Math.min(taskItems.length, 5), {
-        selectedPrefix: (text) => theme.bg("selectedBg", theme.fg("accent", text)),
-        selectedText: (text) => theme.bg("selectedBg", theme.fg("text", text)),
-        description: (text) => theme.fg("muted", text),
-        scrollInfo: (text) => theme.fg("dim", text),
-        noMatch: (text) => theme.fg("warning", text),
-      }, {
-        minPrimaryColumnWidth: 26,
-        maxPrimaryColumnWidth: 32,
-      });
-      list.onSelect = () => done();
-      list.onCancel = () => done();
-
-      refreshSummary();
+      refreshView();
       const liveRefresh = setInterval(() => {
-        refreshSummary();
+        refreshView();
         tui.requestRender();
       }, WORKFLOW_STATUS_REFRESH_MS);
       liveRefresh.unref?.();
@@ -299,7 +322,7 @@ export function createWorkflowReport(
       content.addChild(summary);
       content.addChild(new Spacer(1));
       content.addChild(new Text(theme.fg("accent", theme.bold("任务列表")), 0, 0));
-      content.addChild(list);
+      content.addChild(dynamicList);
       content.addChild(new Spacer(1));
       content.addChild(new Text(theme.fg("muted", "↑↓ 浏览 · Enter 或 Esc 关闭"), 0, 0));
 
@@ -323,12 +346,16 @@ export function createWorkflowReport(
       container.addChild(panelBorder("└", "┘"));
 
       return {
-        render: (width: number) => container.render(width),
+        render: (width: number) => {
+          refreshView();
+          return container.render(width);
+        },
         invalidate: () => container.invalidate(),
         handleInput: (data: string) => {
-          list.handleInput(data);
+          dynamicList.handleInput(data);
           tui.requestRender();
         },
+        handleMouse: (event: Parameters<SelectList["handleMouse"]>[0]) => dynamicList.handleMouse(event),
       };
     }, {
       overlay: true,

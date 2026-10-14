@@ -152,7 +152,7 @@ test("跨 finding 的同 ID 同版本保持合法，版本不同仍拒绝；非�
   }, 4).code, "COORDINATION_ONLY_FACTS_ACCEPTABLE");
 });
 
-test("acceptedEvidence 完全一致的三元引用只保留一份，未解决缺口仍拒绝", () => {
+test("acceptedEvidence 三元引用无损去重，unresolved 披露仅在升为 gaps 时阻塞", () => {
   const base = ok(requestEvidence(
     ok(createCoordinationState({ sessionId: "review-dedup" }, 1)),
     request(),
@@ -181,12 +181,24 @@ test("acceptedEvidence 完全一致的三元引用只保留一份，未解决缺
   ], { questionId: "gap-question", findingId: "gap-finding" })], {
     unresolved: ["Caller behavior is still unverified."],
   }), 3));
-  assert.equal(reviewEvidence(reportedWithGap, {
+  const acceptedWithDisclosure = reviewEvidence(reportedWithGap, {
     reportId: "report-request-gap-1",
     decision: "accept",
     acceptedEvidence: [{ findingId: "gap-finding", sourceId: "shared-source", sourceVersion: "v1" }],
     gaps: [],
-  }, 4).code, "COORDINATION_EVIDENCE_INCOMPLETE");
+  }, 4);
+  assert.equal(acceptedWithDisclosure.ok, true, "architect 显式 accept 且 gaps 为空时，unresolved 可作为非阻塞披露保留");
+  assert.deepEqual(acceptedWithDisclosure.value.reports[0].unresolved, ["Caller behavior is still unverified."]);
+  assert.equal(acceptedWithDisclosure.value.requests[0].status, "accepted");
+
+  const blockingGap = reviewEvidence(reportedWithGap, {
+    reportId: "report-request-gap-1",
+    decision: "accept",
+    acceptedEvidence: [{ findingId: "gap-finding", sourceId: "shared-source", sourceVersion: "v1" }],
+    gaps: ["Caller behavior is still unverified."],
+  }, 4);
+  assert.equal(blockingGap.code, "COORDINATION_EVIDENCE_INCOMPLETE");
+  assert.equal(blockingGap.field, "gaps");
   assert.equal(reviewEvidence(reportedWithGap, {
     reportId: "report-request-gap-1",
     decision: "more",
@@ -740,7 +752,6 @@ test("短引用仍受角色、branch 与阶段守卫约束，且不推进状态"
       action: "request-evidence",
       coordinationHandoffId: blockedReference,
       request: {
-        requestId,
         questionId: "blocked-phase",
         question: "已阻塞的 handoff 是否可提交？",
         rationale: "未知结果的 handoff 不得被消费。",

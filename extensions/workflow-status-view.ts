@@ -40,6 +40,24 @@ export type WorkflowStatusTaskView = {
   duration: { kind: "available"; milliseconds: number } | { kind: "unavailable" };
 };
 
+export type WorkflowStatusAncestorView = {
+  workflowId: string;
+  planSummary: string;
+  status: WorkflowState["status"];
+  parentTaskId?: string;
+};
+
+export type WorkflowStatusSubworkflowView = {
+  workflowId: string;
+  parentWorkflowId: string;
+  parentTaskId?: string;
+  planVersion: number;
+  summary: string;
+  status: "completed" | "cancelled";
+  completed: number;
+  total: number;
+};
+
 export type WorkflowStatusView =
   | { kind: "no-workflow" }
   | { kind: "restore-error"; code: string; message: string; sourceEntryId?: string }
@@ -51,6 +69,8 @@ export type WorkflowStatusView =
       startedAt?: number;
       elapsed: { kind: "available"; milliseconds: number } | { kind: "unavailable" };
       planSummary: string;
+      lineage: WorkflowStatusAncestorView[];
+      subworkflows: WorkflowStatusSubworkflowView[];
       identity: {
         action: WorkflowActionIdentity;
         handoff?: WorkflowHandoffIdentity;
@@ -220,6 +240,25 @@ export function createWorkflowStatusView(
     startedAt: getWorkflowExecutionBounds(workflowState).startedAt,
     elapsed: elapsedFor(workflowState, now),
     planSummary: workflowState.plan.summary,
+    lineage: [
+      ...(workflowState.parentStack ?? []).map((frame) => ({
+        workflowId: frame.state.workflowId,
+        planSummary: frame.state.plan.summary,
+        status: frame.state.status,
+        ...(frame.parentTaskId ? { parentTaskId: frame.parentTaskId } : {}),
+      })),
+      { workflowId: workflowState.workflowId, planSummary: workflowState.plan.summary, status: workflowState.status },
+    ],
+    subworkflows: (workflowState.subworkflowHistory ?? []).map((child) => ({
+      workflowId: child.workflowId,
+      parentWorkflowId: child.parentWorkflowId,
+      ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
+      planVersion: child.planVersion,
+      summary: child.summary,
+      status: child.status,
+      completed: child.tasks.filter((task) => task.status === "completed").length,
+      total: child.tasks.length,
+    })),
     identity: {
       action: workflowActionIdentity(workflowState),
       ...(handoff ? { handoff } : {}),

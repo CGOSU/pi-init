@@ -6,12 +6,13 @@ import type {
   WorkflowContinuation, WorkflowContinuationPhase, WorkflowContinuationReason, WorkflowExecutionBounds,
   WorkflowExecutor, WorkflowHandoff, WorkflowHandoffPhase, WorkflowModelError,
   WorkflowPendingRevision, WorkflowPlan, WorkflowPlanSnapshot, WorkflowPlanSummary, WorkflowRevision,
-  WorkflowRevisionStatus, WorkflowRoleValidationOptions, WorkflowRoleValidationResult, WorkflowState,
-  WorkflowStatus, WorkflowTask, WorkflowTaskDelegation, WorkflowTaskStatus, WorkflowTaskTimestampField,
+  WorkflowRevisionStatus, WorkflowRoleValidationOptions, WorkflowRoleValidationResult, WorkflowParentFrame,
+  WorkflowState, WorkflowStateCore, WorkflowSubworkflowSummary, WorkflowStatus, WorkflowTask,
+  WorkflowTaskDelegation, WorkflowTaskStatus, WorkflowTaskTimestampField,
   WorkflowTaskTimestampReducer, WorkflowTextListOptions,
 } from "./workflow-types.ts";
 
-export const WORKFLOW_STATE_VERSION = 5;
+export const WORKFLOW_STATE_VERSION = 6;
 export const WORKFLOW_IDENTITY_STATE_VERSION = 4;
 // 规划规模建议：仅用于工具描述和规划提示，不参与任务数量校验。
 export const WORKFLOW_RECOMMENDED_TASKS = 12;
@@ -168,7 +169,7 @@ export function normalizeWorkflowContinuation(value: unknown): WorkflowContinuat
     throw new Error("已保存的工作流 continuation 格式无效");
   }
   if (value.kind === "review") return { kind: "review" };
-  const reasons = ["plan-created", "task-completed", "replan-applied", "retry", "resume", "replan-requested"] as const satisfies readonly WorkflowContinuationReason[];
+  const reasons = ["plan-created", "task-completed", "replan-applied", "retry", "resume", "replan-requested", "child-completed", "child-cancelled"] as const satisfies readonly WorkflowContinuationReason[];
   const reason = value.reason;
   if (reason !== undefined && !isOneOf(reasons, reason)) {
     throw new Error(`已保存的工作流 continuation reason 无效：${reason}`);
@@ -399,6 +400,21 @@ export function normalizePendingRevision(revision: unknown): WorkflowPendingRevi
       "已保存的工作流 pendingRevision 的 requestedFromTaskId",
     ).toLowerCase();
   }
+  if (source.kind !== undefined) {
+    if (source.kind !== "replan" && source.kind !== "nested") {
+      throw new Error(`已保存的工作流 pendingRevision 的 kind 无效：${source.kind}`);
+    }
+    result.kind = source.kind;
+  }
+  if (source.childGoal !== undefined) {
+    result.childGoal = requireText(source.childGoal, "已保存的工作流 pendingRevision 的 childGoal");
+  }
+  if (result.kind === "nested" && !result.childGoal) {
+    throw new Error("已保存的嵌套工作流请求缺少 childGoal");
+  }
+  if (result.kind !== "nested" && result.childGoal !== undefined) {
+    throw new Error("非嵌套工作流请求不能包含 childGoal");
+  }
   return result;
 }
 
@@ -427,6 +443,7 @@ export function createWorkflowState(input: unknown, now = Date.now()): WorkflowS
     currentTaskId: undefined,
     nudgeCount: 0,
     revisions: [],
+    subworkflowHistory: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -476,6 +493,39 @@ export function getWorkflowExecutionDuration(state: WorkflowState | null | undef
   return completedAt - startedAt;
 }
 
+function cloneSubworkflowSummary(summary: WorkflowSubworkflowSummary): WorkflowSubworkflowSummary {
+  return {
+    ...summary,
+    tasks: summary.tasks.map((task) => ({ ...task })),
+  };
+}
+
+export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.updatedAt ?? Date.now()): WorkflowStateCore {
+  return {
+    ...state,
+    version: WORKFLOW_STATE_VERSION,
+    planVersion: state.planVersion ?? 0,
+    recoveryGeneration: state.recoveryGeneration ?? 0,
+    executor: normalizeExecutor(state.executor),
+    ...(state.authority !== undefined ? { authority: normalizeExecutor(state.authority) } : {}),
+    plan: clonePlan(state.plan),
+    tasks: state.tasks.map(cloneTask),
+    revisions: (state.revisions ?? []).map(cloneRevision),
+    ...(state.pendingRevision ? { pendingRevision: { ...state.pendingRevision } } : {}),
+    ...(state.handoff ? { handoff: { ...state.handoff } } : {}),
+    ...(state.continuation ? { continuation: { ...state.continuation } } : {}),
+    subworkflowHistory: (state.subworkflowHistory ?? []).map(cloneSubworkflowSummary),
+    updatedAt: now,
+  };
+}
+
+export function cloneWorkflowParentFrame(frame: WorkflowParentFrame, now = frame.state.updatedAt ?? Date.now()): WorkflowParentFrame {
+  return {
+    ...(frame.parentTaskId ? { parentTaskId: frame.parentTaskId } : {}),
+    state: cloneWorkflowStateCore(frame.state, now),
+  };
+}
+
 export function cloneState(state: WorkflowState, now = Date.now()): WorkflowState {
   if (Object.prototype.hasOwnProperty.call(state, "runtimeAuthority")) {
     throw workflowError("WORKFLOW_STATE_RUNTIME_RETIRED", "旧 Runtime 工作流 authority 已退役；不能克隆或本地执行");
@@ -486,18 +536,9 @@ export function cloneState(state: WorkflowState, now = Date.now()): WorkflowStat
   );
   if (authority !== executor) throw new Error("工作流 authority 不允许在创建后切换");
   return {
-    ...state,
-    version: WORKFLOW_STATE_VERSION,
-    planVersion: state.planVersion ?? 0,
-    recoveryGeneration: state.recoveryGeneration ?? 0,
+    ...cloneWorkflowStateCore(state, now),
     executor,
     authority,
-    plan: clonePlan(state.plan),
-    tasks: state.tasks.map(cloneTask),
-    revisions: (state.revisions ?? []).map(cloneRevision),
-    ...(state.pendingRevision ? { pendingRevision: { ...state.pendingRevision } } : {}),
-    ...(state.handoff ? { handoff: { ...state.handoff } } : {}),
-    ...(state.continuation ? { continuation: { ...state.continuation } } : {}),
-    updatedAt: now,
+    ...(state.parentStack ? { parentStack: state.parentStack.map((frame) => cloneWorkflowParentFrame(frame, now)) } : {}),
   };
 }
