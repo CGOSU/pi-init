@@ -106,17 +106,17 @@ test("讨论和纠正不被自动吞成子流程，待规划期间也不污染�
     const harness = await makeHarness(directory);
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
     await workflow.execute("plan-discussion", { action: "plan", summary: "父目标", tasks: [{ id: "first", task: "原任务", files: ["src"], acceptanceCriteria: ["通过"] }] }, undefined, undefined, harness.context);
-    const initial = latestWorkflow(harness);
+    const initial = structuredClone(latestWorkflow(harness));
     for (const text of ["这个设计合理吗？", "这里理解错了", "先解释一下为什么", "顺便看一下日志"]) {
-      for (const handler of harness.handlers.get("input") ?? []) assert.equal((await handler({ text, source: "interactive" }, harness.context))?.action, "continue");
-      assert.equal(latestWorkflow(harness), initial);
+      await emitExtensionEvent(harness, "input", { text, source: "interactive" });
+      assert.deepEqual(latestWorkflow(harness), initial, "讨论和纠正不改变当前工作流，也不自动创建子流程");
     }
     await emitExtensionEvent(harness, "input", { text: "子流程：独立检查部署环境", source: "interactive" });
-    const pending = latestWorkflow(harness);
+    const pending = structuredClone(latestWorkflow(harness));
     assert.equal(pending.pendingRevision.kind, "nested");
     await emitExtensionEvent(harness, "input", { text: "这个设计合理吗？", source: "interactive" });
-    assert.equal(latestWorkflow(harness), pending);
+    assert.deepEqual(latestWorkflow(harness), pending, "待规划期间的讨论不污染显式子流程请求");
     await emitExtensionEvent(harness, "input", { text: "追加任务：补测试", source: "interactive" });
-    assert.equal(latestWorkflow(harness), pending, "不把追加任务混入待规划子目标");
+    assert.deepEqual(latestWorkflow(harness), pending, "不把追加任务混入待规划子目标");
   });
 });

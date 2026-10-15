@@ -6,13 +6,25 @@ function candidate(path = "src/large.ts", fingerprint = "a".repeat(64)) {
   return { path, lineCount: 501, fingerprint };
 }
 
+function structuralCandidate(file = candidate()) {
+  return {
+    file,
+    structuralReviewPending: true,
+    testValueReviewApplicable: false,
+    testValueReviewPending: false,
+    testValueInvalidations: [],
+  };
+}
+
 function snapshot(overrides = {}) {
   const file = candidate();
   return {
     generation: 1,
     sessionId: "test-session",
     files: [file],
-    candidates: [file],
+    candidates: [structuralCandidate(file)],
+    structuralConfirmed: true,
+    testValueConfirmed: true,
     errors: [],
     ...overrides,
   };
@@ -82,12 +94,78 @@ test("完整扫描有待审版本时启动一次命令专属审阅并保留请�
   assert.match(harness.sentUserMessages[0], /developer-test/);
   assert.match(harness.sentUserMessages[0], /docs-commit.*architect/s);
   assert.match(harness.sentUserMessages[0], /完整读取/);
-  assert.match(harness.sentUserMessages[0], /不修改、拆分或重构源码/);
+  assert.match(harness.sentUserMessages[0], /不修改、拆分或重构任何被审阅文件/);
   assert.match(harness.notifications.at(-1).message, /已有 \/large 审阅请求正在处理/);
 
   await harness.emit("agent_settled");
   await command.handler("", harness.context);
   assert.equal(harness.sentUserMessages.length, 2);
+});
+
+test("/large 在只有短测试价值候选时通过原有安全门发起建议审阅", async () => {
+  const valueFile = { path: "test/unit.test.js", lineCount: 4, fingerprint: "c".repeat(64) };
+  const valueCandidate = {
+    file: valueFile,
+    structuralReviewPending: false,
+    testValueReviewApplicable: true,
+    testValueReviewPending: true,
+    testValueInvalidations: [],
+  };
+  const harness = createHarness({
+    snapshot: snapshot({ files: [], candidates: [valueCandidate] }),
+    activeRole: { role: "developer-test" },
+  });
+
+  await harness.commands.get("large").handler("", harness.context);
+
+  assert.equal(harness.sentUserMessages.length, 1);
+  assert.match(harness.sentUserMessages[0], /结构候选：\n- 无/);
+  assert.match(harness.sentUserMessages[0], /测试价值候选：\n- test\/unit\.test\.js/);
+  assert.match(harness.sentUserMessages[0], /implementationPaths/);
+  assert.match(harness.sentUserMessages[0], /完整读取测试及关联实现/);
+  assert.match(harness.notifications.at(-1).message, /测试价值待审 1 个版本/);
+});
+
+test("混合候选在扫描报告和主动请求中分别呈现两个维度", async () => {
+  const mixedFile = { path: "tests/large.spec.js", lineCount: 501, fingerprint: "d".repeat(64) };
+  const mixedCandidate = {
+    file: mixedFile,
+    structuralReviewPending: true,
+    testValueReviewApplicable: true,
+    testValueReviewPending: true,
+    testValueInvalidations: [{ code: "IMPLEMENTATION_CHANGED", path: "src/service.js" }],
+  };
+  const harness = createHarness({
+    snapshot: snapshot({ files: [mixedFile], candidates: [mixedCandidate] }),
+    activeRole: { role: "developer-test" },
+  });
+
+  await harness.commands.get("large").handler("", harness.context);
+
+  assert.match(harness.notifications.at(-1).message, /\[结构\] tests\/large\.spec\.js/);
+  assert.match(harness.notifications.at(-1).message, /\[测试价值\] tests\/large\.spec\.js/);
+  assert.match(harness.sentUserMessages[0], /结构候选：[\s\S]*tests\/large\.spec\.js[\s\S]*测试价值候选：[\s\S]*tests\/large\.spec\.js/);
+  assert.match(harness.sentUserMessages[0], /IMPLEMENTATION_CHANGED\(src\/service\.js\)/);
+});
+
+test("价值状态无法确认时不误报无候选或派发完成请求", async () => {
+  const harness = createHarness({
+    snapshot: snapshot({
+      files: [],
+      candidates: [],
+      testValueConfirmed: false,
+      errors: [{ code: "TEST_VALUE_STATE_INVALID", path: ".", message: "state unreadable" }],
+    }),
+  });
+
+  await harness.commands.get("large").handler("", harness.context);
+
+  assert.equal(harness.sentUserMessages.length, 0);
+  assert.equal(harness.notifications.at(-1).level, "warning");
+  assert.match(harness.notifications.at(-1).message, /测试价值审阅状态无法确认/);
+  assert.match(harness.notifications.at(-1).message, /state unreadable/);
+  assert.doesNotMatch(harness.notifications.at(-1).message, /没有当前版本待审候选/);
+  assert.match(harness.notifications.at(-1).message, /未启动审阅/);
 });
 
 test("没有待审候选或扫描不完整时不启动审阅", async () => {

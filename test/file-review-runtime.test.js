@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -404,5 +404,124 @@ test("价值关联实现版本变化或持久化失败时使记录失效且不�
     assert.equal(failed.details.code, "PERSIST_FAILED");
     const pending = await failingTool.execute("list-call-2", { action: "list" }, undefined, undefined, failingHarness.context);
     assert.equal(pending.details.valueTotal, 1);
+  });
+});
+
+test("短生产实现的成功 read 覆盖可分段累积并支持价值完成", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "src", "service.ts"), "export function add(a, b) {\n  return a + b;\n}\n");
+    await writeFile(path.join(directory, "test", "unit.test.js"), "assert.equal(add(1, 2), 3);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("list-short", { action: "list" }, undefined, undefined, harness.context);
+    const candidate = listed.details.valueCandidates[0];
+
+    await emitExtensionEvent(harness, "tool_result", { ...readEvent("src/service.ts"), isError: true });
+    const failedRead = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(failedRead.details.code, "IMPLEMENTATION_NOT_FULLY_READ");
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/service.ts", { offset: 1, limit: 1 }));
+    const partialRead = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(partialRead.details.code, "IMPLEMENTATION_NOT_FULLY_READ");
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/service.ts", { offset: 2, limit: 2 }));
+    const testUnread = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(testUnread.details.code, "TEST_NOT_FULLY_READ");
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("test/unit.test.js"));
+    const completed = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(completed.details.ok, true);
+    assert.equal(completed.details.reviewKind, "test-value");
+    assert.equal(harness.branch.filter((entry) => entry.customType === "pi-init-test-value-review").length, 1);
+  });
+});
+
+test("读取后实现指纹变化会清除旧覆盖并拒绝价值完成", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "src", "service.ts"), "export const version = 1;\n");
+    await writeFile(path.join(directory, "test", "unit.test.js"), "assert.equal(version, 1);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("list-stale", { action: "list" }, undefined, undefined, harness.context);
+    const candidate = listed.details.valueCandidates[0];
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/service.ts"));
+    await emitExtensionEvent(harness, "tool_result", readEvent("test/unit.test.js"));
+
+    await writeFile(path.join(directory, "src", "service.ts"), "export const version = 2;\n");
+    const stale = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(stale.details.ok, false);
+    assert.equal(stale.details.code, "IMPLEMENTATION_NOT_FULLY_READ");
+    assert.equal(harness.branch.filter((entry) => entry.customType === "pi-init-test-value-review").length, 0);
+  });
+});
+
+test("短测试价值候选贯穿运行时提示、通知和 /large 主动入口", async () => {
+  await withTempDirectory(async (directory) => {
+    await rm(path.join(directory, "src", "large.ts"));
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "src", "service.ts"), "export function run() { return true; }\n");
+    await writeFile(path.join(directory, "test", "service.test.js"), "assert.equal(run(), true);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("runtime-list", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(listed.details.total, 0);
+    assert.equal(listed.details.valueTotal, 1);
+
+    const prompt = { systemPromptOptions: { sections: {} } };
+    await emitExtensionEvent(harness, "before_agent_start", prompt);
+    assert.match(prompt.systemPromptOptions.sections.pi_init_large_file_review, /结构待审文件：0/);
+    assert.match(prompt.systemPromptOptions.sections.pi_init_large_file_review, /service\.test\.js/);
+
+    await emitExtensionEvent(harness, "agent_settled", {});
+    assert.match(harness.notifications.at(-1).message, /1 个测试文件待价值审阅/);
+
+    await harness.commands.get("large").handler("", harness.context);
+    assert.equal(harness.sentUserMessages.length, 1);
+    assert.match(harness.sentUserMessages[0].message, /service\.test\.js/);
+    assert.match(harness.sentUserMessages[0].message, /implementationPaths/);
+  });
+});
+
+test("/large 重扫成功后仍报告损坏价值状态并保留另一维候选", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "test", "unit.test.js"), "assert(true);\n");
+    const branch = [{
+      type: "custom",
+      customType: "pi-init-test-value-review",
+      data: {
+        schemaVersion: 1,
+        policyVersion: 1,
+        projectRoot: await realpath(directory),
+        sessionId: "test-session",
+        decisions: [{}],
+      },
+    }];
+    const harness = createExtensionHarness(branch, { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await harness.tools.find((item) => item.name === "switch_role")
+      .execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
+    const reviewTool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await reviewTool.execute("list-invalid-state", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(listed.details.valueScanComplete, false, JSON.stringify(listed));
+    assert.ok(listed.details.candidateErrors.some((error) => error.code === "TEST_VALUE_STATE_INVALID"));
+
+    await harness.commands.get("large").handler("", harness.context);
+
+    assert.equal(harness.sentUserMessages.length, 0);
+    const report = harness.notifications.at(-1).message;
+    assert.match(report, /结构待审 1 个版本/);
+    assert.match(report, /测试价值审阅状态无法确认/);
+    assert.match(report, /TEST_VALUE_STATE_INVALID/);
+    assert.match(report, /测试价值审阅结果包含无效字段/);
+    assert.match(report, /test\/unit\.test\.js/);
+    assert.match(report, /未启动审阅/);
+    assert.doesNotMatch(report, /没有当前版本待审候选/);
   });
 });

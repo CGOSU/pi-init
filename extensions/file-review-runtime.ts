@@ -18,23 +18,23 @@ import {
   normalizeFileReviewError,
   inspectProjectFile,
   normalizeReviewPath,
-  pendingFileReviews,
   readFileReviewState,
   recordFileReview,
   scanProjectFiles,
-  type FileReviewDecision,
   type FileScanError,
+  type FileScanResult,
   type FileSnapshot,
   type PersistedFileReviewState,
+  type StateReadResult,
 } from "../src/file-review.ts";
-import { isTestValueCandidatePath, type TestValueReviewDecision } from "../src/test-value-review.ts";
+import { isTestValueCandidatePath, type TestValueStateReadResult } from "../src/test-value-review.ts";
+import { buildReviewCandidateQueue, type ReviewCandidateQueueError } from "../src/review-candidates.ts";
 import type { PendingTestValueReview } from "../src/test-value-review.ts";
 import { registerLargeCommand, type LargeReviewSnapshot } from "./large-command.ts";
 import { hasCompleteCoverage, mergeCoverage, pathKey, type FileCoverage } from "./file-review-coverage.ts";
 import {
   TEST_VALUE_DISCOVERY_LIMITATIONS,
   TEST_VALUE_ENTRY_TYPE,
-  pendingTestValueCandidates,
   recordValueReview,
   restoreTestValueReviewSession,
   testValuePersistedState,
@@ -53,10 +53,10 @@ type ReviewSession = {
   projectRoot: string;
   sessionId: string;
   inventory: Map<string, FileSnapshot>;
-  decisions: FileReviewDecision[];
-  valueDecisions: TestValueReviewDecision[];
   errors: ReviewDiagnostic[];
   scanErrors: FileScanError[];
+  fileReviewState: StateReadResult;
+  valueReviewState: TestValueStateReadResult;
   readCoverage: Map<string, FileCoverage>;
 };
 type ReviewDependencies = {
@@ -106,7 +106,20 @@ function persistedState(session: ReviewSession): PersistedFileReviewState {
     policyVersion: FILE_REVIEW_POLICY_VERSION,
     projectRoot: session.projectRoot,
     sessionId: session.sessionId,
-    decisions: session.decisions,
+    decisions: session.fileReviewState.ok ? session.fileReviewState.value.decisions : [],
+  };
+}
+
+function emptyFileReviewState(projectRoot: string, sessionId: string): StateReadResult {
+  return {
+    ok: true,
+    value: {
+      schemaVersion: 1,
+      policyVersion: FILE_REVIEW_POLICY_VERSION,
+      projectRoot,
+      sessionId,
+      decisions: [],
+    },
   };
 }
 
@@ -114,37 +127,63 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   let session: ReviewSession | undefined;
   let generation = 0;
 
-  function pending() {
-    if (!session) return [];
-    return pendingFileReviews([...session.inventory.values()], session.decisions);
+  function candidateQueue(current = session) {
+    if (!current) return undefined;
+    const scan: FileScanResult = {
+      ok: true,
+      projectRoot: current.projectRoot,
+      files: [...current.inventory.values()],
+      errors: [...current.scanErrors],
+    };
+    return buildReviewCandidateQueue(scan, current.fileReviewState, current.valueReviewState);
   }
 
-  function valuePending() {
-    if (!session) return { ok: true as const, pending: [] as PendingTestValueReview[] };
-    return pendingTestValueCandidates(
-      [...session.inventory.values()],
-      session.scanErrors,
-      session.valueDecisions,
-    );
+  function candidateErrorDiagnostics(errors: readonly ReviewCandidateQueueError[]): ReviewDiagnostic[] {
+    return errors.map((error) => ({
+      code: error.code,
+      path: "path" in error && typeof error.path === "string" ? error.path : ".",
+      message: "message" in error ? error.message : error.cause.message,
+    }));
   }
 
-  function runtimeSection(ctx: ExtensionContext) {
+  function pending(current = session) {
+    return candidateQueue(current)?.structuralCandidates ?? [];
+  }
+
+  function valuePending(queue = candidateQueue()) {
+    if (!queue) return { ok: true as const, pending: [] as PendingTestValueReview[] };
+    if (queue.testValueConfirmed) return { ok: true as const, pending: queue.testValueCandidates };
+    const error = queue.testValueError ?? queue.error;
+    return {
+      ok: false as const,
+      error: error
+        ? { code: error.code, message: "message" in error ? error.message : error.cause.message }
+        : { code: "TEST_VALUE_CANDIDATES_UNAVAILABLE", message: "测试价值候选状态无法确认" },
+    };
+  }
+
+  function runtimeSection(ctx: ExtensionContext, queue = candidateQueue()) {
     if (!session) return "大文件审阅状态尚未完成扫描；不得将其视作无候选文件。";
-    const candidates = pending();
-    const valueResult = valuePending();
-    const valueCandidates: PendingTestValueReview[] = valueResult.ok ? valueResult.pending : [];
+    if (!queue) return "统一审阅候选状态无法确认；不得将其视作无候选文件。";
+    const candidates = queue.structuralCandidates;
+    const valueCandidates = queue.testValueCandidates;
+    const valueResult = valuePending(queue);
     const lines = [
       "[pi-init 统一审阅候选]",
       `结构审阅阈值：超过 ${FILE_REVIEW_THRESHOLD} 个物理行进入审阅；这不是文件上限，不自动拆分或拒绝编辑。`,
       `测试价值审阅：独立于行数，按文件约定发现；${TEST_VALUE_DISCOVERY_LIMITATIONS}`,
     ];
     if (session.errors.length > 0) {
-      lines.push("扫描不完整；下列结果可能不完整，不能据此断言没有其他待审文件：");
+      lines.push("扫描或审阅状态不完整；下列结果可能不完整，不能据此断言没有其他待审文件：");
       for (const error of session.errors.slice(0, MAX_SECTION_FILES)) {
         lines.push(`- [${error.code}] ${error.path || "."}: ${error.message}`);
       }
     }
-    lines.push(`结构待审文件：${candidates.length}`);
+    if (!queue.structuralConfirmed) {
+      const error = queue.structuralError;
+      lines.push(`结构候选状态无法确认${error ? `（${error.code}）：${"message" in error ? error.message : error.cause.message}` : ""}；不得推断为没有结构候选。`);
+    }
+    lines.push(`${queue.structuralConfirmed ? "结构待审文件" : "已发现结构候选（未完全确认）"}：${candidates.length}`);
     for (const file of candidates.slice(0, MAX_SECTION_FILES)) {
       lines.push(`- ${file.path} · ${file.lineCount} 行 · version ${file.fingerprint}`);
     }
@@ -164,7 +203,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     if (valueCandidates.length > MAX_SECTION_FILES) {
       lines.push(`另有 ${valueCandidates.length - MAX_SECTION_FILES} 个价值候选；调用 file_review(action="list") 分批读取。`);
     }
-    const hasCandidates = candidates.length > 0 || valueCandidates.length > 0 || !valueResult.ok;
+    const hasCandidates = queue.candidates.length > 0 || !queue.structuralConfirmed || !queue.testValueConfirmed;
     if (hasCandidates) {
       if (!deps.canReview()) {
         lines.push("职责恢复或工具安全门尚未解除；暂不执行审阅操作，先完成当前职责恢复。");
@@ -174,7 +213,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
         lines.push("结构审阅：读取文件内容，判断职责是否内聚；调用 file_review(action=\"complete\") 记录有理由的 keep 或 recommend-split。拆分只是建议，不自动修改代码；若内容版本变化，旧审阅失效。");
         lines.push("测试价值审阅：显式给出关联实现路径，完整读取当前测试及各实现版本后，用 reviewKind=\"test-value\" 记录 keep/merge/rewrite/remove 建议；这些建议不会删除、合并或重写任何测试。结构 keep 不代表价值审阅通过。");
       }
-      if (session.readCoverage.size > 0) lines.push("只有 Pi read 工具读取覆盖当前完整文件版本后，审阅确认才会被接受；大文件可用 offset/limit 分段读取。");
+      if (session.readCoverage.size > 0) lines.push("只有 Pi read 工具读取覆盖当前完整文件版本后，审阅确认才会被接受；分段读取也可累积完整覆盖。");
     }
     return lines.join("\n");
   }
@@ -196,7 +235,11 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     try {
       pi.appendEntry(
         TEST_VALUE_ENTRY_TYPE,
-        testValuePersistedState(sessionToSave.projectRoot, sessionToSave.sessionId, sessionToSave.valueDecisions),
+        testValuePersistedState(
+          sessionToSave.projectRoot,
+          sessionToSave.sessionId,
+          sessionToSave.valueReviewState.ok ? sessionToSave.valueReviewState.value.decisions : [],
+        ),
       );
       return { ok: true as const };
     } catch (error) {
@@ -218,7 +261,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return { ok: false, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描", added: [] };
     }
     const previousFiles = [...current.inventory.values()];
-    const before = new Set(pendingFileReviews(previousFiles, current.decisions).map((file) => pathKey(file.path, file.fingerprint)));
+    const before = new Set(pending(current).map((file) => pathKey(file.path, file.fingerprint)));
     const result = await scanProjectFiles(current.projectRoot, { previous: previousFiles, forcePaths, forceAll });
     if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId) {
       return { ok: false, code: "STALE_SESSION", message: "扫描期间 Pi session 已变化，结果未应用", added: [] };
@@ -244,8 +287,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     current.inventory = next;
     current.errors = result.errors;
     current.scanErrors = result.errors;
-    const added = pendingFileReviews([...next.values()], current.decisions)
-      .filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
+    const added = pending(current).filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
     return result.errors.length === 0
       ? { ok: true, added }
       : { ok: false, code: "PARTIAL_SCAN", message: `${result.errors.length} 个路径无法扫描`, added };
@@ -263,10 +305,10 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
         projectRoot: ctx.cwd,
         sessionId,
         inventory: new Map(),
-        decisions: [],
-        valueDecisions: [],
         errors: [scan.error],
         scanErrors: [scan.error],
+        fileReviewState: emptyFileReviewState(ctx.cwd, sessionId),
+        valueReviewState: { ok: true, value: testValuePersistedState(ctx.cwd, sessionId, []) },
         readCoverage: new Map(),
       };
       return;
@@ -281,14 +323,19 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     const sameSessionRecord = entryData && typeof entryData === "object"
       && (entryData as { projectRoot?: unknown }).projectRoot === scan.projectRoot
       && (entryData as { sessionId?: unknown }).sessionId === sessionId;
+    const fileReviewState = restored.ok || sameSessionRecord
+      ? restored
+      : emptyFileReviewState(scan.projectRoot, sessionId);
     const valueRestored = restoreTestValueReviewSession(branch, scan.projectRoot, sessionId);
+    const valueReviewState = valueRestored.state
+      ?? { ok: true as const, value: testValuePersistedState(scan.projectRoot, sessionId, []) };
     session = {
       generation: thisGeneration,
       projectRoot: scan.projectRoot,
       sessionId,
       inventory: new Map(scan.files.map((file) => [file.path, file])),
-      decisions: restored.ok ? restored.value.decisions : [],
-      valueDecisions: valueRestored.decisions,
+      fileReviewState,
+      valueReviewState,
       errors: [
         ...scan.errors,
         ...(!restored.ok && sameSessionRecord ? [{ code: restored.code, path: ".", message: restored.message }] : []),
@@ -334,10 +381,6 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return appendToolNotice(event, `[pi-init 大文件审阅] 文件读取状态未确认 ${refreshed.code}：${refreshed.message}`);
     }
     const current = refreshed.file;
-    const isStructuralCandidate = current.lineCount > FILE_REVIEW_THRESHOLD;
-    const isValueCandidate = isTestValueCandidatePath(current.path);
-    if (!isStructuralCandidate && !isValueCandidate) return undefined;
-
     const truncation = event.details?.truncation;
     const start = Number.isInteger(event.input.offset) && Number(event.input.offset) > 0 ? Number(event.input.offset) : 1;
     const requestedLimit = Number.isInteger(event.input.limit) && Number(event.input.limit) > 0
@@ -424,19 +467,22 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 
     const latest = await scanCurrent(ctx, [normalized.path]);
     if (!latest.ok) return failure(latest.code, latest.message);
+    if (!current.fileReviewState.ok && current.fileReviewState.code !== "POLICY_MISMATCH") {
+      return failure(current.fileReviewState.code, `结构审阅状态无法确认：${current.fileReviewState.message}`);
+    }
     const file = session?.inventory.get(normalized.path);
     if (!file) return failure("FILE_NOT_FOUND", "文件不存在或不在当前项目的审阅范围内。");
     if (file.lineCount <= FILE_REVIEW_THRESHOLD) return failure("BELOW_THRESHOLD", "该文件当前不超过审阅阈值。");
     if (file.fingerprint !== fingerprintInput) return failure("STALE_VERSION", "文件内容已变化；请读取最新版本并重新审阅。");
-    if (!pendingFileReviews([...current.inventory.values()], current.decisions).some((candidate) =>
+    if (!candidateQueue(current)?.structuralCandidates.some((candidate) =>
       candidate.path === file.path && candidate.fingerprint === file.fingerprint,
     )) return failure("ALREADY_REVIEWED", "该内容版本已经审阅；只有内容变化后才需要重新提交结论。");
     if (!completeReadEvidence(file)) return failure("FILE_NOT_FULLY_READ", "尚未通过 Pi read 工具读取该版本的全部行；分段读取后再提交审阅结论。");
 
     const next = recordFileReview(persistedState(current), file, conclusion, rationale);
-    const saved = persist({ ...current, decisions: next.decisions });
+    const saved = persist({ ...current, fileReviewState: { ok: true, value: next } });
     if (!saved.ok) return failure(saved.code, `审阅结果未保存：${saved.message}`, true);
-    current.decisions = next.decisions;
+    current.fileReviewState = { ok: true, value: next };
     current.readCoverage.delete(file.path);
     return success(`${file.path} 已记录为 ${conclusion === "keep" ? "保留" : "建议拆分"}；该结果只适用于当前内容版本。`, {
       reviewKind: "structure",
@@ -492,6 +538,9 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     if (!latest.ok) return failure(latest.code, latest.message);
     const currentSession = session;
     if (!currentSession) return failure("SESSION_NOT_READY", "当前 Pi session 尚未完成项目扫描", true);
+    if (!currentSession.valueReviewState.ok && currentSession.valueReviewState.code !== "POLICY_MISMATCH") {
+      return failure(currentSession.valueReviewState.code, `测试价值审阅状态无法确认：${currentSession.valueReviewState.message}`);
+    }
     if (currentSession.scanErrors.length > 0) {
       return failure("SCAN_INCOMPLETE", "项目扫描不完整，无法核实测试及其显式关联实现；不得登记价值完成。");
     }
@@ -517,8 +566,11 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return failure("TEST_NOT_FULLY_READ", `${testFile.path} 尚未通过 Pi read 读取当前版本全部行；请先完整读取。`);
     }
 
+    const valueDecisions = currentSession.valueReviewState.ok
+      ? currentSession.valueReviewState.value.decisions
+      : [];
     const recorded = recordValueReview(
-      currentSession.valueDecisions,
+      valueDecisions,
       scan,
       currentSession.sessionId,
       testFile.path,
@@ -527,9 +579,9 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       rationale,
     );
     if (!recorded.ok) return failure(recorded.error.code, recorded.error.message);
-    const saved = persistValue({ ...currentSession, valueDecisions: recorded.value.decisions });
+    const saved = persistValue({ ...currentSession, valueReviewState: { ok: true, value: recorded.value } });
     if (!saved.ok) return failure(saved.code, `测试价值审阅结果未保存：${saved.message}`, true);
-    currentSession.valueDecisions = recorded.value.decisions;
+    currentSession.valueReviewState = { ok: true, value: recorded.value };
     for (const implementationPath of normalizedImplementations) currentSession.readCoverage.delete(implementationPath);
     currentSession.readCoverage.delete(testFile.path);
     return success(
@@ -560,9 +612,11 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     }
     const refreshed = await scanCurrent(ctx, [], true);
     if (!refreshed.ok && refreshed.code !== "PARTIAL_SCAN") return failure(refreshed.code, refreshed.message, true);
-    const candidates = pending();
-    const valueResult = valuePending();
-    const valueCandidates: PendingTestValueReview[] = valueResult.ok ? valueResult.pending : [];
+    const queue = candidateQueue(current);
+    if (!queue) return failure("SESSION_NOT_READY", "统一审阅候选状态无法确认", true);
+    const candidates = queue.structuralCandidates;
+    const valueCandidates = queue.testValueCandidates;
+    const valueResult = valuePending(queue);
 
     if (input.action === "list") {
       const offset = Number(input.offset ?? 0);
@@ -577,20 +631,30 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       const valueStatus = valueResult.ok
         ? "测试价值发现局限：" + TEST_VALUE_DISCOVERY_LIMITATIONS
         : `测试价值候选无法确认（${valueResult.error.code}）：${valueResult.error.message}；不得推断为没有价值候选。`;
-      const summary = kind === "test-value"
-        ? `${scanStatus}${valueItems.length > 0 ? `测试价值待审 ${offset + 1}-${offset + valueItems.length}/${valueCandidates.length}` : `没有该页已发现的测试价值候选；总数 ${valueCandidates.length}`}`
-        : `${scanStatus}${structureItems.length > 0 ? `结构待审 ${offset + 1}-${offset + structureItems.length}/${candidates.length}` : `没有该页已发现的结构候选；总数 ${candidates.length}`}`;
-      return success(`${summary}\n${valueStatus}`, {
+      const structureSummary = !queue.structuralConfirmed
+        ? `结构候选状态无法确认；当前已发现 ${candidates.length} 个候选。`
+        : structureItems.length > 0
+          ? `结构待审 ${offset + 1}-${offset + structureItems.length}/${candidates.length}`
+          : `没有该页已发现的结构候选；总数 ${candidates.length}`;
+      const valueSummary = !queue.testValueConfirmed
+        ? `测试价值候选状态未确认；当前已发现 ${valueCandidates.length} 个候选。`
+        : valueItems.length > 0
+          ? `测试价值待审 ${offset + 1}-${offset + valueItems.length}/${valueCandidates.length}`
+          : `没有该页已发现的测试价值候选；总数 ${valueCandidates.length}`;
+      const summary = kind === "test-value" ? valueSummary : structureSummary;
+      return success(`${scanStatus}${summary}\n${valueStatus}`, {
         candidates: structureItems,
         total: candidates.length,
         valueCandidates: valueItems,
         valueTotal: valueCandidates.length,
-        valueScanComplete: valueResult.ok,
+        structuralComplete: queue.structuralConfirmed,
+        valueScanComplete: queue.testValueConfirmed,
         valueError: valueResult.ok ? undefined : valueResult.error,
         offset,
         reviewKind: kind,
         scanComplete: refreshed.ok,
         errors: current.errors,
+        candidateErrors: queue.errors,
       });
     }
 
@@ -607,12 +671,21 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       const files = [...current.inventory.values()]
         .filter((file) => file.lineCount > FILE_REVIEW_THRESHOLD)
         .sort((left, right) => left.path.localeCompare(right.path));
+      const queue = candidateQueue(current);
+      const errors = [...current.errors];
+      for (const error of candidateErrorDiagnostics(queue?.errors ?? [])) {
+        if (!errors.some((existing) => existing.code === error.code && existing.path === error.path && existing.message === error.message)) {
+          errors.push(error);
+        }
+      }
       return {
         generation: current.generation,
         sessionId: current.sessionId,
         files,
-        candidates: pending(),
-        errors: current.errors,
+        candidates: queue?.candidates ?? [],
+        structuralConfirmed: queue?.structuralConfirmed ?? false,
+        testValueConfirmed: queue?.testValueConfirmed ?? false,
+        errors,
       };
     },
     getActiveRole: deps.getActiveRole,
@@ -652,11 +725,11 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       event.systemPromptOptions.sections[REVIEW_SECTION] = "大文件审阅基线仍未完成；不得断言当前没有超限文件。";
       return;
     }
-    const candidates = pending();
-    const valueResult = valuePending();
-    const hasValueCandidates = !valueResult.ok || valueResult.pending.length > 0;
-    if (candidates.length > 0 || hasValueCandidates || state.errors.length > 0) {
-      event.systemPromptOptions.sections[REVIEW_SECTION] = runtimeSection(ctx);
+    const queue = candidateQueue(state);
+    const hasCandidates = !queue || queue.candidates.length > 0
+      || !queue.structuralConfirmed || !queue.testValueConfirmed || state.errors.length > 0;
+    if (hasCandidates) {
+      event.systemPromptOptions.sections[REVIEW_SECTION] = runtimeSection(ctx, queue);
     } else {
       delete event.systemPromptOptions.sections[REVIEW_SECTION];
     }
@@ -668,15 +741,23 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       ctx.ui.notify(`大文件扫描未完成：${result.message}；不会将未扫描部分标记为已检查。`, "warning");
       return;
     }
-    const notices: string[] = [];
-    if (result.added.length > 0) {
-      notices.push(`发现 ${result.added.length} 个超过 ${FILE_REVIEW_THRESHOLD} 行的代码文件，待下轮结构审阅。`);
+    const queue = candidateQueue();
+    if (!queue) {
+      ctx.ui.notify("统一审阅候选状态无法确认；不会据此宣布没有待审项。", "warning");
+      return;
     }
-    const valueResult = valuePending();
-    if (!valueResult.ok) {
-      notices.push(`测试价值候选无法确认（${valueResult.error.code}）：${valueResult.error.message}；不会推断为没有价值候选。`);
-    } else if (valueResult.pending.length > 0) {
-      notices.push(`有 ${valueResult.pending.length} 个测试文件待价值审阅（仅建议，不自动修改测试）。`);
+    const notices: string[] = [];
+    if (!queue.structuralConfirmed) {
+      const error = queue.structuralError;
+      notices.push(`结构候选无法确认${error ? `（${error.code}）：${"message" in error ? error.message : error.cause.message}` : ""}；不会推断为没有结构候选。`);
+    } else if (result.added.length > 0) {
+      notices.push(`发现 ${result.added.length} 个超过 ${FILE_REVIEW_THRESHOLD} 行的结构候选，待审总数 ${queue.structuralCandidates.length}。`);
+    }
+    if (!queue.testValueConfirmed) {
+      const error = queue.testValueError ?? queue.error;
+      notices.push(`测试价值候选无法确认${error ? `（${error.code}）：${"message" in error ? error.message : error.cause.message}` : ""}；不会推断为没有价值候选。`);
+    } else if (queue.testValueCandidates.length > 0) {
+      notices.push(`有 ${queue.testValueCandidates.length} 个测试文件待价值审阅（仅建议，不自动修改测试）。`);
     }
     if (notices.length > 0) ctx.ui.notify(notices.join("\n"), "warning");
   });

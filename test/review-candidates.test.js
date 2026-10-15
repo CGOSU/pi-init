@@ -195,3 +195,49 @@ test("扫描不完整或状态校验失败时不返回貌似成功的空队列",
   assert.equal(invalidStateQueue.ok, false);
   if (!invalidStateQueue.ok) assert.equal(invalidStateQueue.error.code, "TEST_VALUE_STATE_INVALID");
 });
+
+test("统一队列在一个维度失败时保留另一个维度候选和各自确认状态", () => {
+  const projectRoot = "/project";
+  const testFile = {
+    path: "test/unit.test.js",
+    lineCount: 2,
+    fingerprint: "a".repeat(64),
+    size: "20",
+    modifiedAt: "1",
+  };
+  const largeFile = {
+    path: "src/large.js",
+    lineCount: 501,
+    fingerprint: "b".repeat(64),
+    size: "5000",
+    modifiedAt: "1",
+  };
+  const scan = { ok: true, projectRoot, files: [testFile, largeFile], errors: [] };
+  const validFileState = readFileReviewState(createFileReviewState(projectRoot, "session-a"), projectRoot, "session-a");
+  const invalidValueState = readTestValueReviewState({ schemaVersion: 1 }, projectRoot, "session-a");
+  const valueInvalid = buildReviewCandidateQueue(scan, validFileState, invalidValueState);
+
+  assert.equal(valueInvalid.ok, false);
+  assert.equal(valueInvalid.structuralConfirmed, true);
+  assert.equal(valueInvalid.testValueConfirmed, false);
+  assert.equal(valueInvalid.structuralCandidates.length, 1);
+  assert.equal(valueInvalid.structuralCandidates[0].path, "src/large.js");
+  assert.ok(valueInvalid.candidates.some((candidate) => candidate.testValueReviewApplicable));
+  assert.ok(valueInvalid.errors.some((error) => error.code === "TEST_VALUE_STATE_INVALID"));
+
+  const invalidFileState = readFileReviewState({
+    schemaVersion: 1,
+    policyVersion: 1,
+    projectRoot,
+    sessionId: "session-a",
+    decisions: [{}],
+  }, projectRoot, "session-a");
+  const validValueState = readTestValueReviewState(createTestValueReviewState(projectRoot, "session-a"), projectRoot, "session-a");
+  const structureInvalid = buildReviewCandidateQueue({ ...scan, files: [testFile] }, invalidFileState, validValueState);
+
+  assert.equal(structureInvalid.structuralConfirmed, false);
+  assert.equal(structureInvalid.testValueConfirmed, true);
+  assert.equal(structureInvalid.testValueCandidates.length, 1);
+  assert.equal(structureInvalid.candidates[0].testValueReviewPending, true);
+  assert.ok(structureInvalid.errors.some((error) => error.code === "FILE_REVIEW_STATE_INVALID"));
+});

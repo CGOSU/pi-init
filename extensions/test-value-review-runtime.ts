@@ -12,6 +12,7 @@ import {
   type TestValueFreshnessError,
   type TestValueReviewConclusion,
   type TestValueReviewDecision,
+  type TestValueStateReadResult,
 } from "../src/test-value-review.ts";
 
 export { TEST_VALUE_DISCOVERY_LIMITATIONS };
@@ -26,6 +27,7 @@ export type ReviewDiagnostic = {
 export type TestValueReviewSessionState = {
   decisions: TestValueReviewDecision[];
   errors: ReviewDiagnostic[];
+  state?: TestValueStateReadResult;
 };
 
 export function createTestValueReviewSessionState(): TestValueReviewSessionState {
@@ -59,11 +61,15 @@ export function restoreTestValueReviewSession(
   const sameSessionRecord = Boolean(entryData) && typeof entryData === "object"
     && (entryData as { projectRoot?: unknown }).projectRoot === projectRoot
     && (entryData as { sessionId?: unknown }).sessionId === sessionId;
+  const state = restored.ok || sameSessionRecord
+    ? restored
+    : { ok: true as const, value: testValuePersistedState(projectRoot, sessionId, []) };
   return {
-    decisions: restored.ok ? restored.value.decisions : [],
+    decisions: state.ok ? state.value.decisions : [],
     errors: !restored.ok && sameSessionRecord
       ? [{ code: restored.code, path: ".", message: restored.message }]
       : [],
+    state,
   };
 }
 

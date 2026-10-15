@@ -21,8 +21,9 @@
 - 根因一（ENOTEMPTY）：日志开启时 `extensions/handoff-diagnostics.ts` 会异步 `appendFile` 到项目 `.pi/logs`；测试的 `withTempDirectory` 在 `finally` 里立即 `rm` 临时目录，与尚未完成的写入竞态，导致目录非空。
 - 根因二（TypeError）：`createHandoffDiagnostics(pi, ...)` 在 `createFileReviewRuntime(pi, ...)` 之后注册，因此测试用 `handlers.get("tool_result").at(-1)` 取到的是诊断 handler；日志关闭时诊断不注册 handler，关闭时恰好取到 file-review 的 handler，所以只在日志开启时暴露。
 - 修复：`withTempDirectory` 的 `rm` 加上 `maxRetries: 10`/`retryDelay: 50`；测试改用新增的 `test/helpers.js` `emitToolResult`，按注册顺序收集所有 `tool_result` handler 并取最后一个非 `undefined` 结果，不再依赖注册顺序或“最后一个 handler”假设。
-- 验证：`PI_INIT_HANDOFF_LOG=1 node --test test/file-review.test.js test/file-review-runtime.test.js test/extension-lifecycle.test.js` 修复前稳定 3 失败，修复后连跑 3 次均 35/35；日志关闭时原本 5/5 干净。
-- 剩余边界（根因已确认，未修复）：修复后 `PI_INIT_HANDOFF_LOG=1 npm test` 仍有 1 项失败：`test/workflow-input-resume.test.js` 的「讨论和纠正不被自动吞成子流程」在 `input` 断言上得到 `undefined`（期望 `"continue"`）。它是同一类问题：日志开启时 `handoff-diagnostics` 额外注册一个返回 `undefined` 的 `input` handler（已用探针核实：开日志 2 个 handler、第 2 个返回 `undefined`；关日志 1 个），而该用例遍历断言*每个* `input` handler 都返回 `continue`。属于测试夹具假设问题，不是产品行为缺陷。在 HEAD 隔离 worktree 上仅保留 `rm` 修复后仍稳定复现（日志开 2 通过/1 失败，关 3 通过/0 失败），但涉及文件（`test/workflow-input-resume.test.js`、`extensions/index.ts`）不在本次任务允许范围，未修改，也未描述为已解决。排查时不能只凭“日志开启”把该类失败归为既有噪音。
+- 修复（`input` 夹具，已闭环）：同一根因的第三个失败（`test/workflow-input-resume.test.js` 的「讨论和纠正不被自动吞成子流程」）已在后续工作修复：该用例改为用 `emitExtensionEvent` 驱动完整 `input` 事件链，并对 `structuredClone` 后的工作流状态快照做 `deepEqual`，不再遍历断言*每个* `input` handler 都返回 `continue`。原断言把“每个被观察到的 handler 都必须返回 continue”当成隐含契约，而日志开启时 `handoff-diagnostics` 额外注册的 `input` handler 合法返回 `undefined`。仅改测试夹具，未修改生产代码。
+- 验证：`PI_INIT_HANDOFF_LOG=1 node --test test/file-review.test.js test/file-review-runtime.test.js test/extension-lifecycle.test.js` 修复前稳定 3 失败，修复后连跑 3 次均 35/35；日志关闭时原本 5/5 干净。夹具修复完成后的全量结果为 `npm test` 446 通过、0 失败，`PI_INIT_HANDOFF_LOG=1 npm test` 446 通过、0 失败。
+- 剩余边界：已闭环。上述 `input` 夹具修复完成后，`npm test` 与 `PI_INIT_HANDOFF_LOG=1 npm test` 均为 446 项通过、0 失败；探针与根因记录保留，仍提醒不能只凭“日志开启”把该类失败归为既有噪音。
 
 ### 2026-10-15：嵌套子工作流会失效的父层身份与恢复后仍可消费的短引用
 
