@@ -167,7 +167,7 @@ test("完成任务后的重规划也先压缩，再切换到 architect", async (
     const harness = await boundaryHarness(directory);
     let complete;
     harness.context.compact = ({ onComplete }) => { complete = onComplete; };
-    await emitExtensionEvent(harness, "input", { source: "interactive", text: "调整后续计划" });
+    await emitExtensionEvent(harness, "input", { source: "interactive", text: "重规划：调整后续计划" });
     await finishFirst(harness);
     assert.equal(latest(harness).status, "replanning");
     assert.equal(latest(harness).continuation.phase, "compacting");

@@ -231,6 +231,14 @@ export function retryWorkflowTask(
 
 export function resumeWorkflow(state: WorkflowState, now = Date.now()): WorkflowState {
   if (!state || state.status !== "paused") throw new Error("工作流当前不在暂停状态");
+    if (state.pauseReason === "child-result-review" && state.pendingRevision) {
+      const next = cloneState(state, now);
+      next.status = "replanning";
+      delete next.taskPauseReason;
+      next.recoveryGeneration += 1;
+      next.continuation = { kind: "replan", revisionId: state.pendingRevision.revisionId, phase: "pending", reason: "resume" };
+      return next;
+    }
   if (["boundary-compaction-failed", "boundary-compaction-interrupted"].includes(state.pauseReason ?? "")) {
     const result = cloneState(state, now);
     if (!result.continuation || result.continuation.kind === "review") throw new Error("任务边界缺少可恢复的交接身份");
@@ -263,10 +271,20 @@ export function cancelWorkflow(state: WorkflowState, now = Date.now()): Workflow
   }
   const result = cloneState(state, now);
   result.status = "cancelled";
+  const activeTask = result.currentTaskId ? getWorkflowTask(result, result.currentTaskId) : undefined;
+  if (activeTask?.status === "in_progress") {
+    activeTask.status = "blocked";
+    activeTask.blockReason = "任务已取消；取消不回滚已发生的副作用";
+    if (activeTask.executionStartedAt !== undefined || ["dispatching", "queued", "executing", "uncertain"].includes(result.handoff?.phase ?? "")) activeTask.outcomeUnknown = true;
+  }
   result.currentTaskId = undefined;
   result.recoveryGeneration += 1;
   delete result.handoff;
   delete result.continuation;
+  delete result.pendingRevision;
+  for (const revision of result.revisions) {
+    if (revision.status === "requested") { revision.status = "applied"; revision.appliedAt = now; }
+  }
   result.nudgeCount = 0;
   return result;
 }

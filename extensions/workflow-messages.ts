@@ -1,10 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
 import {
-  cloneState,
   getWorkflowTask,
   markWorkflowTaskOutcomeUnknown,
-  setWorkflowHandoffPhase,
   workflowHandoffIdentity,
   workflowReplanIdentity,
 } from "../src/workflow.ts";
@@ -16,6 +14,7 @@ import type {
 } from "./runtime-state.ts";
 import { getAcceptedEvidence } from "../src/coordination.ts";
 import { textOf } from "./runtime-state.ts";
+import { transitionWorkflowDispatch } from "../src/workflow-orchestrator.ts";
 
 const GENERIC_TASK_TOOL_GUIDANCE = "遵循公共 pi-init-role-routing Skill 的读写与安全边界；只修改当前任务允许范围。关键事实、业务契约或业务决策缺失时，developer-test 必须调用 task_workflow(action=\"clarify\") 并停止，不得猜测；普通可逆工程细节按工程自由度自主决定，实际验证并报告真实结果。";
 const ARCHITECT_RUNTIME_GUIDANCE =
@@ -114,6 +113,7 @@ export function createWorkflowMessages(
       `工作流目标：${workflowState.plan.summary}`,
       workflowState.plan.constraints.length > 0 ? `架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `当前任务直接依赖成果：\n${completed.join("\n")}` : "",
+      workflowState.subworkflowContract ? `子流程契约：${JSON.stringify(workflowState.subworkflowContract)}\n返回父流程：${workflowState.parentStack?.at(-1)?.state.workflowId}。只交付契约要求的结果与实际验证；不得再创建子流程。allowedFiles 是声明的修改范围，不是工具沙箱。` : "",
       `当前任务（${task.id}，角色 ${task.role}）：${task.task}`,
       `当前任务结果身份 JSON（${task.contract && task.role === "developer-test" ? "clarify/" : ""}complete/block 时按原样传回）：${JSON.stringify(identity)}`,
       `允许涉及的文件或目录：${task.files.join(", ")}`,
@@ -141,28 +141,30 @@ export function createWorkflowMessages(
       || (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowHandoffIdentity] === expectedIdentity[key as keyof WorkflowHandoffIdentity]))) {
       return false;
     }
-    const firstDispatch = ["prepared", "waiting-role", "compacting"].includes(current.handoff?.phase ?? "");
-    if (!firstDispatch && !["executing"].includes(current.handoff?.phase ?? "")) return false;
+    const type = current.handoff?.phase === "executing" ? "task-reminder-requested" : "task-dispatch-requested";
+    const transition = transitionWorkflowDispatch(current, { type, identity }, Date.now());
+    if (!transition.effects.length) return false;
+    const firstDispatch = transition.state !== current;
     let dispatchAttempted = false;
     try {
+      const content = workflowTaskPrompt(taskId, note);
       if (firstDispatch) {
-        deps.persistWorkflowState(setWorkflowHandoffPhase(current, "dispatching"), ctx);
+        deps.persistWorkflowState(transition.state, ctx);
       }
       deps.setInternalContinuationPending(true);
       dispatchAttempted = true;
       deps.pi.sendMessage(
         {
           customType: "pi-init-workflow-task",
-          content: workflowTaskPrompt(taskId, note),
+          content,
           display: false,
           details: identity,
         },
         { triggerTurn: true },
       );
-      if (firstDispatch
-        && state.workflowState?.handoff?.handoffId === identity.handoffId
-        && state.workflowState.handoff.phase === "dispatching") {
-        deps.persistWorkflowState(setWorkflowHandoffPhase(state.workflowState, "queued"), ctx);
+      if (firstDispatch && state.workflowState) {
+        const queued = transitionWorkflowDispatch(state.workflowState, { type: "task-queued", identity }, Date.now());
+        if (queued.state !== state.workflowState) deps.persistWorkflowState(queued.state, ctx);
       }
       return true;
     } catch (error) {
@@ -198,6 +200,21 @@ export function createWorkflowMessages(
     const workflowState = state.workflowState;
     const request = workflowState?.pendingRevision;
     if (!workflowState || !request) throw new Error("工作流缺少待处理的重规划请求");
+    if (workflowState.pauseReason === "child-result-review") {
+      const child = workflowState.subworkflowHistory?.findLast((entry) => entry.parentWorkflowId === workflowState.workflowId);
+      const remaining = workflowState.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded");
+      const dependencies = new Set(remaining.flatMap((task) => task.dependsOn));
+      const parentTasks = [...remaining, ...workflowState.tasks.filter((task) => task.status === "completed" && dependencies.has(task.id))];
+      return [
+        "[PI-INIT 子流程结果与父计划审阅]",
+        `当前审阅/重规划身份 JSON：${JSON.stringify(identity)}`,
+        `父计划：${JSON.stringify({ ...workflowState.plan, tasks: parentTasks })}`,
+        `子流程结果包（状态、输出、验证、副作用未知标记、契约和审阅记录）：${JSON.stringify(child)}`,
+        `待处理指令：${request.direction}`,
+        "architect 只审阅与决策；缺少实际核查依据时用 request-evidence/review-evidence，不得自行取证。调用 task_workflow(action=review-child, 上述全部身份, childReview={childWorkflowId,decision:continue|replan|block,reason,parentPlanValid,acceptedOutputs:[按原文列出已满足的 expectedOutputs],verification:[实际验证依据]})。",
+        "仅在子流程成功、全部输出满足、验证完整且父计划仍有效时 continue。取消、结果未知或契约缺失不得 continue；发现影响则 replan，不能确认则 block。replan 决定后以同一身份调用 replan 修改父计划并保留有效任务，不重放副作用。子流程结束本身不解除父任务等待条件。",
+      ].join("\n\n");
+    }
     const pending = workflowState.tasks
       .filter((item) => item.status === "pending")
       .map((item) => `- ${item.id}: ${item.task}；依赖：${item.dependsOn.join(", ") || "无"}`);
@@ -251,7 +268,7 @@ export function createWorkflowMessages(
         : "",
       "规划边界：architect 不直接取证、不执行代码、不连接 MCP；允许通过 request-evidence 安排 docs-commit 查证，并通过 review-evidence 接受、补查或阻塞。缺关键事实时先取证；契约冲突应依据已接受证据/明确需求解决；业务决策缺失必须向用户确认，不能猜测或应用含 blockingQuestions 的计划。",
       request.kind === "nested"
-        ? "只规划 childGoal 对应的独立子工作流；不要覆盖父层计划或把父层未完成任务搬入子层。父层任务、澄清、身份与已完成成果会被原样挂起，子层完成后由运行时恢复父层。不得重放父层副作用为 occurred/unknown 的任务。"
+        ? "只规划 childGoal 对应的独立子工作流；不要覆盖父层计划或把父层未完成任务搬入子层。父层任务、澄清、身份与已完成成果会被原样挂起，子层完成后返回父层审阅结果与计划有效性，不直接恢复执行。提交 replan 必须提供独立 subworkflowContract={inputs:[...],expectedOutputs:[...],acceptanceCriteria:[...],allowedFiles:[...]}；返回位置由运行时父层身份绑定，仅允许一层活动子流程。不得重放父层副作用为 occurred/unknown 的任务。"
         : "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。旧任务的 completedWork 与验证已持久化在澄清报告中，不得将被澄清任务伪报完成。副作用为 occurred/unknown 时不得自动重放；新任务契约必须通过 clarificationResolutions 明确说明处理方式，未核实则不得派发。",
       request.kind === "nested"
         ? "子层 task ID 只须在新子工作流内唯一；不要继承、替换或重写父层任务 ID。"
@@ -271,27 +288,25 @@ export function createWorkflowMessages(
     const identity = workflowReplanIdentity(current);
     if (!identity) return false;
     if (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowReplanIdentity] === expectedIdentity[key as keyof WorkflowReplanIdentity])) return false;
+    const transition = transitionWorkflowDispatch(current, { type: "replan-dispatch-requested", identity }, Date.now());
+    if (!transition.effects.length) return false;
     try {
-      if (continuation.phase !== "dispatching" && continuation.phase !== "queued") {
-        const dispatching = cloneState(current);
-        dispatching.continuation = { ...continuation, phase: "dispatching" };
-        deps.persistWorkflowState(dispatching, ctx);
-      }
+      const content = workflowReplanPrompt(identity);
+      deps.persistWorkflowState(transition.state, ctx);
       deps.setInternalContinuationPending(true);
       deps.pi.sendMessage(
         {
           customType: "pi-init-workflow-replan",
-          content: workflowReplanPrompt(identity),
+          content,
           display: false,
           details: identity,
         },
         { triggerTurn: true },
       );
       const latest = state.workflowState;
-      if (latest?.continuation?.kind === "replan" && latest.continuation.handoffId === identity.handoffId) {
-        const queued = cloneState(latest);
-        queued.continuation = { ...latest.continuation, phase: "queued" };
-        deps.persistWorkflowState(queued, ctx);
+      if (latest) {
+        const queued = transitionWorkflowDispatch(latest, { type: "replan-queued", identity }, Date.now());
+        if (queued.state !== latest) deps.persistWorkflowState(queued.state, ctx);
       }
       return true;
     } catch (error) {

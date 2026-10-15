@@ -496,7 +496,9 @@ export function getWorkflowExecutionDuration(state: WorkflowState | null | undef
 function cloneSubworkflowSummary(summary: WorkflowSubworkflowSummary): WorkflowSubworkflowSummary {
   return {
     ...summary,
-    tasks: summary.tasks.map((task) => ({ ...task })),
+    tasks: summary.tasks.map((task) => ({ ...task, ...(task.verification ? { verification: [...task.verification] } : {}) })),
+    ...(summary.contract ? { contract: structuredClone(summary.contract) } : {}),
+    ...(summary.reviews ? { reviews: structuredClone(summary.reviews) } : {}),
   };
 }
 
@@ -508,6 +510,7 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
     recoveryGeneration: state.recoveryGeneration ?? 0,
     executor: normalizeExecutor(state.executor),
     ...(state.authority !== undefined ? { authority: normalizeExecutor(state.authority) } : {}),
+    ...(state.subworkflowContract ? { subworkflowContract: structuredClone(state.subworkflowContract) } : {}),
     plan: clonePlan(state.plan),
     tasks: state.tasks.map(cloneTask),
     revisions: (state.revisions ?? []).map(cloneRevision),

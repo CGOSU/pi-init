@@ -1,5 +1,8 @@
 import type { WorkflowTaskContract } from "./coordination-types.ts";
 import type { WorkflowExecutor } from "./role-types.ts";
+export type WorkflowSubworkflowContract = { inputs: string[]; expectedOutputs: string[]; acceptanceCriteria: string[]; allowedFiles: string[] };
+export type WorkflowSubworkflowReview = { childWorkflowId: string; decision: "continue" | "replan" | "block"; reason: string; parentPlanValid: boolean; acceptedOutputs: string[]; verification: string[]; reviewedAt: number };
+
 export type { WorkflowExecutor } from "./role-types.ts";
 
 export type WorkflowStatus = "running" | "paused" | "replanning" | "completed" | "cancelled";
@@ -128,6 +131,8 @@ export type WorkflowSubworkflowTaskSummary = {
   task: string;
   status: WorkflowTaskStatus;
   completionSummary?: string;
+  verification?: string[];
+  outcomeUnknown?: boolean;
 };
 
 export type WorkflowSubworkflowSummary = {
@@ -138,6 +143,8 @@ export type WorkflowSubworkflowSummary = {
   summary: string;
   status: "completed" | "cancelled";
   tasks: WorkflowSubworkflowTaskSummary[];
+  contract?: WorkflowSubworkflowContract;
+  reviews?: WorkflowSubworkflowReview[];
   startedAt?: number;
   completedAt?: number;
 };
@@ -162,6 +169,7 @@ export type WorkflowStateCore = {
   handoff?: WorkflowHandoff;
   continuation?: WorkflowContinuation;
   subworkflowHistory?: WorkflowSubworkflowSummary[];
+  subworkflowContract?: WorkflowSubworkflowContract;
   createdAt?: number;
   updatedAt?: number;
   startedAt?: number;

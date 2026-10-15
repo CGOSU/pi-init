@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const ARCHITECT_ROLE = "architect";
 /** architect 允许的 task_workflow 动作由这一份定义同时驱动运行时边界与工具/交接指导。 */
-export const ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS = ["plan", "replan", "status", "request-evidence", "review-evidence"] as const;
+export const ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS = ["plan", "replan", "status", "request-replan", "request-child", "review-child", "request-evidence", "review-evidence"] as const;
 export const ARCHITECT_ALLOWED_ACTIONS_TEXT = ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS.join("、");
 const ALLOWED_TASK_WORKFLOW_ACTIONS = new Set<string>(ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS);
 const ARCHITECT_BOUNDARY_REASON =

@@ -437,7 +437,7 @@ test("新用户方向使旧 revision handoff 失效，只有最新身份能应�
       tasks: [{ id: "replacement", task: "新任务", files: ["src/new.js"], acceptanceCriteria: ["完成"] }],
     };
 
-    await emitExtensionEvent(harness, "input", { source: "interactive", text: "追加第二条方向" });
+    await emitExtensionEvent(harness, "input", { source: "interactive", text: "重规划：追加第二条方向" });
     await assert.rejects(
       workflow.execute("stale-replan", params, undefined, undefined, harness.context),
       { code: "WORKFLOW_ACTION_IDENTITY_STALE" },

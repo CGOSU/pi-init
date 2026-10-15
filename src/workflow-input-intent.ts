@@ -43,5 +43,9 @@ export function isWorkflowContinuationInput(value: unknown): boolean {
 export function isExplicitWorkflowReplanInput(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const normalized = value.normalize("NFKC").trim();
-  return /^(?:重规划|重新规划|修改(?:当前|现有|原有)?计划|调整(?:当前|现有|原有)?计划|replan(?:\s+workflow)?|revise plan)(?:[：:\s，,。.!！?？-]|$)/iu.test(normalized);
+  return /^(?:追加任务|补充任务|重规划|重新规划|修改(?:当前|现有|原有)?计划|调整(?:当前|现有|原有)?计划|replan(?:\s+workflow)?|revise plan)(?:[：:\s，,。.!！?？-]|$)/iu.test(normalized);
+}
+
+export function isExplicitWorkflowChildInput(value: unknown): boolean {
+  return typeof value === "string" && /^(?:创建子流程|子流程|独立子目标|start child workflow)\s*[：:]\s*\S/iu.test(value.normalize("NFKC").trim());
 }

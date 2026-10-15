@@ -16,7 +16,7 @@ export type WorkflowPauseBlock = {
 };
 
 export type WorkflowPauseReason = {
-  kind: "architecture-review" | "handoff-outcome-unknown" | "legacy-execution-outcome-unknown" | "task-blocked" | "workflow-replan" | "boundary-compaction" | "task-pause-reason" | "unrecognized" | "unrecorded";
+  kind: "child-result-review" | "architecture-review" | "handoff-outcome-unknown" | "legacy-execution-outcome-unknown" | "task-blocked" | "workflow-replan" | "boundary-compaction" | "task-pause-reason" | "unrecognized" | "unrecorded";
   text: string;
   code?: string;
 };
@@ -29,6 +29,7 @@ export type WorkflowPauseView = {
 };
 
 const PAUSE_REASON_KINDS: Record<string, Exclude<WorkflowPauseReason["kind"], "task-pause-reason" | "unrecognized" | "unrecorded">> = {
+  "child-result-review": "child-result-review",
   "architecture-review": "architecture-review",
   "handoff-outcome-unknown": "handoff-outcome-unknown",
   "legacy-execution-outcome-unknown": "legacy-execution-outcome-unknown",
@@ -76,7 +77,7 @@ export function createWorkflowPauseView(state: WorkflowState): WorkflowPauseView
   const reason = describePauseReason(state);
   const recoverySteps: WorkflowPauseAction[] = blockedTasks.length > 0
     ? []
-    : reason.kind === "architecture-review" || reason.kind === "boundary-compaction"
+    : reason.kind === "child-result-review" || reason.kind === "architecture-review" || reason.kind === "boundary-compaction"
       ? [{ kind: "resume" }]
       : reason.kind === "handoff-outcome-unknown" || reason.kind === "legacy-execution-outcome-unknown"
         ? [{ kind: "verify-external-effects" }]

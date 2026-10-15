@@ -260,7 +260,7 @@ test("协调 plan/replan 强制任务契约；clarify 退回 architect，补证�
 
     await emitExtensionEvent(harness, "input", {
       source: "interactive",
-      text: "确认只查询先前 attempt 状态，不再次提交持久化写操作。",
+      text: "重规划：确认只查询先前 attempt 状态，不再次提交持久化写操作。",
     });
     const updatedWorkflow = latestWorkflow(harness);
     const updatedCoordination = latestCoordination(harness).coordination;

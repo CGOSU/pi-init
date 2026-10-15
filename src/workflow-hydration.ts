@@ -41,6 +41,7 @@ import type {
   WorkflowStatus,
   WorkflowValidationFailure,
 } from "./workflow-types.ts";
+import { normalizeSubworkflowContract, normalizeSubworkflowReview, assertSubworkflowReview, assertSubworkflowTaskScope } from "./workflow-subworkflow.ts";
 
 function isRecord(value: unknown): value is WorkflowStateRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -265,6 +266,8 @@ function normalizeSubworkflowHistory(value: unknown, workflowId: string, rootTas
         id,
         task: requireText(task.task, `嵌套工作流 ${childWorkflowId} 的任务摘要 ${id} 的 task`),
         status,
+        ...(task.verification !== undefined ? { verification: normalizeTextList(task.verification, "子流程任务验证") } : {}),
+        ...(task.outcomeUnknown !== undefined ? { outcomeUnknown: (() => { if (typeof task.outcomeUnknown !== "boolean") throw new Error("子流程结果未知标记无效"); return task.outcomeUnknown; })() } : {}),
         ...(task.completionSummary !== undefined
           ? { completionSummary: requireText(task.completionSummary, `嵌套工作流 ${childWorkflowId} 的任务摘要 ${id} 的 completionSummary`) }
           : {}),
@@ -283,7 +286,7 @@ function normalizeSubworkflowHistory(value: unknown, workflowId: string, rootTas
     }
     knownWorkflowIds.add(childWorkflowId);
     knownTaskIds.set(childWorkflowId, taskIds);
-    return {
+    const summary: WorkflowSubworkflowSummary = {
       workflowId: childWorkflowId,
       parentWorkflowId,
       ...(parentTaskId ? { parentTaskId } : {}),
@@ -291,9 +294,13 @@ function normalizeSubworkflowHistory(value: unknown, workflowId: string, rootTas
       summary: requireText(item.summary, `嵌套工作流 ${childWorkflowId} 的 summary`),
       status: item.status,
       tasks,
+      ...(item.contract !== undefined ? { contract: normalizeSubworkflowContract(item.contract) } : {}),
+      ...(item.reviews !== undefined ? { reviews: (() => { if (!isUnknownArray(item.reviews)) throw new Error("子流程审阅历史必须是数组"); return item.reviews.map((value) => { const review = normalizeSubworkflowReview(value); if (review.childWorkflowId !== childWorkflowId) throw new Error("子流程审阅身份不一致"); return review; }); })() } : {}),
       ...(startedAt !== undefined ? { startedAt } : {}),
       ...(completedAt !== undefined ? { completedAt } : {}),
     };
+    for (const review of summary.reviews ?? []) assertSubworkflowReview(summary, review);
+    return summary;
   });
 }
 
@@ -384,6 +391,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack 
     throw new Error("已保存的工作流运行状态缺少重规划边界任务");
   }
   const allowedPausedRevisionReasons: ReadonlySet<unknown> = new Set([
+    "child-result-review",
     "task-blocked",
     "task-not-completed",
     "handoff-outcome-unknown",
@@ -420,6 +428,9 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack 
     )) throw Object.assign(new Error("已保存的工作流 handoff 身份与当前状态不一致"), { code: "WORKFLOW_HANDOFF_IDENTITY_MISMATCH" });
   }
 
+  if (state.subworkflowContract !== undefined) {
+    assertSubworkflowTaskScope(normalizeSubworkflowContract(state.subworkflowContract), tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"));
+  }
   const planSource = isRecord(state.plan) ? state.plan : {};
   const createdAt = normalizeTimestamp(state.createdAt, "已保存的工作流 createdAt");
   const updatedAt = normalizeTimestamp(state.updatedAt, "已保存的工作流 updatedAt");
@@ -461,6 +472,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack 
     revisions,
     ...(pendingRevision ? { pendingRevision } : {}),
     subworkflowHistory,
+    ...(state.subworkflowContract !== undefined ? { subworkflowContract: normalizeSubworkflowContract(state.subworkflowContract) } : {}),
     ...(allowParentStack && state.parentStack !== undefined
       ? {
           parentStack: (() => {

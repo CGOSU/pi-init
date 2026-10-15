@@ -71,6 +71,7 @@ export function requestWorkflowReplan(
   { revisionId, direction, kind = "replan", childGoal }: WorkflowReplanRequest = {},
   now = Date.now(),
 ): WorkflowState {
+    if (kind === "nested" && state.parentStack?.length) throw Object.assign(new Error("仅允许一层活动子流程；请在当前子流程内拆分任务"), { code: "WORKFLOW_NESTED_DEPTH_LIMIT" });
   if (!state || state.status !== "running") {
     throw new Error("只有运行中的工作流才能请求重规划");
   }
@@ -104,6 +105,7 @@ export function requestWorkflowReplan(
     result.continuation = { kind: "replan", revisionId: id, phase: "pending", reason: "replan-requested" };
   }
   return result;
+
 }
 
 export function requestWorkflowNestedGoal(

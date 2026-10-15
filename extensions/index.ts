@@ -17,7 +17,7 @@ import {
 } from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
-import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput } from "../src/workflow-input-intent.ts";
+import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput, isExplicitWorkflowChildInput } from "../src/workflow-input-intent.ts";
 import { createRoleRuntime } from "./role-runtime.ts";
 import { registerActivityStatusSources } from "./activity-status-registration.ts";
 import { createArchitectBoundary, ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
@@ -202,9 +202,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     // Ordinary continuation is not a direction change. Preserve the saved plan and let the
     // existing settled/recovery path resume whichever task or replan boundary is active.
     if (isWorkflowContinuationInput(event.text)) return false;
+    const explicitReplan = isExplicitWorkflowReplanInput(event.text);
+    const explicitChild = isExplicitWorkflowChildInput(event.text);
+    if (!explicitReplan && !explicitChild) return false;
 
     if (runtimeState.workflowState.pendingRevision) {
       const revision = runtimeState.workflowState.pendingRevision;
+      if (explicitChild !== (revision.kind === "nested")) {
+        ctx.ui.notify("当前已有不同类型的待处理请求；未将新指令混入该请求，请先处理或取消当前请求。", "warning");
+        return true;
+      }
       try {
         const next = appendWorkflowReplanDirection(runtimeState.workflowState, event.text.trim());
         await persistWorkflowDirection(next, ctx);
@@ -229,7 +236,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const previous = runtimeState.workflowState;
       if (!previous) return false;
       const direction = event.text.trim();
-      const explicitReplan = isExplicitWorkflowReplanInput(direction);
       const next = explicitReplan
         ? requestWorkflowReplan(previous, { direction })
         : requestWorkflowNestedGoal(previous, { direction });
@@ -519,7 +525,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  pi.registerTool<typeof taskWorkflowParameters>({
     name: "task_workflow",
     label: "Task Workflow",
     description:
@@ -533,7 +539,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "task contract 与协调状态是双向门控：携带 contract 的任务必须有绑定当前 workflow revision 且已接受、未过期的协调证据，contract.evidence 必须引用该账本；没有协调证据的普通计划不要附带 contract，否则会被拒。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
-      "After completion, continue only to the next ready task; with a pending revision, wait for architect to replan. Only architect may call replan with the exact revisionId and valid retained task IDs; architect may call only plan, replan, or status on task_workflow.",
+      "Discussion does not change workflow state. Only explicit child requests (子流程：目标 or request-child) create one independent child; additions update the current queue. Child planning requires subworkflowContract (inputs, expectedOutputs, acceptanceCriteria, allowedFiles). No recursive children. On return, architect must review-child using the current replan identity and structured verification; continue only if all expected outputs are accepted and the parent plan remains valid, otherwise replan or block. cancel ends the current child and returns for review; cancel-all ends the whole workflow without rolling back side effects.",
     ],
     parameters: taskWorkflowParameters,
     renderCall(args, theme) {

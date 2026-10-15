@@ -8,7 +8,6 @@ import {
   getWorkflowTask,
   hydrateWorkflowState,
   isWorkflowActive,
-  markWorkflowTaskStarted,
   recoverWorkflowState,
   recordWorkflowNudge,
   setWorkflowHandoffPhase,
@@ -33,6 +32,7 @@ import {
 import type { RoleRuntime } from "./role-runtime.ts";
 import type { WorkflowMessages } from "./workflow-messages.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
+import { selectWorkflowScheduleEffect, transitionWorkflowDispatch } from "../src/workflow-orchestrator.ts";
 
 export type WorkflowDispatchDependencies = {
   roleRuntime: RoleRuntime;
@@ -304,7 +304,8 @@ export function createWorkflowDispatch(
 
   function persistCurrentTaskStarted(ctx: ExtensionContext, candidate: NonNullable<ReturnType<typeof currentTaskStartCandidate>>) {
     try {
-      deps.report.persistWorkflowState(markWorkflowTaskStarted(candidate.current, candidate.task.id), ctx);
+      const transition = transitionWorkflowDispatch(candidate.current, { type: "task-started", identity: candidate.identity }, Date.now());
+      if (transition.state !== candidate.current) deps.report.persistWorkflowState(transition.state, ctx);
     } catch (error) {
       ctx.ui.notify(`无法持久化任务 ${candidate.task.id} 的实际启动身份：${textOf(error)}；任务结果将保持未验收`, "error");
     }
@@ -434,30 +435,24 @@ export function createWorkflowDispatch(
       return;
     }
     if (startTaskBoundaryCompaction(ctx, current)) return;
-    if (current.status === "replanning") {
+    const effect = selectWorkflowScheduleEffect(current);
+    if (!effect) return;
+    if (effect.kind === "replan") {
       await scheduleWorkflowReplan(ctx);
       return;
     }
-    if (!isWorkflowActive(current)) return;
     const coordinationReadiness = workflowCoordinationReadiness(current, state);
     if (!coordinationReadiness.ok) {
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`协调开发任务未通过就绪门（${coordinationReadiness.code}）：${coordinationReadiness.message}；不会派发。`, "error");
       return;
     }
-    if (current.currentTaskId) {
-      const handoff = current.handoff;
-      if (!handoff) return;
-      if (["dispatching", "queued"].includes(handoff.phase)) return;
-      if (["prepared", "waiting-role", "compacting"].includes(handoff.phase)) {
-        state.workflowDispatchInFlight = true;
-        await prepareAndDispatchCurrentTask(
-          ctx,
-          handoff.taskId,
-        );
-        return;
-      }
-      if (handoff.phase !== "executing") return;
+    if (effect.kind === "dispatch-task") {
+      state.workflowDispatchInFlight = true;
+      await prepareAndDispatchCurrentTask(ctx, effect.taskId);
+      return;
+    }
+    if (effect.kind === "nudge-task") {
       state.traceHandoff?.(ctx, "workflow.nudge_requested");
       const nudged = recordWorkflowNudge(current);
       if (nudged === current) return;
@@ -479,17 +474,15 @@ export function createWorkflowDispatch(
       return;
     }
 
-    const next = getNextWorkflowTask(current);
-    if (!next) return;
     state.workflowDispatchInFlight = true;
-    const started = startWorkflowTask(current, next.id);
+    const started = startWorkflowTask(current, effect.taskId);
     try {
       deps.report.persistWorkflowState(started, ctx);
     } catch (error) {
       state.workflowDispatchInFlight = false;
       throw error;
     }
-    await prepareAndDispatchCurrentTask(ctx, next.id);
+    await prepareAndDispatchCurrentTask(ctx, effect.taskId);
   }
 
   async function resumeLocalWorkflow(ctx: ExtensionContext) {

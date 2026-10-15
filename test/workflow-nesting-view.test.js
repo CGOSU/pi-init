@@ -19,6 +19,9 @@ import {
   formatWorkflowStatusText,
 } from "../extensions/workflow-status-renderer.ts";
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
+import { reviewReturnedSubworkflow } from "../src/workflow-subworkflow.ts";
+const contract = { inputs: ["需求"], expectedOutputs: ["检查结论"], acceptanceCriteria: ["验证通过"], allowedFiles: ["src"] };
+
 
 const runtime = {
   workflowRestoreError: undefined,
@@ -44,7 +47,7 @@ test("工作流视图显示当前嵌套路径，并在返回父层后呈现真�
     verification: ["node --test test/workflow-nesting-view.test.js → pass"],
   }, 14);
   const child = createNestedWorkflowState(parent, {
-    summary: "独立子层计划",
+    summary: "独立子层计划", subworkflowContract: contract,
     constraints: [],
     tasks: [task("child-a")],
   }, 15);
@@ -83,24 +86,25 @@ test("工作流视图显示当前嵌套路径，并在返回父层后呈现真�
   const returnedTree = formatWorkflowGoalTreeText(returnedView);
   assert.match(returnedTree, /└── ✓ 独立子层计划 · 已完成 · 已完成 1\/1/);
   assert.match(returnedTree, /父层计划[\s\S]*子层计划/);
-  const cancelledChild = createNestedWorkflowState(requestWorkflowNestedGoal(resumedParent, { direction: "取消目标分支" }, 21), {
-    summary: "取消子层计划",
+  const acceptedParent = reviewReturnedSubworkflow(resumedParent, { childWorkflowId: child.workflowId, decision: "continue", parentPlanValid: true, reason: "输出满足且父计划有效", acceptedOutputs: contract.expectedOutputs, verification: ["已核对输出与父依赖"] }, 21);
+  const cancelledChild = createNestedWorkflowState(requestWorkflowNestedGoal(acceptedParent, { direction: "取消目标分支" }, 21), {
+    summary: "取消子层计划", subworkflowContract: contract,
     constraints: [],
     tasks: [task("cancelled-child-a")],
   }, 22);
   const cancelledParent = returnFromNestedWorkflow(cancelWorkflow(cancelledChild, 23), "cancelled", 24);
   const cancelledTree = formatWorkflowGoalTreeText(createWorkflowStatusView(cancelledParent, runtime, 25));
   assert.match(cancelledTree, /└── × 取消子层计划 · 已取消 · 已完成 0\/1/);
-  const secondChild = createNestedWorkflowState(requestWorkflowNestedGoal(resumedParent, { direction: "继续到第二个子目标" }, 21), {
-    summary: "第二子层计划",
+  const secondChild = createNestedWorkflowState(requestWorkflowNestedGoal(acceptedParent, { direction: "继续到第二个子目标" }, 21), {
+    summary: "第二子层计划", subworkflowContract: contract,
     constraints: [],
     tasks: [task("second-child-a")],
   }, 22);
-  const grandchild = createNestedWorkflowState(requestWorkflowNestedGoal(secondChild, { direction: "进一步拆分目标" }, 23), {
-    summary: "孙层计划",
-    constraints: [],
-    tasks: [task("grandchild-a")],
-  }, 24);
+  assert.throws(() => requestWorkflowNestedGoal(secondChild, { direction: "进一步拆分目标" }, 23), { code: "WORKFLOW_NESTED_DEPTH_LIMIT" });
+  const grandchild = createWorkflowState({ summary: "孙层计划", sessionId: secondChild.sessionId, tasks: [task("grandchild-a")] }, 24);
+  const { parentStack, ...core } = secondChild;
+  core.status = "paused"; core.pauseReason = "waiting-child-workflow"; delete core.continuation;
+  grandchild.parentStack = [...parentStack, { state: core }];
   const deepTree = formatWorkflowGoalTreeText(createWorkflowStatusView(grandchild, runtime, 25));
   const rootIndex = deepTree.indexOf("父层计划");
   const returnedChildIndex = deepTree.indexOf("子层计划");

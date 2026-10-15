@@ -17,6 +17,7 @@ import { createNestedWorkflowState, returnFromNestedWorkflow } from "../src/work
 function plan(summary, taskId) {
   return {
     summary,
+    subworkflowContract: { inputs: ["需求"], expectedOutputs: ["检查结论"], acceptanceCriteria: ["验证通过"], allowedFiles: ["src"] },
     constraints: ["仅在当前层执行，完成后按 parentStack 返回"],
     tasks: [{
       id: taskId,
@@ -65,9 +66,10 @@ test("子工作流独立持久化；完成后按身份和父层位置恢复，�
   assert.ok(resumedRoot);
   assert.equal(resumedRoot.workflowId, root.workflowId);
   assert.equal(resumedRoot.planVersion, root.planVersion);
-  assert.equal(resumedRoot.status, "running");
+  assert.equal(resumedRoot.status, "replanning");
+  assert.equal(resumedRoot.pauseReason, "child-result-review");
   assert.equal(resumedRoot.tasks[0].status, "pending");
-  assert.equal(resumedRoot.continuation.reason, "child-completed");
+  assert.equal(resumedRoot.continuation.reason, "replan-requested");
   assert.deepEqual(resumedRoot.subworkflowHistory.map(({ workflowId, parentWorkflowId, status }) => ({ workflowId, parentWorkflowId, status })), [
     { workflowId: child.workflowId, parentWorkflowId: root.workflowId, status: "completed" },
   ]);
@@ -98,39 +100,24 @@ test("nested task 的 executing 结果未知时恢复保留父层并 fail-closed
   assert.equal(restored.value.parentStack[0].state.workflowId, root.workflowId);
 });
 
-test("grandchild 中断和取消会保留层级；返回 child 后再完成仍回到 root", () => {
+test("拒绝新建递归子流程，但保留旧多层状态的恢复与取消记录", () => {
   const root = createWorkflowState({ ...plan("父工作流", "root-task"), sessionId: "recursive-session" }, 200);
-  const child = createNestedWorkflowState(
-    requestWorkflowNestedGoal(root, { direction: "创建 child" }, 201),
-    plan("子工作流", "child-task"),
-    202,
-  );
-  const grandchild = createNestedWorkflowState(
-    requestWorkflowNestedGoal(child, { direction: "创建 grandchild" }, 203),
-    plan("孙工作流", "grandchild-task"),
-    204,
-  );
-  assert.equal(grandchild.parentStack.length, 2);
-  const restoredGrandchild = hydrateWorkflowState(JSON.parse(JSON.stringify(grandchild)));
-  assert.equal(restoredGrandchild.ok, true, restoredGrandchild.message);
-  assert.deepEqual(restoredGrandchild.value.parentStack.map(({ state }) => state.workflowId), [root.workflowId, child.workflowId]);
-
-  const cancelledGrandchild = cancelWorkflow(grandchild, 210);
-  const resumedChild = returnFromNestedWorkflow(cancelledGrandchild, "cancelled", 211);
-  assert.ok(resumedChild);
+  const child = createNestedWorkflowState(requestWorkflowNestedGoal(root, { direction: "创建 child" }, 201), plan("子工作流", "child-task"), 202);
+  assert.throws(() => requestWorkflowNestedGoal(child, { direction: "创建 grandchild" }, 203), { code: "WORKFLOW_NESTED_DEPTH_LIMIT" });
+  const grandchild = createWorkflowState({ ...plan("历史孙工作流", "grandchild-task"), sessionId: child.sessionId }, 204);
+  const { parentStack, ...core } = child;
+  core.status = "paused";
+  core.pauseReason = "waiting-child-workflow";
+  delete core.continuation;
+  grandchild.parentStack = [...parentStack, { state: core }];
+  const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(grandchild)));
+  assert.equal(restored.ok, true, restored.message);
+  assert.equal(restored.value.parentStack.length, 2);
+  const resumedChild = returnFromNestedWorkflow(cancelWorkflow(grandchild, 210), "cancelled", 211);
   assert.equal(resumedChild.workflowId, child.workflowId);
+  assert.equal(resumedChild.status, "replanning");
   assert.equal(resumedChild.parentStack.length, 1);
-  assert.equal(resumedChild.subworkflowHistory[0].workflowId, grandchild.workflowId);
   assert.equal(resumedChild.subworkflowHistory[0].status, "cancelled");
-
-  const childCompleted = completeOnlyTask(resumedChild, "child-task", 220);
-  const resumedRoot = returnFromNestedWorkflow(childCompleted, "completed", 230);
-  assert.ok(resumedRoot);
-  assert.equal(resumedRoot.workflowId, root.workflowId);
-  assert.deepEqual(resumedRoot.subworkflowHistory.map(({ workflowId, parentWorkflowId, status }) => ({ workflowId, parentWorkflowId, status })), [
-    { workflowId: child.workflowId, parentWorkflowId: root.workflowId, status: "completed" },
-    { workflowId: grandchild.workflowId, parentWorkflowId: child.workflowId, status: "cancelled" },
-  ]);
-  const hydratedRoot = hydrateWorkflowState(JSON.parse(JSON.stringify(resumedRoot)));
-  assert.equal(hydratedRoot.ok, true, hydratedRoot.message);
+  const hydrated = hydrateWorkflowState(JSON.parse(JSON.stringify(resumedChild)));
+  assert.equal(hydrated.ok, true, hydrated.message);
 });

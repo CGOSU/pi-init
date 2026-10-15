@@ -219,7 +219,7 @@ const evidenceReviewSchema = Type.Object({
 });
 
 export const taskWorkflowParameters = Type.Object({
-  action: StringEnum(["plan", "status", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "request-evidence", "report-evidence", "review-evidence"] as const, {
+  action: StringEnum(["plan", "status", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "review-child", "request-evidence", "report-evidence", "review-evidence"] as const, {
     description: "工作流或架构协作动作",
   }),
   coordinationIdentity: Type.Optional(coordinationIdentitySchema),
@@ -230,6 +230,8 @@ export const taskWorkflowParameters = Type.Object({
   report: Type.Optional(evidenceReportSchema),
   review: Type.Optional(evidenceReviewSchema),
   clarification: Type.Optional(workflowTaskClarificationSchema),
+  subworkflowContract: Type.Optional(Type.Object({ inputs: Type.Array(Type.String(), { minItems: 1 }), expectedOutputs: Type.Array(Type.String(), { minItems: 1 }), acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }), allowedFiles: Type.Array(Type.String(), { minItems: 1 }) })),
+  childReview: Type.Optional(Type.Object({ childWorkflowId: Type.String(), decision: StringEnum(["continue", "replan", "block"] as const), reason: Type.String(), parentPlanValid: Type.Boolean(), acceptedOutputs: Type.Array(Type.String()), verification: Type.Array(Type.String(), { minItems: 1 }) })),
   summary: Type.Optional(Type.String({ description: "架构规划摘要（plan/replan 必填）" })),
   constraints: Type.Optional(Type.Array(Type.String(), { description: "架构约束和不可改变的决定" })),
   revisionId: Type.Optional(Type.String({ description: "当前待应用重规划的 revisionId（replan 必填）" })),

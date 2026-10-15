@@ -100,3 +100,23 @@ test("普通继续输入不创建 pendingRevision，中断后沿原计划继续�
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
   });
 });
+
+test("讨论和纠正不被自动吞成子流程，待规划期间也不污染请求", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = await makeHarness(directory);
+    const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
+    await workflow.execute("plan-discussion", { action: "plan", summary: "父目标", tasks: [{ id: "first", task: "原任务", files: ["src"], acceptanceCriteria: ["通过"] }] }, undefined, undefined, harness.context);
+    const initial = latestWorkflow(harness);
+    for (const text of ["这个设计合理吗？", "这里理解错了", "先解释一下为什么", "顺便看一下日志"]) {
+      for (const handler of harness.handlers.get("input") ?? []) assert.equal((await handler({ text, source: "interactive" }, harness.context))?.action, "continue");
+      assert.equal(latestWorkflow(harness), initial);
+    }
+    await emitExtensionEvent(harness, "input", { text: "子流程：独立检查部署环境", source: "interactive" });
+    const pending = latestWorkflow(harness);
+    assert.equal(pending.pendingRevision.kind, "nested");
+    await emitExtensionEvent(harness, "input", { text: "这个设计合理吗？", source: "interactive" });
+    assert.equal(latestWorkflow(harness), pending);
+    await emitExtensionEvent(harness, "input", { text: "追加任务：补测试", source: "interactive" });
+    assert.equal(latestWorkflow(harness), pending, "不把追加任务混入待规划子目标");
+  });
+});

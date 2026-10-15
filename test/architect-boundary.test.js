@@ -121,7 +121,7 @@ test("architect 允许动作单一定义同时驱动运行时边界与工具/契
     assert.equal(await callToolCall(harness, "task_workflow", { action }), undefined, action);
   }
   assert.deepEqual([...ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS], [
-    "plan", "replan", "status", "request-evidence", "review-evidence",
+    "plan", "replan", "status", "request-replan", "request-child", "review-child", "request-evidence", "review-evidence",
   ]);
 
   const blocked = await callToolCall(harness, "task_workflow", { action: "report-evidence" });

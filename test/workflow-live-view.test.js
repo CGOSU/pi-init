@@ -82,3 +82,18 @@ test("打开的进度面板按最新持久状态刷新任务集合与状态", as
   assert.match(childLayer, /→ .*child-task/);
   assert.doesNotMatch(childLayer, /→ .*parent-next/);
 });
+
+test("Enter 打开任务详情，Esc 分层返回后才关闭", async () => {
+  const state = { workflowState: createWorkflowState({ sessionId: "test-session", summary: "交互检查", tasks: [{ id: "first", task: "需要查看的任务", files: ["src/first.ts"], acceptanceCriteria: ["展示完整验收标准"] }] }), roleModeStatus: "auto" };
+  const harness = createExtensionHarness([], { mode: "tui", hasUI: true, custom: async (call) => {
+    call.component.render(80);
+    call.component.handleInput("\r");
+    assert.notEqual(call.done, true, "Enter 不应关闭面板");
+    assert.match(call.component.render(80).join("\n"), /展示完整验收标准/);
+    call.component.handleInput("\u001b");
+    assert.notEqual(call.done, true, "详情 Esc 返回任务列表");
+    call.component.handleInput("\u001b");
+    assert.equal(call.done, true);
+  } });
+  await createWorkflowReport(state, { pi: {}, roleRuntime: { refreshRoleStatus() {} } }).showWorkflowProgress(harness.context);
+});

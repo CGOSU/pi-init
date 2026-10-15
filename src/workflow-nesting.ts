@@ -10,6 +10,9 @@ import type {
   WorkflowStateCore,
   WorkflowSubworkflowSummary,
 } from "./workflow-types.ts";
+import { normalizeSubworkflowContract, assertSubworkflowTaskScope } from "./workflow-subworkflow.ts";
+import { requestWorkflowReplan } from "./workflow-replan.ts";
+import { cancelWorkflow } from "./workflow-transitions.ts";
 
 function toWorkflowStateCore(state: WorkflowState): WorkflowStateCore {
   const { parentStack: _parentStack, ...core } = state;
@@ -24,15 +27,17 @@ export function createNestedWorkflowState(parentState: WorkflowState, planInput:
   if (parentState.currentTaskId || parentState.handoff) {
     throw Object.assign(new Error("父工作流必须先到达安全任务边界，才能开始嵌套工作流"), { code: "WORKFLOW_NESTED_PARENT_NOT_AT_BOUNDARY" });
   }
-  if ((parentState.parentStack?.length ?? 0) >= 32) {
-    throw Object.assign(new Error("嵌套工作流最多支持 32 层；父层状态保持不变"), { code: "WORKFLOW_NESTED_DEPTH_LIMIT" });
+  if (parentState.parentStack?.length) {
+    throw Object.assign(new Error("仅允许一层活动子流程；请在当前子流程内拆分任务"), { code: "WORKFLOW_NESTED_DEPTH_LIMIT" });
   }
+  const contract = normalizeSubworkflowContract((planInput as Record<string, unknown>)?.subworkflowContract);
 
   const childState = createWorkflowState({
     ...(planInput as Record<string, unknown>),
     sessionId: parentState.sessionId,
     executor: parentState.executor,
   }, now);
+  assertSubworkflowTaskScope(contract, childState.tasks);
   if (childState.workflowId === parentState.workflowId
     || parentState.parentStack?.some((frame) => frame.state.workflowId === childState.workflowId)) {
     throw Object.assign(new Error("嵌套工作流身份必须与祖先工作流不同"), { code: "WORKFLOW_NESTED_IDENTITY_COLLISION" });
@@ -65,6 +70,7 @@ export function createNestedWorkflowState(parentState: WorkflowState, planInput:
     frame,
   ];
   childState.subworkflowHistory = [];
+  childState.subworkflowContract = contract;
   return childState;
 }
 
@@ -81,11 +87,14 @@ function createSubworkflowSummary(
     planVersion: childState.planVersion,
     summary: childState.plan.summary,
     status,
-    tasks: childState.tasks.map(({ id, task, status: taskStatus, completionSummary }) => ({
+    ...(childState.subworkflowContract ? { contract: structuredClone(childState.subworkflowContract) } : {}),
+    tasks: childState.tasks.map(({ id, task, status: taskStatus, completionSummary, verification, outcomeUnknown }) => ({
       id,
       task,
       status: taskStatus,
       ...(completionSummary !== undefined ? { completionSummary } : {}),
+      ...(verification ? { verification: [...verification] } : {}),
+      ...(outcomeUnknown ? { outcomeUnknown: true } : {}),
     })),
     ...(childState.startedAt !== undefined ? { startedAt: childState.startedAt } : {}),
     completedAt: childState.completedAt ?? now,
@@ -123,5 +132,16 @@ export function returnFromNestedWorkflow(
     ...(childState.subworkflowHistory ?? []),
   ];
   parentState.updatedAt = now;
-  return parentState;
+  const review = requestWorkflowReplan(parentState, { direction: `审阅子流程「${childState.plan.summary}」的${status === "completed" ? "完成" : "取消"}结果：核查输出契约、实际验证、副作用以及父计划是否仍成立。未验收前不得启动父任务。` }, now);
+  review.pauseReason = "child-result-review";
+  return review;
+}
+
+export function cancelWorkflowTree(state: WorkflowState, now: number): WorkflowState {
+  let cancelled = cancelWorkflow(state, now);
+  while (cancelled.parentStack?.length) {
+    const parent = returnFromNestedWorkflow(cancelled, "cancelled", now)!;
+    cancelled = cancelWorkflow(parent, now);
+  }
+  return cancelled;
 }

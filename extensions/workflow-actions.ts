@@ -1,22 +1,15 @@
-import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Static } from "typebox";
+import type { ExtensionCommandContext, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { } from "typebox";
 import {
   applyWorkflowReplan,
   createNestedWorkflowState,
-  returnFromNestedWorkflow,
-  blockWorkflowTask,
-  cancelWorkflow,
-  completeWorkflowTask,
   createWorkflowState,
-  resumeWorkflow,
-  retryWorkflowTask,
   validateWorkflowHandoffIdentity,
   validateWorkflowMutationIdentity,
   validateWorkflowReplanIdentity,
   validateWorkflowPlan,
   workflowActionIdentity,
-  requestWorkflowTaskClarification,
-} from "../src/workflow.ts";
+  requestWorkflowTaskClarification, requestWorkflowNestedGoal, requestWorkflowReplan } from "../src/workflow.ts";
 import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
 import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowMode } from "../src/role-types.ts";
@@ -40,6 +33,10 @@ import {
 } from "./workflow-completion-renderer.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import { attachWorkflowPresentation } from "./workflow-presentation.ts";
+import { transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
+import type { WorkflowLifecycleTransition } from "../src/workflow-orchestrator.ts";
+import { assertSubworkflowTaskScope } from "../src/workflow-subworkflow.ts";
+import { runWorkflowPanelRequest } from "./workflow-panel-actions.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
@@ -77,11 +74,11 @@ export function createWorkflowActions(
     });
   }
 
-  function persistTerminalWorkflowState(next: ExtensionRuntimeState["workflowState"], ctx: ExtensionContext) {
-    if (!next) throw new Error("终态持久化缺少工作流状态");
-    const previousIdentity = workflowActionIdentity(state.workflowState);
-    const persisted = deps.report.persistWorkflowState(next, ctx);
-    if (previousIdentity) deps.roleRuntime.retireWorkflowContinuation(previousIdentity);
+  function commitLifecycleTransition(transition: WorkflowLifecycleTransition, ctx: ExtensionContext) {
+    const persisted = deps.report.persistWorkflowState(transition.state, ctx);
+    for (const effect of transition.effects) {
+      deps.roleRuntime.retireWorkflowContinuation(effect.identity);
+    }
     state.workflowDispatchInFlight = false;
     return persisted;
   }
@@ -234,7 +231,8 @@ export function createWorkflowActions(
       return;
     }
     if (action === undefined || action === "status") {
-      await deps.report.showWorkflowProgress(ctx);
+      const request = await deps.report.showWorkflowProgress(ctx);
+      if (request) await runWorkflowPanelRequest(request, ctx, state, (nextAction, nextTaskId, confirmed) => workflowCommand(nextAction, nextTaskId, ctx, confirmed));
       const diagnostic = recoveryActions.diagnostic();
       if (diagnostic) ctx.ui.notify(diagnostic, "error");
       return;
@@ -260,31 +258,33 @@ export function createWorkflowActions(
           await deps.dispatch.resumeLocalWorkflow(ctx);
           return;
         }
-        const resumed = resumeWorkflow(state.workflowState);
-        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(resumed, ctx);
-        deps.report.persistWorkflowState(resumed, ctx);
+        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "workflow-resumed", identity: workflowActionIdentity(state.workflowState) }, Date.now());
+        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(transition.state, ctx);
+        commitLifecycleTransition(transition, ctx);
         await deps.dispatch.scheduleWorkflow(ctx);
         return;
       }
       if (action === "retry") {
-        deps.report.persistWorkflowState(retryWorkflowTask(state.workflowState, taskId, undefined, { confirmUnknownOutcome }), ctx);
+        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "task-retried", identity: workflowActionIdentity(state.workflowState), taskId, confirmUnknownOutcome }, Date.now());
+        commitLifecycleTransition(transition, ctx);
         await deps.dispatch.scheduleWorkflow(ctx);
         return;
       }
-      if (action === "cancel") {
-        const cancelled = cancelWorkflow(state.workflowState);
-        persistTerminalWorkflowState(cancelled, ctx);
-        ctx.ui.notify("工作流已取消。", "info");
+      if (action === "cancel" || action === "cancel-all") {
+        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "workflow-cancelled", identity: workflowActionIdentity(state.workflowState), returnToParent: action !== "cancel-all" }, Date.now());
+        if (transition.returnedToParent && deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(transition.state, ctx);
+        commitLifecycleTransition(transition, ctx);
+        ctx.ui.notify(transition.returnedToParent ? "当前子流程已取消；父流程等待结果处置，副作用未自动回滚。" : "工作流已取消；副作用未自动回滚。", "info");
         return;
       }
-      ctx.ui.notify("用法：/pi-init workflow [status|acknowledge|resume|retry <taskId> [--confirm-unknown-outcome]|cancel|discard-recovery <entryId> --confirm-unknown-outcome]", "error");
+      ctx.ui.notify("用法：/pi-init workflow [status|acknowledge|resume|retry <taskId> [--confirm-unknown-outcome]|cancel|cancel-all|discard-recovery <entryId> --confirm-unknown-outcome]", "error");
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
     }
   }
 
   async function runTaskWorkflowAction(
-    params: Static<typeof taskWorkflowParameters>,
+    params: WorkflowActionParameters,
     signal: AbortSignal | undefined,
     ctx: ExtensionContext,
   ): Promise<WorkflowActionResult> {
@@ -311,6 +311,28 @@ export function createWorkflowActions(
     }
 
     switch (params.action) {
+      case "request-replan":
+      case "request-child": {
+        if (!state.workflowState) throw missingWorkflowError();
+        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
+        if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") throw new Error("只有 architect 可以显式安排独立子流程；普通追加任务应修改当前队列");
+        const next = params.action === "request-child"
+          ? requestWorkflowNestedGoal(state.workflowState, { direction: params.summary })
+          : requestWorkflowReplan(state.workflowState, { direction: params.summary });
+        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(next, ctx);
+        deps.report.persistWorkflowState(next, ctx);
+        return { content: [{ type: "text", text: params.action === "request-child" ? "已记录显式子流程目标；请规划独立输入输出契约，仅允许一层活动子流程。" : "已记录父计划修正/追加请求；保留有效任务，在安全边界重规划当前队列。" }], details: statusDetails(next), terminate: true };
+      }
+      case "review-child": {
+        if (!state.workflowState) throw missingWorkflowError();
+        const identity = requireIdentity(validateWorkflowReplanIdentity(state.workflowState, params, ctx));
+        if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") throw new Error("只有 architect 可以审阅子流程结果与父计划影响；实际查证应通过证据请求完成");
+        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "child-reviewed", identity, review: params.childReview }, Date.now());
+        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(transition.state, ctx);
+        commitLifecycleTransition(transition, ctx);
+        const decision = params.childReview?.decision;
+        return { content: [{ type: "text", text: decision === "continue" ? "子流程输出已验收，父计划仍有效；可继续原队列。" : decision === "replan" ? "已记录父计划影响；请使用当前重规划身份提交更新后的父计划。" : "子流程结果已阻塞，父任务不会启动；核实后执行 /pi-init workflow resume 重开架构审阅。" }], details: statusDetails(transition.state), terminate: decision !== "replan" };
+      }
       case "request-evidence": {
         const result = deps.coordination.requestEvidence(params.request, params.coordinationIdentity, params.coordinationHandoffId, ctx);
         return {
@@ -483,8 +505,12 @@ export function createWorkflowActions(
         const coordinatedPlan = deps.coordination.isLinkedToWorkflow(state.workflowState);
         const acceptedEvidence: AcceptedEvidenceReference[] = coordinatedPlan ? deps.coordination.assertReadyForWorkflow() : [];
         const nested = state.workflowState.pendingRevision?.kind === "nested";
+        if (state.workflowState.pauseReason === "child-result-review") {
+          const child = state.workflowState.subworkflowHistory?.findLast((entry) => entry.parentWorkflowId === state.workflowState!.workflowId);
+          if (child?.reviews?.at(-1)?.decision !== "replan") throw new Error("必须先 review-child 审阅子流程输出并明确 replan，不能跳过结果验收直接改写父计划");
+        }
         const next = nested
-          ? createNestedWorkflowState(state.workflowState, plan)
+          ? createNestedWorkflowState(state.workflowState, { ...plan, subworkflowContract: params.subworkflowContract })
           : applyWorkflowReplan(state.workflowState, {
               revisionId: params.revisionId,
               summary: params.summary,
@@ -492,6 +518,7 @@ export function createWorkflowActions(
               tasks: params.tasks,
               retainTaskIds: params.retainTaskIds,
             });
+        if (next.subworkflowContract) assertSubworkflowTaskScope(next.subworkflowContract, next.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"));
         requireTaskContractsReady(
           next.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"),
           acceptedEvidence,
@@ -508,37 +535,37 @@ export function createWorkflowActions(
       }
       case "complete": {
         if (!state.workflowState) throw missingWorkflowError();
-        const { taskId } = requireTaskHandoffIdentity(params, ctx);
+        const identity = requireTaskHandoffIdentity(params, ctx);
+        const { taskId } = identity;
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
           throw new Error(`任务 ${task.id} 要求角色 ${task.role}，当前角色不匹配；请先调用 switch_role`);
         }
         markQueuedTaskStarted(params, ctx);
-        const next = completeWorkflowTask(state.workflowState, {
-          taskId,
+        const transition = transitionWorkflowLifecycle(state.workflowState, {
+          type: "task-completed", identity,
           completionSummary: params.completionSummary,
           implementationRationale: params.implementationRationale,
           verification: params.verification,
-        });
+        }, Date.now());
+        const next = transition.taskState;
         const completedTask = next.tasks.find((item) => item.id === task.id);
         const taskCompletionView = createWorkflowTaskCompletionView(completedTask);
         const workflowCompletionView = next.status === "completed"
           ? createWorkflowCompletionView(next, completedTask)
           : undefined;
-        const completedNested = next.status === "completed" && Boolean(next.parentStack?.length);
-        const activeNext = completedNested ? returnFromNestedWorkflow(next, "completed") ?? next : next;
-        if (completedNested) {
-          const childIdentity = workflowActionIdentity(next);
-          if (childIdentity) deps.roleRuntime.retireWorkflowContinuation(childIdentity);
-          if (deps.coordination.isLinkedToWorkflow(next)) deps.coordination.linkWorkflow(activeNext, ctx);
+        const completedNested = transition.returnedToParent;
+        const activeNext = transition.state;
+        if (completedNested && deps.coordination.isLinkedToWorkflow(state.workflowState)) {
+          deps.coordination.linkWorkflow(activeNext, ctx);
         }
         const completionReport = workflowCompletionView
           ? formatWorkflowCompletionText(workflowCompletionView)
           : formatWorkflowTaskCompletionText(taskCompletionView);
         const continuation: "awaiting-replan" | "next-task" = activeNext.status === "replanning" ? "awaiting-replan" : "next-task";
         const notice = completedNested
-          ? "子工作流已完成，已返回父工作流；父工作流将从原位置继续。"
+          ? "子流程已完成，已返回父流程等待输出验收与父计划影响审阅；未验收前不会启动父任务。"
           : activeNext.status === "completed"
             ? "工作流已完成。"
             : activeNext.status === "replanning"
@@ -547,8 +574,7 @@ export function createWorkflowActions(
         const presentation = workflowCompletionView
           ? { kind: "workflow-completion" as const, view: workflowCompletionView }
           : { kind: "task-completion" as const, view: taskCompletionView, continuation };
-        if (activeNext.status === "completed" || activeNext.status === "cancelled") persistTerminalWorkflowState(activeNext, ctx);
-        else deps.report.persistWorkflowState(activeNext, ctx);
+        commitLifecycleTransition(transition, ctx);
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${notice}` }],
           details: attachWorkflowPresentation(activeNext, presentation),
@@ -557,12 +583,11 @@ export function createWorkflowActions(
       }
       case "block": {
         if (!state.workflowState) throw missingWorkflowError();
-        const { taskId } = requireTaskHandoffIdentity(params, ctx);
+        const identity = requireTaskHandoffIdentity(params, ctx);
         markQueuedTaskStarted(params, ctx);
-        const next = blockWorkflowTask(state.workflowState, { taskId, reason: params.reason });
-        deps.report.persistWorkflowState(next, ctx);
-        state.workflowDispatchInFlight = false;
-        return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(next) }], details: statusDetails(next), terminate: true };
+        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "task-blocked", identity, reason: params.reason }, Date.now());
+        commitLifecycleTransition(transition, ctx);
+        return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(transition.state) }], details: statusDetails(transition.state), terminate: true };
       }
       case "resume": {
         if (!state.workflowState) throw missingWorkflowError();
@@ -590,39 +615,39 @@ export function createWorkflowActions(
             terminate: true,
           };
         }
-        const next = resumeWorkflow(state.workflowState);
-        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(next, ctx);
-        deps.report.persistWorkflowState(next, ctx);
+        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "workflow-resumed", identity: workflowActionIdentity(state.workflowState) }, Date.now());
+        if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(transition.state, ctx);
+        const next = commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: "工作流已恢复，下一任务将自动开始。" }], details: statusDetails(next), terminate: true };
       }
       case "retry": {
         if (!state.workflowState) throw missingWorkflowError();
         requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        const next = retryWorkflowTask(state.workflowState, params.taskId, undefined, {
+        const transition = transitionWorkflowLifecycle(state.workflowState, {
+          type: "task-retried", identity: workflowActionIdentity(state.workflowState), taskId: params.taskId,
           confirmUnknownOutcome: params.confirmUnknownOutcome === true,
-        });
-        deps.report.persistWorkflowState(next, ctx);
+        }, Date.now());
+        const next = commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: `任务 ${params.taskId ?? ""} 已重新排队，工作流将自动继续。` }], details: statusDetails(next), terminate: true };
       }
-      case "cancel": {
+      case "cancel":
+      case "cancel-all": {
         if (!state.workflowState) throw missingWorkflowError();
         requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        const cancelled = cancelWorkflow(state.workflowState);
-        const returnedToParent = cancelled.parentStack?.length
-          ? returnFromNestedWorkflow(cancelled, "cancelled")
-          : undefined;
-        if (returnedToParent) {
-          const childIdentity = workflowActionIdentity(cancelled);
-          if (childIdentity) deps.roleRuntime.retireWorkflowContinuation(childIdentity);
-          if (deps.coordination.isLinkedToWorkflow(cancelled)) deps.coordination.linkWorkflow(returnedToParent, ctx);
-          deps.report.persistWorkflowState(returnedToParent, ctx);
+        const transition = transitionWorkflowLifecycle(state.workflowState, {
+          type: "workflow-cancelled", identity: workflowActionIdentity(state.workflowState), returnToParent: params.action !== "cancel-all",
+        }, Date.now());
+        if (transition.returnedToParent && deps.coordination.isLinkedToWorkflow(state.workflowState)) {
+          deps.coordination.linkWorkflow(transition.state, ctx);
+        }
+        const cancelled = commitLifecycleTransition(transition, ctx);
+        if (transition.returnedToParent) {
           return {
-            content: [{ type: "text", text: `子工作流已取消，已返回父工作流并保留其进度。\n${deps.report.formatWorkflowState(returnedToParent)}` }],
-            details: statusDetails(returnedToParent),
+            content: [{ type: "text", text: `子流程已取消，已返回父流程等待处置；取消不代表依赖已满足或副作用已回滚。\n${deps.report.formatWorkflowState(cancelled)}` }],
+            details: statusDetails(cancelled),
             terminate: true,
           };
         }
-        persistTerminalWorkflowState(cancelled, ctx);
         return { content: [{ type: "text", text: "工作流已取消。" }], details: statusDetails(cancelled), terminate: true };
       }
       default:
@@ -634,3 +659,4 @@ export function createWorkflowActions(
 }
 
 export type WorkflowActions = ReturnType<typeof createWorkflowActions>;
+type WorkflowActionParameters = Parameters<ToolDefinition<typeof taskWorkflowParameters>["execute"]>[1];
