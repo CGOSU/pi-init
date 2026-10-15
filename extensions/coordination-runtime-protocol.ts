@@ -115,9 +115,14 @@ function parseHandoff(value: unknown, coordination: CoordinationRuntimeState["co
   } else {
     reportId = typeof value.reportId === "string" ? value.reportId : "";
     const report = coordination.reports.find((candidate) => candidate.reportId === reportId && candidate.requestId === requestId);
-    const moreReview = coordination.reviews.find((candidate) => candidate.reportId === reportId)?.decision === "more";
-    if (value.role !== "architect" || !report
-      || (request.status !== "reported" && !(request.status === "follow-up-needed" && moreReview))) {
+    const reportReviews = coordination.reviews.filter((candidate) => candidate.reportId === reportId);
+    const latestReview = reportReviews.at(-1);
+    const pendingReopening = coordination.reviewReopenings.findLast((reopening) => reopening.reportId === reportId
+      && !coordination.reviews.some((review) => review.reopeningId === reopening.reopeningId));
+    const newlyReported = request.status === "reported"
+      && (!latestReview || (latestReview.decision === "block" && pendingReopening?.previousReviewId === latestReview.reviewId));
+    const moreReview = request.status === "follow-up-needed" && latestReview?.decision === "more";
+    if (value.role !== "architect" || !report || (!newlyReported && !moreReview)) {
       return coordinationFailure("COORDINATION_HANDOFF_STATE_MISMATCH", "审阅 handoff 必须分派给 architect 且引用当前可审阅报告");
     }
   }

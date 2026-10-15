@@ -16,6 +16,7 @@ import type {
   EvidenceReview,
   EvidenceReviewDecision,
   EvidenceReviewInput,
+  EvidenceReviewReopening,
   EvidenceSource,
   EvidenceTestResult,
 } from "./coordination-types.ts";
@@ -349,7 +350,96 @@ function normalizeStoredReview(input: unknown, report: EvidenceReport, index: nu
   const parsed = parseEvidenceReview(source as unknown as EvidenceReviewInput, report, timestamp(source.reviewedAt, `reviews[${index}].reviewedAt`));
   if (!parsed.ok) return parsed;
   const reviewId = identifier(source.reviewId, `reviews[${index}].reviewId`);
-  return { ok: true, value: { ...parsed.value, reviewId } };
+  const reopeningId = source.reopeningId === undefined ? undefined : identifier(source.reopeningId, `reviews[${index}].reopeningId`);
+  return { ok: true, value: { ...parsed.value, reviewId, ...(reopeningId ? { reopeningId } : {}) } };
+}
+
+function normalizeStoredReviewReopening(input: unknown, index: number): EvidenceReviewReopening {
+  const source = record(input, `协作状态 reviewReopenings[${index}]`);
+  return {
+    reopeningId: identifier(source.reopeningId, `reviewReopenings[${index}].reopeningId`),
+    requestId: identifier(source.requestId, `reviewReopenings[${index}].requestId`),
+    reportId: identifier(source.reportId, `reviewReopenings[${index}].reportId`),
+    previousReviewId: identifier(source.previousReviewId, `reviewReopenings[${index}].previousReviewId`),
+    reason: requiredText(source.reason, `reviewReopenings[${index}].reason`),
+    createdAt: timestamp(source.createdAt, `reviewReopenings[${index}].createdAt`),
+  };
+}
+
+function validateReviewReopeningHistory(
+  reopenings: EvidenceReviewReopening[],
+  reviews: EvidenceReview[],
+  reports: EvidenceReport[],
+  requests: Map<string, EvidenceRequest>,
+) {
+  const reportById = new Map(reports.map((report) => [report.reportId, report]));
+  const reviewById = new Map(reviews.map((review) => [review.reviewId, review]));
+  const reopeningById = new Map(reopenings.map((reopening) => [reopening.reopeningId, reopening]));
+  const reviewByReopeningId = new Map<string, EvidenceReview>();
+
+  for (const review of reviews) {
+    if (!review.reopeningId) continue;
+    const reopening = reopeningById.get(review.reopeningId);
+    if (!reopening || reopening.reportId !== review.reportId) {
+      throw new CoordinationError("COORDINATION_REOPEN_REVIEW_MISMATCH", "复审引用了不存在或不匹配的重开记录", "reviews");
+    }
+    if (reviewByReopeningId.has(review.reopeningId)) {
+      throw new CoordinationError("COORDINATION_REOPEN_REVIEW_DUPLICATE", "同一重开记录包含多个复审", "reviews");
+    }
+    reviewByReopeningId.set(review.reopeningId, review);
+  }
+
+  const reopeningsByReport = new Map<string, EvidenceReviewReopening[]>();
+  for (const reopening of reopenings) {
+    const report = reportById.get(reopening.reportId);
+    if (!report || report.requestId !== reopening.requestId || !requests.has(reopening.requestId)) {
+      throw new CoordinationError("COORDINATION_REOPEN_REPORT_MISMATCH", "重开记录引用了不存在或不匹配的请求/报告", "reviewReopenings");
+    }
+    if (!reviewById.has(reopening.previousReviewId)) {
+      throw new CoordinationError("COORDINATION_REOPEN_REVIEW_MISSING", "重开记录缺少原阻塞审阅", "reviewReopenings");
+    }
+    const grouped = reopeningsByReport.get(reopening.reportId) ?? [];
+    grouped.push(reopening);
+    reopeningsByReport.set(reopening.reportId, grouped);
+  }
+
+  for (const report of reports) {
+    const reportReviews = reviews.filter((review) => review.reportId === report.reportId);
+    const reportReopenings = reopeningsByReport.get(report.reportId) ?? [];
+    if (reportReviews[0]?.reopeningId) {
+      throw new CoordinationError("COORDINATION_REOPEN_HISTORY_INVALID", "报告首轮审阅不能引用重开记录", "reviews");
+    }
+    if (reportReopenings.length > reportReviews.length) {
+      throw new CoordinationError("COORDINATION_REOPEN_HISTORY_INVALID", "报告重开次数超过其复审轮次", "reviewReopenings");
+    }
+    for (let index = 1; index < reportReviews.length; index += 1) {
+      const previousReview = reportReviews[index - 1];
+      const review = reportReviews[index];
+      const reopening = review.reopeningId ? reopeningById.get(review.reopeningId) : undefined;
+      if (!reopening || reopening.reportId !== report.reportId
+        || reopening.requestId !== report.requestId
+        || reopening.previousReviewId !== previousReview.reviewId
+        || previousReview.decision !== "block"
+        || reopening.createdAt < previousReview.reviewedAt
+        || review.reviewedAt < reopening.createdAt) {
+        throw new CoordinationError("COORDINATION_REOPEN_HISTORY_INVALID", "同一报告的再次审阅必须由紧邻的明确阻塞记录重开", "reviews");
+      }
+    }
+    for (let index = 0; index < reportReopenings.length; index += 1) {
+      const reopening = reportReopenings[index];
+      const previousReview = index === 0
+        ? reportReviews[0]
+        : reviewByReopeningId.get(reportReopenings[index - 1].reopeningId);
+      if (!previousReview || previousReview.reviewId !== reopening.previousReviewId || previousReview.decision !== "block"
+        || reopening.createdAt < previousReview.reviewedAt) {
+        throw new CoordinationError("COORDINATION_REOPEN_HISTORY_INVALID", "重开记录必须关联同一报告最近的明确阻塞审阅", "reviewReopenings");
+      }
+      const linkedReview = reviewByReopeningId.get(reopening.reopeningId);
+      if (index < reportReopenings.length - 1 && !linkedReview) {
+        throw new CoordinationError("COORDINATION_REOPEN_HISTORY_INVALID", "后续重开前必须完成上一重开轮次的审阅", "reviewReopenings");
+      }
+    }
+  }
 }
 
 function semanticRequestKey(request: EvidenceRequest): string {
@@ -374,11 +464,14 @@ export function deriveCoordinationPhase(requests: EvidenceRequest[]): Coordinati
 export function hydrateCoordinationState(input: CoordinationStateInput): CoordinationResult<CoordinationState> {
   try {
     const source = record(input, "协作状态");
-    if (source.version !== 1) {
+    if (source.version !== 1 && source.version !== 2) {
       throw new CoordinationError("COORDINATION_VERSION_UNSUPPORTED", `协作状态版本不受支持：${String(source.version)}`, "version");
     }
     if (!Array.isArray(source.requests) || !Array.isArray(source.reports) || !Array.isArray(source.reviews)) {
       throw new CoordinationError("COORDINATION_STATE_ARRAY_INVALID", "协作状态 requests/reports/reviews 必须是数组");
+    }
+    if (source.version === 2 && !Array.isArray(source.reviewReopenings)) {
+      throw new CoordinationError("COORDINATION_STATE_ARRAY_INVALID", "协作状态 version 2 必须包含 reviewReopenings 数组", "reviewReopenings");
     }
     const requests = source.requests.map((item, index) => {
       const parsed = normalizeStoredRequest(item, index);
@@ -408,6 +501,9 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
       throw new CoordinationError("COORDINATION_REPORT_DUPLICATE", "协作状态包含重复 reportId 或每个请求存在多个报告", "reports");
     }
     const reportById = new Map(reports.map((report) => [report.reportId, report]));
+    const reviewReopenings = source.version === 1
+      ? []
+      : (source.reviewReopenings as unknown[]).map((item, index) => normalizeStoredReviewReopening(item, index));
     const reviews = source.reviews.map((item, index) => {
       const value = record(item, `协作状态 reviews[${index}]`);
       const report = reportById.get(identifier(value.reportId, `reviews[${index}].reportId`));
@@ -416,10 +512,17 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
       if (!parsed.ok) throw new CoordinationError(parsed.code, parsed.message, parsed.field);
       return parsed.value;
     });
-    if (new Set(reviews.map((review) => review.reviewId)).size !== reviews.length
-      || new Set(reviews.map((review) => review.reportId)).size !== reviews.length) {
-      throw new CoordinationError("COORDINATION_REVIEW_DUPLICATE", "协作状态包含重复 reviewId 或报告被重复审阅", "reviews");
+    if (new Set(reviews.map((review) => review.reviewId)).size !== reviews.length) {
+      throw new CoordinationError("COORDINATION_REVIEW_DUPLICATE", "协作状态包含重复 reviewId", "reviews");
     }
+    if (new Set(reviewReopenings.map((reopening) => reopening.reopeningId)).size !== reviewReopenings.length) {
+      throw new CoordinationError("COORDINATION_REOPEN_DUPLICATE", "协作状态包含重复 reopeningId", "reviewReopenings");
+    }
+    validateReviewReopeningHistory(reviewReopenings, reviews, reports, requestById);
+
+    const latestReviewForReport = (reportId: string) => reviews.findLast((review) => review.reportId === reportId);
+    const pendingReopeningForReport = (reportId: string) => reviewReopenings.findLast((reopening) =>
+      reopening.reportId === reportId && !reviews.some((review) => review.reopeningId === reopening.reopeningId));
 
     const roundsByQuestion = new Map<string, number>();
     for (const [index, request] of requests.entries()) {
@@ -436,7 +539,7 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
       }
       if (request.followUpOfRequestId) {
         const previousReport = previous && reports.find((candidate) => candidate.requestId === previous.requestId);
-        const previousReview = previousReport && reviews.find((candidate) => candidate.reportId === previousReport.reportId);
+        const previousReview = previousReport && latestReviewForReport(previousReport.reportId);
         if (!previous || request.followUpOfRequestId !== previous.requestId || previousReview?.decision !== "more"
           || !request.addressesGaps.some((gap) => previousReview.gaps.includes(gap))) {
           throw new CoordinationError("COORDINATION_FOLLOW_UP_ID_MISMATCH", "补查请求必须引用上一轮的 more 审阅及其明确缺口", `requests[${index}].followUpOfRequestId`);
@@ -444,7 +547,7 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
       }
       if (previous) {
         const previousReport = reports.find((candidate) => candidate.requestId === previous.requestId);
-        const previousReview = previousReport && reviews.find((candidate) => candidate.reportId === previousReport.reportId);
+        const previousReview = previousReport && latestReviewForReport(previousReport.reportId);
         if (previousReview?.decision === "more" && request.followUpOfRequestId !== previous.requestId) {
           throw new CoordinationError("COORDINATION_FOLLOW_UP_ID_MISMATCH", "more 审阅后的下一轮必须关联原请求", `requests[${index}].followUpOfRequestId`);
         }
@@ -462,13 +565,27 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
 
     for (const request of requests) {
       const report = reports.find((candidate) => candidate.requestId === request.requestId);
-      const review = report ? reviews.find((candidate) => candidate.reportId === report.reportId) : undefined;
-      if (request.status === "pending" && (report || review)) throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `待处理请求 ${request.requestId} 已有报告或审阅`, "requests");
-      if (request.status === "reported" && (!report || review)) throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `报告待审请求 ${request.requestId} 状态不一致`, "requests");
-      if (request.status === "accepted" && (!report || review?.decision !== "accept")) throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `已接受请求 ${request.requestId} 缺少 accept 审阅`, "requests");
-      if (request.status === "follow-up-needed" && (!report || review?.decision !== "more")) throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `待补查请求 ${request.requestId} 缺少 more 审阅`, "requests");
-      if (request.status === "blocked" && (!report || review?.decision !== "block")) throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `阻塞请求 ${request.requestId} 缺少 block 审阅`, "requests");
-      if (request.status === "superseded" && (!report || !review)) throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `已替代请求 ${request.requestId} 缺少报告或审阅`, "requests");
+      const reportReviews = report ? reviews.filter((candidate) => candidate.reportId === report.reportId) : [];
+      const review = reportReviews.at(-1);
+      const pendingReopening = report ? pendingReopeningForReport(report.reportId) : undefined;
+      if (request.status === "pending" && (report || reportReviews.length > 0 || pendingReopening)) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `待处理请求 ${request.requestId} 已有报告或审阅`, "requests");
+      }
+      if (request.status === "reported" && (!report || (review && (review.decision !== "block" || pendingReopening?.previousReviewId !== review.reviewId)))) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `报告待审请求 ${request.requestId} 状态不一致`, "requests");
+      }
+      if (request.status === "accepted" && (!report || review?.decision !== "accept" || pendingReopening)) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `已接受请求 ${request.requestId} 缺少 accept 审阅`, "requests");
+      }
+      if (request.status === "follow-up-needed" && (!report || review?.decision !== "more" || pendingReopening)) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `待补查请求 ${request.requestId} 缺少 more 审阅`, "requests");
+      }
+      if (request.status === "blocked" && (!report || review?.decision !== "block" || pendingReopening)) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `阻塞请求 ${request.requestId} 缺少有效 block 审阅`, "requests");
+      }
+      if (request.status === "superseded" && (!report || !review || pendingReopening)) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", `已替代请求 ${request.requestId} 缺少报告或审阅`, "requests");
+      }
     }
 
     const workflowLink = source.workflowLink === undefined
@@ -489,6 +606,7 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
     const updatedAt = timestamp(source.updatedAt, "协作状态 updatedAt");
     if (updatedAt < createdAt) throw new CoordinationError("COORDINATION_TIMESTAMP_INVALID", "协作状态 updatedAt 早于 createdAt", "updatedAt");
     if (requests.some((request) => request.createdAt < createdAt || request.createdAt > updatedAt)
+      || reviewReopenings.some((reopening) => reopening.createdAt < createdAt || reopening.createdAt > updatedAt)
       || reports.some((report) => {
         const request = requestById.get(report.requestId)!;
         return report.createdAt < request.createdAt || report.createdAt > updatedAt;
@@ -503,13 +621,14 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
     return {
       ok: true,
       value: {
-        version: 1,
+        version: 2,
         coordinationId: identifier(source.coordinationId, "协作状态 coordinationId"),
         sessionId: requiredText(source.sessionId, "协作状态 sessionId"),
         phase: phase as CoordinationPhase,
         requests,
         reports,
         reviews,
+        reviewReopenings,
         ...(workflowLink ? { workflowLink } : {}),
         createdAt,
         updatedAt,

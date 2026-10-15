@@ -413,7 +413,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           ? ROLE_MODES
           : action === "workflow"
             ? ["status", "acknowledge", "resume", "retry", "cancel"]
-            : action === "coordination" ? ["resume"] : [];
+            : action === "coordination" ? ["resume", "reopen"] : [];
       const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
       const matches = values.filter((value) => value.startsWith(partial));
       return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
@@ -435,9 +435,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (action === "role") { await (await loadControlCenter()).switchRole(tokens[0], ctx); return; }
         if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
         if (action === "coordination") {
-          if (tokens.length !== 1 || tokens[0] !== "resume") throw new Error("用法：/pi-init coordination resume");
-          await coordinationRuntime.resumeBoundary(ctx);
-          return;
+          const coordinationAction = tokens.shift();
+          if (coordinationAction === "resume" && tokens.length === 0) {
+            await coordinationRuntime.resumeBoundary(ctx);
+            return;
+          }
+          if (coordinationAction === "reopen" && tokens.length >= 2) {
+            const reportId = tokens.shift();
+            const reason = tokens.join(" ");
+            await coordinationRuntime.reopenReview(reportId, reason, ctx);
+            return;
+          }
+          throw new Error("用法：/pi-init coordination resume | /pi-init coordination reopen <reportId> <原因>");
         }
         if (action === "workflow") {
           await workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));

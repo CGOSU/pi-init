@@ -94,7 +94,7 @@ function makeWorkflowContextFixture() {
     sessionId,
     recoveryGeneration: state.workflowState.recoveryGeneration,
     coordination: {
-      version: 1,
+      version: 2,
       coordinationId: "coordination-context",
       sessionId,
       phase: "ready",
@@ -140,6 +140,7 @@ function makeWorkflowContextFixture() {
         gaps: [],
         reviewedAt: 2,
       }],
+      reviewReopenings: [],
       createdAt: 1,
       updatedAt: 2,
     },
@@ -252,7 +253,7 @@ function coordinationRuntimeState({ role, kind, requestId = "request-current", r
     sessionId,
     recoveryGeneration: 0,
     coordination: {
-      version: 1,
+      version: 2,
       coordinationId: "coordination-context",
       sessionId,
       phase: kind === "evidence" ? "evidence-gathering" : "evidence-review",
@@ -273,6 +274,7 @@ function coordinationRuntimeState({ role, kind, requestId = "request-current", r
         gaps: ["include caller error handling"],
         reviewedAt: 2,
       }],
+      reviewReopenings: [],
       createdAt: 1,
       updatedAt: 3,
     },

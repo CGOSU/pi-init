@@ -5,6 +5,7 @@ import {
   hydrateCoordinationState,
   reportEvidence as recordEvidenceReport,
   requestEvidence as recordEvidenceRequest,
+  reopenEvidenceReview as recordEvidenceReviewReopening,
   reviewEvidence as recordEvidenceReview,
 } from "../src/coordination.ts";
 import type {
@@ -284,6 +285,38 @@ export function createCoordinationRuntime(
     await schedule(ctx);
   }
 
+  async function reopenReview(reportId: unknown, reason: unknown, ctx: ExtensionContext) {
+    if (!ctx.isProjectTrusted()) throw coordinationError("COORDINATION_REOPEN_UNTRUSTED", "重开审阅要求项目可信。");
+    if (!ctx.isIdle() || state.roleCompactionInFlight || state.pendingRoleCompaction || state.workflowDispatchInFlight || localScheduleInFlight || continuationDispatchInFlight) {
+      throw coordinationError("COORDINATION_REOPEN_BUSY", "重开审阅要求 Agent 空闲且没有并发压缩或派发。");
+    }
+    if (state.coordinationRestoreError || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) {
+      throw coordinationError("COORDINATION_REOPEN_RECOVERY_REQUIRED", "存在协作或职责恢复异常；先检查并恢复状态，不能重开审阅。");
+    }
+    const current = state.coordinationRuntimeState;
+    if (!current || current.sessionId !== getSessionId(ctx)) {
+      throw coordinationError("COORDINATION_STATE_MISSING", "当前 session 没有可重开的协作状态。");
+    }
+    if (current.handoff) {
+      throw coordinationError("COORDINATION_REOPEN_HANDOFF_ACTIVE", "仍有活动或结果未知的协作 handoff；重开审阅不能恢复或重放它。");
+    }
+    assertNoUnrelatedWorkflow(current);
+    const coordination = requireCoordinationResult(recordEvidenceReviewReopening(
+      current.coordination,
+      { reportId, reason },
+    ));
+    const reopening = coordination.reviewReopenings.at(-1);
+    if (!reopening) throw coordinationError("COORDINATION_REOPEN_NOT_CREATED", "重开审阅记录未能持久化。");
+    const next: CoordinationRuntimeState = {
+      ...current,
+      coordination,
+      handoff: createHandoff("architect", "review", reopening.requestId, reopening.reportId),
+    };
+    persist(next, ctx);
+    await schedule(ctx);
+    return { state: state.coordinationRuntimeState, reopening };
+  }
+
   function restore(ctx: ExtensionContext) {
     state.coordinationRuntimeState = undefined;
     state.coordinationRestoreError = undefined;
@@ -468,7 +501,7 @@ export function createCoordinationRuntime(
     }
 
     const currentReview = verifiedReviewIdentity && current.handoff?.reportId
-      ? current.coordination.reviews.find((review) => review.reportId === current.handoff?.reportId)
+      ? current.coordination.reviews.findLast((review) => review.reportId === current.handoff?.reportId)
       : undefined;
     const normalizedRequestInput = verifiedReviewIdentity
       && currentReview?.decision === "more"
@@ -641,6 +674,7 @@ export function createCoordinationRuntime(
     schedule,
     continueCoordinationBoundary,
     resumeBoundary,
+    reopenReview,
     sendCoordinationMessage,
     markCurrentHandoffStartedFromMessage,
     requestEvidence,

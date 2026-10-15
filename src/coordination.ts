@@ -10,6 +10,7 @@ import type {
   EvidenceRequest,
   EvidenceRequestInput,
   EvidenceReviewInput,
+  EvidenceReviewReopeningInput,
   TaskContractReadiness,
   WorkflowTaskContractInput,
 } from "./coordination-types.ts";
@@ -77,13 +78,14 @@ export function createCoordinationState(input: unknown, now = Date.now()): Coord
   }
   if (!Number.isSafeInteger(now) || now < 0) return failure("COORDINATION_TIMESTAMP_INVALID", "createdAt 必须是非负安全整数时间戳", "createdAt");
   const state: CoordinationState = {
-    version: 1,
+    version: 2,
     coordinationId: input.coordinationId === undefined ? randomUUID() : (input.coordinationId as string).trim().toLowerCase(),
     sessionId: input.sessionId.trim(),
     phase: "ready",
     requests: [],
     reports: [],
     reviews: [],
+    reviewReopenings: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -127,7 +129,7 @@ export function requestEvidence(
         return failure("COORDINATION_FOLLOW_UP_ID_MISMATCH", "补查请求必须引用当前 follow-up-needed 请求", "followUpOfRequestId");
       }
       const priorReport = state.reports.find((report) => report.requestId === prior.requestId);
-      const review = priorReport && state.reviews.find((candidate) => candidate.reportId === priorReport.reportId);
+      const review = priorReport && state.reviews.findLast((candidate) => candidate.reportId === priorReport.reportId);
       if (!review || review.decision !== "more" || !request.addressesGaps.some((gap) => review.gaps.includes(gap))) {
         return failure("COORDINATION_FOLLOW_UP_GAP_MISSING", "补查请求必须明确回应上一轮审阅指出的缺口", "addressesGaps");
       }
@@ -211,6 +213,12 @@ export function reviewEvidence(
   if (!request || request.status !== "reported") {
     return failure("COORDINATION_REPORT_NOT_REVIEWABLE", "报告已审阅或对应请求状态已变化", "reportId");
   }
+  const priorReviews = state.reviews.filter((candidate) => candidate.reportId === report.reportId);
+  const reopening = state.reviewReopenings.findLast((candidate) => candidate.reportId === report.reportId
+    && !state.reviews.some((review) => review.reopeningId === candidate.reopeningId));
+  if (priorReviews.length > 0 && (!reopening || reopening.previousReviewId !== priorReviews.at(-1)?.reviewId)) {
+    return failure("COORDINATION_REPORT_NOT_REVIEWABLE", "报告已审阅且没有待处理的显式重开记录", "reportId");
+  }
   const parsed = parseEvidenceReview(input, report, now);
   if (!parsed.ok) return parsed;
   if (state.reviews.some((candidate) => candidate.reviewId === parsed.value.reviewId)) {
@@ -221,14 +229,76 @@ export function reviewEvidence(
     : parsed.value.decision === "more"
       ? "follow-up-needed"
       : "blocked";
+  const review = reopening ? { ...parsed.value, reopeningId: reopening.reopeningId } : parsed.value;
   const requests = [...state.requests];
   return hydrateCoordinationState({
     ...state,
     phase: deriveCoordinationPhase(requests),
     requests,
     reports: [...state.reports],
-    reviews: [...state.reviews, parsed.value],
+    reviews: [...state.reviews, review],
     ...(state.workflowLink ? { workflowLink: { ...state.workflowLink } } : {}),
+    updatedAt: now,
+  });
+}
+
+export function reopenEvidenceReview(
+  stateInput: CoordinationStateInput,
+  input: EvidenceReviewReopeningInput,
+  now = Date.now(),
+): CoordinationResult<CoordinationState> {
+  const hydrated = hydrateCoordinationState(stateInput);
+  if (!hydrated.ok) return hydrated;
+  const state = hydrated.value;
+  const timeFailure = validNextTimestamp(now, state);
+  if (timeFailure) return timeFailure;
+  if (!isRecord(input)) return failure("COORDINATION_REOPEN_INPUT_TYPE", "重开审阅参数必须是对象");
+  if (input.reportId === undefined || input.reportId === null) {
+    return failure("COORDINATION_FIELD_MISSING", "重开审阅 reportId 缺失", "reportId");
+  }
+  if (typeof input.reportId !== "string") {
+    return failure("COORDINATION_FIELD_TYPE", "重开审阅 reportId 必须是文本", "reportId");
+  }
+  const reportId = input.reportId.trim().toLowerCase();
+  if (!reportId) return failure("COORDINATION_FIELD_EMPTY", "重开审阅 reportId 不能为空", "reportId");
+  if (input.reason === undefined || input.reason === null) {
+    return failure("COORDINATION_FIELD_MISSING", "重开审阅 reason 缺失", "reason");
+  }
+  if (typeof input.reason !== "string") return failure("COORDINATION_FIELD_TYPE", "重开审阅 reason 必须是文本", "reason");
+  const reason = input.reason.trim();
+  if (!reason) return failure("COORDINATION_FIELD_EMPTY", "重开审阅 reason 不能为空", "reason");
+  if (state.phase !== "blocked") return failure("COORDINATION_REOPEN_NOT_BLOCKED", "当前协作状态没有明确阻塞的审阅", "reportId");
+
+  const report = state.reports.find((candidate) => candidate.reportId === reportId);
+  if (!report) return failure("COORDINATION_REPORT_NOT_FOUND", "找不到要重开的证据报告", "reportId");
+  const request = latestRequestForQuestion(state.requests, state.requests.find((item) => item.requestId === report.requestId)?.questionId ?? "");
+  if (!request || request.requestId !== report.requestId || request.status !== "blocked") {
+    return failure("COORDINATION_REOPEN_NOT_LATEST_BLOCK", "只能重开该问题最新的明确阻塞报告", "reportId");
+  }
+  const previousReview = state.reviews.findLast((candidate) => candidate.reportId === reportId);
+  if (!previousReview || previousReview.decision !== "block") {
+    return failure("COORDINATION_REOPEN_NOT_LATEST_BLOCK", "目标报告的最新审阅不是明确阻塞", "reportId");
+  }
+  const existingPending = state.reviewReopenings.some((candidate) => candidate.reportId === reportId
+    && !state.reviews.some((review) => review.reopeningId === candidate.reopeningId));
+  if (existingPending) return failure("COORDINATION_REOPEN_ALREADY_PENDING", "该报告已有待处理的重开审阅", "reportId");
+
+  const reviewReopening = {
+    reopeningId: randomUUID(),
+    requestId: request.requestId,
+    reportId,
+    previousReviewId: previousReview.reviewId,
+    reason,
+    createdAt: now,
+  };
+  const requests = state.requests.map((item) => item.requestId === request.requestId
+    ? { ...item, status: "reported" as const }
+    : { ...item });
+  return hydrateCoordinationState({
+    ...state,
+    phase: deriveCoordinationPhase(requests),
+    requests,
+    reviewReopenings: [...state.reviewReopenings, reviewReopening],
     updatedAt: now,
   });
 }

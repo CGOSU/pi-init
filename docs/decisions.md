@@ -8,6 +8,15 @@
 
 ## 已确认决策
 
+### 2026-10-15：为明确阻塞的证据审阅提供显式重开入口
+
+- 决定：新增用户命令 `/pi-init coordination reopen <reportId> <reason>`，仅对指定问题最新且存在明确 `decision=block` 的报告发起新的审阅轮次。原 request、report、block review 及其来源/版本记录均保留；新轮次须关联原报告并记录重开原因，不伪装成重新取证。
+- 交接边界：只有重开记录成功持久化后才能签发新的 architect review handoff；它只恢复审阅，不自动接受任何 finding、不派发 developer-test、不绕过来源版本与身份校验。旧 handoff 身份不得复用。
+- 安全限制：项目不可信、Agent 忙碌、状态恢复异常、有未完成/结果未知的 handoff，或目标报告不是最新的明确 block 报告时拒绝重开。未知结果不得通过 reopen 重放；原有 `/pi-init coordination resume` 仍只处理确认尚未派发的 `COORDINATION_COMPACTION_FAILED`，不扩展为通用解除阻塞命令。
+- 不变量：已有审阅与取证记录追加保留；普通 `request-evidence` 仍不能自行重开 blocked 问题；重开后的 accept 仍要求 architect 明确接受合法、来源版本匹配的 fact，任务就绪门及其他证据/身份守卫不放宽。
+- 原因：明确 `block` 会永久封闭问题且清除现有 review handoff，普通 request 被 `COORDINATION_BLOCKED`/`COORDINATION_QUESTION_BLOCKED` 拒绝；现有 resume 只恢复已确认尚未派发的压缩失败。需要受控、可审计的再次审阅路径，不能依赖直接改写 session 记录或重用旧身份。
+- 实施状态：行为已实现并验证。协调状态 schema 升至 v2，v1 hydration 迁移为空的 `reviewReopenings`；重开记录以 `reopeningId` 关联原阻塞审阅和报告，复审通过 `reopeningId` 绑定对应轮次，hydration 校验连续审阅关系与时间顺序。命令先持久化重开记录，再签发新的 architect review handoff；具体验证见 [`docs/session-log.md`](session-log.md)。真实 Pi TUI/Provider 生命周期仍未验证。
+
 ### 2026-10-15：可递归嵌套的持久工作流，父层在安全任务边界挂起并恢复
 
 - 决定：工作流运行期间出现的新目标不再覆盖父计划，而是创建独立子工作流。协议层复用现有 `pendingRevision`/`replan` 身份与提交路径，但 `pendingRevision.kind === "nested"` 时由运行时创建新 `workflowId` 的子状态，不改写父任务列表。

@@ -9,6 +9,7 @@ import {
   hydrateCoordinationState,
   reportEvidence,
   requestEvidence,
+  reopenEvidenceReview,
   reviewEvidence,
 } from "../src/coordination.ts";
 
@@ -202,6 +203,109 @@ test("同一问题的 follow-up 必须对应已记录缺口且改变调查范围
   assert.equal(state.phase, "evidence-gathering");
 });
 
+test("显式重开阻塞审阅保留旧证据并将复审绑定到重开记录", () => {
+  let blocked = ok(createCoordinationState({ sessionId: "session-reopen", coordinationId: "coord-reopen" }, 1));
+  blocked = ok(requestEvidence(blocked, request({ requestId: "request-reopen", questionId: "reopen" }), 2));
+  blocked = ok(reportEvidence(blocked, report("request-reopen", { findings: [{
+    findingId: "reopen-fact",
+    questionId: "reopen",
+    classification: "fact",
+    statement: "原始来源保留。",
+    sources: [{ id: "source-reopen", location: "src/reopen.ts", version: "source-v1" }],
+  }] }), 3));
+  blocked = ok(reviewEvidence(blocked, {
+    reviewId: "review-block-original",
+    reportId: "report-request-reopen",
+    decision: "block",
+    reason: "缺少关键证据。",
+  }, 4));
+  assert.equal(blocked.phase, "blocked");
+  assert.equal(blocked.requests[0].status, "blocked");
+
+  const originalReport = structuredClone(blocked.reports[0]);
+  const originalBlock = structuredClone(blocked.reviews[0]);
+  const reopened = ok(reopenEvidenceReview(blocked, {
+    reportId: originalReport.reportId,
+    reason: "补充了可复核材料，请重新评估原报告。",
+  }, 5));
+  assert.equal(reopened.version, 2);
+  assert.equal(reopened.phase, "evidence-review");
+  assert.equal(reopened.requests[0].status, "reported");
+  assert.deepEqual(reopened.reports[0], originalReport);
+  assert.deepEqual(reopened.reviews[0], originalBlock);
+  assert.deepEqual(reopened.reviewReopenings, [{
+    reopeningId: reopened.reviewReopenings[0].reopeningId,
+    requestId: "request-reopen",
+    reportId: originalReport.reportId,
+    previousReviewId: originalBlock.reviewId,
+    reason: "补充了可复核材料，请重新评估原报告。",
+    createdAt: 5,
+  }]);
+
+  const migratedV1 = { ...blocked, version: 1 };
+  delete migratedV1.reviewReopenings;
+  const hydratedV1 = ok(hydrateCoordinationState(migratedV1));
+  assert.equal(hydratedV1.version, 2);
+  assert.deepEqual(hydratedV1.reviewReopenings, []);
+
+  const accepted = ok(reviewEvidence(reopened, {
+    reviewId: "review-reopened-accept",
+    reportId: originalReport.reportId,
+    decision: "accept",
+    acceptedEvidence: [{ findingId: "reopen-fact", sourceId: "source-reopen", sourceVersion: "source-v1" }],
+    reason: "显式复审后接受来源匹配的事实。",
+  }, 6));
+  assert.equal(accepted.phase, "ready");
+  assert.equal(accepted.requests[0].status, "accepted");
+  assert.deepEqual(accepted.reviews.map((review) => review.decision), ["block", "accept"]);
+  assert.equal(accepted.reviews[1].reopeningId, reopened.reviewReopenings[0].reopeningId);
+  assert.equal(accepted.reviewReopenings[0].previousReviewId, originalBlock.reviewId);
+  assert.equal(checkCoordinationReadiness(accepted).ok, true);
+
+  const blockedAgain = ok(reviewEvidence(reopened, {
+    reviewId: "review-reopened-block",
+    reportId: originalReport.reportId,
+    decision: "block",
+    reason: "再次审阅仍发现缺口。",
+  }, 6));
+  const reopenedAgain = ok(reopenEvidenceReview(blockedAgain, {
+    reportId: originalReport.reportId,
+    reason: "第二次明确授权复审。",
+  }, 7));
+  assert.equal(hydrateCoordinationState(reopenedAgain).ok, true);
+  assert.equal(reopenedAgain.reviewReopenings.length, 2);
+  assert.equal(reopenedAgain.reviewReopenings[1].previousReviewId, "review-reopened-block");
+  const acceptedAgain = ok(reviewEvidence(reopenedAgain, {
+    reviewId: "review-reopened-accept-again",
+    reportId: originalReport.reportId,
+    decision: "accept",
+    acceptedEvidence: [{ findingId: "reopen-fact", sourceId: "source-reopen", sourceVersion: "source-v1" }],
+  }, 8));
+  assert.deepEqual(acceptedAgain.reviews.map((review) => review.decision), ["block", "block", "accept"]);
+  assert.equal(acceptedAgain.reviews[2].reopeningId, reopenedAgain.reviewReopenings[1].reopeningId);
+});
+
+test("审阅重开只允许最新明确阻塞报告和非空原因", () => {
+  let accepted = ok(createCoordinationState({ sessionId: "session-reopen-guards" }, 1));
+  accepted = ok(requestEvidence(accepted, request({ requestId: "request-old" }), 2));
+  accepted = ok(reportEvidence(accepted, report("request-old"), 3));
+  accepted = ok(reviewEvidence(accepted, accept("report-request-old", "finding-request-old", "sha-index-1"), 4));
+  assert.equal(reopenEvidenceReview(accepted, { reportId: "report-request-old", reason: "再次审阅" }, 5).code,
+    "COORDINATION_REOPEN_NOT_BLOCKED");
+
+  let blocked = ok(requestEvidence(accepted, request({ requestId: "request-new", refreshReason: "出现新的来源版本" }), 5));
+  blocked = ok(reportEvidence(blocked, report("request-new"), 6));
+  blocked = ok(reviewEvidence(blocked, {
+    reportId: "report-request-new", decision: "block", reason: "新报告仍缺少关键证据。",
+  }, 7));
+  assert.equal(reopenEvidenceReview(blocked, { reportId: "report-request-old", reason: "旧报告" }, 8).code,
+    "COORDINATION_REOPEN_NOT_LATEST_BLOCK");
+  assert.equal(reopenEvidenceReview(blocked, { reportId: "report-request-new", reason: " " }, 8).code,
+    "COORDINATION_FIELD_EMPTY");
+  assert.equal(requestEvidence(blocked, request({ requestId: "request-automatic-reopen" }), 8).code,
+    "COORDINATION_BLOCKED");
+});
+
 test("报告和审阅对不完整、缺失来源和错误版本返回可区分结果", () => {
   let state = ok(createCoordinationState({ sessionId: "session-3" }, 1));
   state = ok(requestEvidence(state, request(), 2));
@@ -249,7 +353,7 @@ test("协作状态非法类型、版本、身份和时间戳返回结构化错�
   assert.equal(createCoordinationState({ sessionId: "s", coordinationId: 42 }, 1).code, "COORDINATION_FIELD_TYPE");
   assert.equal(createCoordinationState({ sessionId: "s" }, -1).code, "COORDINATION_TIMESTAMP_INVALID");
   assert.equal(hydrateCoordinationState(null).code, "COORDINATION_INPUT_TYPE");
-  assert.equal(hydrateCoordinationState({ version: 2 }).code, "COORDINATION_VERSION_UNSUPPORTED");
+  assert.equal(hydrateCoordinationState({ version: 3 }).code, "COORDINATION_VERSION_UNSUPPORTED");
   assert.equal(hydrateCoordinationState({
     version: 1,
     coordinationId: "coord",

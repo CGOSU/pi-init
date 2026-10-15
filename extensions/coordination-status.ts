@@ -38,8 +38,17 @@ export function createCoordinationStatus(state: ExtensionRuntimeState) {
       reviews: current.coordination.reviews.map((review) => ({
         reviewId: review.reviewId,
         reportId: review.reportId,
+        reopeningId: review.reopeningId,
         decision: review.decision,
         gaps: review.gaps,
+      })),
+      reviewReopenings: current.coordination.reviewReopenings.map((reopening) => ({
+        reopeningId: reopening.reopeningId,
+        requestId: reopening.requestId,
+        reportId: reopening.reportId,
+        previousReviewId: reopening.previousReviewId,
+        reason: reopening.reason,
+        createdAt: reopening.createdAt,
       })),
     };
   }

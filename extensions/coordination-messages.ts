@@ -16,7 +16,7 @@ function acceptedFindingSummaries(
     && current.coordination.requests.some((request) => request.requestId === report.requestId && request.questionId === questionId));
   const summaries = new Map<string, string>();
   for (const report of reports) {
-    const review = current.coordination.reviews.find((item) => item.reportId === report.reportId);
+    const review = current.coordination.reviews.findLast((item) => item.reportId === report.reportId);
     if (review?.decision !== "accept") continue;
     for (const reference of review.acceptedEvidence) {
       const finding = report.findings.find((item) => item.findingId === reference.findingId
@@ -33,7 +33,7 @@ function acceptedFindingSummaries(
 function previousReviewGaps(current: CoordinationRuntimeState, request: EvidenceRequest) {
   if (!request.followUpOfRequestId) return [];
   const report = current.coordination.reports.find((item) => item.requestId === request.followUpOfRequestId);
-  const review = report && current.coordination.reviews.find((item) => item.reportId === report.reportId);
+  const review = report && current.coordination.reviews.findLast((item) => item.reportId === report.reportId);
   return review?.decision === "more" ? review.gaps : [];
 }
 
@@ -71,7 +71,13 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
     };
   }
   if (!report) throw coordinationError("COORDINATION_REPORT_NOT_FOUND", "架构审阅 handoff 缺少报告");
-  const review = current.coordination.reviews.find((item) => item.reportId === report.reportId);
+  const reportReviews = current.coordination.reviews.filter((item) => item.reportId === report.reportId);
+  const review = reportReviews.at(-1);
+  const reopening = current.coordination.reviewReopenings.findLast((item) => item.reportId === report.reportId
+    && !current.coordination.reviews.some((candidate) => candidate.reopeningId === item.reopeningId));
+  const previousBlockReview = reopening
+    ? current.coordination.reviews.find((item) => item.reviewId === reopening.previousReviewId)
+    : undefined;
   return {
     customType: COORDINATION_REVIEW_MESSAGE_TYPE,
     identity,
@@ -85,11 +91,16 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
         ? `可核对引用（findingId · sourceId · sourceVersion）：\n${report.findings.flatMap((finding) => finding.sources.map((source) => `- ${finding.findingId} · ${source.id} · ${source.version}（${finding.classification}）`)).join("\n")}`
         : "",
       priorAcceptedFacts.length ? `本问题之前已接受的事实：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
+      reopening && previousBlockReview
+        ? `本轮为显式重开审阅（不是新取证）；重开原因：${reopening.reason}\n此前阻塞审阅：${previousBlockReview.reviewId}（${previousBlockReview.reason ?? previousBlockReview.gaps.join("；")}）`
+        : "",
       `已检查范围：${report.inspectedScope.join("；")}`,
       report.testsLocated.length ? `已定位测试：${report.testsLocated.join("；")}` : "未列出测试位置。",
       report.testsRun.length ? `实际运行：${report.testsRun.map((result) => `${result.command} → ${result.result}`).join("；")}` : "报告未声称执行测试。",
       report.unresolved.length ? `未确认项：${report.unresolved.join("；")}` : "报告未列出未确认项。",
-      review ? `当前最新审阅 decision：${review.decision}` : "该报告尚未审阅。",
+      reopening
+        ? "当前为重开后的待审阅轮次；此前审阅记录保留在账本中。"
+        : review ? `当前最新审阅 decision：${review.decision}` : "该报告尚未审阅。",
       `你是 architect，只做证据审阅和架构决策。调用 task_workflow(action="review-evidence", coordinationHandoffId="${handoff.handoffId}", review={reportId, decision: accept|more|block, acceptedEvidence, gaps, reason})；从上方可核对引用中显式选择要接受的 fact。accept 必须逐条引用来源版本匹配的 fact，more 必须给出具体 gaps。若 decision=more，随后用同一短引用调用 request-evidence，设置 followUpOfRequestId 并明确 addressesGaps。不得执行取证、调用代码工具或派发开发；关键证据未接受前不得 plan。`,
     ].join("\n\n"),
   };

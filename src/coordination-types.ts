@@ -58,11 +58,27 @@ export type EvidenceReport = {
 export type EvidenceReview = {
   reviewId: string;
   reportId: string;
+  /** 复审同一报告时，关联经显式授权的重开记录。 */
+  reopeningId?: string;
   decision: EvidenceReviewDecision;
   acceptedEvidence: AcceptedEvidenceReference[];
   gaps: string[];
   reason?: string;
   reviewedAt: number;
+};
+
+export type EvidenceReviewReopening = {
+  reopeningId: string;
+  requestId: string;
+  reportId: string;
+  previousReviewId: string;
+  reason: string;
+  createdAt: number;
+};
+
+export type EvidenceReviewReopeningInput = {
+  reportId: unknown;
+  reason: unknown;
 };
 
 export type CoordinationWorkflowLink = {
@@ -73,13 +89,14 @@ export type CoordinationWorkflowLink = {
 
 /** Durable evidence protocol state; it never owns or dispatches executable tasks. */
 export type CoordinationState = {
-  version: 1;
+  version: 2;
   coordinationId: string;
   sessionId: string;
   phase: CoordinationPhase;
   requests: EvidenceRequest[];
   reports: EvidenceReport[];
   reviews: EvidenceReview[];
+  reviewReopenings: EvidenceReviewReopening[];
   workflowLink?: CoordinationWorkflowLink;
   createdAt: number;
   updatedAt: number;
