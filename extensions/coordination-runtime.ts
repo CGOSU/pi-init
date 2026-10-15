@@ -232,6 +232,12 @@ export function createCoordinationRuntime(
 
   async function schedule(ctx: ExtensionContext) {
     state.traceHandoff?.(ctx, "coordination.schedule");
+    try {
+      if (state.workflowState) synchronizeWorkflowLink(state.workflowState, ctx);
+    } catch (error) {
+      ctx.ui.notify(`证据绑定同步尚未持久化，未派发协作任务：${textOf(error)}`, "warning");
+      return;
+    }
     const current = state.coordinationRuntimeState;
     if (!current || state.coordinationRestoreError || current.handoff?.phase !== "prepared") return;
     if (state.runtimeDisposed || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed
@@ -443,6 +449,7 @@ export function createCoordinationRuntime(
     const sessionId = getSessionId(ctx);
     const requestInput = isRecord(input) ? input : undefined;
     if (!requestInput) throw coordinationError("COORDINATION_REQUEST_INVALID_TYPE", "request 必须是对象");
+    if (state.workflowState) synchronizeWorkflowLink(state.workflowState, ctx);
     let current = state.coordinationRuntimeState;
     let verifiedReviewIdentity: CoordinationHandoffIdentity | undefined;
     if (state.coordinationRestoreError) throw coordinationError(state.coordinationRestoreError.code, state.coordinationRestoreError.message);
@@ -638,6 +645,19 @@ export function createCoordinationRuntime(
     return { state: next, acceptedEvidence: ready };
   }
 
+  function synchronizeWorkflowLink(workflow: WorkflowState, ctx: ExtensionContext) {
+    const current = state.coordinationRuntimeState;
+    const link = current?.coordination.workflowLink;
+    if (!current || !link || state.runtimeDisposed || state.coordinationRestoreError || state.workflowRestoreError
+      || state.workflowState !== workflow || ["completed", "cancelled"].includes(workflow.status)
+      || link.workflowId !== workflow.workflowId || link.planVersion !== workflow.planVersion
+      || link.recoveryGeneration >= workflow.recoveryGeneration) return;
+    const sessionId = getSessionId(ctx);
+    if (current.sessionId !== sessionId || current.coordination.sessionId !== sessionId || workflow.sessionId !== sessionId) return;
+    // The existing link proves plan ownership; only callback identity advanced. Evidence is neither accepted nor refreshed here.
+    return persistWorkflowLink(current, workflow, ctx);
+  }
+
   function reconcileWorkflowRecovery(previous: HydratedWorkflowState, recovered: WorkflowState, ctx: ExtensionContext) {
     const current = state.coordinationRuntimeState;
     const link = current?.coordination.workflowLink;
@@ -688,6 +708,7 @@ export function createCoordinationRuntime(
     isLinkedToWorkflow,
     linkWorkflow,
     reconcileWorkflowRecovery,
+    synchronizeWorkflowLink,
   };
 }
 

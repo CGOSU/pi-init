@@ -119,7 +119,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.internalContinuationPending = value;
     },
   });
-  workflowReport = createWorkflowReport(runtimeState, { pi, roleRuntime, activityStatus });
+  workflowReport = createWorkflowReport(runtimeState, {
+    pi, roleRuntime, activityStatus,
+    onWorkflowPersisted: (workflow, ctx) => { coordinationRuntime.synchronizeWorkflowLink(workflow, ctx); },
+  });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
     messages: workflowMessages,
@@ -127,6 +130,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     setCurrentContext: (ctx) => {
       runtimeState.currentContext = ctx;
     },
+    synchronizeWorkflowLink: (workflow, ctx) => { coordinationRuntime.synchronizeWorkflowLink(workflow, ctx); },
     onWorkflowRecovered: (previous, recovered, ctx) =>
       coordinationRuntime.reconcileWorkflowRecovery(previous, recovered, ctx),
   });

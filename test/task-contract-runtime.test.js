@@ -14,12 +14,13 @@ import {
   COORDINATION_EVIDENCE_MESSAGE_TYPE,
   COORDINATION_REVIEW_MESSAGE_TYPE,
 } from "../extensions/coordination-runtime-protocol.ts";
+import { workflowActionIdentity } from "../src/workflow.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const docs = { provider: "openai-codex", id: "gpt-5.6-docs" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
-async function makeHarness(directory) {
+async function makeHarness(directory, options = {}) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify({
     schemaVersion: 2,
@@ -37,6 +38,7 @@ async function makeHarness(directory) {
     model: architect,
     availableModels: [architect, docs, developer],
     sessionId: "task-contract-session",
+    ...options,
   });
   await emitExtensionEvent(harness, "session_start");
   return harness;
@@ -481,4 +483,160 @@ test("恢复不自动改绑缺失或指向其他工作流的 evidence link", asy
       }), (error) => error.code === "COORDINATION_WORKFLOW_ACTIVE");
     });
   }
+});
+
+async function coordinatedPlan(harness) {
+  const { evidence } = await prepareEvidence(harness);
+  const params = taskParams(evidence);
+  params.tasks = ["first", "second", "third"].map((id, index, ids) => ({ ...params.tasks[0], id, dependsOn: index ? [ids[index - 1]] : [] }));
+  await execute(harness, params);
+  await emitExtensionEvent(harness, "agent_settled");
+  return evidence;
+}
+function assertCurrentLink(harness) {
+  const workflow = latestWorkflow(harness);
+  assert.deepEqual(latestCoordination(harness).coordination.workflowLink, { workflowId: workflow.workflowId, planVersion: workflow.planVersion, recoveryGeneration: workflow.recoveryGeneration });
+}
+test("协调计划连续完成任务后同步证据绑定，下一项不被执行代次变化阻断", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    await coordinatedPlan(harness);
+    const reviews = structuredClone(latestCoordination(harness).coordination.reviews);
+    for (const taskId of ["first", "second", "third"]) {
+      const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+      assert.equal(identity.taskId, taskId);
+      await execute(harness, { action: "complete", ...identity, completionSummary: taskId + " 已完成", implementationRationale: "严格沿当前契约推进", verification: ["针对性检查通过"] });
+      if (taskId !== "third") assertCurrentLink(harness);
+      await emitExtensionEvent(harness, "agent_settled");
+    }
+    assert.equal(latestWorkflow(harness).status, "completed");
+    assert.deepEqual(latestCoordination(harness).coordination.reviews, reviews);
+    assert.equal(harness.notifications.some(entry => /协作证据未绑定当前 workflow revision/.test(entry.message)), false);
+    assert.equal(harness.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 3);
+  });
+});
+test("协调任务 block 与 retry 同步关联但保留证据审阅和旧结果隔离", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    await coordinatedPlan(harness);
+    const original = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    await execute(harness, { action: "block", ...original, reason: "临时缺少权限" });
+    assertCurrentLink(harness);
+    await execute(harness, { action: "retry", ...workflowActionIdentity(latestWorkflow(harness)), taskId: "first" });
+    assertCurrentLink(harness);
+    await emitExtensionEvent(harness, "agent_settled");
+    const retried = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    assert.notEqual(retried.attemptId, original.attemptId);
+    await assert.rejects(execute(harness, { action: "complete", ...original, completionSummary: "旧结果", implementationRationale: "不得接受", verification: ["旧检查"] }), error => error.code === "WORKFLOW_ACTION_IDENTITY_STALE");
+  });
+});
+
+test("证据同步写入失败保留完成结果并停止派发，存储恢复后补偿而不重放", async () => {
+  await withTempDirectory(async directory => {
+    let failSync = false;
+    const harness = await makeHarness(directory, { appendEntry: type => {
+      if (failSync && type === COORDINATION_ENTRY_TYPE) throw new Error("evidence append failed");
+    } });
+    await coordinatedPlan(harness);
+    const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    failSync = true;
+    await execute(harness, { action: "complete", ...identity, completionSummary: "第一项已完成", implementationRationale: "先保存真实结果", verification: ["已验证"] });
+    assert.equal(latestWorkflow(harness).tasks[0].status, "completed");
+    assert.ok(latestWorkflow(harness).recoveryGeneration > latestCoordination(harness).coordination.workflowLink.recoveryGeneration);
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 1);
+    failSync = false;
+    await emitExtensionEvent(harness, "agent_settled");
+    assertCurrentLink(harness);
+    assert.equal(workflowMessageIdentity(harness, "pi-init-workflow-task").taskId, "second");
+    assert.equal(harness.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 2);
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 2);
+    assert.equal(latestWorkflow(harness).tasks[0].completionSummary, "第一项已完成");
+  });
+});
+test("调度补偿不创建缺失绑定、不改绑其他计划/session，也不倒退未来代次", async () => {
+  for (const mode of ["missing", "different-workflow", "different-plan", "different-session", "future-generation"]) {
+    await withTempDirectory(async directory => {
+      const harness = await makeHarness(directory);
+      await coordinatedPlan(harness);
+      const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+      await execute(harness, { action: "complete", ...identity, completionSummary: "第一项完成", implementationRationale: "保持来源身份边界", verification: ["已验证"] });
+      const current = latestCoordination(harness);
+      const link = current.coordination.workflowLink;
+      link.recoveryGeneration -= 1;
+      if (mode === "missing") delete current.coordination.workflowLink;
+      if (mode === "different-workflow") link.workflowId = "unrelated-workflow";
+      if (mode === "different-plan") link.planVersion += 1;
+      if (mode === "different-session") current.sessionId = "other-session";
+      if (mode === "future-generation") link.recoveryGeneration = latestWorkflow(harness).recoveryGeneration + 1;
+      const before = structuredClone(current);
+      await emitExtensionEvent(harness, "agent_settled");
+      assert.deepEqual(latestCoordination(harness), before, mode);
+      assert.equal(harness.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 1, mode);
+      assert.equal(latestWorkflow(harness).tasks[1].status, "pending", mode);
+    });
+  }
+});
+test("修复代次绑定不会接受来源已变化的证据或绕过契约就绪门", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    await coordinatedPlan(harness);
+    const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    await execute(harness, { action: "complete", ...identity, completionSummary: "第一项完成", implementationRationale: "证据变更仍需重查", verification: ["已验证"] });
+    const coordination = latestCoordination(harness).coordination;
+    coordination.reports[0].findings[0].sources[0].version = "changed-source-version";
+    const reviews = structuredClone(coordination.reviews);
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 1);
+    assert.deepEqual(latestCoordination(harness).coordination.reviews, reviews);
+    assert.equal(latestWorkflow(harness).tasks[1].status, "pending");
+    assert.ok(harness.notifications.some(entry => /未通过就绪门/.test(entry.message)));
+  });
+});
+
+test("工作流写入失败不先推进证据绑定；重提同一合法结果后才同步", async () => {
+  await withTempDirectory(async directory => {
+    let failWorkflow = false;
+    const harness = await makeHarness(directory, { appendEntry: type => {
+      if (failWorkflow && type === "pi-init-workflow") throw new Error("workflow append failed");
+    } });
+    await coordinatedPlan(harness);
+    const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    const entryIndex = harness.branch.findLastIndex(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task");
+    const [entry] = harness.branch.splice(entryIndex, 1);
+    const message = harness.sentMessages.findLast(item => item.message.customType === "pi-init-workflow-task").message;
+    await emitExtensionEvent(harness, "agent_start");
+    await emitExtensionEvent(harness, "message_start", { message: { ...message, role: "custom", timestamp: Date.now() } });
+    harness.branch.splice(entryIndex, 0, entry);
+    assert.equal(latestWorkflow(harness).handoff.phase, "executing");
+    const beforeWorkflow = structuredClone(latestWorkflow(harness));
+    const beforeCoordination = structuredClone(latestCoordination(harness));
+    const params = { action: "complete", ...identity, completionSummary: "第一项完成", implementationRationale: "提交顺序不能倒置", verification: ["已验证"] };
+    failWorkflow = true;
+    await assert.rejects(execute(harness, params), /workflow append failed/);
+    assert.deepEqual(latestWorkflow(harness), beforeWorkflow);
+    assert.deepEqual(latestCoordination(harness), beforeCoordination);
+    failWorkflow = false;
+    await execute(harness, params);
+    assertCurrentLink(harness);
+    assert.equal(latestWorkflow(harness).tasks[0].status, "completed");
+  });
+});
+test("同步失败后直接补充证据也可受限补偿，不再误报未关联活动工作流", async () => {
+  await withTempDirectory(async directory => {
+    let failSync = false;
+    const harness = await makeHarness(directory, { appendEntry: type => {
+      if (failSync && type === COORDINATION_ENTRY_TYPE) throw new Error("evidence append failed");
+    } });
+    await coordinatedPlan(harness);
+    const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    failSync = true;
+    await execute(harness, { action: "block", ...identity, reason: "需要补查事实" });
+    failSync = false;
+    await switchToArchitect(harness);
+    await execute(harness, { action: "request-evidence", request: { questionId: "additional-fact", question: "补查事实是否成立？", rationale: "任务受阻后需要额外事实", scope: ["src/input.ts"], completionCriteria: ["提供可核查证据"] } });
+    assertCurrentLink(harness);
+    assert.equal(latestCoordination(harness).coordination.requests.at(-1).questionId, "additional-fact");
+  });
 });

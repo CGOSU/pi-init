@@ -51,6 +51,7 @@ export type WorkflowReportDependencies = {
   pi: ExtensionAPI;
   roleRuntime: RoleRuntime;
   activityStatus?: ActivityStatusReporter;
+  onWorkflowPersisted?: (workflow: WorkflowState, ctx: ExtensionContext) => void;
 };
 
 export function createWorkflowReport(
@@ -231,6 +232,11 @@ export function createWorkflowReport(
     deps.pi.appendEntry("pi-init-workflow", next);
     state.workflowState = next;
     state.workflowRestoreError = undefined;
+    try {
+      deps.onWorkflowPersisted?.(next, ctx);
+    } catch (error) {
+      ctx.ui.notify(`工作流结果已保存，但证据绑定同步失败；派发前将重试，不会重放已完成任务：${textOf(error)}`, "warning");
+    }
     state.traceHandoff?.(ctx, "workflow.persisted");
     updateWorkflowStatus(ctx);
     return next;

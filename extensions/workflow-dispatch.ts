@@ -39,6 +39,7 @@ export type WorkflowDispatchDependencies = {
   messages: WorkflowMessages;
   report: WorkflowReport;
   setCurrentContext: (ctx: ExtensionContext) => void;
+  synchronizeWorkflowLink?: (workflow: WorkflowState, ctx: ExtensionContext) => void;
   onWorkflowRecovered?: (previous: HydratedWorkflowState, recovered: WorkflowState, ctx: ExtensionContext) => void;
 };
 
@@ -432,6 +433,12 @@ export function createWorkflowDispatch(
       state.workflowRestoreError = { code: roleValidation.code, message: roleValidation.message };
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`工作流任务不可派发（${roleValidation.code}）：${roleValidation.message}`, "error");
+      return;
+    }
+    try {
+      deps.synchronizeWorkflowLink?.(current, ctx);
+    } catch (error) {
+      ctx.ui.notify(`证据绑定同步尚未持久化，已保存任务结果不会重放，暂不派发：${textOf(error)}`, "warning");
       return;
     }
     if (startTaskBoundaryCompaction(ctx, current)) return;
