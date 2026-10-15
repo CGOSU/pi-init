@@ -1,7 +1,6 @@
 import { Text, type SelectItem } from "@earendil-works/pi-tui";
-import { roleLabel } from "../src/roles.ts";
 import type { ReportTheme } from "./contracts.ts";
-import { formatWorkflowPauseBlockLines } from "./workflow-pause-renderer.ts";
+import { formatWorkflowPauseBlockLines, formatWorkflowPauseSummary } from "./workflow-pause-renderer.ts";
 import type { WorkflowStatusActivity, WorkflowStatusView } from "./workflow-status-view.ts";
 import { formatWorkflowDuration, formatWorkflowTimestamp } from "./workflow-view-format.ts";
 import { classifyWorkflowRecoveryError } from "../src/workflow-recovery-disposition.ts";
@@ -56,6 +55,7 @@ function workflowIdentityLines(view: Extract<WorkflowStatusView, { kind: "workfl
   return lines;
 }
 
+/** Full tool text retains the identities needed by subsequent workflow actions. */
 export function formatWorkflowStatusText(view: WorkflowStatusView) {
   if (view.kind === "no-workflow") return "当前没有活动工作流。";
   if (view.kind === "restore-error") {
@@ -112,51 +112,44 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
   return lines.join("\n");
 }
 
-export function formatWorkflowStatusPanelSummary(view: WorkflowStatusView) {
+export function formatWorkflowStatusDetailsText(view: WorkflowStatusView) {
+  return formatWorkflowStatusText(view);
+}
+
+/** Concise user-facing status; technical identities remain available in expanded details. */
+export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
   if (view.kind !== "workflow") return formatWorkflowStatusText(view);
   const lines = [
-    `状态  ${workflowStatusActivityLabel(view.activity)} · workflowId  ${view.identity.action.workflowId} · planVersion  ${view.identity.action.planVersion} · recoveryGeneration  ${view.identity.action.recoveryGeneration}`,
-    `已完成任务  ${view.progress.completed}/${view.progress.total}`,
-    `总任务开始时间  ${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
-    `总任务已运行时间  ${elapsedText(view)}`,
-    `规划  ${view.planSummary}`,
-    ...(view.lineage.length > 1
-      ? [`层级  ${view.lineage.map((item) => item.workflowId).join(" → ")}`, `父层任务  ${view.lineage.slice(0, -1).map((item) => item.parentTaskId).filter(Boolean).join(" → ") || "无"}`]
-      : []),
-    ...(view.subworkflows.length > 0
-      ? [`已返回子工作流  ${view.subworkflows.filter((item) => item.status === "completed").length}/${view.subworkflows.length} 完成；${view.subworkflows.filter((item) => item.status === "cancelled").length} 取消`, ...view.subworkflows.map((item) => `${item.workflowId} ← ${item.parentWorkflowId}${item.parentTaskId ? ` · ${item.parentTaskId}` : ""}`)]
-      : []),
-    ...(view.progress.currentTaskId ? [`当前任务  ${view.progress.currentTaskId}`] : []),
-    ...(view.progress.currentTaskPosition !== undefined
-      ? [`当前任务位置  第 ${view.progress.currentTaskPosition}/${view.progress.total} 项`]
-      : []),
-    ...(view.identity.handoff && view.identity.handoffPhase
-      ? [`handoff  ${view.identity.handoff.handoffId} · attempt  ${view.identity.handoff.attemptId} · ${view.identity.handoffPhase}`]
-      : []),
-    ...(view.pauseCode ? [`暂停类别  ${view.pauseCode}`] : []),
-    ...(view.taskPauseReason && view.pause.blockedTasks.length === 0
-      ? [`暂停说明  ${view.taskPauseReason}`]
-      : []),
-    ...formatWorkflowPauseBlockLines(view.pause),
-    ...(view.pendingRevision ? [
-      `待处理 revision  ${view.pendingRevision.revisionId}`,
-      `用户方向  ${view.pendingRevision.direction}`,
-    ] : []),
+    `${workflowStatusActivityLabel(view.activity)} · 已完成 ${view.progress.completed}/${view.progress.total}`,
+    `目标：${view.planSummary}`,
   ];
+  if (view.progress.currentTaskId) {
+    const currentTask = view.tasks.find((task) => task.id === view.progress.currentTaskId);
+    lines.push(`当前任务：${currentTask?.task ?? view.progress.currentTaskId}`);
+  }
+  if (view.lineage.length > 1) {
+    lines.push("正在处理子目标；父工作流暂停等待返回。");
+  }
+  if (view.subworkflows.length > 0) {
+    const completed = view.subworkflows.filter((item) => item.status === "completed").length;
+    const cancelled = view.subworkflows.filter((item) => item.status === "cancelled").length;
+    lines.push(`已返回子目标：${completed} 完成，${cancelled} 取消。`);
+  }
+  if (view.activity === "paused") {
+    lines.push(...formatWorkflowPauseSummary(view.pause).split("\n").slice(1));
+  }
+  if (view.pendingRevision) lines.push(`等待重规划：${view.pendingRevision.direction}`);
   return lines.join("\n");
+}
+
+export function formatWorkflowStatusPanelSummary(view: WorkflowStatusView) {
+  return formatWorkflowStatusSummaryText(view);
 }
 
 export function formatWorkflowControlCenterLabel(view: WorkflowStatusView) {
   if (view.kind === "no-workflow") return "无活动工作流";
   if (view.kind === "restore-error") return `工作流恢复失败（${view.code}）`;
-  const currentPosition = view.progress.currentTaskPosition === undefined
-    ? undefined
-    : `当前第 ${view.progress.currentTaskPosition}/${view.progress.total} 项${view.progress.currentTaskId ? ` · ${view.progress.currentTaskId}` : ""}`;
-  return [
-    workflowStatusActivityLabel(view.activity),
-    currentPosition,
-    `已完成 ${view.progress.completed}/${view.progress.total}`,
-  ].filter(Boolean).join(" · ");
+  return `${workflowStatusActivityLabel(view.activity)} · 已完成 ${view.progress.completed}/${view.progress.total}`;
 }
 
 export function workflowStatusTaskItems(view: WorkflowStatusView): SelectItem[] {
@@ -169,15 +162,10 @@ export function workflowStatusTaskItems(view: WorkflowStatusView): SelectItem[] 
           : task.status === "blocked"
             ? "! 已阻塞"
             : "○ 待处理";
-      const taskDuration = task.status === "completed"
-        ? `耗时：${task.duration.kind === "available"
-          ? formatWorkflowDuration(task.duration.milliseconds, TASK_DURATION_UNAVAILABLE)
-          : TASK_DURATION_UNAVAILABLE}`
-        : undefined;
       return {
         value: task.id,
         label: `${taskStatus} · ${task.id}`,
-        description: [taskDuration, roleLabel(task.role), task.task, task.completionSummary].filter(Boolean).join(" · "),
+        description: task.task,
       };
     });
   }
@@ -224,16 +212,19 @@ export function renderWorkflowStatusResult(view: WorkflowStatusView, expanded: b
     const content = formatWorkflowStatusText(view);
     return new Text(theme.fg(view.kind === "restore-error" ? "error" : "muted", content), 0, 0);
   }
+  if (expanded) {
+    return new Text(
+      `${theme.fg("accent", theme.bold("工作流详情"))}\n${formatWorkflowStatusDetailsText(view)}`,
+      0,
+      0,
+    );
+  }
   const color = view.status === "running" ? "accent" : view.status === "completed" ? "success" : "warning";
   const icon = view.status === "running" ? "⏳" : view.status === "completed" ? "✓" : "⏸";
-  const lines = [
-    theme.fg(color, theme.bold(`${icon} 已完成 ${view.progress.completed}/${view.progress.total}`)),
-    theme.fg("muted", `${workflowStatusActivityLabel(view.activity)}${view.progress.currentTaskPosition !== undefined ? ` · 当前项 ${view.progress.currentTaskPosition}/${view.progress.total}` : ""}${view.progress.currentTaskId ? ` · ${view.progress.currentTaskId}` : ""}`),
-  ];
-  if (expanded) {
-    lines.push(theme.fg("accent", theme.bold("技术详情：")), formatWorkflowStatusText(view));
-  } else {
-    lines.push(theme.fg("muted", "展开结果以查看完整任务与身份状态。"));
-  }
-  return new Text(lines.join("\n"), 0, 0);
+  const [headline, ...summaryLines] = formatWorkflowStatusSummaryText(view).split("\n");
+  return new Text([
+    theme.fg(color, theme.bold(`${icon} ${headline}`)),
+    ...summaryLines.map((line) => theme.fg("text", line)),
+    theme.fg("muted", "展开结果可查看任务列表与技术身份。"),
+  ].join("\n"), 0, 0);
 }

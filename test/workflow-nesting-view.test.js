@@ -10,7 +10,12 @@ import {
   startWorkflowTask,
 } from "../src/workflow.ts";
 import { createNestedWorkflowState, returnFromNestedWorkflow } from "../src/workflow-nesting.ts";
-import { formatWorkflowStatusPanelSummary, formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
+import {
+  formatWorkflowStatusDetailsText,
+  formatWorkflowStatusPanelSummary,
+  formatWorkflowStatusSummaryText,
+  formatWorkflowStatusText,
+} from "../extensions/workflow-status-renderer.ts";
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
 
 const runtime = {
@@ -42,12 +47,17 @@ test("工作流视图显示当前嵌套路径，并在返回父层后呈现真�
     tasks: [task("child-a")],
   }, 15);
   const activeView = createWorkflowStatusView(child, runtime, 16);
-  const activeText = formatWorkflowStatusText(activeView);
+  const activeText = formatWorkflowStatusSummaryText(activeView);
   assert.deepEqual(activeView.lineage.map(({ workflowId }) => workflowId), [parent.workflowId, child.workflowId]);
   assert.equal(activeView.lineage[0].parentTaskId, "parent-a");
-  assert.match(activeText, /工作流层级（由外向内）/);
-  assert.match(activeText, /父任务 parent-a 触发/);
-  assert.match(formatWorkflowStatusPanelSummary(activeView), new RegExp(`${parent.workflowId} → ${child.workflowId}`));
+  assert.match(activeText, /目标：独立子层计划/);
+  assert.match(activeText, /正在处理子目标；父工作流暂停等待返回/);
+  assert.doesNotMatch(activeText, new RegExp(`${parent.workflowId}|${child.workflowId}|parent-a`));
+  const activeDetails = formatWorkflowStatusDetailsText(activeView);
+  assert.match(activeDetails, /工作流层级（由外向内）/);
+  assert.match(activeDetails, /父任务 parent-a 触发/);
+  assert.match(formatWorkflowStatusPanelSummary(activeView), /正在处理子目标/);
+  assert.doesNotMatch(formatWorkflowStatusPanelSummary(activeView), new RegExp(`${parent.workflowId}|${child.workflowId}`));
 
   const childStarted = startWorkflowTask(child, "child-a", 17);
   const childExecuting = setWorkflowHandoffPhase(childStarted, "executing", 18);
@@ -60,10 +70,13 @@ test("工作流视图显示当前嵌套路径，并在返回父层后呈现真�
   }, 19);
   const resumedParent = returnFromNestedWorkflow(childCompleted, "completed", 20);
   const returnedView = createWorkflowStatusView(resumedParent, runtime, 21);
-  const returnedText = formatWorkflowStatusText(returnedView);
+  const returnedText = formatWorkflowStatusSummaryText(returnedView);
   assert.equal(returnedView.lineage.length, 1);
   assert.equal(returnedView.subworkflows[0].status, "completed");
-  assert.match(returnedText, /已返回的子工作流历史（保留真实终态）/);
-  assert.match(returnedText, new RegExp(child.workflowId));
-  assert.match(returnedText, /父任务 parent-a/);
+  assert.match(returnedText, /已返回子目标：1 完成，0 取消/);
+  assert.doesNotMatch(returnedText, new RegExp(`${child.workflowId}|parent-a`));
+  const returnedDetails = formatWorkflowStatusDetailsText(returnedView);
+  assert.match(returnedDetails, /已返回的子工作流历史（保留真实终态）/);
+  assert.match(returnedDetails, new RegExp(child.workflowId));
+  assert.match(returnedDetails, /父任务 parent-a/);
 });

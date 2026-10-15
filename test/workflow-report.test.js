@@ -324,8 +324,8 @@ test("工作流状态工具结果使用结构化状态视图且展开后保留�
     { isError: false },
   ).render(80).join("\n");
   assert.match(compact, /已完成 1\/3/);
-  assert.match(compact, /当前项 2\/3/);
-  assert.doesNotMatch(compact, /当前基础动作身份 JSON/);
+  assert.match(compact, /当前任务：被阻塞任务/);
+  assert.doesNotMatch(compact, /当前基础动作身份 JSON|workflowId：/);
 
   const expanded = workflow.renderResult(
     result,

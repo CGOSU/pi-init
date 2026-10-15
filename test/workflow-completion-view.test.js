@@ -6,9 +6,20 @@ import {
   createWorkflowTaskCompletionView,
 } from "../extensions/workflow-completion-view.ts";
 import {
+  formatWorkflowCompletionDetailsText,
+  formatWorkflowCompletionSummaryText,
   formatWorkflowCompletionText,
+  formatWorkflowTaskCompletionDetailsText,
+  formatWorkflowTaskCompletionSummaryText,
   formatWorkflowTaskCompletionText,
+  renderWorkflowCompletion,
+  renderWorkflowTaskCompletion,
 } from "../extensions/workflow-completion-renderer.ts";
+
+const theme = {
+  fg: (_color, text) => text,
+  bold: (text) => text,
+};
 
 function completedTask(overrides = {}) {
   return {
@@ -34,10 +45,21 @@ test("任务完成视图保留真实失败、零耗时和未声明通过的语�
   const view = createWorkflowTaskCompletionView(task);
   assert.deepEqual(view.duration, { kind: "available", milliseconds: 0 });
   assert.deepEqual(view.task.verificationFailures, ["npm test：失败：1 个测试失败"]);
-  const text = formatWorkflowTaskCompletionText(view);
-  assert.match(text, /耗时：0 毫秒/);
+  const text = formatWorkflowTaskCompletionSummaryText(view);
+  assert.match(text, /已完成：完成最终任务/);
+  assert.match(text, /结果：已完成/);
   assert.match(text, /npm test：失败：1 个测试失败/);
-  assert.doesNotMatch(text, /node --test：通过|验证全部通过|0 errors/);
+  assert.doesNotMatch(text, /task-final|耗时|实现原因/);
+  const details = formatWorkflowTaskCompletionDetailsText(view);
+  assert.match(details, /耗时：0 毫秒/);
+  assert.match(details, /npm test：失败：1 个测试失败/);
+  assert.doesNotMatch(details, /node --test：通过|验证全部通过|0 errors/);
+  const collapsed = renderWorkflowTaskCompletion(view, "next-task", theme, false).render(200).join("\n");
+  const expanded = renderWorkflowTaskCompletion(view, "next-task", theme, true).render(200).join("\n");
+  assert.match(collapsed, /npm test：失败：1 个测试失败/);
+  assert.doesNotMatch(collapsed, /task-final|耗时|实现原因/);
+  assert.match(expanded, /task-final/);
+  assert.match(expanded, /实现原因：遵循现有模式/);
   assert.deepEqual(task, before);
 });
 
@@ -48,7 +70,7 @@ test("缺失任务时间不伪装成零耗时，失败验证缺失时省略验�
     verification: ["node --test：通过"],
   }));
   assert.deepEqual(view.duration, { kind: "unavailable", reason: "missing-or-invalid-time" });
-  const text = formatWorkflowTaskCompletionText(view);
+  const text = formatWorkflowTaskCompletionDetailsText(view);
   assert.match(text, /耗时：不可用（历史任务未记录有效的开始时间）/);
   assert.doesNotMatch(text, /验证：/);
 });
@@ -75,10 +97,21 @@ test("最终报告使用本次明确验收任务而不从 currentTaskId 选择�
   assert.equal(view.finalTask?.id, "task-final");
   assert.deepEqual(view.progress, { completed: 1, total: 2 });
   assert.deepEqual(view.duration, { kind: "available", milliseconds: 60 });
-  const text = formatWorkflowCompletionText(view);
-  assert.match(text, /最终任务[\s\S]*ID：task-final/);
-  assert.doesNotMatch(text, /task-later/);
-  assert.match(text, /总耗时：60 毫秒/);
+  const text = formatWorkflowCompletionSummaryText(view);
+  assert.match(text, /目标：最终交付/);
+  assert.match(text, /已完成任务：1\/2/);
+  assert.match(text, /最终结果：已完成/);
+  assert.doesNotMatch(text, /task-final|task-later|总耗时/);
+  const details = formatWorkflowCompletionDetailsText(view);
+  assert.match(details, /最终任务[\s\S]*ID：task-final/);
+  assert.doesNotMatch(details, /task-later/);
+  assert.match(details, /总耗时：60 毫秒/);
+  const collapsed = renderWorkflowCompletion(view, theme, false).render(200).join("\n");
+  const expanded = renderWorkflowCompletion(view, theme, true).render(200).join("\n");
+  assert.match(collapsed, /结果：已完成/);
+  assert.doesNotMatch(collapsed, /task-final|总耗时/);
+  assert.match(expanded, /task-final/);
+  assert.match(expanded, /总耗时：60 毫秒/);
 });
 
 test("缺失整体时间保留不可用原因且没有完成任务时不捏造任务摘要", () => {
@@ -88,10 +121,13 @@ test("缺失整体时间保留不可用原因且没有完成任务时不捏造�
     tasks: [{ id: "pending", task: "待执行", files: ["src/pending.ts"], acceptanceCriteria: ["执行"] }],
   }, 100);
   const view = createWorkflowCompletionView({ ...state, status: "completed" });
-  const text = formatWorkflowCompletionText(view);
+  const text = formatWorkflowCompletionSummaryText(view);
   assert.equal(view.finalTask, undefined);
-  assert.match(text, /内容：无/);
-  assert.match(text, /开始时间：不可用（工作流未记录有效的开始时间）/);
-  assert.match(text, /结束时间：不可用（工作流未记录有效的结束时间）/);
-  assert.match(text, /总耗时：不可用（工作流缺少有效的整体开始或结束时间）/);
+  assert.match(text, /工作流完成报告/);
+  assert.doesNotMatch(text, /开始时间|结束时间|总耗时/);
+  const details = formatWorkflowCompletionDetailsText(view);
+  assert.match(details, /内容：无/);
+  assert.match(details, /开始时间：不可用（工作流未记录有效的开始时间）/);
+  assert.match(details, /结束时间：不可用（工作流未记录有效的结束时间）/);
+  assert.match(details, /总耗时：不可用（工作流缺少有效的整体开始或结束时间）/);
 });

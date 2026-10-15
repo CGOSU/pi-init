@@ -15,12 +15,17 @@ import {
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
 import {
   formatWorkflowControlCenterLabel,
+  formatWorkflowStatusDetailsText,
   formatWorkflowStatusPanelSummary,
+  formatWorkflowStatusSummaryText,
   formatWorkflowStatusText,
+  renderWorkflowStatusResult,
   workflowStatusBar,
+  workflowStatusTaskItems,
 } from "../extensions/workflow-status-renderer.ts";
 
 const idleRuntime = { roleCompactionPhase: "idle", workflowDispatchInFlight: false };
+const theme = { fg: (_color, text) => text, bold: (text) => text };
 
 function createRunningWorkflow() {
   const planned = createWorkflowState({
@@ -48,16 +53,30 @@ test("状态视图复用活动身份、当前阶段和单一时间快照而不�
   assert.deepEqual(view.identity.action, workflowActionIdentity(state));
   assert.deepEqual(view.identity.handoff, workflowHandoffIdentity(state));
   assert.deepEqual(view.elapsed, { kind: "available", milliseconds: 50 });
-  assert.match(formatWorkflowStatusText(view), /当前任务结果身份 JSON（complete\/block）/);
-  const details = formatWorkflowStatusText(view);
+  const summary = formatWorkflowStatusSummaryText(view);
+  assert.match(summary, /任务执行中 · 已完成 0\/2/);
+  assert.match(summary, /目标：状态视图测试/);
+  assert.match(summary, /当前任务：检查状态/);
+  assert.doesNotMatch(summary, /workflowId|sessionId|handoff|JSON/);
+  const details = formatWorkflowStatusDetailsText(view);
+  assert.match(details, /当前任务结果身份 JSON（complete\/block）/);
   assert.match(details, /handoff 正在执行/);
   assert.match(details, /已完成任务（completed\/total）：0\/2/);
   assert.match(details, /当前任务位置：第 1\/2 项/);
   const panel = formatWorkflowStatusPanelSummary(view);
-  assert.match(panel, /handoff  .*attempt/);
-  assert.match(panel, /当前任务位置  第 1\/2 项/);
+  assert.match(panel, /目标：状态视图测试/);
+  assert.doesNotMatch(panel, /handoff|attempt|workflowId/);
   assert.match(workflowStatusBar(view)?.text ?? "", /当前项 1\/2/);
-  assert.match(formatWorkflowControlCenterLabel(view), /当前第 1\/2 项/);
+  assert.match(formatWorkflowControlCenterLabel(view), /任务执行中 · 已完成 0\/2/);
+  const items = workflowStatusTaskItems(view);
+  assert.equal(items[0].description, "检查状态");
+  assert.doesNotMatch(items[0].description, /developer-test|耗时|completionSummary/);
+  const collapsed = renderWorkflowStatusResult(view, false, theme).render(200).join("\n");
+  const expanded = renderWorkflowStatusResult(view, true, theme).render(500).join("\n");
+  assert.doesNotMatch(collapsed, /status-session|handoffId|workflowId/);
+  assert.match(collapsed, /目标：状态视图测试/);
+  assert.match(expanded, /sessionId：status-session/);
+  assert.match(expanded, /当前任务结果身份 JSON/);
   assert.deepEqual(state, before);
 });
 
@@ -170,8 +189,12 @@ test("状态视图对暂停、压缩等待、dispatch 和缺失时间保留准�
   }, 100);
   const missingView = createWorkflowStatusView(missingTime, idleRuntime, 150);
   assert.equal(missingView.kind === "workflow" ? missingView.elapsed.kind : "unexpected", "unavailable");
-  assert.match(formatWorkflowStatusText(missingView), /总任务已运行时间：不可用（工作流未记录有效的开始时间）/);
-  assert.doesNotMatch(formatWorkflowStatusText(missingView), /总任务已运行时间：0 毫秒/);
+  const summary = formatWorkflowStatusSummaryText(missingView);
+  assert.match(summary, /目标：无时间状态/);
+  assert.doesNotMatch(summary, /开始时间|已运行时间/);
+  const details = formatWorkflowStatusDetailsText(missingView);
+  assert.match(details, /总任务已运行时间：不可用（工作流未记录有效的开始时间）/);
+  assert.doesNotMatch(details, /总任务已运行时间：0 毫秒/);
 });
 
 test("暂停、重规划、无当前任务和终态不携带活动任务位置", () => {
@@ -224,9 +247,13 @@ test("状态视图保留暂停原因、revision 与任务历史", () => {
   assert.equal(view.pause.blockedTasks[0]?.recoverySteps[0]?.kind, "verify-external-effects");
   assert.deepEqual(view.pendingRevision, { revisionId: "rev-2", direction: "缩小改动范围" });
   assert.equal(view.tasks.length, 2);
-  const report = formatWorkflowStatusText(view);
-  assert.match(report, /暂停类别：task-blocked/);
-  assert.match(report, /等待权限确认/);
-  assert.match(report, /待处理 revision：rev-2/);
-  assert.match(report, /用户方向：缩小改动范围/);
+  const summary = formatWorkflowStatusSummaryText(view);
+  assert.match(summary, /已暂停 · 已完成 0\/2/);
+  assert.match(summary, /等待权限确认/);
+  assert.match(summary, /等待重规划：缩小改动范围/);
+  assert.doesNotMatch(summary, /task-blocked|rev-2/);
+  const details = formatWorkflowStatusDetailsText(view);
+  assert.match(details, /暂停类别：task-blocked/);
+  assert.match(details, /待处理 revision：rev-2/);
+  assert.match(details, /用户方向：缩小改动范围/);
 });

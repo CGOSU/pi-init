@@ -19,6 +19,7 @@ import { formatWorkflowPauseBlockLines, formatWorkflowPauseSummary as renderWork
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import {
   formatWorkflowStatusPanelSummary,
+  formatWorkflowStatusSummaryText,
   formatWorkflowStatusText,
   workflowStatusBar,
   workflowStatusTaskItems,
@@ -259,7 +260,7 @@ export function createWorkflowReport(
 
   async function showWorkflowProgress(ctx: ExtensionCommandContext) {
     if (!ctx.hasUI || ctx.mode !== "tui") {
-      ctx.ui.notify(formatWorkflowStatusText(createCurrentWorkflowStatusView(state)), "info");
+      ctx.ui.notify(formatWorkflowStatusSummaryText(createCurrentWorkflowStatusView(state)), "info");
       return;
     }
 
@@ -288,17 +289,24 @@ export function createWorkflowReport(
       const initialItems = workflowStatusTaskItems(initialView);
       let list = makeList(initialItems, initialView.kind === "workflow" ? initialView.progress.currentTaskId : undefined);
       let listItemsKey = JSON.stringify(initialItems);
+      let listWorkflowId = initialView.kind === "workflow" ? initialView.identity.action.workflowId : undefined;
       const refreshView = () => {
         const view = createCurrentWorkflowStatusView(state);
         summary.setText(theme.fg("text", formatWorkflowStatusPanelSummary(view)));
         const items = workflowStatusTaskItems(view);
         const nextItemsKey = JSON.stringify(items);
-        if (nextItemsKey !== listItemsKey) {
-          const selectedValue = view.kind === "workflow"
-            ? view.progress.currentTaskId ?? list.getSelectedItem()?.value
-            : list.getSelectedItem()?.value;
+        const nextWorkflowId = view.kind === "workflow" ? view.identity.action.workflowId : undefined;
+        const workflowChanged = nextWorkflowId !== listWorkflowId;
+        if (workflowChanged || nextItemsKey !== listItemsKey) {
+          const previousSelection = workflowChanged ? undefined : list.getSelectedItem()?.value;
+          const selectedValue = previousSelection && items.some((item) => item.value === previousSelection)
+            ? previousSelection
+            : view.kind === "workflow"
+              ? view.progress.currentTaskId
+              : undefined;
           list = makeList(items, selectedValue);
           listItemsKey = nextItemsKey;
+          listWorkflowId = nextWorkflowId;
         }
       };
       const dynamicList = {

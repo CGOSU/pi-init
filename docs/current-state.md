@@ -13,6 +13,8 @@
 
 ## 当前已确认事实
 
+- 工作流状态结果默认以摘要突出阶段、进度、目标、当前任务与暂停原因；展开后保留完整状态和身份。完成结果默认呈现简短任务/最终结果摘要，展开后保留验证、时间和嵌套子工作流历史。TUI 进度面板在刷新时保留仍有效的任务选择，workflowId 改变时转到新工作流当前任务；模型可见状态文本和调度/验收行为不受摘要展示影响。详情见 [README.md](../README.md)。
+
 - `/pi-init coordination reopen <reportId> <reason>` 仅重开最新且明确 `block` 的证据审阅：追加关联原报告、阻塞审阅与理由的重开记录，持久化成功后才签发新的 architect 复审 handoff；原取证/审阅记录和来源版本保留，不自动接受证据、不派发开发。协调状态 schema v2 迁移读取 v1；项目不可信、Agent 忙、恢复异常或存在未完成/结果未知 handoff 时 fail-closed，旧 handoff 身份不复用。验证及真实 Pi/TUI 未覆盖项见 [`docs/session-log.md`](session-log.md)。
 
 - `/fast <任务描述>` 是用户为单次任务显式选择 Fast Path，不持久修改模型或配置，也不因自动资格中的任务类型、规模或修改范围不符而退回普通流程。安全、权限、需求/契约确认、角色职责、上下文恢复门、工作流保护与必要验证仍优先；Agent 忙碌、存在未结束的 running/paused/replanning 工作流或无法恢复的已保存工作流时拒绝派发，终态工作流不阻止独立任务。行为详见 [README.md](../README.md) 和 [公共角色路由 Skill](../skills/pi-init-role-routing/SKILL.md)。
@@ -67,6 +69,7 @@
 
 ## 最近一次更新
 
+- 2026-10-15：优化工作流查看渐进披露：默认突出阶段、进度、目标、当前任务和暂停原因；完成与状态工具结果支持展开查看完整技术详情，进度面板刷新保留有效任务选择、切换工作流重置到当前项。测试 369 项通过、类型检查和差异检查通过；真实 Pi TUI/E2E 未验证，详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-15：新增显式证据审阅重开命令，仅对最新明确 block 报告创建保留审计链的新审阅轮次；协调状态 v2 可迁移读取 v1，持久化重开记录后才派发新 architect handoff，拒绝忙碌/不可信/恢复异常/未知结果状态。`npm test` 369 项通过、`npm run typecheck` 与 `git diff --check` 通过；真实 Pi TUI/Provider 生命周期未验证，详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-15：可递归嵌套的持久工作流与协作关联规范化：新目标创建独立子工作流并保留父层计划/进度/返回位置，子层完成或取消后逐层返回父层原位置，未知结果仍保留层级并 fail-closed；状态 schema 升至 v6（`parentStack` 仅 v6，v1–v5 可迁移读取），状态与完成视图展示嵌套路径与真实子流程历史，进度面板动态刷新；协作侧将 evidence report 的 requestId 改为可选（仅在 handoff 身份验证成功后补入）、未知结果重试用 `coordinationHandoffId`/完整身份关联并在恢复时轮换 handoffId、`report.unresolved` 披露与 `review.gaps` 阻塞分离。`npm test` 363 项通过、0 失败，`npm run typecheck` 与 `git diff --check` 通过；未验证真实 Pi TUI/Provider abort 与恢复生命周期，详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-14：修复工作流恢复后协调证据链接代次落后：恢复后的工作流 entry 成功持久化后，同步可证明属于同一 session/workflow/plan 的既有链接；缺失或身份不符仍 fail-closed，status 可见链接 tuple。定向 37 项测试、`npm run typecheck` 与 `git diff --check` 通过；未运行全量测试或真实 Pi reload/E2E，详见 [`docs/session-log.md`](session-log.md)。
