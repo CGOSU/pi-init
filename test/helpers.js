@@ -81,7 +81,9 @@ async function withTempDirectory(run) {
   try {
     await run(directory);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    // 交接诊断日志（PI_INIT_HANDOFF_LOG=1 时启用）异步写入 .pi/logs；
+    // maxRetries 让清理等待仍在进行的写入，避免 ENOTEMPTY 误报。
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -346,6 +348,15 @@ function createExtensionHarness(branch = [], options = {}) {
   };
 }
 
+async function emitToolResult(harness, event) {
+  let result;
+  for (const handler of harness.handlers.get("tool_result") ?? []) {
+    const current = await handler(event, harness.context);
+    if (current !== undefined) result = current;
+  }
+  return result;
+}
+
 async function emitExtensionEvent(harness, name, event = {}) {
   const emit = async (eventName, payload) => {
     for (const handler of harness.handlers.get(eventName) ?? []) {
@@ -555,6 +566,7 @@ export {
   createExtensionHarness,
   workflowMessageIdentity,
   emitExtensionEvent,
+  emitToolResult,
   runExternalAgent,
   assertFastCommandContract,
 };

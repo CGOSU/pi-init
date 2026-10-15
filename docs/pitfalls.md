@@ -14,6 +14,16 @@
 
 ## 已知问题
 
+### 2026-10-15：开启交接诊断日志会改变测试结果（ENOTEMPTY 与 handler 选取）
+
+- 日期：2026-10-15。
+- 现象：同一组定向测试在 `PI_INIT_HANDOFF_LOG=1` 下失败、关闭时通过；失败表现为 `ENOTEMPTY: directory not empty, rmdir '<tmp>/.pi/logs'`，以及读取工具结果时 `content` 为 `undefined` 的 `TypeError`。两者都容易被误判为产品缺陷或已知基线噪音。
+- 根因一（ENOTEMPTY）：日志开启时 `extensions/handoff-diagnostics.ts` 会异步 `appendFile` 到项目 `.pi/logs`；测试的 `withTempDirectory` 在 `finally` 里立即 `rm` 临时目录，与尚未完成的写入竞态，导致目录非空。
+- 根因二（TypeError）：`createHandoffDiagnostics(pi, ...)` 在 `createFileReviewRuntime(pi, ...)` 之后注册，因此测试用 `handlers.get("tool_result").at(-1)` 取到的是诊断 handler；日志关闭时诊断不注册 handler，关闭时恰好取到 file-review 的 handler，所以只在日志开启时暴露。
+- 修复：`withTempDirectory` 的 `rm` 加上 `maxRetries: 10`/`retryDelay: 50`；测试改用新增的 `test/helpers.js` `emitToolResult`，按注册顺序收集所有 `tool_result` handler 并取最后一个非 `undefined` 结果，不再依赖注册顺序或“最后一个 handler”假设。
+- 验证：`PI_INIT_HANDOFF_LOG=1 node --test test/file-review.test.js test/file-review-runtime.test.js test/extension-lifecycle.test.js` 修复前稳定 3 失败，修复后连跑 3 次均 35/35；日志关闭时原本 5/5 干净。
+- 剩余边界（根因已确认，未修复）：修复后 `PI_INIT_HANDOFF_LOG=1 npm test` 仍有 1 项失败：`test/workflow-input-resume.test.js` 的「讨论和纠正不被自动吞成子流程」在 `input` 断言上得到 `undefined`（期望 `"continue"`）。它是同一类问题：日志开启时 `handoff-diagnostics` 额外注册一个返回 `undefined` 的 `input` handler（已用探针核实：开日志 2 个 handler、第 2 个返回 `undefined`；关日志 1 个），而该用例遍历断言*每个* `input` handler 都返回 `continue`。属于测试夹具假设问题，不是产品行为缺陷。在 HEAD 隔离 worktree 上仅保留 `rm` 修复后仍稳定复现（日志开 2 通过/1 失败，关 3 通过/0 失败），但涉及文件（`test/workflow-input-resume.test.js`、`extensions/index.ts`）不在本次任务允许范围，未修改，也未描述为已解决。排查时不能只凭“日志开启”把该类失败归为既有噪音。
+
 ### 2026-10-15：嵌套子工作流会失效的父层身份与恢复后仍可消费的短引用
 
 - 日期：2026-10-15。

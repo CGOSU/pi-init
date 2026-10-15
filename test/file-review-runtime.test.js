@@ -7,6 +7,7 @@ import {
   createExtensionHarness,
   createWorkflowState,
   emitExtensionEvent,
+  emitToolResult,
 } from "./helpers.js";
 
 const lineCount = 501;
@@ -45,6 +46,19 @@ async function completeReview(harness, candidate, rationale = "职责内聚，�
     path: candidate.path,
     fingerprint: candidate.fingerprint,
     conclusion: "keep",
+    rationale,
+  }, undefined, undefined, harness.context);
+}
+
+async function completeValueReview(harness, candidate, implementationPaths, conclusion = "keep", rationale = "覆盖关键业务规则，属于高价值回归防护。") {
+  const tool = harness.tools.find((item) => item.name === "file_review");
+  return tool.execute("value-review-call", {
+    action: "complete",
+    reviewKind: "test-value",
+    path: candidate.path,
+    fingerprint: candidate.fingerprint,
+    implementationPaths,
+    conclusion,
     rationale,
   }, undefined, undefined, harness.context);
 }
@@ -143,8 +157,7 @@ test("非代码文件的 read 结果不触发大文件扫描错误提示", async
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory });
     await emitExtensionEvent(harness, "session_start", { reason: "startup" });
-    const resultHandler = harness.handlers.get("tool_result").at(-1);
-    const result = await resultHandler(readEvent("README.md"), harness.context);
+    const result = await emitToolResult(harness, readEvent("README.md"));
     assert.equal(result, undefined);
   });
 });
@@ -207,8 +220,7 @@ test("分段读取覆盖完整文件后才能确认；内容变化使旧确认�
       details: undefined,
       isError: true,
     };
-    const resultHandler = harness.handlers.get("tool_result").at(-1);
-    const editResult = await resultHandler(editEvent, harness.context);
+    const editResult = await emitToolResult(harness, editEvent);
     assert.match(editResult.content.at(-1).text, /大文件审阅待处理/);
     assert.deepEqual(editResult.structuredContent, editEvent.structuredContent);
     assert.equal(editEvent.isError, true);
@@ -267,9 +279,130 @@ test("shell 写入产生的新超限文件在当前工具结果中被发现", as
       details: undefined,
       isError: false,
     };
-    const resultHandler = harness.handlers.get("tool_result").at(-1);
-    const result = await resultHandler(event, harness.context);
+    const result = await emitToolResult(harness, event);
     assert.match(result.content.at(-1).text, /src\/new\.ts/);
     assert.match(result.content.at(-1).text, /大文件审阅待处理/);
+  });
+});
+test("list 同时呈现结构与测试价值待审，且价值同意独立于行数", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "test", "small.test.js"), "assert(true);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+
+    const listed = await tool.execute("list-call", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(listed.details.total, 1);
+    assert.equal(listed.details.valueTotal, 1);
+    assert.equal(listed.details.valueCandidates[0].path, "test/small.test.js");
+    assert.deepEqual(listed.details.valueCandidates[0].invalidations, []);
+    assert.equal(listed.details.candidates[0].lineCount, 501);
+
+    const valueOnly = await tool.execute("list-call", { action: "list", reviewKind: "test-value" }, undefined, undefined, harness.context);
+    assert.match(valueOnly.content[0].text, /测试价值待审 1-1\/1/);
+    assert.match(valueOnly.content[0].text, /发现局限/);
+  });
+});
+
+test("测试价值完成需要显式实现关联并完整读取测试与实现当前版本", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "test", "unit.test.js"), "assert(true);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("list-call", { action: "list" }, undefined, undefined, harness.context);
+    const candidate = listed.details.valueCandidates[0];
+
+    const noAssociation = await completeValueReview(harness, candidate, []);
+    assert.equal(noAssociation.details.ok, false);
+    assert.equal(noAssociation.details.code, "INVALID_REVIEW");
+
+    const unread = await completeValueReview(harness, candidate, ["src/large.ts"]);
+    assert.equal(unread.details.ok, false);
+    assert.equal(unread.details.code, "IMPLEMENTATION_NOT_FULLY_READ");
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/large.ts"));
+    const testUnread = await completeValueReview(harness, candidate, ["src/large.ts"]);
+    assert.equal(testUnread.details.ok, false);
+    assert.equal(testUnread.details.code, "TEST_NOT_FULLY_READ");
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("test/unit.test.js"));
+    const completed = await completeValueReview(harness, candidate, ["src/large.ts"]);
+    assert.equal(completed.details.ok, true);
+  });
+});
+
+test("价值记录独立持久化并可随同会话恢复，结构记录不受影响", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "test", "unit.test.js"), "assert(true);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("list-call", { action: "list" }, undefined, undefined, harness.context);
+    const candidate = listed.details.valueCandidates[0];
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("test/unit.test.js"));
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/large.ts"));
+    const recorded = await completeValueReview(harness, candidate, ["src/large.ts"], "merge", "与其它用例重复，建议合并而非自动修改。");
+    assert.equal(recorded.details.ok, true);
+    assert.equal(recorded.details.reviewKind, "test-value");
+    assert.equal(recorded.details.conclusion, "merge");
+    assert.equal(harness.branch.filter((entry) => entry.customType === "pi-init-test-value-review").length, 1);
+    assert.equal(harness.branch.filter((entry) => entry.customType === "pi-init-file-review").length, 0);
+
+    const afterRecord = await tool.execute("list-call-2", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(afterRecord.details.valueTotal, 0);
+    assert.equal(afterRecord.details.total, 1);
+
+    await emitExtensionEvent(harness, "session_start", { reason: "resume" });
+    await harness.tools.find((item) => item.name === "switch_role")
+      .execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
+    const afterResume = await tool.execute("list-call-3", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(afterResume.details.valueTotal, 0);
+    assert.equal(afterResume.details.total, 1);
+  });
+});
+
+test("价值关联实现版本变化或持久化失败时使记录失效且不产生虚假通过", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "test"));
+    await writeFile(path.join(directory, "test", "unit.test.js"), "assert(true);\n");
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("list-call", { action: "list" }, undefined, undefined, harness.context);
+    const candidate = listed.details.valueCandidates[0];
+    await emitExtensionEvent(harness, "tool_result", readEvent("test/unit.test.js"));
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/large.ts"));
+    const recorded = await completeValueReview(harness, candidate, ["src/large.ts"], "keep", "覆盖核心业务规则，值得保留并持续维护。");
+    assert.equal(recorded.details.ok, true);
+
+    await writeFile(path.join(directory, "src", "large.ts"), makeFile("changed-implementation"));
+    const rescan = await tool.execute("list-call-2", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(rescan.details.valueTotal, 1);
+    assert.deepEqual(rescan.details.valueCandidates[0].invalidations, [
+      { code: "IMPLEMENTATION_CHANGED", path: "src/large.ts" },
+    ]);
+
+    const failingHarness = createExtensionHarness([], {
+      cwd: directory,
+      appendEntry(type) {
+        if (type === "pi-init-test-value-review") throw new Error("session append failed");
+      },
+    });
+    await emitExtensionEvent(failingHarness, "session_start", { reason: "startup" });
+    const failingTool = failingHarness.tools.find((item) => item.name === "file_review");
+    const failingListed = await failingTool.execute("list-call", { action: "list" }, undefined, undefined, failingHarness.context);
+    const failingCandidate = failingListed.details.valueCandidates[0];
+    await emitExtensionEvent(failingHarness, "tool_result", readEvent("test/unit.test.js"));
+    await emitExtensionEvent(failingHarness, "tool_result", readEvent("src/large.ts"));
+    const failed = await completeValueReview(failingHarness, failingCandidate, ["src/large.ts"], "remove", "建议移除重复覆盖，但不自动删除测试文件。");
+    assert.equal(failed.details.ok, false);
+    assert.equal(failed.details.code, "PERSIST_FAILED");
+    const pending = await failingTool.execute("list-call-2", { action: "list" }, undefined, undefined, failingHarness.context);
+    assert.equal(pending.details.valueTotal, 1);
   });
 });

@@ -2,6 +2,18 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-15：统一审阅候选队列与独立测试价值审阅
+
+- 目标与边界：已确认的契约见 [`docs/decisions.md`](decisions.md) 的 2026-10-15 条目。结构审阅保持 500 物理行阈值与旧 `keep`/`recommend-split` 调用、记录和恢复语义；测试价值审阅独立于行数。不引入第二个工具、重复扫描、AST/语法解析、同名自动关联、跨会话缓存或通用配置平台。
+- 完成（领域）：新增 `src/test-value-review.ts` 与 `src/review-candidates.ts`。测试候选按 `test/`、`tests/`、`__tests__/` 目录或 `*.test.*`、`*.spec.*`、`*_test.*` 文件名发现（显式导出发现局限）；价值状态独立于结构状态，记录显式关联实现路径和测试/实现 SHA-256，并按策略版本与当前扫描指纹失效；扫描失败/不完整、路径缺失、状态损坏均返回结构化错误，不以空候选伪装成功。
+- 完成（运行时）：`extensions/file-review-runtime.ts` 接入可选 `reviewKind`（`structure`/`test-value`），`list` 按两维各自分页，`complete` 按维度分流；价值 `complete` 要求显式 `implementationPaths` 且测试与每个关联实现都经 Pi `read` 完整覆盖当前版本，记录独立写入 `pi-init-test-value-review` 条目并随当前 session branch 恢复；持久化失败返回 `PERSIST_FAILED` 且不标记完成。结构与价值共用同一 `inventory`/`scanErrors`，但各自决策与持久化条目独立、互不迁移，价值审阅不会消除结构待审。提取 `extensions/file-review-coverage.ts`（read 覆盖合并与完整性判定）和 `extensions/test-value-review-runtime.ts`（价值会话状态、持久化、恢复、候选查询）控制组合根规模；注入提示与 `agent_settled` 通知同时展示两个维度，并明确价值建议不自动修改测试、结构 `keep` 不代表价值通过。省略 `reviewKind` 的旧结构调用保持原语义。
+- 已报告失败定位：先前 31 项定向测试中的 3 项失败原因是两类真实缺陷，不是既有基线噪音。（1）`TypeError`：测试用 `handlers.get("tool_result").at(-1)` 取最后注册的 handler，而 `handoff-diagnostics` 在 `file_review` 之后注册的 handler 返回 `undefined`；改为新增 `test/helpers.js` 的 `emitToolResult`，按注册顺序收集并取最后一个非 `undefined` 结果（2）`ENOTEMPTY`：`PI_INIT_HANDOFF_LOG=1` 时诊断日志异步写入 `.pi/logs`，与临时目录清理竞态；为 `withTempDirectory` 的 `rm` 增加 `maxRetries: 10`/`retryDelay: 50`。两者都只在日志开启时出现（关闭时 5/5 干净）；修复前该组合稳定 3 失败，修复后连跑 3 次均 35/35。
+- 验证：`PI_INIT_HANDOFF_LOG=1 node --test test/file-review.test.js test/file-review-runtime.test.js test/extension-lifecycle.test.js` 35 通过、0 失败（连跑 3 次均 35/35）；`node --test test/test-value-review.test.js test/review-candidates.test.js test/test-value-review-runtime.test.js` 12 通过、0 失败；七文件组合（含 `handoff-diagnostics`）在日志开/关下均为 55 通过、0 失败；`npm test` 438 通过、0 失败；`npm run typecheck` 通过；`git diff --check` 通过。Rust/Go/Python/PHP 扩展名不在本任务范围，未新增。
+- 遗留（未修复，根因已确认）：`PI_INIT_HANDOFF_LOG=1 npm test` 为 437 通过、1 失败，唯一失败是 `test/workflow-input-resume.test.js` 的「讨论和纠正不被自动吞成子流程，待规划期间也不污染请求」。已用探针确认它属于同类测试夹具假设问题：日志开启时 `handoff-diagnostics` 额外注册一个返回 `undefined` 的 `input` handler（开日志 2 个、关日志 1 个），而该用例遍历断言*每个* `input` handler 都返回 `continue`。在 HEAD 隔离 worktree 上仅保留 `test/helpers.js` 的 `rm` 修复后仍稳定复现（日志开 2 通过/1 失败，关 3 通过/0 失败；HEAD 原状开日志为 1 通过/2 失败，含 `ENOTEMPTY`）。因此它既不是本次改动引入的，也不是产品行为缺陷；但涉及文件（`test/workflow-input-resume.test.js`、`extensions/index.ts`）不在本任务允许范围，未修改也未描述为已解决。
+- 结构审阅：核对当前 session 中已有的 `pi-init-file-review` 条目，最新记录覆盖 `extensions/file-review-runtime.ts`（当前 690 行，fingerprint `7091778c55db6223bec18827ba3e28aba5c76686f0108b94eb1518832394148d`）与 `test/helpers.js`（当前 572 行，fingerprint `9ebd2f4c6d8f79455727a0571cc756ce8b711b35151daabef5f48c305ecffaec`），两条均为 `keep`，且记录的指纹与磁盘当前版本逐字匹配，所以旧审阅仍适用于当前内容。本次收尾完整读取了 `extensions/file-review-runtime.ts`，未重复登记已有结论；`test/helpers.js` 仅定向读取。
+- 未验证：未运行真实 Pi TUI/E2E、TUI 实际输入/渲染、真实 Provider 请求或磁盘/进程故障实验；`/large` 主动派发未针对价值维度修改（其不属于本任务允许文件），价值审阅目前只能经由 `file_review` 工具路径获得。未变更 `extensions/large-command.ts` 的 `./large` 文案。
+- 收尾：同步 README（两维审阅、`reviewKind`、显式实现关联、发现局限与仅建议语义）、公共职责路由 Skill（`file_review` 两维硬约束）、当前状态、决策实施状态及本文件。以 CGOSU `dev@cgosu.com` 创建中文 commit，仅纳入本工作流产生的代码/测试/文档改动；工作区中 `.gitignore` 新增 `.empryo` 来自无关本地工具产物，无法归属本任务，未纳入提交并保留在工作区。未 push。
+
 ### 2026-10-15：修复正常任务推进后的协调证据绑定漂移
 
 - 根因与复现：complete/block/retry 等递增 workflow recoveryGeneration，但原证据链接未在统一持久化入口同步；新增连续三任务与 block/retry 集成用例先失败，确认第一项结束后下一项被错误链接门阻断。
