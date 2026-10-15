@@ -142,8 +142,112 @@ export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
   return lines.join("\n");
 }
 
+type WorkflowGoalTreeNode = {
+  workflowId: string;
+  planSummary: string;
+  status: Extract<WorkflowStatusView, { kind: "workflow" }>["status"];
+  completed: number;
+  total: number;
+  parentTaskId?: string;
+  activePath: boolean;
+  current: boolean;
+  children: WorkflowGoalTreeNode[];
+};
+
+function workflowGoalTreeRoot(view: Extract<WorkflowStatusView, { kind: "workflow" }>): WorkflowGoalTreeNode | undefined {
+  const activeNodes: WorkflowGoalTreeNode[] = view.lineage.map((item, index) => ({
+    workflowId: item.workflowId,
+    planSummary: item.planSummary,
+    status: item.status,
+    completed: item.completed,
+    total: item.total,
+    ...(item.parentTaskId ? { parentTaskId: item.parentTaskId } : {}),
+    activePath: true,
+    current: index === view.lineage.length - 1,
+    children: [],
+  }));
+  const nodesById = new Map(activeNodes.map((node) => [node.workflowId, node]));
+  const historyById = new Map<string, (typeof view.subworkflows)[number]>();
+  for (const child of [...view.lineage.flatMap((item) => item.subworkflows), ...view.subworkflows]) {
+    if (!historyById.has(child.workflowId)) historyById.set(child.workflowId, child);
+  }
+  for (const child of historyById.values()) {
+    if (nodesById.has(child.workflowId)) continue;
+    nodesById.set(child.workflowId, {
+      workflowId: child.workflowId,
+      planSummary: child.summary,
+      status: child.status,
+      completed: child.completed,
+      total: child.total,
+      ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
+      activePath: false,
+      current: false,
+      children: [],
+    });
+  }
+  for (const child of historyById.values()) {
+    const parent = nodesById.get(child.parentWorkflowId);
+    const node = nodesById.get(child.workflowId);
+    if (parent && node && !parent.children.some((candidate) => candidate.workflowId === node.workflowId)) {
+      parent.children.push(node);
+    }
+  }
+  for (let index = 1; index < activeNodes.length; index += 1) {
+    const parent = activeNodes[index - 1];
+    const child = activeNodes[index];
+    if (!parent.children.some((candidate) => candidate.workflowId === child.workflowId)) parent.children.push(child);
+  }
+  return activeNodes[0];
+}
+
+/** Compact visible tree of active goals plus completed/cancelled child goals. */
+export function formatWorkflowGoalTreeText(view: WorkflowStatusView) {
+  if (view.kind !== "workflow") return "";
+  const root = workflowGoalTreeRoot(view);
+  if (!root) return "目标树：无";
+  const lines = ["目标树："];
+  const append = (node: WorkflowGoalTreeNode, prefix: string, last: boolean, isRoot: boolean) => {
+    const status = node.current
+      ? `当前 · ${workflowStatusActivityLabel(view.activity)}`
+      : node.activePath
+        ? "等待子目标"
+        : node.status === "completed"
+          ? "已完成"
+          : node.status === "cancelled"
+            ? "已取消"
+            : node.status === "paused"
+              ? "已暂停"
+              : node.status === "replanning"
+                ? "等待重规划"
+                : "进行中";
+    const marker = node.current
+      ? "●"
+      : node.activePath
+        ? "⏸"
+        : node.status === "completed"
+          ? "✓"
+          : node.status === "cancelled"
+            ? "×"
+            : "○";
+    const connector = isRoot ? "└──" : last ? "└──" : "├──";
+    const parentTask = node.parentTaskId ? ` · 父任务 ${node.parentTaskId}` : "";
+    lines.push(`${prefix}${connector} ${marker} ${node.planSummary} · ${status} · 已完成 ${node.completed}/${node.total}${parentTask}`);
+    const childPrefix = isRoot ? "    " : `${prefix}${last ? "    " : "│   "}`;
+    node.children.forEach((child, index) => append(child, childPrefix, index === node.children.length - 1, false));
+  };
+  append(root, "", true, true);
+  return lines.join("\n");
+}
+
 export function formatWorkflowStatusPanelSummary(view: WorkflowStatusView) {
-  return formatWorkflowStatusSummaryText(view);
+  const summary = formatWorkflowStatusSummaryText(view);
+  if (view.kind !== "workflow") return summary;
+  const conciseLines = summary.split("\n").filter((line) =>
+    !line.startsWith("目标：")
+    && !line.startsWith("正在处理子目标；")
+    && !line.startsWith("已返回子目标："),
+  );
+  return [...conciseLines, formatWorkflowGoalTreeText(view)].join("\n");
 }
 
 export function formatWorkflowControlCenterLabel(view: WorkflowStatusView) {

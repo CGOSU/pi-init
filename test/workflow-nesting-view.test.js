@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  cancelWorkflow,
   completeWorkflowTask,
   createWorkflowState,
   markWorkflowTaskStarted,
@@ -11,6 +12,7 @@ import {
 } from "../src/workflow.ts";
 import { createNestedWorkflowState, returnFromNestedWorkflow } from "../src/workflow-nesting.ts";
 import {
+  formatWorkflowGoalTreeText,
   formatWorkflowStatusDetailsText,
   formatWorkflowStatusPanelSummary,
   formatWorkflowStatusSummaryText,
@@ -56,8 +58,11 @@ test("工作流视图显示当前嵌套路径，并在返回父层后呈现真�
   const activeDetails = formatWorkflowStatusDetailsText(activeView);
   assert.match(activeDetails, /工作流层级（由外向内）/);
   assert.match(activeDetails, /父任务 parent-a 触发/);
-  assert.match(formatWorkflowStatusPanelSummary(activeView), /正在处理子目标/);
-  assert.doesNotMatch(formatWorkflowStatusPanelSummary(activeView), new RegExp(`${parent.workflowId}|${child.workflowId}`));
+  const panelSummary = formatWorkflowStatusPanelSummary(activeView);
+  assert.match(panelSummary, /└── ⏸ 父层计划 · 等待子目标/);
+  assert.match(panelSummary, /└── ● 独立子层计划 · 当前 · 等待调度/);
+  assert.match(panelSummary, /父层计划[\s\S]*独立子层计划/);
+  assert.doesNotMatch(panelSummary, new RegExp(`${parent.workflowId}|${child.workflowId}`));
 
   const childStarted = startWorkflowTask(child, "child-a", 17);
   const childExecuting = setWorkflowHandoffPhase(childStarted, "executing", 18);
@@ -75,6 +80,35 @@ test("工作流视图显示当前嵌套路径，并在返回父层后呈现真�
   assert.equal(returnedView.subworkflows[0].status, "completed");
   assert.match(returnedText, /已返回子目标：1 完成，0 取消/);
   assert.doesNotMatch(returnedText, new RegExp(`${child.workflowId}|parent-a`));
+  const returnedTree = formatWorkflowGoalTreeText(returnedView);
+  assert.match(returnedTree, /└── ✓ 独立子层计划 · 已完成 · 已完成 1\/1/);
+  assert.match(returnedTree, /父层计划[\s\S]*子层计划/);
+  const cancelledChild = createNestedWorkflowState(requestWorkflowNestedGoal(resumedParent, { direction: "取消目标分支" }, 21), {
+    summary: "取消子层计划",
+    constraints: [],
+    tasks: [task("cancelled-child-a")],
+  }, 22);
+  const cancelledParent = returnFromNestedWorkflow(cancelWorkflow(cancelledChild, 23), "cancelled", 24);
+  const cancelledTree = formatWorkflowGoalTreeText(createWorkflowStatusView(cancelledParent, runtime, 25));
+  assert.match(cancelledTree, /└── × 取消子层计划 · 已取消 · 已完成 0\/1/);
+  const secondChild = createNestedWorkflowState(requestWorkflowNestedGoal(resumedParent, { direction: "继续到第二个子目标" }, 21), {
+    summary: "第二子层计划",
+    constraints: [],
+    tasks: [task("second-child-a")],
+  }, 22);
+  const grandchild = createNestedWorkflowState(requestWorkflowNestedGoal(secondChild, { direction: "进一步拆分目标" }, 23), {
+    summary: "孙层计划",
+    constraints: [],
+    tasks: [task("grandchild-a")],
+  }, 24);
+  const deepTree = formatWorkflowGoalTreeText(createWorkflowStatusView(grandchild, runtime, 25));
+  const rootIndex = deepTree.indexOf("父层计划");
+  const returnedChildIndex = deepTree.indexOf("子层计划");
+  const secondChildIndex = deepTree.indexOf("第二子层计划");
+  const grandchildIndex = deepTree.indexOf("孙层计划");
+  assert.ok(rootIndex >= 0 && rootIndex < returnedChildIndex && returnedChildIndex < secondChildIndex && secondChildIndex < grandchildIndex);
+  assert.match(deepTree, /├── ✓ 独立子层计划/);
+  assert.match(deepTree, /└── ⏸ 第二子层计划[\s\S]*└── ● 孙层计划/);
   const returnedDetails = formatWorkflowStatusDetailsText(returnedView);
   assert.match(returnedDetails, /已返回的子工作流历史（保留真实终态）/);
   assert.match(returnedDetails, new RegExp(child.workflowId));

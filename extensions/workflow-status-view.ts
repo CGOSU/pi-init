@@ -44,6 +44,9 @@ export type WorkflowStatusAncestorView = {
   workflowId: string;
   planSummary: string;
   status: WorkflowState["status"];
+  completed: number;
+  total: number;
+  subworkflows: WorkflowStatusSubworkflowView[];
   parentTaskId?: string;
 };
 
@@ -193,6 +196,19 @@ function activityFor(
   return "waiting-task";
 }
 
+function statusSubworkflows(state: WorkflowState) {
+  return (state.subworkflowHistory ?? []).map((child) => ({
+    workflowId: child.workflowId,
+    parentWorkflowId: child.parentWorkflowId,
+    ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
+    planVersion: child.planVersion,
+    summary: child.summary,
+    status: child.status,
+    completed: child.tasks.filter((task) => task.status === "completed").length,
+    total: child.tasks.length,
+  }));
+}
+
 function elapsedFor(state: WorkflowState, now: number) {
   const { startedAt, completedAt } = getWorkflowExecutionBounds(state);
   const endAt = state.status === "completed"
@@ -241,24 +257,28 @@ export function createWorkflowStatusView(
     elapsed: elapsedFor(workflowState, now),
     planSummary: workflowState.plan.summary,
     lineage: [
-      ...(workflowState.parentStack ?? []).map((frame) => ({
-        workflowId: frame.state.workflowId,
-        planSummary: frame.state.plan.summary,
-        status: frame.state.status,
-        ...(frame.parentTaskId ? { parentTaskId: frame.parentTaskId } : {}),
-      })),
-      { workflowId: workflowState.workflowId, planSummary: workflowState.plan.summary, status: workflowState.status },
+      ...(workflowState.parentStack ?? []).map((frame) => {
+        const ancestorProgress = workflowProgress(frame.state);
+        return {
+          workflowId: frame.state.workflowId,
+          planSummary: frame.state.plan.summary,
+          status: frame.state.status,
+          completed: ancestorProgress.completed,
+          total: ancestorProgress.total,
+          subworkflows: statusSubworkflows(frame.state),
+          ...(frame.parentTaskId ? { parentTaskId: frame.parentTaskId } : {}),
+        };
+      }),
+      {
+        workflowId: workflowState.workflowId,
+        planSummary: workflowState.plan.summary,
+        status: workflowState.status,
+        completed: progress.completed,
+        total: progress.total,
+        subworkflows: statusSubworkflows(workflowState),
+      },
     ],
-    subworkflows: (workflowState.subworkflowHistory ?? []).map((child) => ({
-      workflowId: child.workflowId,
-      parentWorkflowId: child.parentWorkflowId,
-      ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
-      planVersion: child.planVersion,
-      summary: child.summary,
-      status: child.status,
-      completed: child.tasks.filter((task) => task.status === "completed").length,
-      total: child.tasks.length,
-    })),
+    subworkflows: statusSubworkflows(workflowState),
     identity: {
       action: workflowActionIdentity(workflowState),
       ...(handoff ? { handoff } : {}),

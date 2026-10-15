@@ -64,7 +64,7 @@ test("状态视图复用活动身份、当前阶段和单一时间快照而不�
   assert.match(details, /已完成任务（completed\/total）：0\/2/);
   assert.match(details, /当前任务位置：第 1\/2 项/);
   const panel = formatWorkflowStatusPanelSummary(view);
-  assert.match(panel, /目标：状态视图测试/);
+  assert.match(panel, /└── ● 状态视图测试 · 当前 · 任务执行中/);
   assert.doesNotMatch(panel, /handoff|attempt|workflowId/);
   assert.match(workflowStatusBar(view)?.text ?? "", /当前项 1\/2/);
   assert.match(formatWorkflowControlCenterLabel(view), /任务执行中 · 已完成 0\/2/);
