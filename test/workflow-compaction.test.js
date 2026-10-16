@@ -101,39 +101,6 @@ test("同角色任务在上下文达到阈值时于任务边界压缩", async ()
   });
 });
 
-test("实际角色切换的压缩信号只派发一次下一任务", async () => {
-  await withTempDirectory(async (directory) => {
-    await writeWorkflowConfig(directory, "local");
-    const branch = [{
-      type: "custom",
-      customType: "pi-init-workflow",
-      data: createWorkflowState({ summary: "角色切换压缩", tasks: roleSwitchTasks(), executor: "local" }, 100),
-    }];
-    const harness = createExtensionHarness(branch, {
-      cwd: directory,
-      trusted: true,
-      model: developerModel,
-      availableModels: [developerModel, architectModel],
-    });
-    let compactCalls = 0;
-    const compact = harness.context.compact;
-    harness.context.getContextUsage = () => ({ percent: 60 });
-    harness.context.compact = (options) => {
-      compactCalls++;
-      compact(options);
-    };
-
-    await emitExtensionEvent(harness, "session_start");
-    await emitExtensionEvent(harness, "agent_start");
-    const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
-    await workflow.execute("complete-first", completeParams(harness, "first", "第一项完成"), undefined, undefined, harness.context);
-    await emitExtensionEvent(harness, "agent_settled");
-
-    assert.equal(compactCalls, 1);
-    assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 2);
-  });
-});
-
 test("无归属的 session_compact 信号不能确认压缩交接，只有本次回调能收敛", async () => {
   await withTempDirectory(async (directory) => {
     await writeWorkflowConfig(directory, "local");
@@ -490,10 +457,16 @@ test("Local resume 在主动压缩期间不清锁也不重复派发", async () =
     assert.equal(harness.notifications.length > 0, true);
   });
 });
+test("目标模型预算识别低于 50% 的大窗口到小窗口交接", () => {
+  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 20, tokens: 40000 }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), true);
+  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 20, tokens: 40000 }, targetModel: { contextWindow: 200000, maxTokens: 8000 } }), false);
+  assert.equal(shouldCompactAfterWorkflowTask({ mode: "manual", contextUsage: { percent: 20, tokens: 40000 }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), false);
+});
 
-test("任务边界压缩要求自动模式和至少 50% 上下文", () => {
+test("预算不可用时沿用 50% 兜底，不增加恢复门槛", () => {
   assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 50 } }), true);
   assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 49.9 } }), false);
   assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: null } }), false);
   assert.equal(shouldCompactAfterWorkflowTask({ mode: "confirm", contextUsage: { percent: 90 } }), false);
+  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 49, tokens: null }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), false);
 });

@@ -2,6 +2,15 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-16：测试文件归组与重复回归精简
+
+- 范围：只整理测试，不修改产品实现；以本轮实际基线 65 个测试文件、468 项通过为准，不按先前估算强行删除。
+- 归组：`handoff-snapshot` 的快照测试与 `role-handoff-recovery` 合入 `role-handoff`，预算测试归入 `workflow-compaction`；`workflow-pause-view` 与 `workflow-completion-view` 合入 `workflow-status-view`，复用同一 theme；`workflow-nesting-view` 合入 `workflow-nesting`；`workflow-live-view` 合入 `workflow-panel-actions`。以上均为 test/ 下的 .test.js 文件。
+- 精简 3 个重复用例：custom 交接的新职责注入和消息说明断言并入原切角生命周期测试（不保留仅比较旧 event 对象的弱断言）；基础压缩派发计数由更强的任务边界时序/重复回调测试及无归属 session_compact 保护覆盖；旧 50% 策略用例并入预算兜底测试，保留 49.9、null 与 confirm 分支。
+- 保留：持久化失败、未知派发、取消、session/角色代际失配、证据和嵌套恢复等独立安全回归。未因功能稳定或测试年龄删除有效覆盖。
+- 结果：65 → 59 个测试文件（减少 6 个，约 9.2%）；468 → 465 项测试。合并后的最大目标文件 441 行，不新增超 500 行聚合文件。历史日志中的旧命令路径保持原记录。
+- 验证：定向 63 项通过；最终 npm test 465 项通过、0 失败，npm run typecheck 与 git diff --check 通过。project check 的 typecheck 封装曾错误附加 npm 不支持的 --listFiles；直接执行项目原命令成功，未修改项目工具链。
+
 ### 2026-10-16：按测试价值建议整改低收益覆盖
 
 - 目标与边界：落实前一条测试价值审阅提出的 4 项 `rewrite` 建议；仅调整测试，不改变产品行为，不删除混合价值测试，不把审阅建议当作自动修改。保留对权限、持久化、身份、状态和边界行为的回归保护。
