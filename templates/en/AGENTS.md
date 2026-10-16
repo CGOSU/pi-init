@@ -34,6 +34,7 @@ pi-init workflows run sequentially in the current main session (local only); mis
 
 - When a task meets the Fast Path conditions, follow the Fast Path rules and do not run tests by default; otherwise, follow these validation requirements.
 - For new or fixed behavior, add focused tests when appropriate; start with the smallest relevant test set and use file or change-range filters when supported instead of defaulting to the full suite.
+- Scope incremental tests by the behavior change itself and its necessary direct impact rather than a fixed line count: prefer reusing or adjusting existing tests, add tests only for real risk gaps within that scope, and keep valuable long-term regression coverage; do not add tests for presentation-only, style, or copy changes by default, and do not add coverage for unrelated legacy logic. Do not generate tests to delete them by default, and do not delete tests automatically by age, last-pass time, or coverage.
 - Within the same workspace, reuse a passing validation result when the relevant implementation, tests, dependencies, and test configuration have not changed since it ran; rerun affected checks after relevant changes.
 - Run the full suite only when explicitly requested, changes span multiple modules or affect test infrastructure or dependency configuration, the relevant scope cannot be determined, or the project is being prepared for delivery or release.
 - Record only validations actually run and their real results; when reusing a result, state the basis rather than describing an unrun check as passed.

@@ -2,6 +2,16 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-16：增量补测规则与日常增量审阅范围
+
+- 目标与边界：承接用户已要求的“架构分析和实现”，复用已接受报告 `0932faf7-154f-4294-95a4-feac942caa7f`，不重做已有统一审阅。先补齐本次行为变化的增量补测执行规则，再把日常审阅提示收窄为当前会话/branch 基线之后的变化与显式关联失效测试；完整库存继续由 `file_review list` 与 `/large` 承担。不恢复/重放历史工作流，不复用已消费的协调 handoff。
+- 完成（增量补测规则）：项目 `AGENTS.md`、`templates/AGENTS.md`、`templates/en/AGENTS.md`、公共 `skills/pi-init-role-routing/SKILL.md` 与 `roles/developer-test.md` 增加同一条规则——补测范围按本次行为变化及必要直接影响划分，不按修改行数机械限定，优先复用/调整已有测试、只为真实风险缺口新增、保留有效长期回归；纯展示/样式/文案默认不补，不生成后再删除，不按年龄、通过时间或覆盖率自动删除。明确该规则不是自动测试生成或自动选测。
+- 完成（增量审阅核心）：新增 `src/review-incremental.ts`，用内存 `Map` 维护当前 session/branch 的观察基线与变化集：已有库存不进入日常增量，完整观察到的新增/变化/删除进入范围，部分观察不推断删除；未确认维度保留上次确认上下文。候选版本 `structureVersion`/`valueVersion` 用于通知去重，价值版本同时纳入测试指纹、显式关联实现指纹与策略版本。
+- 完成（运行时接入）：`extensions/file-review-runtime.ts` 将会话 state 扩展为携带 `branchIds`、`valueAssociationDecisions` 与 `incremental`；`candidateQueue` 在构建统一队列后刷新增量候选；`runtimeSection` 改为只展示增量候选并明确“日常范围不代表精准任务 Git diff、完整库存走 list/`/large`”；`handleReadResult`、`handleToolResult` 与 `agent_settled` 改用 `unnotifiedIncrementalReviewCandidates` 并在实际送达后 `markIncrementalReviewNotified`。新增 `session_tree` handler（`oldLeafId !== newLeafId` 时 `restore`）；`scanCurrent`/`refreshSpecificFile` 在扫描前后用 `branchIdsContinue`/`branchContinuesFrom` 核验 branch 前缀，过期结果返回 `STALE_SESSION`，`restore` 在异步扫描前后核验 generation、session 与 branch。完整候选队列、`file_review list`、`/large`、安全门、双维独立状态与结构化错误语义未改。
+- 完成（测试）：新增 `test/review-incremental.test.js`（6 项）覆盖“已有库存不进增量 / 完整新增变化删除 / 部分观察不推断删除 / 显式关联实现变化进入日常并按版本去重 / 策略变化纳入版本 / 完成后退出且仅完整扫描使关联删除生效 / 未确认维度不消费水位”；`test/file-review-runtime.test.js` 改/增用例覆盖启动库存静默、`session_tree` 与 reload 重建基线、扫描期间 branch 变化拒绝旧结果、settled 只提示新版本且上下文保留、显式关联实现变化使短测试进入日常并按版本去重。
+- 验证：`node --test test/file-review-runtime.test.js test/review-incremental.test.js test/file-review.test.js test/review-candidates.test.js test/test-value-review.test.js test/test-value-review-runtime.test.js test/large-command.test.js` 57 项通过、0 失败；`npm test` 469 项通过、0 失败；`npm run typecheck`（`tsc --noEmit`）通过；`git diff --check` 通过。验证使用 Node v26.11.1；`@earendil-works/pi-coding-agent` peer/lockfile 版本为 1.1.0。
+- 未验证：未运行真实 Pi TUI/E2E、TUI 实际输入/渲染、真实 Provider 请求或磁盘/进程故障实验；未执行构建或故障注入。“增量范围过滤与 branch/恢复隔离成立”仅由单元/集成测试支持，不代表真实宿主行为已验证。未实现按长期未触达排序、周期自动调度、自动测试生成或自动选测，也未新增跨会话缓存。结构审阅方面，上一轮对 `extensions/file-review-runtime.ts`（771 行 / `86f2137ece1187ee`）与 `test/file-review-runtime.test.js`（527 行 / `4dd9b7123400a126`）的 `keep` 因本轮内容变化已失效，需按新版本重审。
+
 ### 2026-10-15：续接统一审阅候选队列——短实现读取、价值维度 `/large` 入口与日志夹具修复
 
 - 目标与边界：只续接已取消补充工作流留在工作区的实现成果，不回滚、不重做已提交的 c51338f。仅修改本轮的 7 个代码/测试文件与直接相关文档，不重写历史记录当时的结果。

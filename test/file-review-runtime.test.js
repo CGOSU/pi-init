@@ -63,17 +63,65 @@ async function completeValueReview(harness, candidate, implementationPaths, conc
   }, undefined, undefined, harness.context);
 }
 
-test("session 启动发现已有超限文件并向 Pi 注入待审阅版本", async () => {
+test("启动库存不进入日常提示，但完整 file_review 列表仍可读取", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory });
     await emitExtensionEvent(harness, "session_start", { reason: "startup" });
     const event = { systemPromptOptions: { sections: {} } };
     await emitExtensionEvent(harness, "before_agent_start", event);
-    const section = event.systemPromptOptions.sections.pi_init_large_file_review;
-    assert.match(section, /待审文件：1/);
-    assert.match(section, /src\/large\.ts/);
-    assert.match(section, /不是文件上限/);
-    assert.match(section, /file_review/);
+    assert.equal(event.systemPromptOptions.sections.pi_init_large_file_review, undefined);
+
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("inventory-list", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(listed.details.total, 1);
+    assert.equal(listed.details.candidates[0].path, "src/large.ts");
+    assert.equal(await emitToolResult(harness, readEvent("src/large.ts")), undefined);
+  });
+});
+
+test("session_tree 与 reload 重建同一 session 的增量基线", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory, sessionId: "same-session" });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await writeFile(path.join(directory, "src", "large.ts"), makeFile("branch-baseline"));
+    harness.branch.push({ type: "custom", id: "branch-entry", parentId: null });
+    await emitExtensionEvent(harness, "session_tree", { oldLeafId: "old-leaf", newLeafId: "new-leaf" });
+
+    let prompt = { systemPromptOptions: { sections: {} } };
+    await emitExtensionEvent(harness, "before_agent_start", prompt);
+    assert.equal(prompt.systemPromptOptions.sections.pi_init_large_file_review, undefined);
+
+    await writeFile(path.join(directory, "src", "large.ts"), makeFile("after-branch-baseline"));
+    const mutation = await emitToolResult(harness, {
+      type: "tool_result",
+      toolCallId: "branch-edit",
+      toolName: "edit",
+      input: { path: "src/large.ts", edits: [] },
+      content: [],
+      details: undefined,
+      isError: false,
+    });
+    assert.match(mutation.content.at(-1).text, /src\/large\.ts/);
+
+    await emitExtensionEvent(harness, "session_start", { reason: "reload" });
+    prompt = { systemPromptOptions: { sections: {} } };
+    await emitExtensionEvent(harness, "before_agent_start", prompt);
+    assert.equal(prompt.systemPromptOptions.sections.pi_init_large_file_review, undefined);
+  });
+});
+
+test("扫描期间活动 branch 改变时拒绝应用旧候选结果", async () => {
+  await withTempDirectory(async (directory) => {
+    const branch = [{ type: "custom", id: "branch-root", customType: "unrelated", data: {} }];
+    const harness = createExtensionHarness(branch, { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await harness.tools.find((item) => item.name === "switch_role")
+      .execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const pending = tool.execute("branch-list", { action: "list" }, undefined, undefined, harness.context);
+    branch[0] = { ...branch[0], id: "sibling-root" };
+    const result = await pending;
+    assert.equal(result.details.code, "STALE_SESSION");
   });
 });
 
@@ -221,7 +269,7 @@ test("分段读取覆盖完整文件后才能确认；内容变化使旧确认�
       isError: true,
     };
     const editResult = await emitToolResult(harness, editEvent);
-    assert.match(editResult.content.at(-1).text, /大文件审阅待处理/);
+    assert.match(editResult.content.at(-1).text, /src\/large\.ts/);
     assert.deepEqual(editResult.structuredContent, editEvent.structuredContent);
     assert.equal(editEvent.isError, true);
     const refreshed = await tool.execute("list-call-2", { action: "list" }, undefined, undefined, harness.context);
@@ -265,6 +313,29 @@ test("恢复门未解除时大文件审阅工具不执行", async () => {
   });
 });
 
+test("settled 通知只提示新候选版本且待审上下文持续保留", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await writeFile(path.join(directory, "src", "new.ts"), makeFile("first-version"));
+
+    await emitExtensionEvent(harness, "agent_settled", {});
+    assert.equal(harness.notifications.length, 1);
+    assert.match(harness.notifications[0].message, /src\/new\.ts/);
+
+    const prompt = { systemPromptOptions: { sections: {} } };
+    await emitExtensionEvent(harness, "before_agent_start", prompt);
+    assert.match(prompt.systemPromptOptions.sections.pi_init_large_file_review, /src\/new\.ts/);
+    await emitExtensionEvent(harness, "agent_settled", {});
+    assert.equal(harness.notifications.length, 1);
+
+    await writeFile(path.join(directory, "src", "new.ts"), makeFile("second-version"));
+    await emitExtensionEvent(harness, "agent_settled", {});
+    assert.equal(harness.notifications.length, 2);
+    assert.match(harness.notifications[1].message, /src\/new\.ts/);
+  });
+});
+
 test("shell 写入产生的新超限文件在当前工具结果中被发现", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory });
@@ -281,7 +352,6 @@ test("shell 写入产生的新超限文件在当前工具结果中被发现", as
     };
     const result = await emitToolResult(harness, event);
     assert.match(result.content.at(-1).text, /src\/new\.ts/);
-    assert.match(result.content.at(-1).text, /大文件审阅待处理/);
   });
 });
 test("list 同时呈现结构与测试价值待审，且价值同意独立于行数", async () => {
@@ -459,7 +529,7 @@ test("读取后实现指纹变化会清除旧覆盖并拒绝价值完成", async
   });
 });
 
-test("短测试价值候选贯穿运行时提示、通知和 /large 主动入口", async () => {
+test("显式关联实现变化使短测试进入日常，通知去重且完成后退出", async () => {
   await withTempDirectory(async (directory) => {
     await rm(path.join(directory, "src", "large.ts"));
     await mkdir(path.join(directory, "test"));
@@ -472,19 +542,51 @@ test("短测试价值候选贯穿运行时提示、通知和 /large 主动入口
     const listed = await tool.execute("runtime-list", { action: "list" }, undefined, undefined, harness.context);
     assert.equal(listed.details.total, 0);
     assert.equal(listed.details.valueTotal, 1);
+    const candidate = listed.details.valueCandidates[0];
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/service.ts"));
+    await emitExtensionEvent(harness, "tool_result", readEvent("test/service.test.js"));
+    const recorded = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(recorded.details.ok, true);
+
+    await writeFile(path.join(directory, "src", "service.ts"), "export function run() { return false; }\n");
+    const editEvent = {
+      type: "tool_result",
+      toolCallId: "implementation-edit",
+      toolName: "edit",
+      input: { path: "src/service.ts", edits: [] },
+      content: [],
+      details: undefined,
+      isError: false,
+    };
+    const editResult = await emitToolResult(harness, editEvent);
+    assert.match(editResult.content.at(-1).text, /service\.test\.js/);
+    assert.match(editResult.content.at(-1).text, /IMPLEMENTATION_CHANGED\(src\/service\.ts\)/);
+    assert.equal(await emitToolResult(harness, readEvent("test/service.test.js")), undefined);
+
+    await writeFile(path.join(directory, "src", "service.ts"), "export function run() { return 2; }\n");
+    const secondEdit = await emitToolResult(harness, {
+      ...editEvent,
+      toolCallId: "implementation-edit-2",
+    });
+    assert.match(secondEdit.content.at(-1).text, /service\.test\.js/);
 
     const prompt = { systemPromptOptions: { sections: {} } };
     await emitExtensionEvent(harness, "before_agent_start", prompt);
-    assert.match(prompt.systemPromptOptions.sections.pi_init_large_file_review, /结构待审文件：0/);
     assert.match(prompt.systemPromptOptions.sections.pi_init_large_file_review, /service\.test\.js/);
 
     await emitExtensionEvent(harness, "agent_settled", {});
-    assert.match(harness.notifications.at(-1).message, /1 个测试文件待价值审阅/);
-
+    assert.equal(harness.notifications.length, 0);
     await harness.commands.get("large").handler("", harness.context);
     assert.equal(harness.sentUserMessages.length, 1);
     assert.match(harness.sentUserMessages[0].message, /service\.test\.js/);
     assert.match(harness.sentUserMessages[0].message, /implementationPaths/);
+
+    await emitExtensionEvent(harness, "tool_result", readEvent("src/service.ts"));
+    const completed = await completeValueReview(harness, candidate, ["src/service.ts"]);
+    assert.equal(completed.details.ok, true);
+    const afterComplete = { systemPromptOptions: { sections: {} } };
+    await emitExtensionEvent(harness, "before_agent_start", afterComplete);
+    assert.equal(afterComplete.systemPromptOptions.sections.pi_init_large_file_review, undefined);
   });
 });
 
