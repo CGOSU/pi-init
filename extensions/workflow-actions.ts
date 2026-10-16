@@ -9,7 +9,7 @@ import {
   validateWorkflowReplanIdentity,
   validateWorkflowPlan,
   workflowActionIdentity,
-  requestWorkflowTaskClarification, requestWorkflowNestedGoal, requestWorkflowReplan } from "../src/workflow.ts";
+  requestWorkflowTaskClarification, requestWorkflowReplan, requestWorkflowGoal, createWorkflowGoalState, validateWorkflowGoalPlan, normalizeReplanPlan } from "../src/workflow.ts";
 import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
 import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowMode } from "../src/role-types.ts";
@@ -312,16 +312,18 @@ export function createWorkflowActions(
 
     switch (params.action) {
       case "request-replan":
-      case "request-child": {
+      case "request-child":
+      case "request-goal": {
         if (!state.workflowState) throw missingWorkflowError();
         requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") throw new Error("只有 architect 可以显式安排独立子流程；普通追加任务应修改当前队列");
-        const next = params.action === "request-child"
-          ? requestWorkflowNestedGoal(state.workflowState, { direction: params.summary })
+        if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") throw new Error("只有 architect 可以安排目标归属或修正计划；所有执行任务共用同一队列");
+        const grouped = params.action === "request-child" || params.action === "request-goal";
+        const next = grouped
+          ? requestWorkflowGoal(state.workflowState, { direction: params.summary, parentGoalId: params.parentGoalId })
           : requestWorkflowReplan(state.workflowState, { direction: params.summary });
         if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(next, ctx);
         deps.report.persistWorkflowState(next, ctx);
-        return { content: [{ type: "text", text: params.action === "request-child" ? "已记录显式子流程目标；请规划独立输入输出契约，仅允许一层活动子流程。" : "已记录父计划修正/追加请求；保留有效任务，在安全边界重规划当前队列。" }], details: statusDetails(next), terminate: true };
+        return { content: [{ type: "text", text: grouped ? "已记录插入目标；在安全边界规划同一任务队列，父子关系仅表达归属，不创建子工作流。" : "已记录父计划修正/追加请求；保留有效任务，在安全边界重规划当前队列。" }], details: statusDetails(next), terminate: true };
       }
       case "review-child": {
         if (!state.workflowState) throw missingWorkflowError();
@@ -495,7 +497,8 @@ export function createWorkflowActions(
           throw new Error("当前没有等待应用的工作流重规划");
         }
         const config = await deps.roleRuntime.readSessionRoleConfig(ctx);
-        const plan = validateWorkflowPlan({
+        const grouped = state.workflowState.pendingRevision?.kind === "goal";
+        const plan = grouped ? validateWorkflowGoalPlan(state.workflowState, params) : state.workflowState.pendingRevision?.kind !== "nested" ? normalizeReplanPlan(params) : validateWorkflowPlan({
           summary: params.summary,
           constraints: params.constraints,
           tasks: params.tasks,
@@ -509,7 +512,7 @@ export function createWorkflowActions(
           const child = state.workflowState.subworkflowHistory?.findLast((entry) => entry.parentWorkflowId === state.workflowState!.workflowId);
           if (child?.reviews?.at(-1)?.decision !== "replan") throw new Error("必须先 review-child 审阅子流程输出并明确 replan，不能跳过结果验收直接改写父计划");
         }
-        const next = nested
+        const next = grouped ? createWorkflowGoalState(state.workflowState, params) : nested
           ? createNestedWorkflowState(state.workflowState, { ...plan, subworkflowContract: params.subworkflowContract })
           : applyWorkflowReplan(state.workflowState, {
               revisionId: params.revisionId,
@@ -517,6 +520,8 @@ export function createWorkflowActions(
               constraints: params.constraints,
               tasks: params.tasks,
               retainTaskIds: params.retainTaskIds,
+              confirmUnknownOutcome: params.confirmUnknownOutcome === true,
+              reason: params.reason,
             });
         if (next.subworkflowContract) assertSubworkflowTaskScope(next.subworkflowContract, next.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"));
         requireTaskContractsReady(
@@ -528,7 +533,7 @@ export function createWorkflowActions(
         deps.report.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
         return {
-          content: [{ type: "text", text: `${nested ? "已创建嵌套子工作流，父工作流计划与进度保留。" : "已应用工作流重规划。"}\n${deps.report.formatWorkflowState(next)}\n\n新计划将自动开始。` }],
+          content: [{ type: "text", text: `${grouped ? "目标已加入共享队列；原目标、已完成成果与待执行任务保留，无父子运行栈。" : nested ? "已按历史请求创建兼容子工作流，原记录保留。" : "已应用工作流重规划。"}\n${deps.report.formatWorkflowState(next)}\n\n新计划将自动开始。` }],
           details: statusDetails(next),
           terminate: true,
         };

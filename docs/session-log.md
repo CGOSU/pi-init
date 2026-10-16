@@ -25,6 +25,15 @@
 - 未验证：未运行真实 Pi TUI/E2E、TUI 实际输入/渲染、真实 Provider 请求或磁盘/进程故障实验；`/large` 主动派发未针对价值维度修改（其不属于本任务允许文件），价值审阅目前只能经由 `file_review` 工具路径获得。未变更 `extensions/large-command.ts` 的 `./large` 文案。
 - 收尾：同步 README（两维审阅、`reviewKind`、显式实现关联、发现局限与仅建议语义）、公共职责路由 Skill（`file_review` 两维硬约束）、当前状态、决策实施状态及本文件。以 CGOSU `dev@cgosu.com` 创建中文 commit，仅纳入本工作流产生的代码/测试/文档改动；工作区中 `.gitignore` 新增 `.empryo` 来自无关本地工具产物，无法归属本任务，未纳入提交并保留在工作区。未 push。
 
+### 2026-10-15：目标归属与扁平执行队列
+
+- 完成：新目标通过 request-goal（request-child/旧输入兼容别名）进入同一 workflowId 和任务队列，goals/goalId 只用于归属与展示；不创建新的父子运行栈。调度先满足 dependsOn，再比较 priority（默认0），同级保持原顺序；不会因为创建目标自动加急或强行中断工具。
+- 迁移：schema v7 保存目标归属和优先级，v1–v6 旧记录继续读取，旧 parentStack/待规划 nested 请求按兼容协议收尾；不在加载时强制展开、改写任务身份或重放未知结果。分组按真实任务验收/验证汇总，空分组显示无活动任务，不等于根目标完成。
+- 队列变更：目标插入明确确认保留全部原 pending 项，发现原任务失效可直接转普通重规划；安全暂停边界也可重规划，不必先 retry。普通 replan 支持空 tasks 配合 retainTaskIds 只保留/撤销任务，最终队列非空且无悬空依赖；被替换任务进入审计。无就绪项时暂停而非卡在 running。
+- 安全补充：测试发现未知结果可能借重规划替换绕过 retry 确认，新增任务替换需明确 confirmUnknownOutcome 和 reason 核对说明（已有结构化澄清处置复用原守卫）；superseded 审计仍保留未知标记。当前运行中的工具不会被新增目标强制终止。
+- 验证：新增扁平队列领域测试与运行时目标插入/恢复/写盘失败验证，保留旧嵌套兼容测试。node --test 全工作区 460 项通过；npm run typecheck、git diff --check 通过。真实 Pi/TUI、实际进程中断和外部副作用未实机验收；harness 故障注入不等于宿主验收。
+- 边界：旧栈不自动转换；新分组无独立执行器，cancel 取消当前共享队列，撤销某个目标通过普通重规划处理依赖。workflow/coordination 跨账本仍无原子事务。未提交或推送，既有 .gitignore 改动保留。
+
 ### 2026-10-15：修复正常任务推进后的协调证据绑定漂移
 
 - 根因与复现：complete/block/retry 等递增 workflow recoveryGeneration，但原证据链接未在统一持久化入口同步；新增连续三任务与 block/retry 集成用例先失败，确认第一项结束后下一项被错误链接门阻断。

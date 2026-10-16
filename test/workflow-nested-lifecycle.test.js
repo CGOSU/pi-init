@@ -10,12 +10,13 @@ import {
   workflowMessageIdentity,
   writeFile,
 } from "./helpers.js";
+import { workflowActionIdentity } from "../src/workflow.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const docs = { provider: "openai-codex", id: "gpt-5.6-docs" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
-async function makeHarness(directory, branch = []) {
+async function makeHarness(directory, branch = [], options = {}) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify({
     schemaVersion: 2,
@@ -33,6 +34,7 @@ async function makeHarness(directory, branch = []) {
     model: architect,
     availableModels: [architect, docs, developer],
     sessionId: "nested-lifecycle-session",
+    ...options,
   });
   await emitExtensionEvent(harness, "session_start");
   return harness;
@@ -71,102 +73,72 @@ async function completeCurrentTask(harness, taskId, summary) {
   return identity;
 }
 
-test("新目标创建独立子工作流，完成后恢复父层并继续原后续任务", async () => {
-  await withTempDirectory(async (directory) => {
+test("新目标与原任务共用扁平队列，完成目标分组不等于完成原计划", async () => {
+  await withTempDirectory(async directory => {
     const harness = await makeHarness(directory);
-    await execute(harness, {
-      action: "plan",
-      summary: "父目标：维护原工作流进度",
-      constraints: ["新目标作为子工作流执行，不覆盖父计划"],
-      tasks: [
-        { id: "parent-first", task: "完成父层第一项", files: ["src/parent-first.ts"], acceptanceCriteria: ["第一项完成"], role: "developer-test" },
-        { id: "parent-second", task: "继续父层第二项", files: ["src/parent-second.ts"], acceptanceCriteria: ["第二项完成"], role: "developer-test" },
-      ],
-    });
+    await execute(harness, { action: "plan", summary: "父目标：保持原计划", constraints: ["不能丢失原有成果"], tasks: [
+      { id: "parent-first", task: "完成第一项", files: ["src"], acceptanceCriteria: ["已验证"], role: "developer-test" },
+      { id: "parent-second", task: "继续第二项", files: ["src"], acceptanceCriteria: ["已验证"], role: "developer-test" },
+    ] });
     const rootWorkflowId = latestWorkflow(harness).workflowId;
-
     await emitExtensionEvent(harness, "agent_settled");
-    assert.equal(harness.context.model.id, developer.id);
-    const taskIdentity = workflowMessageIdentity(harness, "pi-init-workflow-task");
-    assert.equal(taskIdentity.taskId, "parent-first");
-    let inputResult;
-    for (const handler of harness.handlers.get("input") ?? []) {
-      inputResult = await handler({ text: "子流程：检查新的子系统", source: "interactive" }, harness.context) ?? inputResult;
-    }
-    assert.equal(inputResult?.action, "handled");
-    assert.equal(latestWorkflow(harness).pendingRevision.kind, "nested");
-    assert.equal(latestWorkflow(harness).pendingRevision.requestedFromTaskId, "parent-first");
-
-    await completeCurrentTask(harness, "parent-first", "父层第一项完成");
-    assert.equal(latestWorkflow(harness).status, "replanning");
+    await emitExtensionEvent(harness, "input", { text: "插入目标：检查新子系统", source: "interactive" });
+    assert.equal(latestWorkflow(harness).pendingRevision.kind, "goal");
+    assert.equal(latestWorkflow(harness).currentTaskId, "parent-first", "新目标不抢占正在执行的任务");
+    await completeCurrentTask(harness, "parent-first", "原第一项已完成");
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(harness.context.model.id, architect.id);
-    const replanIdentity = workflowMessageIdentity(harness, "pi-init-workflow-replan");
-    assert.ok(replanIdentity);
-    await execute(harness, {
-      action: "replan",
-      ...replanIdentity,
-      revisionId: latestWorkflow(harness).pendingRevision.revisionId,
-      summary: "子目标：检查新子系统",
-      subworkflowContract: { inputs: ["父目标"], expectedOutputs: ["新子系统检查完成"], acceptanceCriteria: ["检查结果明确"], allowedFiles: ["src"] },
-      constraints: ["子工作流完成后返回父工作流"],
-      tasks: [{
-        id: "child-check",
-        task: "检查新子系统",
-        files: ["src/new-subsystem.ts"],
-        acceptanceCriteria: ["检查结果明确"],
-        role: "developer-test",
-      }],
-    });
-    const childState = latestWorkflow(harness);
-    assert.notEqual(childState.workflowId, rootWorkflowId);
-    assert.equal(childState.parentStack.at(-1).state.workflowId, rootWorkflowId);
-    assert.equal(childState.parentStack.at(-1).state.tasks.find(({ id }) => id === "parent-first").status, "completed");
-
-    const reloadedHarness = await makeHarness(directory, harness.branch.slice());
-    const recoveredChild = latestWorkflow(reloadedHarness);
-    assert.equal(recoveredChild.workflowId, childState.workflowId);
-    assert.equal(recoveredChild.planVersion, childState.planVersion);
-    assert.equal(recoveredChild.parentStack.at(-1).state.workflowId, rootWorkflowId);
-    assert.deepEqual(recoveredChild.parentStack.at(-1).state.tasks.map(({ id, status }) => ({ id, status })), [
-      { id: "parent-first", status: "completed" },
-      { id: "parent-second", status: "pending" },
-    ]);
-
+    const identity = workflowMessageIdentity(harness, "pi-init-workflow-replan");
+    await execute(harness, { action: "replan", ...identity, summary: "检查新子系统", retainTaskIds: ["parent-second"], tasks: [
+      { id: "check-subsystem", task: "检查子系统", files: ["src"], acceptanceCriteria: ["有验证结论"], role: "developer-test", priority: 10 },
+    ] });
+    const queued = latestWorkflow(harness);
+    assert.equal(queued.workflowId, rootWorkflowId);
+    assert.equal(queued.plan.summary, "父目标：保持原计划");
+    assert.equal(queued.parentStack, undefined);
+    assert.equal(queued.tasks.length, 3);
+    assert.equal(queued.tasks[0].completionSummary, "原第一项已完成");
+    assert.equal(queued.goals[0].parentId, rootWorkflowId);
+    assert.equal(queued.tasks[2].goalId, queued.goals[0].id);
+    const restarted = await makeHarness(directory, harness.branch.slice());
+    assert.equal(latestWorkflow(restarted).workflowId, rootWorkflowId);
+    assert.equal(latestWorkflow(restarted).goals[0].id, queued.goals[0].id);
+    assert.equal(latestWorkflow(restarted).tasks[0].status, "completed");
     await emitExtensionEvent(harness, "agent_settled");
-    assert.equal(harness.context.model.id, developer.id);
-    const childIdentity = await completeCurrentTask(harness, "child-check", "新子系统检查完成");
-
-    const returnedParent = latestWorkflow(harness);
-    assert.equal(returnedParent.workflowId, rootWorkflowId);
-    assert.equal(returnedParent.plan.summary, "父目标：维护原工作流进度");
-    assert.equal(returnedParent.planVersion, 0);
-    assert.equal(returnedParent.status, "replanning");
-    assert.equal(returnedParent.pauseReason, "child-result-review");
-    assert.deepEqual(returnedParent.tasks.map(({ id, status }) => ({ id, status })), [
-      { id: "parent-first", status: "completed" },
-      { id: "parent-second", status: "pending" },
-    ]);
-    assert.equal(returnedParent.subworkflowHistory[0].workflowId, childState.workflowId);
-    assert.equal(returnedParent.subworkflowHistory[0].parentTaskId, "parent-first");
-    assert.equal(returnedParent.subworkflowHistory[0].status, "completed");
-    await assert.rejects(execute(harness, {
-      action: "complete",
-      ...childIdentity,
-      completionSummary: "迟到的子工作流结果",
-      implementationRationale: "该 attempt 已结束",
-      verification: ["not replayed"],
-    }), (error) => error.code === "WORKFLOW_ACTION_IDENTITY_STALE");
+    assert.equal(workflowMessageIdentity(harness, "pi-init-workflow-task").taskId, "check-subsystem");
+    const oldGoalAttempt = await completeCurrentTask(harness, "check-subsystem", "新目标任务已验证");
+    assert.equal(latestWorkflow(harness).status, "running");
     assert.equal(latestWorkflow(harness).workflowId, rootWorkflowId);
-
-    await emitExtensionEvent(harness, "agent_settled");
-    assert.equal(harness.context.model.id, architect.id);
-    const reviewIdentity = workflowMessageIdentity(harness, "pi-init-workflow-replan");
-    assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task" && message.details.workflowId === rootWorkflowId && message.details.taskId === "parent-second").length, 0);
-    await assert.rejects(execute(harness, { action: "replan", ...reviewIdentity, summary: "跳过结果验收", retainTaskIds: ["parent-second"], tasks: [{ id: "bypass", task: "绕过验收", role: "developer-test", files: ["src"], acceptanceCriteria: ["完成"] }] }), /必须先 review-child/);
-    await execute(harness, { action: "review-child", ...reviewIdentity, childReview: { childWorkflowId: childState.workflowId, decision: "continue", parentPlanValid: true, reason: "子目标输出已验证，未改变父层第二项依赖", acceptedOutputs: ["新子系统检查完成"], verification: ["已核对输出、父计划与依赖"] } });
+    assert.equal(latestWorkflow(harness).pendingRevision, undefined);
+    assert.equal(latestWorkflow(harness).subworkflowHistory.length, 0);
+    await assert.rejects(execute(harness, { action: "complete", ...oldGoalAttempt, completionSummary: "旧结果", implementationRationale: "不能覆盖新状态", verification: ["旧验证"] }), error => error.code === "WORKFLOW_ACTION_IDENTITY_STALE");
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(workflowMessageIdentity(harness, "pi-init-workflow-task").taskId, "parent-second");
+    await completeCurrentTask(harness, "parent-second", "原计划第二项已验证");
+    assert.equal(latestWorkflow(harness).status, "completed");
     assert.equal(latestWorkflow(harness).workflowId, rootWorkflowId);
+    assert.ok(harness.branch.filter(entry => entry.type === "custom" && entry.customType === "pi-init-workflow").every(entry => !entry.data.parentStack?.length));
+  });
+});
+
+test("插入目标写入失败保持原队列与请求，重提后仅追加一次", async () => {
+  await withTempDirectory(async directory => {
+    let fail = false;
+    const harness = await makeHarness(directory, [], { appendEntry: (type, data) => { if (fail && type === "pi-init-workflow" && data.goals?.length) throw new Error("goal append failed"); } });
+    await execute(harness, { action: "plan", summary: "保留队列", tasks: [{ id: "original", task: "原任务", files: ["src"], acceptanceCriteria: ["已验证"] }] });
+    await execute(harness, { action: "request-goal", ...workflowActionIdentity(latestWorkflow(harness)), summary: "临时检查" });
+    await emitExtensionEvent(harness, "agent_settled");
+    const before = latestWorkflow(harness);
+    const params = { action: "replan", ...workflowMessageIdentity(harness, "pi-init-workflow-replan"), summary: "临时检查", retainTaskIds: ["original"], tasks: [{ id: "check", task: "检查", files: ["src"], acceptanceCriteria: ["已验证"] }] };
+    fail = true;
+    await assert.rejects(execute(harness, params), /goal append failed/);
+    assert.equal(latestWorkflow(harness), before);
+    assert.equal(before.goals, undefined);
+    fail = false;
+    await execute(harness, params);
+    assert.equal(latestWorkflow(harness).workflowId, before.workflowId);
+    assert.equal(latestWorkflow(harness).tasks.length, 2);
+    assert.equal(latestWorkflow(harness).goals.length, 1);
+    assert.equal(latestWorkflow(harness).parentStack, undefined);
   });
 });

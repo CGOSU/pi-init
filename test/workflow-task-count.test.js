@@ -87,7 +87,7 @@ test("初始规划接受超过 12 个任务并保留依赖顺序", () => {
 test("工具 schema 接受超过 12 个任务且不设数量上限", () => {
   const schema = taskWorkflowParameters.properties.tasks;
   assert.equal(schema.maxItems, undefined);
-  assert.equal(schema.minItems, 1);
+  assert.equal(schema.minItems, 0, "普通 replan 可仅保留/撤销任务；plan 与目标插入仍由运行时要求非空");
 
   const params = {
     action: "plan",
@@ -95,7 +95,8 @@ test("工具 schema 接受超过 12 个任务且不设数量上限", () => {
     tasks: createPlanTasks(14),
   };
   assert.equal(Check(taskWorkflowParameters, params), true);
-  assert.equal(Check(taskWorkflowParameters, { ...params, tasks: [] }), false);
+  assert.equal(Check(taskWorkflowParameters, { ...params, action: "replan", tasks: [] }), true);
+  assert.throws(() => createWorkflowState({ ...params, tasks: [] }), /至少需要一个任务/);
   assert.equal(
     Check(taskWorkflowParameters, { ...params, tasks: [{ id: "task-0", task: "任务 0", files: ["src/task-0.js"] }] }),
     false,

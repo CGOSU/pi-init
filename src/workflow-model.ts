@@ -9,10 +9,9 @@ import type {
   WorkflowRevisionStatus, WorkflowRoleValidationOptions, WorkflowRoleValidationResult, WorkflowParentFrame,
   WorkflowState, WorkflowStateCore, WorkflowSubworkflowSummary, WorkflowStatus, WorkflowTask,
   WorkflowTaskDelegation, WorkflowTaskStatus, WorkflowTaskTimestampField,
-  WorkflowTaskTimestampReducer, WorkflowTextListOptions,
-} from "./workflow-types.ts";
+  WorkflowTaskTimestampReducer, WorkflowTextListOptions, WorkflowGoal } from "./workflow-types.ts";
 
-export const WORKFLOW_STATE_VERSION = 6;
+export const WORKFLOW_STATE_VERSION = 7;
 export const WORKFLOW_IDENTITY_STATE_VERSION = 4;
 // 规划规模建议：仅用于工具描述和规划提示，不参与任务数量校验。
 export const WORKFLOW_RECOMMENDED_TASKS = 12;
@@ -295,6 +294,8 @@ export function normalizeTask(task: unknown, index = 0): WorkflowTask {
     files,
     acceptanceCriteria,
     dependsOn,
+    ...(source.goalId !== undefined ? { goalId: normalizeIdentityToken(source.goalId, "任务归属 goalId") } : {}),
+    ...(source.priority !== undefined ? { priority: normalizeWorkflowPriority(source.priority) } : {}),
     ...(contract?.ok ? { contract: contract.value } : {}),
     status: "pending",
   };
@@ -401,7 +402,7 @@ export function normalizePendingRevision(revision: unknown): WorkflowPendingRevi
     ).toLowerCase();
   }
   if (source.kind !== undefined) {
-    if (source.kind !== "replan" && source.kind !== "nested") {
+    if (source.kind !== "replan" && source.kind !== "nested" && source.kind !== "goal") {
       throw new Error(`已保存的工作流 pendingRevision 的 kind 无效：${source.kind}`);
     }
     result.kind = source.kind;
@@ -409,10 +410,11 @@ export function normalizePendingRevision(revision: unknown): WorkflowPendingRevi
   if (source.childGoal !== undefined) {
     result.childGoal = requireText(source.childGoal, "已保存的工作流 pendingRevision 的 childGoal");
   }
-  if (result.kind === "nested" && !result.childGoal) {
+  if (source.goalParentId !== undefined) result.goalParentId = normalizeIdentityToken(source.goalParentId, "目标父归属");
+  if ((result.kind === "nested" || result.kind === "goal") && !result.childGoal) {
     throw new Error("已保存的嵌套工作流请求缺少 childGoal");
   }
-  if (result.kind !== "nested" && result.childGoal !== undefined) {
+  if (result.kind !== "nested" && result.kind !== "goal" && result.childGoal !== undefined) {
     throw new Error("非嵌套工作流请求不能包含 childGoal");
   }
   return result;
@@ -424,6 +426,7 @@ export function createWorkflowState(input: unknown, now = Date.now()): WorkflowS
   const executor = normalizeExecutor(source.executor);
   const workflowId = normalizeIdentityToken(source.workflowId ?? randomUUID(), "工作流 workflowId");
   const sessionId = normalizeIdentityToken(source.sessionId, "工作流 sessionId");
+  assertWorkflowGoalReferences(undefined, workflowId, plan.tasks);
   return {
     version: WORKFLOW_STATE_VERSION,
     workflowId,
@@ -513,6 +516,7 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
     ...(state.subworkflowContract ? { subworkflowContract: structuredClone(state.subworkflowContract) } : {}),
     plan: clonePlan(state.plan),
     tasks: state.tasks.map(cloneTask),
+    ...(state.goals ? { goals: state.goals.map((goal) => ({ ...goal, constraints: [...goal.constraints] })) } : {}),
     revisions: (state.revisions ?? []).map(cloneRevision),
     ...(state.pendingRevision ? { pendingRevision: { ...state.pendingRevision } } : {}),
     ...(state.handoff ? { handoff: { ...state.handoff } } : {}),
@@ -528,6 +532,18 @@ export function cloneWorkflowParentFrame(frame: WorkflowParentFrame, now = frame
     state: cloneWorkflowStateCore(frame.state, now),
   };
 }
+
+export function normalizeWorkflowPriority(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new Error("任务 priority 必须是安全整数");
+  return value;
+}
+
+export function assertWorkflowGoalReferences(goals: WorkflowGoal[] | undefined, rootId: string, tasks: WorkflowTask[]): void {
+  const ids = new Set((goals ?? []).map(goal => goal.id));
+  for (const task of tasks) if (task.goalId && task.goalId !== rootId && !ids.has(task.goalId)) throw new Error("任务引用不存在的目标归属：" + task.goalId);
+}
+
+
 
 export function cloneState(state: WorkflowState, now = Date.now()): WorkflowState {
   if (Object.prototype.hasOwnProperty.call(state, "runtimeAuthority")) {

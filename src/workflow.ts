@@ -9,3 +9,4 @@ export * from "./coordination-validation.ts";
 export * from "./coordination.ts";
 export * from "./workflow-task-contract.ts";
 export * from "./workflow-clarification.ts";
+export { requestWorkflowGoal, createWorkflowGoalState, validateWorkflowGoalPlan, workflowGoalProgress } from "./workflow-goals.ts";

@@ -12,9 +12,7 @@ import {
   WORKFLOW_RECOMMENDED_TASKS,
   isWorkflowActive,
   appendWorkflowReplanDirection,
-  requestWorkflowNestedGoal,
-  requestWorkflowReplan,
-} from "../src/workflow.ts";
+  requestWorkflowReplan, requestWorkflowGoal } from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput, isExplicitWorkflowChildInput } from "../src/workflow-input-intent.ts";
@@ -196,7 +194,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   ) {
     if (
       !runtimeState.workflowState ||
-      !["running", "replanning"].includes(runtimeState.workflowState.status) ||
+      !["running", "replanning", "paused"].includes(runtimeState.workflowState.status) ||
       !isExternalRunSource(event.source) ||
       typeof event.text !== "string" ||
       !event.text.trim() ||
@@ -212,14 +210,22 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
     if (runtimeState.workflowState.pendingRevision) {
       const revision = runtimeState.workflowState.pendingRevision;
-      if (explicitChild !== (revision.kind === "nested")) {
+      if (explicitReplan && revision.kind === "goal") {
+        try {
+          const next = requestWorkflowReplan(runtimeState.workflowState, { direction: event.text.trim() });
+          await persistWorkflowDirection(next, ctx);
+          ctx.ui.notify("目标插入已转为共享队列重规划；保留新目标意图和原有成果，当前任务不会被强行中断。", "info");
+        } catch (error) { ctx.ui.notify(`无法调整队列请求：${textOf(error)}`, "warning"); }
+        return true;
+      }
+      if (explicitChild !== (revision.kind === "nested" || revision.kind === "goal")) {
         ctx.ui.notify("当前已有不同类型的待处理请求；未将新指令混入该请求，请先处理或取消当前请求。", "warning");
         return true;
       }
       try {
         const next = appendWorkflowReplanDirection(runtimeState.workflowState, event.text.trim());
         await persistWorkflowDirection(next, ctx);
-        const nested = revision.kind === "nested";
+        const nested = revision.kind === "nested" || revision.kind === "goal";
         ctx.ui.notify(
           next.status === "replanning"
             ? nested
@@ -242,7 +248,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const direction = event.text.trim();
       const next = explicitReplan
         ? requestWorkflowReplan(previous, { direction })
-        : requestWorkflowNestedGoal(previous, { direction });
+        : requestWorkflowGoal(previous, { direction });
       await persistWorkflowDirection(next, ctx);
       ctx.ui.notify(
         explicitReplan
@@ -250,8 +256,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             ? `已记录父工作流重规划，将在当前任务 ${next.currentTaskId} 完成后交给架构师。`
             : "已记录父工作流重规划，等待架构师处理。"
           : next.currentTaskId
-            ? `已创建子工作流目标，将在当前任务 ${next.currentTaskId} 完成后规划；父工作流进度保留。`
-            : "已创建子工作流目标，等待架构师规划；父工作流进度保留。",
+            ? `已记录共享队列新目标，将在当前任务 ${next.currentTaskId} 完成后规划；父工作流进度保留。`
+            : "已记录共享队列新目标，等待架构师规划；原队列进度保留。",
         "info",
       );
     } catch (error) {
@@ -543,7 +549,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "task contract 与协调状态是双向门控：携带 contract 的任务必须有绑定当前 workflow revision 且已接受、未过期的协调证据，contract.evidence 必须引用该账本；没有协调证据的普通计划不要附带 contract，否则会被拒。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
-      "Discussion does not change workflow state. Only explicit child requests (子流程：目标 or request-child) create one independent child; additions update the current queue. Child planning requires subworkflowContract (inputs, expectedOutputs, acceptanceCriteria, allowedFiles). No recursive children. On return, architect must review-child using the current replan identity and structured verification; continue only if all expected outputs are accepted and the parent plan remains valid, otherwise replan or block. cancel ends the current child and returns for review; cancel-all ends the whole workflow without rolling back side effects.",
+      "Discussion does not change workflow state. Use request-replan to revise the existing queue and request-goal (request-child is a compatible alias) to insert a goal group. Parent/child IDs express ownership only; all tasks share one workflow ID, ready queue and executor. New goal planning must explicitly retain existing pending task IDs; dependencies take precedence over priority, ties preserve order, and running tools are not preempted. Old parentStack and review-child are legacy recovery paths, not new task grouping.",
     ],
     parameters: taskWorkflowParameters,
     renderCall(args, theme) {

@@ -15,16 +15,23 @@
 
 - `transitionWorkflowLifecycle(state, event, now)` 复用现有业务转换，返回待持久化活动状态、当前层业务结果和提交后效果，不执行 IO。完成/阻塞要求匹配的 executing handoff；入口保留 session、branch、角色和 queued 启动证据校验。
 - 命令与工具通过同一 `commitLifecycleTransition` 先持久化活动状态，再撤销终态工作流原身份的续跑。写入失败不运行撤销效果、不清除调度标记、不调度后续任务；成功后才处理这些瞬态变化。
-- 子流程完成或取消返回父层时，父层进入结果审阅，父状态、子层输出/验证/契约及历史通过一次 workflow append 保存；撤销使用事件前身份，不使用 complete/cancel 后递增的 recoveryGeneration。
-- 命令与工具统一：cancel 取消当前层，子层返回父层等待结果处置；cancel-all 终止父子流程，保留历史。取消不回滚副作用，也不保证已运行的工具/进程或宿主压缩停止。已派发或执行中的取消任务记为结果未知，不伪报未执行。
+- 旧子流程完成或取消返回父层时，父层进入结果审阅，父状态、子层输出/验证/契约及历史通过一次 workflow append 保存；撤销使用事件前身份，不使用 complete/cancel 后递增的 recoveryGeneration。
+- 命令与工具统一：新扁平队列 cancel 取消整个当前队列；旧栈中 cancel 取消当前层、cancel-all 终止父子流程，保留历史。取消不回滚副作用，也不保证已运行的工具/进程或宿主压缩停止。已派发或执行中的取消任务记为结果未知，不伪报未执行。
 
-## 显式单层子流程
+## 目标归属与扁平队列
 
-讨论、解释、纠正和普通继续输入不写入工作流；模型可用 request-replan 明确调整当前队列。显式“子流程：目标”或 request-child 才安排独立子目标，仅允许一层新活动子流程；已有深层状态仍可读取和逐层处置。
+新目标共用同一工作流和执行器，goals 只表达归属与约束，任务 goalId 只用于关联/展示，不建立父子调度栈。按依赖是否完成、priority 降序、同级原顺序选择下一项；默认 priority=0，分组本身不加急。正在执行的任务不抢占，只在真实完成或正式阻塞后处理插入。
 
-新子流程必须提供 inputs、expectedOutputs、acceptanceCriteria、allowedFiles 契约，返回位置由父 frame 身份绑定。创建、后续重规划和恢复时校验未完成任务的声明范围；allowedFiles 不是 IO 沙箱，也不授权外部副作用。
+request-goal 记录目标请求，replan 只新增任务并通过 retainTaskIds 确认原有 pending 项仍有效。任务 ID 全局与历史唯一，dependsOn 可引用旧任务。发现原任务失效时，将插入请求转为普通 request-replan；保留新目标意图与原成果，不靠 retry 绕回运行态。普通 replan 可用空 tasks 只保留/撤销任务，最终队列仍须非空；撤销不能留下悬空依赖，审计保留 superseded 原任务。
 
-子层结果通过现有重规划 handoff 交给 architect 的 review-child，不直接恢复旧计划。continue 要求子层成功、全部期望输出明确被接受、真实验证已记录、父计划仍有效；否则先 replan 或 block，禁止绕过审阅直接 replan。block 暂停，显式 resume 只重开审阅。没有影响时复用原队列，不重新生成计划；需要查证时复用证据请求机制。历史审阅追加记录，schema v6 的新增可选字段兼容旧状态；旧子流程缺失契约时不能直接 continue。代码核对结构与身份，不证明模型陈述或真实副作用是否属实。
+分组完成依据实际任务验收与验证记录汇总，不能自动宣告根目标成功。分组被重规划移空时显示“无活动任务”而非成功。插入目标完成后重新检查全队列依赖，不自动恢复旧任务或清除阻塞/未知结果。普通重规划若新增替换任务且旧结果未知、没有结构化澄清处置，必须显式 confirmUnknownOutcome 并提供 reason 核对说明；旧未知标记保留在 superseded 审计中，不伪装为成功。没有就绪项时暂停等待处理，不能悄悄卡在 running。
+
+## 历史迁移规则
+
+- 新持久状态为 v7，严格校验目标 ID、父归属非循环、任务归属存在与安全整数优先级；旧版本不得携带新字段。
+- v1–v6 记录仍可读取。旧 parentStack、子流程历史和待处理 nested 请求按旧协议兼容收尾，加载时不强制扁平化、不改任务身份/已完成成果、不重放未知副作用。只追加新版本状态，不改原 session entry。
+- request-child 与“子流程：…”成为新目标插入的兼容入口；新请求不生成 parentStack、独立 workflowId 或新的协调账本。subworkflowContract/review-child 仅保留旧记录兼容。
+- 新目标分组无独立取消执行器；cancel 取消当前共享队列。撤销某个目标须重规划其未完成任务与受影响依赖。旧 cancel/cancel-all 的层级行为只适用于旧栈。
 
 ## 故障与恢复
 

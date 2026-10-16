@@ -47,5 +47,5 @@ export function isExplicitWorkflowReplanInput(value: unknown): boolean {
 }
 
 export function isExplicitWorkflowChildInput(value: unknown): boolean {
-  return typeof value === "string" && /^(?:创建子流程|子流程|独立子目标|start child workflow)\s*[：:]\s*\S/iu.test(value.normalize("NFKC").trim());
+  return typeof value === "string" && /^(?:新目标|插入目标|子目标|创建子流程|子流程|独立子目标|start child workflow|insert goal)\s*[：:]\s*\S/iu.test(value.normalize("NFKC").trim());
 }

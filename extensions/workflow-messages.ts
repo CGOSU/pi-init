@@ -71,9 +71,7 @@ function taskToolGuidance(role: string) {
 }
 
 function taskDirectionGuidance(role: string) {
-  return role === "architect"
-    ? "用户在工作流期间提出新目标时，必须将其规划为嵌套子工作流，保留父工作流和已完成成果；只有用户明确要求修改现有计划时才重规划父层。不得派发旧计划的下一任务；使用 task_workflow(action=\"replan\") 处理当前带身份的请求。"
-    : "用户在工作流期间提出新目标时，扩展会将其记录为嵌套子工作流，父工作流进度保留并在安全任务边界交给架构师规划。明确要求修改现有计划时才进入父层重规划。不要自行派发旧计划下一任务；若必须立即停止当前任务，使用现有 cancel 流程。";
+  return "新目标只改变共享队列中的优先级与依赖，父子关系仅表达目标归属，不新建运行栈或自动恢复旧位置。讨论不修改计划。" + (role === "architect" ? "用 request-goal 显式安排目标，replan 提交新增任务并明确保留原有待执行任务；需修改原任务则走 request-replan。" : "当前任务在安全边界完成或正式上报阻塞后才重新调度；不要强行中断写操作，未知副作用不得自动重试。");
 }
 
 function taskCompletionGuidance(role: string, identity: WorkflowHandoffIdentity, hasContract: boolean) {
@@ -114,6 +112,8 @@ export function createWorkflowMessages(
       workflowState.plan.constraints.length > 0 ? `架构约束：\n${workflowState.plan.constraints.map((item) => `- ${item}`).join("\n")}` : "",
       completed.length > 0 ? `当前任务直接依赖成果：\n${completed.join("\n")}` : "",
       workflowState.subworkflowContract ? `子流程契约：${JSON.stringify(workflowState.subworkflowContract)}\n返回父流程：${workflowState.parentStack?.at(-1)?.state.workflowId}。只交付契约要求的结果与实际验证；不得再创建子流程。allowedFiles 是声明的修改范围，不是工具沙箱。` : "",
+      task.goalId ? `目标归属与约束（同一执行队列）：${JSON.stringify(workflowState.goals?.find(goal => goal.id === task.goalId))}` : "",
+      `队列优先级：${task.priority ?? 0}；先满足依赖，再比较优先级。`,
       `当前任务（${task.id}，角色 ${task.role}）：${task.task}`,
       `当前任务结果身份 JSON（${task.contract && task.role === "developer-test" ? "clarify/" : ""}complete/block 时按原样传回）：${JSON.stringify(identity)}`,
       `允许涉及的文件或目录：${task.files.join(", ")}`,
@@ -200,6 +200,20 @@ export function createWorkflowMessages(
     const workflowState = state.workflowState;
     const request = workflowState?.pendingRevision;
     if (!workflowState || !request) throw new Error("工作流缺少待处理的重规划请求");
+    if (request.kind === "goal") {
+      return [
+        "[PI-INIT 共享队列目标插入]",
+        `当前 replan 身份 JSON：${JSON.stringify(identity)}`,
+        `新目标：${request.childGoal ?? request.direction}`,
+        `根目标与约束：${JSON.stringify(workflowState.plan)}`,
+        `已有目标归属：${JSON.stringify(workflowState.goals ?? [])}`,
+        `父归属 ID：${request.goalParentId ?? workflowState.workflowId}`,
+        `原队列：${JSON.stringify(workflowState.tasks)}`,
+        "只新增目标任务，不创建子工作流或 parentStack。提交 task_workflow(action=replan,上述完整身份,summary=新目标说明,constraints=[目标约束],tasks=[新增任务],retainTaskIds=[全部仍有效的原有 pending 任务 ID])；必须先核查原任务是否仍有效，不能为了通过校验盲目保留，若需替换原任务则改为普通重规划。",
+        "task ID 在整个队列及历史中唯一，dependsOn 可引用原有任务；就绪任务按 priority 降序，省略时为 0，与普通任务同级并保留原顺序；仅明确需要插队时提高 priority。父归属不自动建立依赖；先决条件必须显式 dependsOn。原任务结果未知或受阻不会因新目标完成而自动 retry，禁止重放副作用。",
+        "复用既有任务契约/证据门；普通任务无协调契约也可规划，不得伪造证据。目标层的 subworkflowContract 不再是新分组的前置条件。",
+      ].join("\n\n");
+    }
     if (workflowState.pauseReason === "child-result-review") {
       const child = workflowState.subworkflowHistory?.findLast((entry) => entry.parentWorkflowId === workflowState.workflowId);
       const remaining = workflowState.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded");

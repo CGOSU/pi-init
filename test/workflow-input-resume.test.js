@@ -113,10 +113,13 @@ test("讨论和纠正不被自动吞成子流程，待规划期间也不污染�
     }
     await emitExtensionEvent(harness, "input", { text: "子流程：独立检查部署环境", source: "interactive" });
     const pending = structuredClone(latestWorkflow(harness));
-    assert.equal(pending.pendingRevision.kind, "nested");
+    assert.equal(pending.pendingRevision.kind, "goal");
     await emitExtensionEvent(harness, "input", { text: "这个设计合理吗？", source: "interactive" });
     assert.deepEqual(latestWorkflow(harness), pending, "待规划期间的讨论不污染显式子流程请求");
     await emitExtensionEvent(harness, "input", { text: "追加任务：补测试", source: "interactive" });
-    assert.deepEqual(latestWorkflow(harness), pending, "不把追加任务混入待规划子目标");
+    assert.equal(latestWorkflow(harness).workflowId, pending.workflowId);
+    assert.equal(latestWorkflow(harness).pendingRevision.kind, "replan");
+    assert.match(latestWorkflow(harness).pendingRevision.direction, /独立检查部署环境/);
+    assert.match(latestWorkflow(harness).pendingRevision.direction, /补测试/);
   });
 });

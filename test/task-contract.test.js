@@ -117,7 +117,7 @@ test("工作流创建、clone、hydration 和 JSON 恢复保留任务契约且�
 
   const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(state)));
   assert.equal(restored.ok, true);
-  assert.equal(restored.value.version, 6);
+  assert.equal(restored.value.version, 7);
   assert.deepEqual(restored.value.tasks[0].contract, originalContract);
 });
 
@@ -137,7 +137,7 @@ test("version 4 有身份 workflow 升级到当前版本但不伪造旧任务契
 
   const restored = hydrateWorkflowState(version4);
   assert.equal(restored.ok, true);
-  assert.equal(restored.value.version, 6);
+  assert.equal(restored.value.version, 7);
   assert.equal(restored.value.workflowId, current.workflowId);
   assert.equal(restored.value.sessionId, current.sessionId);
   assert.equal(restored.value.legacySourceVersion, undefined);

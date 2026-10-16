@@ -18,6 +18,7 @@ import type {
 } from "../src/workflow-types.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { createWorkflowPauseView, type WorkflowPauseView } from "./workflow-pause-view.ts";
+import { workflowGoalProgress } from "../src/workflow-goals.ts";
 
 export type WorkflowStatusActivity =
   | "awaiting-replan"
@@ -36,6 +37,8 @@ export type WorkflowStatusTaskView = {
   role: string;
   task: string;
   status: WorkflowTaskStatus;
+  goalId?: string;
+  priority?: number;
   completionSummary?: string;
   duration: { kind: "available"; milliseconds: number } | { kind: "unavailable" };
 };
@@ -74,6 +77,7 @@ export type WorkflowStatusView =
       planSummary: string;
       lineage: WorkflowStatusAncestorView[];
       subworkflows: WorkflowStatusSubworkflowView[];
+      goals?: ReturnType<typeof workflowGoalProgress>;
       identity: {
         action: WorkflowActionIdentity;
         handoff?: WorkflowHandoffIdentity;
@@ -279,6 +283,7 @@ export function createWorkflowStatusView(
       },
     ],
     subworkflows: statusSubworkflows(workflowState),
+    goals: workflowGoalProgress(workflowState),
     identity: {
       action: workflowActionIdentity(workflowState),
       ...(handoff ? { handoff } : {}),
@@ -300,6 +305,8 @@ export function createWorkflowStatusView(
       return {
         id: task.id,
         role: task.role,
+        goalId: task.goalId,
+        priority: task.priority,
         task: task.task,
         status: task.status,
         ...(task.completionSummary ? { completionSummary: task.completionSummary } : {}),

@@ -23,7 +23,10 @@ function dependenciesCompleted(state: WorkflowState, task: WorkflowTask): boolea
 
 export function getNextWorkflowTask(state: WorkflowState | null | undefined): WorkflowTask | undefined {
   if (!state || state.status !== "running" || state.currentTaskId) return undefined;
-  return state.tasks.find((task) => task.status === "pending" && dependenciesCompleted(state, task));
+  return state.tasks.reduce<WorkflowTask | undefined>((next, task) => {
+    if (task.status !== "pending" || !dependenciesCompleted(state, task)) return next;
+    return !next || (task.priority ?? 0) > (next.priority ?? 0) ? task : next;
+  }, undefined);
 }
 
 export function startWorkflowTask(state: WorkflowState, taskId?: string, now = Date.now()): WorkflowState {
@@ -144,6 +147,12 @@ export function completeWorkflowTask(
   } else {
     delete result.completedAt;
     result.continuation = { kind: "schedule", phase: "pending", reason: "task-completed" };
+    if (!getNextWorkflowTask(result)) {
+      result.status = "paused";
+      result.pauseReason = "dependency-blocked";
+      result.taskPauseReason = "队列没有依赖已满足的待执行任务；保留已完成结果，请处理阻塞或重规划，不会盲目恢复旧位置。";
+      delete result.continuation;
+    }
   }
   return result;
 }

@@ -144,6 +144,8 @@ export const workflowTaskSchema = Type.Object({
   role: Type.Optional(workflowTaskRoleSchema),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
   contract: Type.Optional(taskContractSchema),
+  goalId: Type.Optional(Type.String({ description: "已有目标归属，仅影响分组展示，不建立父子执行栈" })),
+  priority: Type.Optional(Type.Integer({ minimum: -Number.MAX_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER, description: "同一队列中依赖已满足任务的优先级；越大越优先，相同保持顺序" })),
 });
 
 const coordinationIdentitySchema = Type.Object({
@@ -219,7 +221,7 @@ const evidenceReviewSchema = Type.Object({
 });
 
 export const taskWorkflowParameters = Type.Object({
-  action: StringEnum(["plan", "status", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "review-child", "request-evidence", "report-evidence", "review-evidence"] as const, {
+  action: StringEnum(["plan", "status", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "request-goal", "review-child", "request-evidence", "report-evidence", "review-evidence"] as const, {
     description: "工作流或架构协作动作",
   }),
   coordinationIdentity: Type.Optional(coordinationIdentitySchema),
@@ -232,12 +234,13 @@ export const taskWorkflowParameters = Type.Object({
   clarification: Type.Optional(workflowTaskClarificationSchema),
   subworkflowContract: Type.Optional(Type.Object({ inputs: Type.Array(Type.String(), { minItems: 1 }), expectedOutputs: Type.Array(Type.String(), { minItems: 1 }), acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }), allowedFiles: Type.Array(Type.String(), { minItems: 1 }) })),
   childReview: Type.Optional(Type.Object({ childWorkflowId: Type.String(), decision: StringEnum(["continue", "replan", "block"] as const), reason: Type.String(), parentPlanValid: Type.Boolean(), acceptedOutputs: Type.Array(Type.String()), verification: Type.Array(Type.String(), { minItems: 1 }) })),
+  parentGoalId: Type.Optional(Type.String({ description: "插入目标的已有父归属 ID，默认当前任务所属目标或根目标" })),
   summary: Type.Optional(Type.String({ description: "架构规划摘要（plan/replan 必填）" })),
   constraints: Type.Optional(Type.Array(Type.String(), { description: "架构约束和不可改变的决定" })),
   revisionId: Type.Optional(Type.String({ description: "当前待应用重规划的 revisionId（replan 必填）" })),
   retainTaskIds: Type.Optional(Type.Array(Type.String(), { description: "重规划时保留的未开始任务 ID" })),
   tasks: Type.Optional(Type.Array(workflowTaskSchema, {
-    minItems: 1,
+    minItems: 0,
     description: `按顺序拆分的开发测试任务，建议不超过 ${WORKFLOW_RECOMMENDED_TASKS} 个（软建议，不是硬上限）`,
   })),
   reviewRequired: Type.Optional(Type.Boolean({

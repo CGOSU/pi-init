@@ -253,7 +253,7 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
   });
 
   const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(applied))).value;
-  assert.equal(restored.version, 6);
+  assert.equal(restored.version, 7);
   assert.deepEqual(restored.tasks, applied.tasks);
   assert.deepEqual(restored.revisions, applied.revisions);
 });
@@ -369,12 +369,12 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
     updatedAt: 20,
   };
   const restored = hydrateWorkflowState(legacy).value;
-  assert.equal(restored.version, 6);
+  assert.equal(restored.version, 7);
   assert.deepEqual(restored.revisions, []);
   assert.equal(restored.executor, "local");
   assert.equal(restored.currentTaskId, "legacy-task");
   const restoredV2 = hydrateWorkflowState({ ...legacy, version: 2, executor: "local" }).value;
-  assert.equal(restoredV2.version, 6);
+  assert.equal(restoredV2.version, 7);
   assert.deepEqual(restoredV2.revisions, []);
   assert.equal(restored.tasks[0].status, "in_progress");
   assert.equal(restored.tasks[0].startedAt, undefined);
@@ -414,7 +414,7 @@ test("version 5 工作流迁移到嵌套状态版本且保留身份和任务历�
   delete version5.subworkflowHistory;
   const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(version5)));
   assert.equal(restored.ok, true, restored.message);
-  assert.equal(restored.value.version, 6);
+  assert.equal(restored.value.version, 7);
   assert.equal(restored.value.workflowId, current.workflowId);
   assert.equal(restored.value.planVersion, current.planVersion);
   assert.deepEqual(restored.value.subworkflowHistory, []);

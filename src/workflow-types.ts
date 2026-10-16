@@ -1,5 +1,7 @@
 import type { WorkflowTaskContract } from "./coordination-types.ts";
 import type { WorkflowExecutor } from "./role-types.ts";
+export type WorkflowGoal = { id: string; parentId: string; summary: string; constraints: string[]; createdAt: number };
+
 export type WorkflowSubworkflowContract = { inputs: string[]; expectedOutputs: string[]; acceptanceCriteria: string[]; allowedFiles: string[] };
 export type WorkflowSubworkflowReview = { childWorkflowId: string; decision: "continue" | "replan" | "block"; reason: string; parentPlanValid: boolean; acceptedOutputs: string[]; verification: string[]; reviewedAt: number };
 
@@ -47,6 +49,8 @@ export type WorkflowTask = {
   files: string[];
   acceptanceCriteria: string[];
   dependsOn: string[];
+  goalId?: string;
+  priority?: number;
   contract?: WorkflowTaskContract;
   clarification?: WorkflowTaskClarification;
   status: WorkflowTaskStatus;
@@ -81,7 +85,8 @@ export type WorkflowPendingRevision = {
   direction: string;
   requestedAt: number;
   requestedFromTaskId?: string;
-  kind?: "replan" | "nested";
+  kind?: "replan" | "nested" | "goal";
+  goalParentId?: string;
   childGoal?: string;
 };
 
@@ -162,6 +167,7 @@ export type WorkflowStateCore = {
   taskPauseReason?: string;
   plan: WorkflowPlanSummary;
   tasks: WorkflowTask[];
+  goals?: WorkflowGoal[];
   currentTaskId?: string;
   nudgeCount?: number;
   revisions: WorkflowRevision[];
@@ -220,7 +226,7 @@ export type WorkflowRoleValidationOptions = { unfinishedOnly?: boolean };
 export type WorkflowTextListOptions = { required?: boolean };
 export type WorkflowTaskNormalizationOptions = { allowSuperseded?: boolean };
 export type WorkflowModelError = Error & { code?: string; details?: unknown };
-export type WorkflowStateVersion = 1 | 2 | 3 | 4 | 5 | 6;
+export type WorkflowStateVersion = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type WorkflowStateRecord = Record<string, unknown>;
 export type WorkflowLegacyState = Partial<WorkflowState> & Record<string, unknown>;
 export type WorkflowRevisionRecord = Record<string, unknown>;

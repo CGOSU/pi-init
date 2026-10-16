@@ -11,6 +11,8 @@ export function workflowPauseReasonLabel(reason: string | undefined): string {
     case "boundary-compaction-failed":
     case "boundary-compaction-interrupted":
       return "任务边界压缩未完成；检查后执行 /pi-init workflow resume 重试";
+    case "dependency-blocked":
+      return "队列依赖未满足；保留现场，处理阻塞或重规划后再继续";
     case "task-blocked":
       return "任务受阻；请查看阻塞原因";
     case "workflow-replan":

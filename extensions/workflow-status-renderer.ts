@@ -92,6 +92,7 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
       : []),
     ...workflowIdentityLines(view),
   ];
+  if (view.goals?.length) lines.push("目标归属 JSON（仅分组，共享队列）：" + JSON.stringify(view.goals));
   if (view.pauseCode) lines.push(`暂停类别：${view.pauseCode}`);
   if (view.taskPauseReason && view.pause.blockedTasks.length === 0) {
     lines.push(`暂停说明：${view.taskPauseReason}`);
@@ -107,7 +108,7 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
         ? formatWorkflowDuration(task.duration.milliseconds, TASK_DURATION_UNAVAILABLE)
         : TASK_DURATION_UNAVAILABLE}`
       : "";
-    return `- [${task.status}] ${task.id} · ${task.role} · ${task.task}${duration}${task.completionSummary ? ` · ${task.completionSummary}` : ""}`;
+    return `- [${task.status}] ${task.id} · ${task.role} · ${task.task}${task.goalId ? ` · 归属：${task.goalId}` : ""}${task.priority !== undefined ? ` · 优先级：${task.priority}` : ""}${duration}${task.completionSummary ? ` · ${task.completionSummary}` : ""}`;
   }));
   return lines.join("\n");
 }
@@ -126,6 +127,8 @@ export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
   if (view.progress.currentTaskId) {
     const currentTask = view.tasks.find((task) => task.id === view.progress.currentTaskId);
     lines.push(`当前任务：${currentTask?.task ?? view.progress.currentTaskId}`);
+    const goal = view.goals?.find(goal => goal.id === currentTask?.goalId);
+    if (goal) lines.push("当前目标归属：" + goal.summary);
   }
   if (view.lineage.length > 1) {
     lines.push("正在处理子目标；父工作流暂停等待返回。");
@@ -236,6 +239,17 @@ export function formatWorkflowGoalTreeText(view: WorkflowStatusView) {
     node.children.forEach((child, index) => append(child, childPrefix, index === node.children.length - 1, false));
   };
   append(root, "", true, true);
+  if (view.goals?.length) {
+    lines.push("目标归属（共享队列，不挂起父目标）：");
+    const appendGroup = (parentId: string, depth: number) => {
+      for (const goal of view.goals ?? []) if (goal.parentId === parentId) {
+        const status = goal.status === "completed" ? "已验收" : goal.status === "blocked" ? "受阻" : goal.status === "in_progress" ? "执行中" : goal.status === "review-required" ? "待验收" : goal.status === "inactive" ? "无活动任务" : "待执行";
+        lines.push("  ".repeat(depth) + "└─ " + goal.summary + " · " + status + " · " + goal.completed + "/" + goal.total);
+        appendGroup(goal.id, depth + 1);
+      }
+    };
+    appendGroup(view.identity.action.workflowId, 0);
+  }
   return lines.join("\n");
 }
 
