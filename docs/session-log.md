@@ -2,6 +2,17 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-16：测试价值审阅收敛与结论汇总
+
+- 目标与边界：以当前会话 `file_review(action="list", reviewKind="test-value")` 为唯一待审状态来源，汇总已登记的价值结论与剩余状态；只登记建议，不修改测试、生产代码、依赖或配置，不重跑全量测试/typecheck/构建。不沿用独立空 harness 的旧文件枚举作为当前队列，也不恢复已完成的历史审阅工作流。
+- 完成（队列核对）：当前测试价值候选队列为 0。已登记的 66 条价值结论覆盖全部按约定发现的候选（`test/` 下 65 个 `*.test.js` 加共享夹具 `test/helpers.js`），分类为 62 `keep`、4 `rewrite`，无 `merge` 与 `remove`。结论绑定的测试指纹与全部显式关联实现指纹逐条与磁盘当前版本核对，0 失效、0 缺失。
+- 完成（有效跳过与失效重登）：其中 21 条在本轮工作流首个批次快照之前即已登记（如 `test/file-review-runtime.test.js`、`review-incremental`、`file-review`、`architect-boundary` 等），本轮未重复登记；`test/file-review-runtime.test.js` 在更早阶段因其指纹变化被重审过一次，属增量实现变更后的失效重登，不是重复结论。
+- 完成（重写建议要点）：`rewrite` 分别指向 `test/line-count.test.js`（与 `test/file-review.test.js` 重复的换行计数断言、对 `package.json` 脚本不存在的配置断言价值低，但保留扩展名/排除目录与 500/501 边界）、`test/control-center-menu.test.js`（多个用例重复锁定“正在保存/成功/快捷键/通知”文案）、`test/scaffold.test.js`（模板长文案、章节顺序、Clean Code 标题等展示细节，且混杂角色/工作流行为）、`test/workflow-runtime-exports.test.js`（暂停态 fixture 无法真正判别身份拒绝与角色校验，建议改用可派发的运行状态）。均为审阅建议，未执行任何修改。
+- 完成（保留回归重点）：`keep` 覆盖权限 fail-closed、编辑防护、协调身份/证据状态机、工作流持久化与恢复、角色配置持久化与 fallback、usage 真值与去重、运行时退役错误语义等高风险行为；固定文案、布局、schema/形状与重复基础断言等低收益片段已在各条理由中标注为可后续局部精简，未据以删除混合价值文件。
+- 完成（维度隔离与审阅盲点）：结构审阅维度独立，仍有 14 个超限候选待审，本轮未顺带登记结构结论。另发现 `test/file-review.test.js` 首个用例标题声称“不跟随链接”，但正文未构造任何 symlink，仅覆盖排除依赖/生成目录；已记录到 [`docs/pitfalls.md`](pitfalls.md)，仅建议未实施。
+- 验证：`file_review(action="list", reviewKind="test-value")` 返回“没有该页已发现的测试价值候选；总数 0”，`file_review(action="list")` 返回结构待审 1-14/14；用 SHA-256 逐条比对 66 个已登记测试路径及全部关联实现路径，0 不匹配、0 缺失；`git status --short` 仅 `?? .DS_Store`。
+- 未验证/未执行：未运行 `npm test`、`npm run typecheck`、构建或真实 Pi 宿主/Provider 验证；未修改测试或生产代码；价值审阅记录持久化在 Pi session（`pi-init-test-value-review` 条目），不在仓库内。
+
 ### 2026-10-16：Pi 1.3 轻量交接
 
 - 完成：SDK peer 下限和本地依赖对齐 1.3.0；角色、任务、重规划和取证交接增加系统派生快照，补充说明可省略，压缩完成后按当前状态重建。
