@@ -17,6 +17,8 @@ const {
   withTempDirectory,
   createExtensionHarness,
   emitExtensionEvent,
+  filterRoleModels,
+  findMatchingRole,
 } = helpers;
 
 test("TUI 菜单按 Esc 返回上一级而不是取消", async () => {
@@ -41,6 +43,32 @@ test("TUI 文本输入按 Esc 返回且恢复内容可继续追加", async () =>
     call.component.handleInput("\n");
   } });
   assert.equal(await input(harness.context, "测试输入", "占位文本", "Description"), "DescriptionX");
+});
+
+test("角色模型搜索与恢复匹配按模型信息过滤并要求角色唯一", () => {
+  const models = [
+    { provider: "openai-codex", id: "gpt-5.6-luna", name: "Luna" },
+    { provider: "anthropic", id: "claude-sonnet", name: "Sonnet" },
+  ];
+  assert.deepEqual(filterRoleModels(models, "LUNA"), [models[0]]);
+  assert.deepEqual(filterRoleModels(models, "anthropic/"), [models[1]]);
+  assert.deepEqual(filterRoleModels(models, "  "), models);
+
+  const config = {
+    architect: { provider: "p", model: "m-architect", thinkingLevel: "max" },
+    "developer-test": { provider: "p", model: "m-developer", thinkingLevel: "max" },
+    "docs-commit": { provider: "p", model: "m-docs", thinkingLevel: "medium" },
+  };
+  assert.equal(findMatchingRole(config, { provider: "p", id: "m-developer" }, "max"), "developer-test");
+  assert.equal(findMatchingRole(config, { provider: "p", id: "m-developer" }, "medium"), undefined);
+  assert.equal(findMatchingRole({ schemaVersion: 2, roleModels: {
+    reviewer: { provider: "p", model: "m-reviewer", thinkingLevel: "high" },
+  } }, { provider: "p", id: "m-reviewer" }, "high"), "reviewer");
+  assert.equal(findMatchingRole(config, undefined, "max"), undefined);
+  assert.equal(findMatchingRole({
+    ...config,
+    architect: { provider: "p", model: "m-developer", thinkingLevel: "max" },
+  }, { provider: "p", id: "m-developer" }, "max"), undefined);
 });
 
 test("角色模型选择按 Esc 逐级返回并保留已选角色", async () => {

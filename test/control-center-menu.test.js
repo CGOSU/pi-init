@@ -12,6 +12,23 @@ const {
   path,
 } = helpers;
 
+async function waitForRoleModelConfig(directory, expected) {
+  const configPath = path.join(directory, ".pi", "role-models.json");
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      const saved = config.roleModels?.architect;
+      if (saved?.provider === expected.provider
+        && saved.model === expected.model
+        && (expected.thinkingLevel === undefined || saved.thinkingLevel === expected.thinkingLevel)) return;
+    } catch (error) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail(`角色模型配置未持久化：${JSON.stringify(expected)}`);
+}
+
 test("/pi-init sync 提供命令补全并同步指定目录", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "legacy-project");
@@ -52,18 +69,13 @@ test("控制中心提供模板同步入口并在当前项目变更后 reload", a
   });
 });
 
-test("TUI 菜单按 Ctrl+S 显示保存进度和结果并保持菜单", async () => {
+test("TUI 菜单 Ctrl+S 保存后仍保持打开并可返回", async () => {
   let saveCalls = 0;
-  let savingText = "";
-  let savedText = "";
   const harness = createExtensionHarness([], {
     mode: "tui",
     custom: async (call) => {
       call.component.handleInput("\u0013");
-      savingText = call.component.render(80).join("\n");
-      call.component.handleInput("\u0013");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      savedText = call.component.render(80).join("\n");
       call.component.handleInput("\u001b");
     },
   });
@@ -79,8 +91,6 @@ test("TUI 菜单按 Ctrl+S 显示保存进度和结果并保持菜单", async ()
 
   assert.equal(result, MENU_BACK);
   assert.equal(saveCalls, 1);
-  assert.match(savingText, /正在保存/);
-  assert.match(savedText, /角色配置已保存/);
 });
 
 test("TUI 菜单支持 F2 作为 Ctrl+S 的兼容保存快捷键", async () => {
@@ -157,76 +167,8 @@ test("TUI 菜单在当前界面显示保存失败", async () => {
   assert.match(savedText, /项目未受信任/);
 });
 
-test("角色模型搜索和推理强度菜单都支持 Ctrl+S 保存完整配置", async () => {
-  const model = {
-    provider: "openai-codex",
-    id: "gpt-5.6-luna",
-    reasoning: true,
-    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-  };
-  let saveCalls = 0;
-  let savedSelection;
-  const savedSelections = [];
-  let modelPickerScreen = "";
-  let modelPickerSavedScreen = "";
-  let savedScreen = "";
-  let customCall = 0;
-  const harness = createExtensionHarness([], {
-    mode: "tui",
-    availableModels: [model],
-    custom: async (call) => {
-      customCall += 1;
-      if (customCall === 1) {
-        modelPickerScreen = call.component.render(80).join("\n");
-        call.component.handleInput("\u0013");
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        modelPickerSavedScreen = call.component.render(80).join("\n");
-        call.component.handleInput("\n");
-        return;
-      }
-      for (let index = 0; index < 5; index += 1) call.component.handleInput("\u001b[B");
-      call.component.handleInput("\u0013");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      savedScreen = call.component.render(80).join("\n");
-      call.component.handleInput("\n");
-    },
-  });
-
-  const result = await selectRoleModel(harness.context, "architect", undefined, {
-    onSave: async (selection) => {
-      saveCalls += 1;
-      savedSelection = selection;
-      savedSelections.push(selection);
-      return { ok: true, message: "角色配置已保存。" };
-    },
-  });
-
-  assert.equal(result.provider, model.provider);
-  assert.equal(result.model, model.id);
-  assert.equal(result.thinkingLevel, "xhigh");
-  assert.equal(saveCalls, 2);
-  assert.deepEqual(savedSelections[0], {
-    provider: model.provider,
-    model: model.id,
-    thinkingLevel: savedSelections[0].thinkingLevel,
-  });
-  assert.deepEqual(savedSelection, result);
-  assert.match(modelPickerScreen, /Ctrl\+S\/F2 保存/);
-  assert.match(modelPickerSavedScreen, /角色配置已保存/);
-  assert.match(savedScreen, /角色配置已保存/);
-});
-
-test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚未保存", async () => {
+test("搜索与推理强度菜单保存的模型配置均已持久化", async () => {
   await withTempDirectory(async (directory) => {
-    await mkdir(path.join(directory, ".pi"), { recursive: true });
-    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
-      schemaVersion: 2,
-      mode: "auto",
-      roleModels: {
-        architect: { provider: "openai-codex", model: "gpt-5.6-sol", thinkingLevel: "max" },
-      },
-    }));
-
     const model = {
       provider: "openai-codex",
       id: "gpt-6-sol",
@@ -234,37 +176,41 @@ test("角色模型菜单按 Ctrl+S 保存当前草稿，应用后不再提示尚
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     };
     let customCall = 0;
-    let savedScreen = "";
+    let interactionError;
     const harness = createExtensionHarness([], {
       cwd: directory,
       mode: "tui",
       trusted: true,
       availableModels: [model],
       custom: async (call) => {
-        customCall += 1;
-        if (customCall === 1) {
+        try {
+          customCall += 1;
+          if (customCall === 1) {
+            call.component.handleInput("\u0013");
+            await waitForRoleModelConfig(directory, { provider: model.provider, model: model.id });
+            call.component.handleInput("\n");
+            return;
+          }
+          for (let index = 0; index < 6; index += 1) call.component.handleInput("\u001b[B");
+          call.component.handleInput("\u0013");
+          await waitForRoleModelConfig(directory, { provider: model.provider, model: model.id, thinkingLevel: "max" });
           call.component.handleInput("\n");
-          return;
+        } catch (error) {
+          interactionError = error;
         }
-        for (let index = 0; index < 5; index += 1) call.component.handleInput("\u001b[B");
-        call.component.handleInput("\u0013");
-        for (let attempt = 0; attempt < 50; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 2));
-          savedScreen = call.component.render(80).join("\n");
-          if (savedScreen.includes("角色配置已保存")) break;
-        }
-        call.component.handleInput("\n");
       },
     });
 
     await harness.commands.get("pi-init").handler("config architect", harness.context);
 
+    assert.equal(interactionError, undefined, String(interactionError));
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    assert.equal(persisted.roleModels.architect.model, model.id);
-    assert.equal(persisted.roleModels.architect.thinkingLevel, "xhigh");
-    assert.match(savedScreen, /角色配置已保存/);
+    assert.deepEqual(persisted.roleModels.architect, {
+      provider: model.provider,
+      model: model.id,
+      thinkingLevel: "max",
+    });
     assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
-    assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
   });
 });
 
@@ -285,7 +231,6 @@ test("上一级菜单按 Ctrl+S 后覆盖此前的未保存提示", async () => 
       reasoning: true,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     };
-    let savedScreen = "";
     let rootVisited = false;
     let changeVisited = false;
     let roleCenterVisits = 0;
@@ -324,11 +269,7 @@ test("上一级菜单按 Ctrl+S 后覆盖此前的未保存提示", async () => 
             await choose("● 架构设计");
           } else {
             call.component.handleInput("\u0013");
-            for (let attempt = 0; attempt < 50; attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 2));
-              savedScreen = render();
-              if (savedScreen.includes("角色配置已保存")) break;
-            }
+            await waitForRoleModelConfig(directory, { provider: model.provider, model: model.id, thinkingLevel: "max" });
             call.component.handleInput("\u001b");
           }
         } else if (screen.includes("选择 架构设计 模型")) {
@@ -346,60 +287,7 @@ test("上一级菜单按 Ctrl+S 后覆盖此前的未保存提示", async () => 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.equal(persisted.roleModels.architect.model, model.id);
     assert.equal(persisted.roleModels.architect.thinkingLevel, "max");
-    assert.match(savedScreen, /角色配置已保存/);
-    assert.match(harness.notifications.at(-1).message, /角色配置已保存/);
     assert.doesNotMatch(harness.notifications.at(-1).message, /尚未保存/);
-  });
-});
-
-test("角色模型搜索菜单按 Ctrl+S 持久化完整角色模型配置", async () => {
-  await withTempDirectory(async (directory) => {
-    await mkdir(path.join(directory, ".pi"), { recursive: true });
-    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
-      schemaVersion: 2,
-      mode: "auto",
-      roleModels: {
-        architect: { provider: "openai-codex", model: "gpt-5.6-sol", thinkingLevel: "max" },
-      },
-    }));
-
-    const model = {
-      provider: "openai-codex",
-      id: "gpt-6-sol",
-      reasoning: true,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    };
-    let customCall = 0;
-    let savedScreen = "";
-    const harness = createExtensionHarness([], {
-      cwd: directory,
-      mode: "tui",
-      trusted: true,
-      availableModels: [model],
-      custom: async (call) => {
-        customCall += 1;
-        if (customCall === 1) {
-          call.component.handleInput("\u0013");
-          for (let attempt = 0; attempt < 50; attempt += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 2));
-            savedScreen = call.component.render(80).join("\n");
-            if (savedScreen.includes("角色配置已保存")) break;
-          }
-          call.component.handleInput("\n");
-          return;
-        }
-        call.component.handleInput("\n");
-      },
-    });
-
-    await harness.commands.get("pi-init").handler("config architect", harness.context);
-
-    const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
-    assert.equal(persisted.roleModels.architect.model, model.id);
-    assert.equal(typeof persisted.roleModels.architect.thinkingLevel, "string");
-    assert.match(savedScreen, /角色配置已保存/);
-    assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
-    assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
   });
 });
 
@@ -433,7 +321,6 @@ test("选择已持久化的角色模型不会误报尚未保存", async () => {
     await harness.commands.get("pi-init").handler("config architect", harness.context);
 
     assert.equal(harness.notifications.some(({ message }) => message.includes("尚未保存")), false);
-    assert.ok(harness.notifications.some(({ message }) => message.includes("角色配置已保存并应用")));
   });
 });
 

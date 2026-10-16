@@ -60,8 +60,8 @@ async function writeWorkflowConfig(directory, workflowMode = "on") {
   );
 }
 
-async function planThroughTool(directory, planParams = {}) {
-  await writeWorkflowConfig(directory);
+async function planThroughTool(directory, workflowMode = "on") {
+  await writeWorkflowConfig(directory, workflowMode);
   const harness = createExtensionHarness([], {
     cwd: directory,
     trusted: true,
@@ -74,6 +74,24 @@ async function planThroughTool(directory, planParams = {}) {
   const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
   return { harness, workflow };
 }
+
+test("auto 模式下两任务计划跳过工作流持久化和派发", async () => {
+  await withTempDirectory(async (directory) => {
+    const { harness, workflow } = await planThroughTool(directory, "auto");
+    const result = await workflow.execute("plan", {
+      action: "plan",
+      summary: "验证 auto 小计划策略",
+      tasks: [
+        { id: "implementation", task: "实现功能", files: ["src/feature.js"], acceptanceCriteria: ["结果正确"] },
+        { id: "verification", task: "验证功能", files: ["test/feature.test.js"], acceptanceCriteria: ["验证通过"] },
+      ],
+    }, undefined, undefined, harness.context);
+
+    assert.equal(result.details.orchestrated, false);
+    assert.equal(harness.sentMessages.length, 0);
+    assert.equal(harness.branch.some((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow"), false);
+  });
+});
 
 test("初始规划接受超过 12 个任务并保留依赖顺序", () => {
   const tasks = createPlanTasks(15);

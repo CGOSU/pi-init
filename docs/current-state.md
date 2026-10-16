@@ -82,7 +82,7 @@
 
 ## 最近一次更新
 
-- 2026-10-16：完成本会话测试价值审阅收敛。以 `file_review(action="list", reviewKind="test-value")` 为唯一待审状态来源，当前价值候选队列为 0；已登记的 66 条价值结论覆盖全部按约定发现的候选（`test/` 下 65 个 `*.test.js` 加共享夹具 `test/helpers.js`），分类为 62 `keep`、4 `rewrite`，无 `merge`/`remove`。结论绑定的测试与全部显式关联实现 SHA-256 逐条与该磁盘版本核对，0 失效、0 缺失。`rewrite` 建议指向 `test/line-count.test.js`、`test/control-center-menu.test.js`、`test/scaffold.test.js`、`test/workflow-runtime-exports.test.js`，理由是与 `file-review` 重复的计数/文案断言、模板展示细节及暂停态 fixture 不能判别身份/角色校验等局部低收益或判别力不足；全部仅为建议，未修改任何测试或生产代码。结构审阅维度独立，仍有 14 个超限候选待审，不代表价值维度未收敛。详见 [`docs/session-log.md`](session-log.md)。
+- 2026-10-16：测试价值审阅原始结论为 66 项（62 `keep`、4 `rewrite`）；随后按四项 rewrite 建议整改 7 个测试文件，将被重复的计数/菜单文案/模板细节覆盖精简，并把角色匹配、auto 两任务计划与重规划身份覆盖移到职责更匹配的测试套件。7 个文件中的测试用例净减 7 项（52→45），同批定向测试 45/45 通过；未修改生产代码，测试文件数量仍为 65 个 `*.test.js` 加 `test/helpers.js`。因测试指纹变化，这 7 项旧价值结论已失效、当前重新进入待审队列；其余 59 项结论仍有效。结构候选是独立维度，仍有 14 项待审。详细内容与验证见 [`docs/session-log.md`](session-log.md)。
 
 - 2026-10-16：明确增量补测范围与日常/维护审阅分流，并落地日常增量审阅范围。补测按本次行为变化及必要直接影响划分，不按行数机械限定，优先复用/调整已有测试、保留有效长期回归，纯展示默认不补，不引入自动测试生成/选测或自动删除；同步项目 `AGENTS.md`、中英文模板、公共 Skill 与 `developer-test` 角色规则。日常提示（系统提示 section、文件工具结果附加通知、`agent_settled` 通知）改为只呈现当前 session/branch 观察基线之后实际观察到的变化候选及显式关联实现失效测试，不声称任务 Git 归属，完整库存继续由 `file_review list` 与 `/large` 承担；基线/通知水位仅限当前会话/branch，`session_tree`/reload 重建，通知按候选有效版本去重，未送达不提前消费，部分失败保持未确认。新增 `src/review-incremental.ts` 及 `test/review-incremental.test.js`，并扩展 `extensions/file-review-runtime.ts` 与 `test/file-review-runtime.test.js`。验证：`node --test` 定向 7 文件 57 项通过、0 失败，`npm test` 469 项通过、0 失败，`npm run typecheck` 与 `git diff --check` 通过。真实 Pi TUI/E2E、真实 Provider 请求未验证，详见 [`docs/session-log.md`](session-log.md)。
 

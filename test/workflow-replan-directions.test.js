@@ -8,11 +8,17 @@ const {
   applyWorkflowReplan,
   completeWorkflowTask,
   createWorkflowState,
+  createExtensionHarness,
+  emitExtensionEvent,
   getNextWorkflowTask,
   hydrateWorkflowState,
   requestWorkflowReplan,
   startWorkflowTask,
+  withTempDirectory,
 } = helpers;
+
+const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
+const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
 function taskContract(overrides = {}) {
   return {
@@ -31,6 +37,46 @@ function taskContract(overrides = {}) {
     ...overrides,
   };
 }
+
+test("重规划交接携带完整身份并保留 architect 取证边界", async () => {
+  await withTempDirectory(async (directory) => {
+    const state = requestWorkflowReplan(
+      createWorkflowState({
+        workflowId: "replan-role-routing",
+        sessionId: "replan-session",
+        summary: "重规划身份",
+        tasks: [{ id: "current", task: "继续规划", files: ["src/current.js"], acceptanceCriteria: ["完成"] }],
+      }),
+      { revisionId: "revision-read", direction: "补充后续工作" },
+      110,
+    );
+    const harness = createExtensionHarness([
+      { type: "custom", customType: "pi-init-workflow", data: state },
+    ], {
+      cwd: directory,
+      sessionId: "replan-session",
+      trusted: true,
+      model: architectModel,
+      availableModels: [architectModel, developerModel],
+    });
+
+    await emitExtensionEvent(harness, "session_start");
+
+    const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
+    assert.ok(message);
+    const latest = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    assert.deepEqual(message.message.details, {
+      workflowId: latest.workflowId,
+      planVersion: latest.planVersion,
+      sessionId: latest.sessionId,
+      recoveryGeneration: latest.recoveryGeneration,
+      revisionId: latest.pendingRevision.revisionId,
+      handoffId: latest.continuation.handoffId,
+    });
+    assert.match(message.message.content, /architect 不直接取证、不执行代码、不连接 MCP/);
+    assert.match(message.message.content, /request-evidence 安排 docs-commit 查证/);
+  });
+});
 
 test("连续方向输入合并到同一待处理 revision，重规划前不启动旧后续任务", () => {
   const started = startWorkflowTask(

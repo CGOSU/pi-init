@@ -2,6 +2,15 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-16：按测试价值建议整改低收益覆盖
+
+- 目标与边界：落实前一条测试价值审阅提出的 4 项 `rewrite` 建议；仅调整测试，不改变产品行为，不删除混合价值测试，不把审阅建议当作自动修改。保留对权限、持久化、身份、状态和边界行为的回归保护。
+- 完成（重复/低判别断言）：`test/line-count.test.js` 移除与 `test/file-review.test.js` 重复的纯行数解析断言及低价值的 package 脚本缺失断言，保留递归扫描排除项、扩展名、500/501 边界和 CLI 候选结果；`test/control-center-menu.test.js` 合并搜索/推理强度两级保存路径的重复文案检查，改为验证完整模型配置实际持久化，同时保留 Ctrl+S/F2、安全错误、上层菜单保存、无陈旧“未保存”状态和选择导航；`test/scaffold.test.js` 从混合套件收窄为脚手架文件、变量替换、角色配置规范化、语言选择、dry-run/冲突保护、既有项目 Skill 保留及 package 发布元数据；移除重复模板长文案/章节与常量断言。
+- 完成（按领域归位与判别力）：角色模型过滤/唯一匹配从 scaffold suite 移至 `test/extension-roles.test.js`；auto 两任务计划的真实不编排/不写入/不派发验证移至 `test/workflow-task-count.test.js`；重规划角色边界 smoke test 移至 `test/workflow-replan-directions.test.js` 并校验当前完整身份及 architect 不取证、交由 docs-commit 查证的消息结果；`test/workflow-runtime-exports.test.js` 保留 Pi Jiti 扩展加载，并改用可派发状态证明 stale identity 不派发、有效身份可派发，以及 architect 执行角色返回真实拒绝且不派发。
+- 验证：`node --test test/line-count.test.js test/control-center-menu.test.js test/scaffold.test.js test/workflow-runtime-exports.test.js test/extension-roles.test.js test/workflow-task-count.test.js test/workflow-replan-directions.test.js` → 45 项通过、0 失败、0 跳过；`git diff --check` 通过。未运行全量测试、typecheck、构建或真实 Pi/Provider 验证。
+- 后续状态：7 个测试文件的内容指纹发生变化，原价值结论按机制失效；当前 `file_review(action="list", reviewKind="test-value")` 显示 7 项待重新审阅，其余 59 条既有当前版本结论有效。测试文件数量不变；7 个文件中的测试用例由 52 项净减至 45 项（部分行为覆盖移入更匹配的已有套件）。不把旧的 `62 keep / 4 rewrite` 统计当作当前版本结论，不自动重审或清空新队列。
+- 未执行：未修改生产代码；未运行 `npm test`、`npm run typecheck` 或 build；未 push。
+
 ### 2026-10-16：测试价值审阅收敛与结论汇总
 
 - 目标与边界：以当前会话 `file_review(action="list", reviewKind="test-value")` 为唯一待审状态来源，汇总已登记的价值结论与剩余状态；只登记建议，不修改测试、生产代码、依赖或配置，不重跑全量测试/typecheck/构建。不沿用独立空 harness 的旧文件枚举作为当前队列，也不恢复已完成的历史审阅工作流。

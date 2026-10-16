@@ -3,75 +3,25 @@ import test from "node:test";
 import * as helpers from "./helpers.js";
 
 const {
-  mkdtemp,
   mkdir,
   readFile,
-  rm,
-  writeFile,
-  os,
   path,
-  initProjectExtension,
-  installLaunchers,
-  dateRange,
-  formatReport,
-  PI_USAGE_VERSION,
-  queryUsage,
-  shouldRefreshUsage,
-  summarizeUsage,
   createScaffold,
-  formatEnvironmentInstructions,
   DEFAULT_ROLE_CONFIG,
-  DEFAULT_WORKFLOW_EXECUTOR,
-  DEFAULT_WORKFLOW_MODE,
-  ROLE_LABELS,
-  ROLE_MODE_LABELS,
-  ROLE_SWITCH_COMPACTION_THRESHOLD,
-  THINKING_LEVELS,
-  filterRoleModels,
-  findMatchingRole,
-  normalizeModelReference,
   resolveRoleConfig,
   unwrapRoleResult,
-  resolveRoleMode,
-  resolveWorkflowExecutor,
-  resolveWorkflowMode,
-  resolveRoleModel,
-  shouldOrchestrateWorkflow,
-  shouldCompactOnRoleSwitch,
-  WORKFLOW_MAX_NUDGES,
-  blockWorkflowTask,
-  cancelWorkflow,
-  completeWorkflowTask,
-  createWorkflowState,
-  getNextWorkflowTask,
-  getWorkflowTask,
-  getWorkflowTaskDuration,
-  getWorkflowExecutionBounds,
-  getWorkflowExecutionDuration,
-  hydrateWorkflowState,
-  markWorkflowTaskStarted,
-  recordWorkflowNudge,
-  requestWorkflowReplan,
-  applyWorkflowReplan,
-  resumeWorkflow,
-  retryWorkflowTask,
-  startWorkflowTask,
-  validateWorkflowPlan,
-  workflowProgress,
-  completeRunTiming,
-  createRunTiming,
-  getRunTimingDuration,
-  isExternalRunSource,
   withTempDirectory,
-  createExtensionHarness,
-  emitExtensionEvent,
-  runExternalAgent,
+  writeFile,
 } = helpers;
 
-test("生成默认文件结构并引用公共角色 Skill", async () => {
+test("默认脚手架生成约定文件并替换项目变量", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "example-app");
-    const result = await createScaffold(target, { projectName: "Example App" });
+    const result = await createScaffold(target, {
+      projectName: "Example App",
+      description: "A customer portal.",
+      testCommand: "npm test",
+    });
 
     assert.deepEqual(result.files, [
       "AGENTS.md",
@@ -84,150 +34,91 @@ test("生成默认文件结构并引用公共角色 Skill", async () => {
       ".pi/pi-init-state.json",
     ]);
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
-    const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
     const roleModels = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
-    await assert.rejects(
-      readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8"),
-      { code: "ENOENT" },
-    );
-    assert.match(agents, /^# Example App AI 协作指南/);
-    assert.match(agents, /## 运行环境与命令约定/);
-    assert.match(agents, new RegExp("`" + process.platform + "`"));
-    assert.match(agents, new RegExp("`" + process.arch + "`"));
-    if (process.platform === "win32") {
-      assert.match(agents, /`where\.exe`/);
-      assert.match(agents, /Linux-only 的 `which`/);
-    }
-    assert.match(agents, /git config user\.name CGOSU/);
-    assert.match(agents, /git config user\.email dev@cgosu\.com/);
-    assert.match(agents, /## 验证要求/);
-    assert.match(agents, /可复用已通过的验证结果/);
-    assert.match(agents, /docs\/clean-code\.md/);
-    assert.match(agents, /pi-init-role-routing/);
-    assert.match(agents, /通用任务执行流程、证据门控、工具调用和角色交接规则/);
-    assert.match(agents, /不要在本文件复制其内容/);
-    assert.doesNotMatch(agents, /## 任务执行流程/);
-    assert.doesNotMatch(agents, /## 证据与工具调用规则/);
-    assert.doesNotMatch(agents, /已有新鲜且精确证据为 0 轮/);
-    assert.match(agents, /workflowExecutor/);
-    assert.match(agents, /task_workflow/);
-    assert.doesNotMatch(agents, /\.pi\/agents\//);
-    assert.match(agents, /<!-- pi-init:managed:start fast-path-wrap-up -->/);
-    assert.match(agents, /<!-- pi-init:managed:end fast-path-wrap-up -->/);
-    assert.match(agents, /## Fast Path 收尾优先级/);
-    assert.match(agents, /用户通过 `\/fast` 显式手动选择本次 Fast Path/);
-    assert.ok(agents.indexOf("## Fast Path 收尾优先级") < agents.indexOf("## 会话收尾"));
     const templateState = JSON.parse(await readFile(path.join(target, ".pi/pi-init-state.json"), "utf8"));
+
+    assert.match(agents, /^# Example App AI 协作指南/);
+    assert.match(agents, /A customer portal\./);
+    assert.match(agents, /npm test/);
+    assert.deepEqual(roleModels, DEFAULT_ROLE_CONFIG);
     assert.equal(templateState.schemaVersion, 1);
     assert.equal(templateState.templateSchemaVersion, 1);
     assert.equal(templateState.language, "zh-CN");
     assert.equal(templateState.managedBlocks["fast-path-wrap-up"].file, "AGENTS.md");
     assert.match(templateState.managedBlocks["fast-path-wrap-up"].hash, /^[0-9a-f]{64}$/);
-    assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
-    assert.match(cleanCode, /Copyright \(c\) 2026 Maciej Ciemborowicz/);
-    assert.match(cleanCode, /## Hard rules/);
-    assert.doesNotMatch(agents, /知识库地址远程地址/);
-    assert.deepEqual(roleModels, DEFAULT_ROLE_CONFIG);
-    assert.deepEqual(unwrapRoleResult(resolveRoleConfig(undefined)), DEFAULT_ROLE_CONFIG);
-    assert.deepEqual(THINKING_LEVELS, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-    assert.equal(roleModels.mode, "auto");
-    assert.equal(roleModels.workflowMode, DEFAULT_WORKFLOW_MODE);
-    assert.equal(roleModels.workflowExecutor, DEFAULT_WORKFLOW_EXECUTOR);
-    assert.deepEqual(roleModels.roleModels, {});
-
+    await assert.rejects(
+      readFile(path.join(target, ".pi/skills/example-app/SKILL.md"), "utf8"),
+      { code: "ENOENT" },
+    );
     for (const file of result.files) {
       assert.doesNotMatch(await readFile(path.join(target, file), "utf8"), /\{\{[A-Z_]+\}\}/);
     }
   });
 });
 
-test("自定义三职责配置会同步规范化 JSON 且不生成项目级 Skill", async () => {
+test("自定义职责模型配置按既有 schema 规范化并持久化", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "custom-app");
     const roleModels = {
       mode: "confirm",
       workflowMode: "on",
       workflowExecutor: "local",
-      architect: {
-        provider: "provider-architect",
-        model: "model-architect",
-        thinkingLevel: "high",
-      },
-      "developer-test": {
-        provider: "provider-developer",
-        model: "model-developer",
-        thinkingLevel: "low",
-      },
-      "docs-commit": {
-        provider: "provider-docs",
-        model: "model-docs",
-        thinkingLevel: "minimal",
-      },
+      architect: { provider: "provider-architect", model: "model-architect", thinkingLevel: "high" },
+      "developer-test": { provider: "provider-developer", model: "model-developer", thinkingLevel: "low" },
+      "docs-commit": { provider: "provider-docs", model: "model-docs", thinkingLevel: "minimal" },
     };
 
     await createScaffold(target, { projectName: "Custom App", roleModels });
 
     const config = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
-    const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
-    assert.match(agents, /pi-init-role-routing/);
-    await assert.rejects(
-      readFile(path.join(target, ".pi/skills/custom-app/SKILL.md"), "utf8"),
-      { code: "ENOENT" },
-    );
     assert.deepEqual(config, unwrapRoleResult(resolveRoleConfig(roleModels)));
-    assert.equal(config.workflowMode, "on");
-    assert.equal(config.workflowExecutor, "local");
   });
 });
 
-test("部分职责配置保持可选映射且不生成项目级 Skill", async () => {
+test("英文模板保留用户输入并支持部分职责映射", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "partial-app");
     const roleModels = {
       mode: "manual",
-      architect: {
-        provider: "provider-architect",
-        model: "model-architect",
-        thinkingLevel: "xhigh",
-      },
+      architect: { provider: "provider-architect", model: "model-architect", thinkingLevel: "xhigh" },
     };
 
-    await createScaffold(target, { language: "en", roleModels });
+    const result = await createScaffold(target, {
+      language: "en",
+      projectName: "Mall App",
+      description: "A customer portal.",
+      testCommand: "npm test",
+      roleModels,
+    });
 
-    const config = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
     const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
-    assert.match(agents, /pi-init-role-routing/);
-    assert.match(agents, /## Fast Path Wrap-up Priority/);
-    assert.match(agents, /user explicitly selects a one-time Fast Path via `\/fast`/);
-    assert.ok(agents.indexOf("## Fast Path Wrap-up Priority") < agents.indexOf("## Session Wrap-up"));
-    await assert.rejects(
-      readFile(path.join(target, ".pi/skills/partial-app/SKILL.md"), "utf8"),
-      { code: "ENOENT" },
-    );
+    const config = JSON.parse(await readFile(path.join(target, ".pi/role-models.json"), "utf8"));
+    const templateState = JSON.parse(await readFile(path.join(target, ".pi/pi-init-state.json"), "utf8"));
+    assert.equal(result.language, "en");
+    assert.equal(templateState.language, "en");
+    assert.match(agents, /## Project Purpose/);
+    assert.match(agents, /A customer portal\./);
+    assert.match(agents, /npm test/);
     assert.deepEqual(config, unwrapRoleResult(resolveRoleConfig(roleModels)));
-    assert.deepEqual(config.roleModels, { architect: roleModels.architect });
-    assert.equal(config.workflowMode, DEFAULT_WORKFLOW_MODE);
   });
 });
 
-test("无效职责配置会被拒绝", async () => {
+test("无效职责模型配置失败且不生成配置文件", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "invalid-app");
     const roleModels = {
-      architect: {
-        provider: "provider",
-        model: "model",
-        thinkingLevel: "invalid",
-      },
+      architect: { provider: "provider", model: "model", thinkingLevel: "invalid" },
     };
 
-    assert.equal(resolveRoleConfig(roleModels).code, "ROLE_MODEL_THINKING_LEVEL_INVALID");
-    await assert.rejects(createScaffold(target, { roleModels }), /thinkingLevel 无效/);
+    await assert.rejects(
+      createScaffold(target, { roleModels }),
+      { code: "ROLE_MODEL_THINKING_LEVEL_INVALID" },
+    );
     await assert.rejects(readFile(path.join(target, ".pi/role-models.json"), "utf8"), { code: "ENOENT" });
   });
 });
 
-test("dry-run 不创建文件并报告冲突", async () => {
+test("dry-run 报告冲突但不写入或覆盖文件", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "existing-app");
     await mkdir(target, { recursive: true });
@@ -242,7 +133,7 @@ test("dry-run 不创建文件并报告冲突", async () => {
   });
 });
 
-test("重新初始化不会删除已有项目级 Skill", async () => {
+test("重新初始化保留已有项目级 Skill", async () => {
   await withTempDirectory(async (directory) => {
     const target = path.join(directory, "legacy-app");
     const legacySkill = path.join(target, ".pi", "skills", "legacy-role", "SKILL.md");
@@ -255,206 +146,15 @@ test("重新初始化不会删除已有项目级 Skill", async () => {
   });
 });
 
-test("职责显示标签保留内部 ID 并提供友好中文名称", () => {
-  assert.equal(ROLE_LABELS.architect, "架构设计");
-  assert.equal(ROLE_MODE_LABELS.auto, "自动（推荐）");
-});
-
-test("职责模型搜索会按 provider、model 或名称过滤并保留空搜索结果", () => {
-  const models = [
-    { provider: "openai-codex", id: "gpt-5.6-luna", name: "Luna" },
-    { provider: "anthropic", id: "claude-sonnet", name: "Sonnet" },
-  ];
-
-  assert.deepEqual(filterRoleModels(models, "LUNA"), [models[0]]);
-  assert.deepEqual(filterRoleModels(models, "anthropic/"), [models[1]]);
-  assert.deepEqual(filterRoleModels(models, "  "), models);
-  assert.deepEqual(filterRoleModels(models, "missing"), []);
-});
-
-test("恢复会话角色要求模型和推理强度唯一匹配", () => {
-  const config = {
-    architect: { provider: "p", model: "m-architect", thinkingLevel: "max" },
-    "developer-test": { provider: "p", model: "m-developer", thinkingLevel: "max" },
-    "docs-commit": { provider: "p", model: "m-docs", thinkingLevel: "medium" },
-  };
-
-  assert.equal(findMatchingRole(config, { provider: "p", id: "m-developer" }, "max"), "developer-test");
-  assert.equal(findMatchingRole(config, { provider: "p", id: "m-developer" }, "medium"), undefined);
-  assert.equal(
-    findMatchingRole(
-      { schemaVersion: 2, roleModels: { reviewer: { provider: "p", model: "m-reviewer", thinkingLevel: "high" } } },
-      { provider: "p", id: "m-reviewer" },
-      "high",
-    ),
-    "reviewer",
-  );
-  assert.equal(findMatchingRole(config, undefined, "max"), undefined);
-  assert.equal(
-    findMatchingRole(
-      {
-        ...config,
-        architect: { provider: "p", model: "m-developer", thinkingLevel: "max" },
-      },
-      { provider: "p", id: "m-developer" },
-      "max",
-    ),
-    undefined,
-  );
-});
-
-
-test("auto 小计划绕过提示按任务角色顺序执行", async () => {
-  await withTempDirectory(async (directory) => {
-    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
-    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
-    const configPath = path.join(directory, ".pi", "role-models.json");
-    await mkdir(path.dirname(configPath), { recursive: true });
-    await writeFile(configPath, `${JSON.stringify({
-      schemaVersion: 2,
-      workflowMode: "auto",
-      workflowExecutor: "local",
-      roleModels: {
-        architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
-        "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
-      },
-    }, null, 2)}\n`);
-    const harness = createExtensionHarness([], {
-      cwd: directory,
-      trusted: true,
-      model: architect,
-      availableModels: [architect, developer],
-    });
-    await emitExtensionEvent(harness, "session_start");
-    const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
-    const result = await workflow.execute("plan", {
-      action: "plan",
-      summary: "验证 auto fast path",
-      tasks: [
-        { id: "implementation", task: "实现功能", files: ["src/feature.js"], acceptanceCriteria: ["测试通过"] },
-        { id: "verification", task: "验证功能", files: ["test/feature.test.js"], acceptanceCriteria: ["验证通过"] },
-      ],
-    }, undefined, undefined, harness.context);
-
-    assert.equal(result.details.orchestrated, false);
-    assert.equal(harness.sentMessages.length, 0);
-  });
-});
-
-test("重规划提示明确 architect 不取证并交由 docs-commit 提供证据", async () => {
-  await withTempDirectory(async (directory) => {
-    const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
-    const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
-    const state = requestWorkflowReplan(
-      createWorkflowState({
-        summary: "重规划读取策略",
-        tasks: [{ id: "current", role: "developer-test", task: "完成当前任务", files: ["src/current.js"], acceptanceCriteria: ["通过"] }],
-      },
-      100),
-      { revisionId: "revision-read", direction: "新增后续方向" },
-      110,
-    );
-    const harness = createExtensionHarness([
-      { type: "custom", customType: "pi-init-workflow", data: state },
-    ], {
-      cwd: directory,
-      trusted: true,
-      model: architect,
-      availableModels: [architect, developer],
-    });
-
-    await emitExtensionEvent(harness, "session_start");
-
-    const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
-    assert.equal(message?.message.customType, "pi-init-workflow-replan");
-  });
-});
-
-test("英文模板引用公共角色 Skill 且不生成项目级 Skill", async () => {
-  await withTempDirectory(async (directory) => {
-    const target = path.join(directory, "商城");
-    const result = await createScaffold(target, {
-      language: "en",
-      projectName: "商城",
-      description: "A customer portal.",
-      testCommand: "npm test",
-    });
-
-    const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
-    const cleanCode = await readFile(path.join(target, "docs/clean-code.md"), "utf8");
-    assert.equal(result.files.some((file) => file.includes("SKILL.md")), false);
-    await assert.rejects(
-      readFile(path.join(target, ".pi", "skills", "mall-app", "SKILL.md"), "utf8"),
-      { code: "ENOENT" },
-    );
-    assert.match(agents, /## Project Purpose/);
-    assert.match(agents, /## Runtime Environment and Command Conventions/);
-    assert.match(agents, new RegExp("`" + process.platform + "`"));
-    assert.match(agents, /- Test: `npm test`/);
-    assert.match(agents, /## Validation Requirements/);
-    assert.match(agents, /reuse a passing validation result/);
-    assert.match(agents, /docs\/clean-code\.md/);
-    assert.match(agents, /pi-init-role-routing/);
-    assert.match(agents, /single source for the general task workflow, evidence gating, `read`\/`edit` invocation/);
-    assert.match(agents, /load that Skill and the relevant role profile on demand/);
-    assert.doesNotMatch(agents, /## Task Execution Workflow/);
-    assert.doesNotMatch(agents, /## Evidence and Tool Invocation Rules/);
-    assert.doesNotMatch(agents, /0 rounds when fresh/);
-    assert.doesNotMatch(agents, /## Task Execution Workflow/);
-    assert.match(agents, /workflowExecutor/);
-    assert.match(agents, /task_workflow/);
-    assert.match(agents, /## Fast Path Wrap-up Priority/);
-    assert.ok(agents.indexOf("## Fast Path Wrap-up Priority") < agents.indexOf("## Session Wrap-up"));
-    assert.match(cleanCode, /OBEY Clean Code by Robert C\. Martin/);
-    assert.match(agents, /github\.com\/CGOSU\/knowledge\.git/);
-    assert.match(agents, /git config user\.name CGOSU/);
-  });
-});
-
-test("公共角色路由 Skill 随 package 发布并按角色拆分说明", async () => {
+test("公共角色路由 Skill 由 package 元数据发布", async () => {
   const packageRoot = process.cwd();
   const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-  const sharedSkill = (await readFile(
+  const sharedSkill = await readFile(
     path.join(packageRoot, "skills", "pi-init-role-routing", "SKILL.md"),
     "utf8",
-  )).replace(/\r\n/g, "\n");
-  const roleProfiles = await Promise.all([
-    "architect",
-    "developer-test",
-    "docs-commit",
-  ].map((role) => readFile(
-    path.join(packageRoot, "skills", "pi-init-role-routing", "roles", `${role}.md`),
-    "utf8",
-  )));
+  );
 
   assert.ok(manifest.files.includes("skills"));
   assert.deepEqual(manifest.pi.skills, ["./skills"]);
   assert.match(sharedSkill, /^---\nname: pi-init-role-routing\n/);
-  assert.match(sharedSkill, /roleModels/);
-  assert.match(sharedSkill, /普通压缩、reload、resume、fork 或已有上下文恢复后，先核对运行时恢复门/);
-  assert.match(sharedSkill, /自动角色交接已确认，不要重复切换/);
-  assert.match(sharedSkill, /task_workflow/);
-  assert.match(sharedSkill, /## 路由/);
-  assert.match(sharedSkill, /明确对应实现\/测试的指令直接交给 `developer-test`/);
-  assert.match(sharedSkill, /不明确、含糊、需要需求判断或跨职责的指令从 `architect` 开始/);
-  assert.match(sharedSkill, /凡任务需要仓库、代码、测试、文档或外部事实取证，均由 `docs-commit` 完成/);
-  assert.match(sharedSkill, /## 共享硬约束/);
-  assert.match(sharedSkill, /`read` 只接收 `path`、`offset`、`limit`/);
-  assert.match(sharedSkill, /每个 `oldText` 调用前必须精确匹配一次/);
-  assert.match(sharedSkill, /运行时守卫对无效或歧义写入 fail-closed/);
-  assert.match(sharedSkill, /充分证据不重复读取/);
-  assert.match(roleProfiles[0], /所有需要的仓库、代码、测试、文档和外部事实取证，均由 `docs-commit` 完成/);
-  assert.match(roleProfiles[1], /按风险选择验证范围/);
-  assert.match(roleProfiles[1], /不默认运行全量测试、类型检查或构建/);
-  assert.match(roleProfiles[2], /交接结构化证据包/);
-  assert.doesNotMatch([...roleProfiles, sharedSkill].join("\n"), /## 精确文件修改|逐项预检.*oldText.*逻辑快照/);
-  assert.match(sharedSkill, /roles\/architect\.md/);
-  assert.match(sharedSkill, /roles\/developer-test\.md/);
-  assert.match(sharedSkill, /roles\/docs-commit\.md/);
-  assert.doesNotMatch([...roleProfiles, sharedSkill].join("\n"), /openai-codex|gpt-5\.6/);
-  assert.match(roleProfiles[0], /architect/);
-  assert.match(roleProfiles[0], /架构师除 `switch_role` 与 `task_workflow.*外不得调用任何工具/);
-  assert.match(sharedSkill, /`architect` 不进行低风险或其他只读探索/);
-  assert.match(roleProfiles[1], /developer-test/);
-  assert.match(roleProfiles[2], /docs-commit/);
 });
