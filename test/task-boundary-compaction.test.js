@@ -183,4 +183,32 @@ test("完成任务后的重规划也先压缩，再切换到 architect", async (
   });
 });
 
-
+async function receiverBudgetBoundary() {
+  await withTempDirectory(async (directory) => {
+    const harness = await boundaryHarness(directory);
+    const find = harness.context.modelRegistry.find;
+    harness.context.modelRegistry.find = (provider, id) => {
+      const model = find(provider, id);
+      return model && { ...model, contextWindow: id === "docs" ? 32000 : 200000, maxTokens: 8000 };
+    };
+    harness.context.getContextUsage = () => ({ percent: 20, tokens: 40000, contextWindow: 200000 });
+    let complete;
+    harness.context.compact = ({ onComplete }) => { complete = onComplete; };
+    await finishFirst(harness);
+    assert.equal(typeof complete, "function");
+    assert.equal(harness.context.model.id, "developer");
+    assert.equal(messageCount(harness), 1);
+    complete();
+    await waitForDispatch(harness);
+    const message = harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").at(-1).message;
+    assert.match(message.content, /系统生成的轻量交接快照/);
+    assert.match(message.content, /"taskId":"second"/);
+    assert.match(message.content, /补充说明可省略/);
+    assert.equal(latest(harness).tasks[0].status, "completed");
+    complete();
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(messageCount(harness), 2);
+    await emitExtensionEvent(harness, "session_shutdown");
+  });
+}
+test("小窗口接收模型在低于 50% 时先压缩，随后从当前状态重建快照且仅派发一次", receiverBudgetBoundary);

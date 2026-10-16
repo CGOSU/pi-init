@@ -17,7 +17,6 @@ import {
   workflowHandoffMessageOnBranch,
   validateWorkflowExecutionRoles,
 } from "../src/workflow.ts";
-import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
 import { validateWorkflowTaskStartMessage } from "./workflow-start-evidence.ts";
 import type { HydratedWorkflowState } from "../src/workflow-types.ts";
 import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery.ts";
@@ -111,17 +110,19 @@ export function createWorkflowDispatch(
   let pendingBoundaryResume: { ctx: ExtensionContext; identity: WorkflowActionIdentity } | undefined;
 
 
-  function startTaskBoundaryCompaction(ctx: ExtensionContext, current: WorkflowState) {
+  async function startTaskBoundaryCompaction(ctx: ExtensionContext, current: WorkflowState) {
     if (!["running", "replanning"].includes(current.status)) return false;
     const continuation = current.continuation;
     if (!continuation || continuation.kind === "review") return false;
     if (continuation.phase === "compacting") return true;
     if (continuation.phase !== "pending" || !["task-completed", "replan-applied", "replan-requested"].includes(continuation.reason ?? "")) return false;
-    if (!shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) return false;
-    if (!ctx.isIdle()) return true;
     const fromRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     const toRole = current.status === "replanning" ? "architect" : getNextWorkflowTask(current)?.role;
     if (!fromRole || !toRole) return false;
+    const compact = await deps.roleRuntime.shouldCompactForRole(ctx, toRole);
+    if (state.runtimeDisposed || state.workflowState !== current) return true;
+    if (!compact) return false;
+    if (!ctx.isIdle()) return true;
     const identity = workflowIdentity(current);
     const next = cloneState(current);
     next.continuation = { ...continuation, phase: "compacting" };
@@ -194,7 +195,7 @@ export function createWorkflowDispatch(
     current = ensured;
     const identity = replanIdentity(current);
     if (!identity) return;
-    if (startTaskBoundaryCompaction(ctx, current)) return;
+    if (await startTaskBoundaryCompaction(ctx, current)) return;
     state.workflowDispatchInFlight = true;
     try {
       const selection = await deps.roleRuntime.automaticRole("architect", ctx);
@@ -441,7 +442,7 @@ export function createWorkflowDispatch(
       ctx.ui.notify(`证据绑定同步尚未持久化，已保存任务结果不会重放，暂不派发：${textOf(error)}`, "warning");
       return;
     }
-    if (startTaskBoundaryCompaction(ctx, current)) return;
+    if (await startTaskBoundaryCompaction(ctx, current)) return;
     const effect = selectWorkflowScheduleEffect(current);
     if (!effect) return;
     if (effect.kind === "replan") {

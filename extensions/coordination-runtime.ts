@@ -37,7 +37,7 @@ import {
   requireCoordinationResult,
   sameCoordinationIdentity as sameIdentity,
 } from "./coordination-runtime-protocol.ts";
-import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
+import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
 
 export type CoordinationRuntimeDependencies = {
   pi: ExtensionAPI;
@@ -177,7 +177,7 @@ export function createCoordinationRuntime(
       const message = compileCoordinationMessage(current);
       await deps.pi.sendMessage({
         customType: message.customType,
-        content: message.content,
+        content: [handoffSnapshotPrompt(state, identity.role), message.content].join("\n\n"),
         display: false,
         details: message.identity,
       }, { triggerTurn: true });
@@ -254,7 +254,10 @@ export function createCoordinationRuntime(
       if (!identity) return;
       persist(withPhase(current, "dispatching"), ctx);
       const fromRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
-      if (fromRole && shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: ctx.getContextUsage() })) {
+      const compact = fromRole && await deps.roleRuntime.shouldCompactForRole(ctx, identity.role);
+      const latest = state.coordinationRuntimeState;
+      if (state.runtimeDisposed || !latest || !sameIdentity(handoffIdentity(latest), identity)) return;
+      if (compact && fromRole) {
         state.pendingRoleCompaction = deps.roleRuntime.createPendingRoleCompaction(ctx, fromRole, identity.role);
         state.pendingRoleCompaction.continuation = { kind: "coordination-boundary", identity };
         deps.roleRuntime.startPendingRoleCompaction(ctx);

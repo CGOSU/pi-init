@@ -1,12 +1,3 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import {
-  CONFIG_DIR_NAME,
-  withFileMutationQueue,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
 import {
   THINKING_LEVELS,
   getRoleNames,
@@ -16,8 +7,18 @@ import {
   resolveRoleModel,
   roleLabel,
   roleModeLabel,
+  shouldCompactAfterWorkflowTask,
   unwrapRoleResult,
 } from "../src/roles.ts";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import {
+  CONFIG_DIR_NAME,
+  withFileMutationQueue,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import type { CoordinationHandoffIdentity } from "../src/coordination-runtime-types.ts";
 import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
@@ -112,6 +113,16 @@ export function createRoleRuntime(
 
   function activeRoleFor(ctx: ExtensionContext) {
     return activeRoleMatches(state, ctx, pi.getThinkingLevel()) ? state.activeRole : undefined;
+  }
+
+  async function shouldCompactForRole(ctx: ExtensionContext, role: string) {
+    const usage = ctx.getContextUsage();
+    if (shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: usage })) return true;
+    if (state.roleModeStatus !== "auto" || usage?.tokens == null) return false;
+    const config = await readSessionRoleConfig(ctx);
+    const target = unwrapRoleResult(resolveRoleModel(config, role, sessionDefaultModel(ctx)));
+    const model = ctx.modelRegistry.find(target.provider, target.model);
+    return shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: usage, targetModel: model });
   }
 
   function hasPendingRoleConfigChanges() { return Object.keys(state.sessionRoleConfigOverrides).length > 0; }
@@ -441,6 +452,7 @@ export function createRoleRuntime(
   }
   return {
     activeRoleFor,
+    shouldCompactForRole,
     readSessionRoleConfig,
     hasPendingRoleConfigChanges,
     isRoleModelConfigPersisted,

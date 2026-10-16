@@ -19,8 +19,9 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 - 工作流状态工具、活动栏、进度面板和控制中心共用同一阶段/进度投影。当前项位置只从真实 `tasks` 列表中的 `currentTaskId` 计算一基索引；底部活动栏显示阶段、当前项位置和真实耗时，不重复显示“已完成 x/y”，内部完成统计仍供状态查询、控制中心和完成报告使用。Local 工作流只有在当前 Agent run 的 `message_start` 实际消费与当前 handoff 完整身份匹配的任务消息后才记录启动；“任务执行中”不凭 Agent 忙碌或 Provider 响应推断。
 - 可观测性只基于公开 Provider 和工具生命周期事件：不推测 MCP/codemode 内部 I/O；未知工具以通用类别显示，不展示工具参数、命令、路径、URL 或结果。`cacheRead`/`cacheWrite` 是 Provider token usage，不代表磁盘或网络 I/O；完整有效 usage 中的正数按对应字段显示，部分/无效字段不补零或伪装为成功。Pi 1.1.0 可能已将 Provider 未报告的计数归一化为零，因此全零显示为“来源未确认”，不代表 Provider 明确报告零，也不推断缓存命中或未命中。缺失、无效 usage、请求失败、中止和缺少结束事件分别保留状态语义。新 Provider 请求期间，若保留先前完整结果会明确标为“上次”；只有同一请求匹配的最终 assistant `message_end` usage 才显示为“本次”，旧成功不会覆盖本次缺失、无效、未确认零值或错误。
 - 角色交接诊断日志默认关闭。启动 Pi 前设置环境变量 `PI_INIT_HANDOFF_LOG=1` 可开启；日志写入项目 `.pi/logs/handoff.jsonl`。详细启用命令、日志内容和隐私说明见 [`docs/handoff-diagnostics.md`](docs/handoff-diagnostics.md)。
-- Pi API peer dependencies：`@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 均要求 `^1.1.0`，锁文件与本地解析版本为 `1.1.0`；peer 范围声明不修改已安装的全局 Pi 版本。
-- 自动模式将压缩放在任务交接边界：先保存完成结果与交接身份，上下文使用率达到 50% 时先压缩，再切换角色和派发；同角色后续任务也按阈值判断。普通 `switch_role` 不触发压缩；失败或恢复时未确认收敛则暂停，核对后显式 resume。
+- Pi API peer dependencies：`@earendil-works/pi-ai`、`@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 均要求 `^1.3.0`；本地以 `1.3.0` 验证，peer 范围声明不修改已安装的全局 Pi 版本。
+- 自动模式将压缩放在任务交接边界：先保存完成结果与交接身份；达到 50% 兜底阈值，或按接收模型窗口估算的输入、输出预留与 4096 token 交接增量放不下时，先压缩，再切换角色和派发。同角色后续任务也判断预算；预算数据缺失沿用原阈值，不新增确认门槛。普通 `switch_role` 不触发压缩；失败或恢复时未确认收敛则暂停，核对后显式 resume。
+- 角色、任务、重规划和取证交接均从当前状态生成轻量快照：携带身份、状态、下一步和按需读取的契约/验证/审阅引用，不要求模型填写交接表，不复制证据全文。补充说明缺失不阻塞；引用失效或证据不足先读取当前状态并补查/验证，不猜测旧身份。压缩后重新生成快照，保留现有身份、持久化和未知派发保护。
 - 记录项目宿主环境和平台相关命令约定。
 
 ## 安装与启动

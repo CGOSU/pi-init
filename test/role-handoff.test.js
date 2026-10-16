@@ -96,3 +96,28 @@ test("职责交接内部续跑沿用一次外部请求计时，不提前生成�
   assert.equal(harness.entries.filter((entry) => entry.type === "pi-init-run-timing").length, 1);
   await emitExtensionEvent(harness, "session_shutdown");
 });
+
+async function customHandoffLifecycle() {
+  const harness = createExtensionHarness();
+  await switchRole(harness, "architect");
+  await startRun(harness);
+  await switchRole(harness, "docs-commit");
+  await emitExtensionEvent(harness, "agent_end");
+  await emitExtensionEvent(harness, "agent_settled");
+  const message = handoffs(harness)[0].message;
+  assert.match(message.content, /补充说明可省略/);
+  assert.match(message.content, /引用失效或证据不足/);
+  const event = { messageType: "custom", message, systemPromptOptions: { sections: {} } };
+  await emitExtensionEvent(harness, "before_agent_start", event);
+  await emitExtensionEvent(harness, "agent_start");
+  const prompt = event.systemPromptOptions.sections.pi_init_runtime;
+  assert.match(prompt, /当前职责：文档收尾/);
+  await emitExtensionEvent(harness, "tool_result", { toolName: "read", input: { path: "missing.ts" }, content: [{ type: "text", text: "not found" }], isError: true });
+  assert.equal(event.systemPromptOptions.sections.pi_init_runtime, prompt);
+  await emitExtensionEvent(harness, "agent_end");
+  await emitExtensionEvent(harness, "agent_settled");
+  assert.equal(handoffs(harness).length, 1);
+  assert.equal(harness.notifications.some((item) => /补充说明.*失败/.test(item.message)), false);
+  await emitExtensionEvent(harness, "session_shutdown");
+}
+test("1.3 自定义交接启动钩子注入新职责，工具失败不丢提示或重复交接", customHandoffLifecycle);

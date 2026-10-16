@@ -147,15 +147,19 @@ export function shouldCompactOnRoleSwitch({
 export function shouldCompactAfterWorkflowTask({
   mode,
   contextUsage,
+  targetModel,
 }: {
   mode: RoleMode;
-  contextUsage?: { percent?: number | null } | null;
+  contextUsage?: { percent?: number | null; tokens?: number | null } | null;
+  targetModel?: { contextWindow: number; maxTokens: number };
 }): boolean {
-  return (
-    mode === "auto" &&
-    contextUsage?.percent != null &&
-    contextUsage.percent >= ROLE_SWITCH_COMPACTION_THRESHOLD
-  );
+  if (mode !== "auto") return false;
+  if (contextUsage?.percent != null && contextUsage.percent >= ROLE_SWITCH_COMPACTION_THRESHOLD) return true;
+  if (contextUsage?.tokens == null || !targetModel || !(targetModel.contextWindow > 0)) return false;
+  // Usage includes the existing prompt; leave room for output and the next handoff/tools delta.
+  const outputReserve = Math.min(targetModel.maxTokens, Math.floor(targetModel.contextWindow / 4));
+  const handoffReserve = 4096;
+  return contextUsage.tokens + outputReserve + handoffReserve >= targetModel.contextWindow;
 }
 
 export function findMatchingRole(

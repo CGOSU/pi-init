@@ -15,6 +15,7 @@ import type {
 import { getAcceptedEvidence } from "../src/coordination.ts";
 import { textOf } from "./runtime-state.ts";
 import { transitionWorkflowDispatch } from "../src/workflow-orchestrator.ts";
+import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
 
 const GENERIC_TASK_TOOL_GUIDANCE = "遵循公共 pi-init-role-routing Skill 的读写与安全边界；只修改当前任务允许范围。关键事实、业务契约或业务决策缺失时，developer-test 必须调用 task_workflow(action=\"clarify\") 并停止，不得猜测；普通可逆工程细节按工程自由度自主决定，实际验证并报告真实结果。";
 const ARCHITECT_RUNTIME_GUIDANCE =
@@ -147,7 +148,7 @@ export function createWorkflowMessages(
     const firstDispatch = transition.state !== current;
     let dispatchAttempted = false;
     try {
-      const content = workflowTaskPrompt(taskId, note);
+      const content = [handoffSnapshotPrompt(state, getWorkflowTask(current, taskId)!.role), workflowTaskPrompt(taskId, note)].join("\n\n");
       if (firstDispatch) {
         deps.persistWorkflowState(transition.state, ctx);
       }
@@ -305,7 +306,7 @@ export function createWorkflowMessages(
     const transition = transitionWorkflowDispatch(current, { type: "replan-dispatch-requested", identity }, Date.now());
     if (!transition.effects.length) return false;
     try {
-      const content = workflowReplanPrompt(identity);
+      const content = [handoffSnapshotPrompt(state, "architect"), workflowReplanPrompt(identity)].join("\n\n");
       deps.persistWorkflowState(transition.state, ctx);
       deps.setInternalContinuationPending(true);
       deps.pi.sendMessage(

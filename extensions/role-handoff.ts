@@ -4,6 +4,7 @@ import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity
 import { coordinationHandoffIdentity } from "./coordination-runtime-protocol.ts";
 import { roleLabel } from "../src/roles.ts";
 import { textOf, type ActiveRole, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
 
 export const ROLE_HANDOFF_MESSAGE_TYPE = "pi-init-role-handoff";
 const ROLE_HANDOFF_ENTRY_TYPE = "pi-init-role-handoff-state";
@@ -100,6 +101,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
         display: false,
         details: identity(handoff),
         content: [
+          handoffSnapshotPrompt(state, handoff.targetRole.role),
           `职责交接已完成。当前职责：${roleLabel(handoff.targetRole.role)}（${handoff.targetRole.role}）。`,
           "上一角色回合已结束；本回合由新职责重新构建系统提示，不沿用上一回合的职责声明。",
           "按当前用户目标、已有工具结果和交接记录，只继续尚未完成的工作；不要重复已完成的调查或仅为确认而再次切角。",
