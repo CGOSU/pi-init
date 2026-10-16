@@ -1,39 +1,26 @@
 import type { FileSnapshot } from "./file-review.ts";
 import type { ReviewCandidateQueueResult } from "./review-candidates.ts";
-import type {
-  PendingTestValueReview,
-  TestValueReviewDecision,
-} from "./test-value-review.ts";
 
-export type IncrementalReviewCandidate =
-  | { kind: "structure"; file: FileSnapshot; version: string }
-  | { kind: "test-value"; review: PendingTestValueReview; version: string };
+export type IncrementalReviewCandidate = {
+  kind: "structure";
+  file: FileSnapshot;
+  version: string;
+};
 
 type IncrementalReviewState = {
   baseline: Map<string, string>;
   baselineComplete: boolean;
   changes: Map<string, string | null>;
-  structurePolicyVersion: number;
-  valuePolicyVersion: number;
-  structuralCandidates: Map<string, Omit<Extract<IncrementalReviewCandidate, { kind: "structure" }>, "kind">>;
-  valueCandidates: Map<string, Omit<Extract<IncrementalReviewCandidate, { kind: "test-value" }>, "kind">>;
+  structuralCandidates: Map<string, Omit<IncrementalReviewCandidate, "kind">>;
   notifiedVersions: Set<string>;
 };
 
-export function createIncrementalReviewState(
-  files: readonly FileSnapshot[],
-  complete: boolean,
-  structurePolicyVersion: number,
-  valuePolicyVersion: number,
-): IncrementalReviewState {
+export function createIncrementalReviewState(files: readonly FileSnapshot[], complete: boolean): IncrementalReviewState {
   return {
     baseline: new Map(files.map((file) => [file.path, file.fingerprint])),
     baselineComplete: complete,
     changes: new Map(),
-    structurePolicyVersion,
-    valuePolicyVersion,
     structuralCandidates: new Map(),
-    valueCandidates: new Map(),
     notifiedVersions: new Set(),
   };
 }
@@ -75,82 +62,33 @@ function structureVersion(file: FileSnapshot, policyVersion: number) {
   return JSON.stringify(["structure", file.path, file.fingerprint, policyVersion]);
 }
 
-function valueVersion(
-  review: PendingTestValueReview,
-  decisions: readonly TestValueReviewDecision[],
-  files: ReadonlyMap<string, FileSnapshot>,
-  policyVersion: number,
-) {
-  const decision = decisions.find((item) => item.testPath === review.file.path);
-  const implementations = (decision?.implementationFiles ?? [])
-    .map((implementation) => [implementation.path, files.get(implementation.path)?.fingerprint ?? null] as const)
-    .sort(([left], [right]) => left.localeCompare(right));
-  return JSON.stringify([
-    "test-value",
-    review.file.path,
-    review.file.fingerprint,
-    implementations,
-    policyVersion,
-  ]);
-}
-
 export function refreshIncrementalReviewCandidates(
   state: IncrementalReviewState,
   queue: ReviewCandidateQueueResult,
-  files: ReadonlyMap<string, FileSnapshot>,
-  decisions: readonly TestValueReviewDecision[],
-  structurePolicyVersion: number,
-  valuePolicyVersion: number,
+  policyVersion: number,
 ) {
-  if (queue.structuralConfirmed) {
-    state.structuralCandidates.clear();
-    for (const file of queue.structuralCandidates) {
-      if (currentChange(state, file.path, file.fingerprint)) {
-        state.structuralCandidates.set(file.path, {
-          file,
-          version: structureVersion(file, structurePolicyVersion),
-        });
-      }
-    }
-  }
-
-  if (queue.testValueConfirmed) {
-    state.valueCandidates.clear();
-    for (const review of queue.testValueCandidates) {
-      const testChanged = currentChange(state, review.file.path, review.file.fingerprint);
-      const decision = decisions.find((item) => item.testPath === review.file.path);
-      const associatedImplementationChanged = (decision?.implementationFiles ?? []).some((implementation) => {
-        const currentFingerprint = files.get(implementation.path)?.fingerprint ?? null;
-        return state.changes.has(implementation.path)
-          && currentChange(state, implementation.path, currentFingerprint)
-          && currentFingerprint !== implementation.fingerprint;
+  if (!queue.structuralConfirmed) return;
+  state.structuralCandidates.clear();
+  for (const file of queue.structuralCandidates) {
+    if (currentChange(state, file.path, file.fingerprint)) {
+      state.structuralCandidates.set(file.path, {
+        file,
+        version: structureVersion(file, policyVersion),
       });
-      const policyChanged = state.valuePolicyVersion !== valuePolicyVersion
-        && review.invalidations.some((invalidation) => invalidation.code === "POLICY_CHANGED");
-      if (testChanged || associatedImplementationChanged || policyChanged) {
-        state.valueCandidates.set(review.file.path, {
-          review,
-          version: valueVersion(review, decisions, files, valuePolicyVersion),
-        });
-      }
     }
   }
 }
 
 export function incrementalReviewCandidates(state: IncrementalReviewState): IncrementalReviewCandidate[] {
-  return [
-    ...[...state.structuralCandidates.values()].map((candidate) => ({ kind: "structure" as const, ...candidate })),
-    ...[...state.valueCandidates.values()].map((candidate) => ({ kind: "test-value" as const, ...candidate })),
-  ];
+  return [...state.structuralCandidates.values()].map((candidate) => ({ kind: "structure", ...candidate }));
 }
 
 export function unnotifiedIncrementalReviewCandidates(
   state: IncrementalReviewState,
-  confirmed: { structural: boolean; testValue: boolean },
+  structuralConfirmed: boolean,
 ) {
   return incrementalReviewCandidates(state).filter((candidate) =>
-    (candidate.kind === "structure" ? confirmed.structural : confirmed.testValue)
-    && !state.notifiedVersions.has(candidate.version),
+    structuralConfirmed && !state.notifiedVersions.has(candidate.version),
   );
 }
 

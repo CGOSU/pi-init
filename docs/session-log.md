@@ -2,6 +2,15 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-16：退役测试价值审阅功能并保留结构审阅
+
+- 完成：移除测试价值候选的领域/运行时、专属测试、共享双维候选与增量通知接线、`file_review` 价值字段/结论和 `/large` 价值派发路径。`file_review` 仅保留超过 500 个物理行的结构审阅、`keep`/`recommend-split`、完整读取门、指纹失效和结构记录恢复；旧非结构 `reviewKind` 明确失败，不传参数和 `structure` 继续支持。历史 `pi-init-test-value-review` session entries 保持原样并忽略，不读取、迁移、写入或删除。
+- 保留：通用 Test Value Gate、按行为变化补测的原则及有价值的业务回归；此前已提交的测试整理不回滚，也不据此开展全仓删测。
+- 文档：README 与公共职责路由 Skill 仅说明结构审阅和现有通用测试规范；当前状态移除价值审阅待办数量并记录退役状态；本文件与决策文档保留旧结论作为历史，避免把历史数量当作当前队列。
+- 验证（实现任务实际结果）：`node --test test/review-candidates.test.js test/review-incremental.test.js test/file-review-runtime.test.js test/large-command.test.js` — 32 项通过；`npm run typecheck` — 通过；`npm test` — 445 项通过；`git diff --check` — 通过。
+- 文档收尾实际检查：`npm run typecheck` — 通过；本轮重新执行的针对性命令 `node --test test/review-candidates.test.js test/review-incremental.test.js test/file-review-runtime.test.js test/large-command.test.js` 为 31 项通过、1 项失败，失败用例“旧价值 session 条目原样忽略；旧调用明确失败且结构审阅仍可完成”收到 `ROLE_RECOVERY_PENDING`，与测试分支角色恢复门有关；未修改代码或重试。该失败不覆盖记录的实现任务先前 32 项通过结果，但本轮复跑没有全绿。
+- 未验证：未进行真实 Pi reload、TUI/E2E 或 Provider 验证；运行中的旧工具 schema 与提示需 reload 或重启后更新。不执行 push、发布或版本升级。
+
 ### 2026-10-16：测试文件归组与重复回归精简
 
 - 范围：只整理测试，不修改产品实现；以本轮实际基线 65 个测试文件、468 项通过为准，不按先前估算强行删除。

@@ -7,13 +7,7 @@ function candidate(path = "src/large.ts", fingerprint = "a".repeat(64)) {
 }
 
 function structuralCandidate(file = candidate()) {
-  return {
-    file,
-    structuralReviewPending: true,
-    testValueReviewApplicable: false,
-    testValueReviewPending: false,
-    testValueInvalidations: [],
-  };
+  return { file, structuralReviewPending: true };
 }
 
 function snapshot(overrides = {}) {
@@ -24,7 +18,6 @@ function snapshot(overrides = {}) {
     files: [file],
     candidates: [structuralCandidate(file)],
     structuralConfirmed: true,
-    testValueConfirmed: true,
     errors: [],
     ...overrides,
   };
@@ -102,59 +95,28 @@ test("完整扫描有待审版本时启动一次命令专属审阅并保留请�
   assert.equal(harness.sentUserMessages.length, 2);
 });
 
-test("/large 在只有短测试价值候选时通过原有安全门发起建议审阅", async () => {
-  const valueFile = { path: "test/unit.test.js", lineCount: 4, fingerprint: "c".repeat(64) };
-  const valueCandidate = {
-    file: valueFile,
-    structuralReviewPending: false,
-    testValueReviewApplicable: true,
-    testValueReviewPending: true,
-    testValueInvalidations: [],
-  };
+test("扫描报告和主动请求只呈现结构候选", async () => {
+  const largeFile = { path: "src/large.ts", lineCount: 501, fingerprint: "d".repeat(64) };
   const harness = createHarness({
-    snapshot: snapshot({ files: [], candidates: [valueCandidate] }),
+    snapshot: snapshot({ files: [largeFile], candidates: [structuralCandidate(largeFile)] }),
     activeRole: { role: "developer-test" },
   });
 
   await harness.commands.get("large").handler("", harness.context);
 
-  assert.equal(harness.sentUserMessages.length, 1);
-  assert.match(harness.sentUserMessages[0], /结构候选：\n- 无/);
-  assert.match(harness.sentUserMessages[0], /测试价值候选：\n- test\/unit\.test\.js/);
-  assert.match(harness.sentUserMessages[0], /implementationPaths/);
-  assert.match(harness.sentUserMessages[0], /完整读取测试及关联实现/);
-  assert.match(harness.notifications.at(-1).message, /测试价值待审 1 个版本/);
+  assert.match(harness.notifications.at(-1).message, /\[结构\] src\/large\.ts/);
+  assert.match(harness.sentUserMessages[0], /结构候选：[\s\S]*src\/large\.ts/);
+  assert.doesNotMatch(harness.notifications.at(-1).message, /测试价值|test-value|implementationPaths/);
+  assert.doesNotMatch(harness.sentUserMessages[0], /测试价值|test-value|implementationPaths/);
 });
 
-test("混合候选在扫描报告和主动请求中分别呈现两个维度", async () => {
-  const mixedFile = { path: "tests/large.spec.js", lineCount: 501, fingerprint: "d".repeat(64) };
-  const mixedCandidate = {
-    file: mixedFile,
-    structuralReviewPending: true,
-    testValueReviewApplicable: true,
-    testValueReviewPending: true,
-    testValueInvalidations: [{ code: "IMPLEMENTATION_CHANGED", path: "src/service.js" }],
-  };
-  const harness = createHarness({
-    snapshot: snapshot({ files: [mixedFile], candidates: [mixedCandidate] }),
-    activeRole: { role: "developer-test" },
-  });
-
-  await harness.commands.get("large").handler("", harness.context);
-
-  assert.match(harness.notifications.at(-1).message, /\[结构\] tests\/large\.spec\.js/);
-  assert.match(harness.notifications.at(-1).message, /\[测试价值\] tests\/large\.spec\.js/);
-  assert.match(harness.sentUserMessages[0], /结构候选：[\s\S]*tests\/large\.spec\.js[\s\S]*测试价值候选：[\s\S]*tests\/large\.spec\.js/);
-  assert.match(harness.sentUserMessages[0], /IMPLEMENTATION_CHANGED\(src\/service\.js\)/);
-});
-
-test("价值状态无法确认时不误报无候选或派发完成请求", async () => {
+test("结构状态无法确认时不误报无候选或派发完成请求", async () => {
   const harness = createHarness({
     snapshot: snapshot({
       files: [],
       candidates: [],
-      testValueConfirmed: false,
-      errors: [{ code: "TEST_VALUE_STATE_INVALID", path: ".", message: "state unreadable" }],
+      structuralConfirmed: false,
+      errors: [{ code: "FILE_REVIEW_STATE_INVALID", path: ".", message: "state unreadable" }],
     }),
   });
 
@@ -162,7 +124,7 @@ test("价值状态无法确认时不误报无候选或派发完成请求", async
 
   assert.equal(harness.sentUserMessages.length, 0);
   assert.equal(harness.notifications.at(-1).level, "warning");
-  assert.match(harness.notifications.at(-1).message, /测试价值审阅状态无法确认/);
+  assert.match(harness.notifications.at(-1).message, /结构审阅状态无法确认/);
   assert.match(harness.notifications.at(-1).message, /state unreadable/);
   assert.doesNotMatch(harness.notifications.at(-1).message, /没有当前版本待审候选/);
   assert.match(harness.notifications.at(-1).message, /未启动审阅/);
