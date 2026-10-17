@@ -117,12 +117,15 @@ export function transitionWorkflowLifecycle(
       if (!sameIdentity(workflowHandoffIdentity(state), event.identity) || state.currentTaskId !== event.identity.taskId) {
         throw Object.assign(new Error("任务生命周期事件与当前 handoff 不匹配"), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
       }
-      if (state.handoff?.phase !== "executing") {
+      if (state.handoff?.phase !== "executing" && state.handoff?.phase !== "queued") {
         throw Object.assign(new Error("任务尚未确认实际启动，不能验收结果"), { code: "WORKFLOW_TASK_NOT_STARTED" });
       }
+      const started = state.handoff?.phase === "queued"
+        ? markWorkflowTaskStarted(state, event.identity.taskId, now)
+        : state;
       next = event.type === "task-completed"
-        ? completeWorkflowTask(state, { taskId: event.identity.taskId, completionSummary: event.completionSummary, implementationRationale: event.implementationRationale, verification: event.verification }, now)
-        : blockWorkflowTask(state, { taskId: event.identity.taskId, reason: event.reason }, now);
+        ? completeWorkflowTask(started, { taskId: event.identity.taskId, completionSummary: event.completionSummary, implementationRationale: event.implementationRationale, verification: event.verification }, now)
+        : blockWorkflowTask(started, { taskId: event.identity.taskId, reason: event.reason }, now);
       break;
     }
     case "child-reviewed":

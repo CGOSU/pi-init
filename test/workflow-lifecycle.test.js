@@ -130,13 +130,23 @@ test("完成与阻塞事件校验全部 handoff 身份字段，迟到结果不�
   }
 });
 
-test("queued 任务不能直接完成或阻塞，必须先由消息证据确认真实启动", () => {
+test("queued 任务在验收时补记真实启动，prepared 阶段仍拒绝", () => {
   const prepared = startWorkflowTask(nestedState(), undefined, 110);
   const identity = workflowHandoffIdentity(prepared);
   const dispatching = transitionWorkflowDispatch(prepared, { type: "task-dispatch-requested", identity }, 111).state;
   const queued = transitionWorkflowDispatch(dispatching, { type: "task-queued", identity }, 112).state;
-  assert.throws(() => transitionWorkflowLifecycle(queued, completionEvent(queued), 120), { code: "WORKFLOW_TASK_NOT_STARTED" });
-  assert.throws(() => transitionWorkflowLifecycle(queued, { type: "task-blocked", identity, reason: "阻塞" }, 120), { code: "WORKFLOW_TASK_NOT_STARTED" });
+  assert.throws(() => transitionWorkflowLifecycle(prepared, completionEvent(prepared), 115), { code: "WORKFLOW_TASK_NOT_STARTED" });
+  assert.throws(() => transitionWorkflowLifecycle(prepared, { type: "task-blocked", identity, reason: "阻塞" }, 115), { code: "WORKFLOW_TASK_NOT_STARTED" });
+
+  const completed = transitionWorkflowLifecycle(queued, completionEvent(queued), 120);
+  assert.equal(completed.taskState.tasks[0].status, "completed");
+  assert.equal(completed.taskState.tasks[0].startedAt, 120);
+  assert.equal(completed.taskState.tasks[0].executionStartedAt, 120);
+  assert.equal(completed.taskState.tasks[0].completedAt, 120);
+
+  const blocked = transitionWorkflowLifecycle(queued, { type: "task-blocked", identity, reason: "阻塞" }, 120);
+  assert.equal(blocked.taskState.tasks[0].status, "blocked");
+  assert.equal(blocked.taskState.tasks[0].executionStartedAt, 120);
 });
 
 test("未知结果重试仍须显式确认，重试后旧事件失效", () => {
