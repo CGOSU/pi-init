@@ -442,6 +442,10 @@ export function createCoordinationRuntime(
       }
       return undefined;
     }
+    if (handoff.role === "docs-commit" && handoff.kind === "evidence") {
+      // 取证 handoff 仍在进行：允许 architect 追加其他 scope 的取证请求，由状态层按 scope 交集判断能否并发。
+      return undefined;
+    }
     throw coordinationError("COORDINATION_REQUEST_IN_FLIGHT", "当前协作 handoff 尚未完成；不得创建并行取证请求");
   }
 

@@ -61,6 +61,33 @@ function ok(result) {
   return result.value;
 }
 
+test("无范围重叠的取证请求可以并发在飞，范围重叠或写范围仍串行", () => {
+  let state = ok(createCoordinationState({ sessionId: "session-1", coordinationId: "coord-1" }, 10));
+  state = ok(requestEvidence(state, request(), 20));
+
+  const disjoint = ok(requestEvidence(state, request({
+    requestId: "request-docs",
+    questionId: "docs-coverage",
+    question: "Docs coverage for the coordination协议",
+    scope: ["docs/decisions.md"],
+  }), 21));
+  assert.deepEqual(disjoint.requests.map((item) => item.questionId).sort(), ["direct-callers", "docs-coverage"]);
+
+  assert.equal(requestEvidence(disjoint, request({
+    requestId: "request-overlap",
+    questionId: "workflow-handlers",
+    question: "Other handlers under the same files",
+    scope: ["src/workflow-transitions.ts"],
+  }), 22).code, "COORDINATION_REQUEST_IN_FLIGHT");
+
+  assert.equal(requestEvidence(disjoint, request({
+    requestId: "request-write",
+    questionId: "write-scope",
+    question: "Apply the write change",
+    scope: ["write src/workflow-transitions.ts"],
+  }), 23).code, "COORDINATION_REQUEST_IN_FLIGHT");
+});
+
 test("证据请求经历补查和第二轮审阅，只接受被架构师明确接受的来源事实", () => {
   let state = ok(createCoordinationState({ sessionId: "session-1", coordinationId: "coord-1" }, 10));
   state = ok(requestEvidence(state, request(), 20));

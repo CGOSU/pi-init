@@ -484,8 +484,11 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
     const activeRequests = requests.filter((request) =>
       request.status === "pending" || request.status === "reported" || request.status === "follow-up-needed",
     );
-    if (activeRequests.length > 1) {
-      throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", "当前 local 协调状态只能有一个未完成取证交接", "requests");
+    if (activeRequests.length > 0) {
+      const activeIds = new Set(activeRequests.map((request) => request.questionId));
+      if (activeIds.size !== activeRequests.length) {
+        throw new CoordinationError("COORDINATION_STATE_INCONSISTENT", "同一问题只能有一个未完成取证交接", "requests");
+      }
     }
     const requestById = new Map(requests.map((request) => [request.requestId, request]));
     const reports = source.reports.map((item, index) => {

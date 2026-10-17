@@ -40,6 +40,35 @@ function semanticInvestigationKey(request: Pick<EvidenceRequest, "question" | "s
   });
 }
 
+const WRITE_SCOPE_PATTERN = /\b(write|edit|create|delete|rename|apply|mutate|run|execute|install)\b/i;
+
+function isWriteScope(scope: string[]): boolean {
+  return scope.some((value) => WRITE_SCOPE_PATTERN.test(value));
+}
+
+function matchesGlob(pattern: string, value: string): boolean {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp('^' + escaped + '$').test(value);
+}
+
+function scopeEntryOverlaps(leftPath: string, rightPath: string): boolean {
+  if (leftPath.includes('*') || leftPath.includes('?')) {
+    return matchesGlob(leftPath, rightPath) || matchesGlob(leftPath, rightPath + '/x');
+  }
+  if (rightPath.includes('*') || rightPath.includes('?')) {
+    return matchesGlob(rightPath, leftPath) || matchesGlob(rightPath, leftPath + '/x');
+  }
+  return leftPath === rightPath
+    || leftPath.startsWith(rightPath + '/')
+    || rightPath.startsWith(leftPath + '/');
+}
+
+function scopeOverlaps(left: string[], right: string[]): boolean {
+  if (left.length === 0 || right.length === 0) return false;
+  const normalize = (value: string) => value.replace(/^[*+]/, '').replace(/\/+/g, '/').replace(/\/+$/, '').toLowerCase();
+  return left.some((a) => right.some((b) => scopeEntryOverlaps(normalize(a), normalize(b))));
+}
+
 function validNextTimestamp(now: number, state: CoordinationState): CoordinationFailure | undefined {
   if (!Number.isSafeInteger(now) || now < 0) {
     return { ok: false, code: "COORDINATION_TIMESTAMP_INVALID", message: "操作时间必须是非负安全整数时间戳" };
@@ -109,8 +138,19 @@ export function requestEvidence(
   const activeRequest = [...state.requests].reverse().find((candidate) =>
     candidate.status === "pending" || candidate.status === "reported" || candidate.status === "follow-up-needed",
   );
-  if (activeRequest && activeRequest.questionId !== request.questionId) {
-    return failure("COORDINATION_REQUEST_IN_FLIGHT", `问题 ${activeRequest.questionId} 尚未审阅完成，暂不派发其他取证请求`, "questionId");
+  if (isWriteScope(request.scope)) {
+    if (activeRequest && activeRequest.questionId !== request.questionId) {
+      return failure("COORDINATION_REQUEST_IN_FLIGHT", `写范围取证不能与其他请求并发：问题 ${activeRequest.questionId} 尚未审阅完成`, "questionId");
+    }
+  } else {
+    const conflicting = [...state.requests].reverse().find((candidate) =>
+      (candidate.status === "pending" || candidate.status === "reported" || candidate.status === "follow-up-needed")
+      && candidate.questionId !== request.questionId
+      && (isWriteScope(candidate.scope) || scopeOverlaps(candidate.scope, request.scope)),
+    );
+    if (conflicting) {
+      return failure("COORDINATION_REQUEST_IN_FLIGHT", `问题 ${conflicting.questionId} 的取证范围与当前请求重叠，暂不并发派发`, "scope");
+    }
   }
   const prior = latestRequestForQuestion(state.requests, request.questionId);
   request.round = prior ? prior.round + 1 : 1;
