@@ -205,6 +205,7 @@ export type WorkflowValidationFailure = {
   nextAction?: string;
   taskId?: string;
   role?: string;
+  branchMatched?: boolean;
 };
 
 export type WorkflowResult<T> = { ok: true; value: T } | WorkflowValidationFailure;

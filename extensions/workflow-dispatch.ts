@@ -319,6 +319,18 @@ export function createWorkflowDispatch(
     persistCurrentTaskStarted(ctx, candidate);
   }
 
+  function confirmCurrentTaskStarted() {
+    const current = state.workflowState;
+    if (!current || current.handoff?.phase !== "queued") return;
+    const task = current.currentTaskId
+      ? current.tasks.find((item) => item.id === current.currentTaskId)
+      : undefined;
+    const identity = workflowHandoffIdentity(current);
+    if (!task || !identity) return;
+    const ctx = deps.messages.lastContext?.();
+    if (ctx) persistCurrentTaskStarted(ctx, { current, task, identity });
+  }
+
   function markCurrentTaskStartedFromMessage(ctx: ExtensionContext, message: unknown) {
     const candidate = currentTaskStartCandidate(ctx);
     if (!candidate || !validateWorkflowTaskStartMessage(message, candidate.identity).ok) return;

@@ -95,6 +95,8 @@ export function createWorkflowMessages(
   state: ExtensionRuntimeState,
   deps: WorkflowMessageDependencies,
 ) {
+  let lastContext: ExtensionContext | undefined;
+
   function workflowTaskPrompt(taskId: string, note?: string) {
     const workflowState = state.workflowState;
     if (!workflowState) throw new Error("当前没有活动工作流");
@@ -136,6 +138,7 @@ export function createWorkflowMessages(
     note?: string,
     expectedIdentity?: WorkflowHandoffIdentity,
   ) {
+    lastContext = ctx;
     const current = state.workflowState;
     const identity = current ? workflowHandoffIdentity(current) : undefined;
     if (!current || current.currentTaskId !== taskId || !identity
@@ -334,6 +337,7 @@ export function createWorkflowMessages(
   }
 
   return {
+    lastContext: () => lastContext,
     workflowTaskPrompt,
     sendWorkflowTaskMessage,
     workflowReplanPrompt,

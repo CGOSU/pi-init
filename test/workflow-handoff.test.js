@@ -232,7 +232,11 @@ test("queued handoff 身份错误或当前 branch 缺少交接消息时不补记
     harness.branch.splice(messageIndex, 1);
     await assert.rejects(
       workflow.execute("missing-branch-result", completeParams(identity), undefined, undefined, harness.context),
-      { code: "WORKFLOW_HANDOFF_BRANCH_MISMATCH" },
+      (error) => {
+        assert.equal(error.code, "WORKFLOW_HANDOFF_NOT_EXECUTING");
+        assert.equal(error.details.branchMatched, false);
+        return true;
+      },
     );
     current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
     assert.equal(current.handoff.phase, "queued");

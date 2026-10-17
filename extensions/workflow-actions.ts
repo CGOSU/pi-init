@@ -33,6 +33,7 @@ import {
 } from "./workflow-completion-renderer.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import { attachWorkflowPresentation } from "./workflow-presentation.ts";
+import { workflowHandoffMessageOnBranch, workflowHandoffNotExecutingFailure, workflowHandoffIdentity } from "../src/workflow-handoff.ts";
 import { transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
 import type { WorkflowLifecycleTransition } from "../src/workflow-orchestrator.ts";
 import { assertSubworkflowTaskScope } from "../src/workflow-subworkflow.ts";
@@ -177,10 +178,27 @@ export function createWorkflowActions(
   }
 
   function requireTaskHandoffIdentity(params: unknown, ctx: ExtensionContext): WorkflowHandoffIdentity {
-    return requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx, { allowQueued: true }));
+    return requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
   }
 
-  function markQueuedTaskStarted(params: unknown, ctx: ExtensionContext) {
+  function guardQueuedTaskStart(action: "complete" | "block" | "clarify", ctx: ExtensionContext) {
+    const current = state.workflowState;
+    const phase = current?.handoff?.phase;
+    if (!current || phase !== "queued") return;
+    const task = current.currentTaskId
+      ? current.tasks.find((item) => item.id === current.currentTaskId)
+      : undefined;
+    const identity = workflowHandoffIdentity(current);
+    const branchMatched = identity !== undefined && workflowHandoffMessageOnBranch(ctx, identity);
+    if (branchMatched) return;
+    const failure = workflowHandoffNotExecutingFailure(phase, { branchMatched });
+    throw Object.assign(new Error(`queued handoff 尚未被任务消息消费，拒绝以 ${action} 结果先行启动任务：${failure.message}`), {
+      code: failure.code,
+      details: failure,
+    });
+  }
+
+  function markCurrentTaskStarted(ctx: ExtensionContext) {
     const current = state.workflowState;
     if (current?.handoff?.phase !== "queued") return;
     const task = current.currentTaskId
@@ -191,7 +209,6 @@ export function createWorkflowActions(
       throw new Error(`queued handoff 要求角色 ${task.role}，当前角色不匹配；拒绝补记任务开始`);
     }
     deps.dispatch.markCurrentTaskStarted(ctx);
-    requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
   }
 
   async function workflowCommand(
@@ -366,7 +383,9 @@ export function createWorkflowActions(
       }
       case "clarify": {
         if (!state.workflowState) throw missingWorkflowError();
+        guardQueuedTaskStart("clarify", ctx);
         const identity = requireTaskHandoffIdentity(params, ctx);
+        markCurrentTaskStarted(ctx);
         const task = state.workflowState.tasks.find((item) => item.id === identity.taskId);
         if (!task) throw Object.assign(new Error(`澄清任务不存在：${identity.taskId}`), { code: "WORKFLOW_CLARIFICATION_TASK_MISSING" });
         if (task.role !== "developer-test" || deps.roleRuntime.activeRoleFor(ctx)?.role !== "developer-test") {
@@ -386,7 +405,6 @@ export function createWorkflowActions(
             code: "COORDINATION_WORKFLOW_LINK_MISMATCH",
           });
         }
-        markQueuedTaskStarted(params, ctx);
         const next = requireIdentity(requestWorkflowTaskClarification(state.workflowState, parsed.value));
         try {
           deps.coordination.linkWorkflow(next, ctx);
@@ -540,14 +558,15 @@ export function createWorkflowActions(
       }
       case "complete": {
         if (!state.workflowState) throw missingWorkflowError();
+        guardQueuedTaskStart("complete", ctx);
         const identity = requireTaskHandoffIdentity(params, ctx);
+        markCurrentTaskStarted(ctx);
         const { taskId } = identity;
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
           throw new Error(`任务 ${task.id} 要求角色 ${task.role}，当前角色不匹配；请先调用 switch_role`);
         }
-        markQueuedTaskStarted(params, ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, {
           type: "task-completed", identity,
           completionSummary: params.completionSummary,
@@ -588,8 +607,9 @@ export function createWorkflowActions(
       }
       case "block": {
         if (!state.workflowState) throw missingWorkflowError();
+        guardQueuedTaskStart("block", ctx);
         const identity = requireTaskHandoffIdentity(params, ctx);
-        markQueuedTaskStarted(params, ctx);
+        markCurrentTaskStarted(ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, { type: "task-blocked", identity, reason: params.reason }, Date.now());
         commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(transition.state) }], details: statusDetails(transition.state), terminate: true };
