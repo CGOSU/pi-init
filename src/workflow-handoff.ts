@@ -76,6 +76,10 @@ function sameIdentity(actual: unknown, expected: unknown, fields: readonly strin
   return fields.every((field) => actual[field] === expected[field]);
 }
 
+function profileBaseIdentity(source: unknown, fields: readonly string[]): Record<string, unknown> {
+  return { ...safeIdentityValues(source, BASE_IDENTITY_FIELDS), present: fields.filter((field) => isRecord(source) && source[field] !== undefined) };
+}
+
 export function workflowHandoffNotExecutingFailure(
   phase: string,
   { branchMatched = false }: { branchMatched?: boolean } = {},
@@ -276,8 +280,9 @@ export function validateWorkflowHandoffIdentity(
     }
   }
   const expected = workflowHandoffIdentity(state) ?? handoff;
-  const mismatchedFields = differingIdentityFields(input, expected, fields);
-  if (mismatchedFields.length > 0) {
+  const differs = !sameIdentity(input, expected, fields);
+  if (differs) {
+    const mismatchedFields = differingIdentityFields(input, expected, fields);
     return identityFailure(
       "WORKFLOW_HANDOFF_STALE",
       `任务 handoff 身份已变化：${mismatchedFields.join(", ")}`,
@@ -285,7 +290,7 @@ export function validateWorkflowHandoffIdentity(
       "拒绝旧 attempt 的结果。查询当前状态一次；若 attempt/handoff/branch 已变化，不得把旧结果换成最新身份提交。结果未知时先核对副作用并显式授权 retry。",
     );
   }
-  const branchMatched = activeBranchContains(ctx, TASK_MESSAGE_TYPE, expected, fields);
+  const branchMatched = activeBranchContains(ctx, TASK_MESSAGE_TYPE, expected, BASE_IDENTITY_FIELDS);
   if (handoff.phase !== "executing" && handoff.phase !== "queued") return notExecuting(handoff.phase, { branchMatched });
   if (!branchMatched) {
     return identityFailure(
@@ -346,8 +351,9 @@ export function validateWorkflowReplanIdentity(
       );
     }
   }
-  const mismatchedFields = differingIdentityFields(input, expected, fields);
-  if (mismatchedFields.length > 0) {
+  const differs = !sameIdentity(input, expected, fields);
+  if (differs) {
+    const mismatchedFields = differingIdentityFields(input, expected, fields);
     return identityFailure(
       "WORKFLOW_REPLAN_STALE",
       `工作流重规划身份已变化：${mismatchedFields.join(", ")}`,
@@ -355,7 +361,7 @@ export function validateWorkflowReplanIdentity(
       "拒绝旧 revision 的重规划结果。读取当前状态并由 architect 处理当前 revision；不得将旧计划改贴新 handoff 身份。",
     );
   }
-  if (!activeBranchContains(ctx, REPLAN_MESSAGE_TYPE, expected, fields)) {
+  if (!activeBranchContains(ctx, REPLAN_MESSAGE_TYPE, expected, BASE_IDENTITY_FIELDS)) {
     return identityFailure(
       "WORKFLOW_REPLAN_BRANCH_MISMATCH",
       "当前 session branch 不包含匹配的重规划消息",
