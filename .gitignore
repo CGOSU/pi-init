@@ -2,3 +2,4 @@ node_modules/
 .pi
 .pi-graph/
 .empryo
+.DS_Store
