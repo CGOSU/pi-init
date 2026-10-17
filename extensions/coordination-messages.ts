@@ -44,6 +44,11 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
   if (!identity) throw coordinationError("COORDINATION_HANDOFF_IDENTITY_MISSING", "协作状态缺少 handoff identity");
   const request = current.coordination.requests.find((item) => item.requestId === handoff.requestId);
   if (!request) throw coordinationError("COORDINATION_HANDOFF_REQUEST_MISMATCH", "协作 handoff 找不到对应请求");
+  const batchRequests = (handoff.requestIds && handoff.requestIds.length > 1
+    ? handoff.requestIds
+    : [request.requestId])
+    .map((id) => current.coordination.requests.find((item) => item.requestId === id))
+    .filter((item): item is EvidenceRequest => item !== undefined);
   const report = handoff.reportId
     ? current.coordination.reports.find((item) => item.reportId === handoff.reportId)
     : undefined;
@@ -56,17 +61,21 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
       content: [
         "[PI-INIT 证据取证交接]",
         `当前协作 handoff 短引用（report-evidence 时按原样传回 coordinationHandoffId）：${handoff.handoffId}`,
-        `问题 ID：${request.questionId}`,
-        `待回答问题：${request.question}`,
-        `取证理由：${request.rationale}`,
-        `限定范围：${request.scope.map((item) => `- ${item}`).join("\n")}`,
-        request.exclusions.length ? `排除范围：${request.exclusions.map((item) => `- ${item}`).join("\n")}` : "",
-        `完成条件：${request.completionCriteria.map((item) => `- ${item}`).join("\n")}`,
+        batchRequests.length > 1
+          ? `本次为批量取证，共 ${batchRequests.length} 个问题，可在同一回合内逐一核对后分别报告：\n${batchRequests.map((item, index) => `${index + 1}. requestId ${item.requestId} / questionId ${item.questionId}\n   问题：${item.question}\n   理由：${item.rationale}\n   范围：${item.scope.join("；")}${item.exclusions.length ? `\n   排除：${item.exclusions.join("；")}` : ""}\n   完成条件：${item.completionCriteria.join("；")}${item.addressesGaps.length ? `\n   需回应的缺口：${item.addressesGaps.join("；")}` : ""}`).join("\n")}`
+          : `问题 ID：${request.questionId}`,
+        batchRequests.length > 1 ? "" : `待回答问题：${request.question}`,
+        batchRequests.length > 1 ? "" : `取证理由：${request.rationale}`,
+        batchRequests.length > 1 ? "" : `限定范围：${request.scope.map((item) => `- ${item}`).join("\n")}`,
+        batchRequests.length > 1 ? "" : (request.exclusions.length ? `排除范围：${request.exclusions.map((item) => `- ${item}`).join("\n")}` : ""),
+        batchRequests.length > 1 ? "" : `完成条件：${request.completionCriteria.map((item) => `- ${item}`).join("\n")}`,
         request.addressesGaps.length ? `需回应的先前缺口：${request.addressesGaps.map((item) => `- ${item}`).join("\n")}` : "",
         priorGaps.length ? `上一轮 architect 指出的缺口：${priorGaps.map((item) => `- ${item}`).join("\n")}` : "",
         priorAcceptedFacts.length ? `本问题先前已接受事实（历史来源版本，须按本轮范围重新核实）：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
         "你是受派发的 docs-commit 取证角色。当前交接包只包含本问题和相关历史事实，不得推断完整协作账本。核对最新实现、直接调用方和相关测试；报告必须区分 fact/inference/unconfirmed/conflict，并给每条发现附来源 location 与当前版本。测试源码已定位与实际执行验证分开填写；没有运行的测试不得声称通过。不要代替 architect 接受证据、决定业务方案或派发开发。",
-        `完成后调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={...})。一次报告后停止；若证据不完整，明确列出未确认项。若报告输入校验失败，可在同一有效 handoff 内修正后重提，不要新建 attempt、重复取证或复用已消费身份。`,
+        batchRequests.length > 1
+          ? `每个问题核对完成后分别调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={requestId: 对应 requestId, ...})；同一 handoff 可连续提交多个报告，全部完成后停止。`
+          : `完成后调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={...})。一次报告后停止；若证据不完整，明确列出未确认项。若报告输入校验失败，可在同一有效 handoff 内修正后重提，不要新建 attempt、重复取证或复用已消费身份。`,
       ].filter(Boolean).join("\n\n"),
     };
   }
@@ -86,6 +95,14 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
       `当前审阅 handoff 短引用（review-evidence 与后续 request-evidence 使用时按原样传回 coordinationHandoffId）：${handoff.handoffId}`,
       `问题 ${request.questionId}：${request.question}`,
       `取证范围：${request.scope.join("；")}`,
+      handoff.reportIds && handoff.reportIds.length > 1
+        ? `本次为批量取证结果，共 ${handoff.reportIds.length} 份报告：\n${handoff.reportIds.map((id) => {
+            const item = current.coordination.reports.find((candidate) => candidate.reportId === id);
+            if (!item) return `- ${id}（未找到报告）`;
+            const owner = current.coordination.requests.find((candidate) => candidate.requestId === item.requestId);
+            return `报告 ${item.reportId}（问题 ${owner?.questionId ?? item.requestId}）：\n${item.findings.map((finding) => `  - [${finding.classification}] ${finding.statement}；来源：${finding.sources.map((source) => `${source.location} @ ${source.version}`).join("，") || "未提供"}`).join("\n")}`;
+          }).join("\n")}`
+        : "",
       `报告 ${report.reportId}：\n${report.findings.map((finding) => `- [${finding.classification}] ${finding.statement}；来源：${finding.sources.map((source) => `${source.location} @ ${source.version}`).join("，") || "未提供"}`).join("\n")}`,
       report.findings.some((finding) => finding.sources.length > 0)
         ? `可核对引用（findingId · sourceId · sourceVersion）：\n${report.findings.flatMap((finding) => finding.sources.map((source) => `- ${finding.findingId} · ${source.id} · ${source.version}（${finding.classification}）`)).join("\n")}`

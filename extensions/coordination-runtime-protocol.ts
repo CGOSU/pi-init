@@ -74,7 +74,18 @@ export function sameCoordinationIdentity(left: unknown, right: CoordinationHando
     "coordinationId", "coordinationVersion", "sessionId", "recoveryGeneration", "requestId",
     "role", "kind", "attemptId", "handoffId", "reportId",
   ] as const;
-  return fields.every((field) => left[field] === right[field]);
+  if (!fields.every((field) => left[field] === right[field] || (field === "reportId" && left[field] === undefined))) return false;
+  if (typeof left.reportId !== "string" && Array.isArray(left.reportIds) && Array.isArray(right.reportIds)
+    && right.reportIds.length > 0 && left.reportIds.every((item) => right.reportIds!.includes(item))) {
+    return true;
+  }
+  if (typeof left.reportId !== "string" && Array.isArray(left.reportIds) && right.reportId !== undefined) {
+    return left.reportIds.length === 1 && left.reportIds[0] === right.reportId;
+  }
+  const leftReports = Array.isArray(left.reportIds) ? left.reportIds : [];
+  const rightReports = right.reportIds ?? [];
+  return leftReports.length === rightReports.length
+    && leftReports.every((item, index) => item === rightReports[index]);
 }
 
 export function coordinationHandoffIdentity(current: CoordinationRuntimeState): CoordinationHandoffIdentity | undefined {
@@ -91,6 +102,7 @@ export function coordinationHandoffIdentity(current: CoordinationRuntimeState): 
     attemptId: handoff.attemptId,
     handoffId: handoff.handoffId,
     ...(handoff.reportId ? { reportId: handoff.reportId } : {}),
+    ...(handoff.reportIds ? { reportIds: [...handoff.reportIds] } : {}),
   };
 }
 
@@ -104,15 +116,30 @@ function parseHandoff(value: unknown, coordination: CoordinationRuntimeState["co
   if (typeof value.createdAt !== "number" || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) {
     return coordinationFailure("COORDINATION_HANDOFF_TIMESTAMP_INVALID", "协作 handoff createdAt 无效");
   }
+  const requestIds = Array.isArray(value.requestIds) && value.requestIds.length > 0
+    ? value.requestIds.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
   const requestId = typeof value.requestId === "string" ? value.requestId : "";
-  const request = coordination.requests.find((candidate) => candidate.requestId === requestId);
-  if (!request) return coordinationFailure("COORDINATION_HANDOFF_REQUEST_MISMATCH", "协作 handoff 引用了不存在的证据请求");
+  const requestedIds = requestIds.length > 0 ? requestIds : [requestId];
   let reportId: string | undefined;
+  let reportIds: string[] | undefined;
   if (value.kind === "evidence") {
-    if (value.role !== "docs-commit" || value.reportId !== undefined || request.status !== "pending") {
+    if (value.role !== "docs-commit" || value.reportId !== undefined || requestedIds.length === 0) {
       return coordinationFailure("COORDINATION_HANDOFF_STATE_MISMATCH", "取证 handoff 必须分派给 docs-commit 且对应待处理请求");
     }
+    for (const id of requestedIds) {
+      const request = coordination.requests.find((candidate) => candidate.requestId === id);
+      if (!request) return coordinationFailure("COORDINATION_HANDOFF_REQUEST_MISMATCH", "协作 handoff 引用了不存在的证据请求");
+      if (request.status !== "pending") {
+        return coordinationFailure("COORDINATION_HANDOFF_STATE_MISMATCH", "取证 handoff 必须分派给 docs-commit 且对应待处理请求");
+      }
+    }
   } else {
+    if (requestedIds.length !== 1) {
+      return coordinationFailure("COORDINATION_HANDOFF_STATE_MISMATCH", "审阅 handoff 只能引用一个报告");
+    }
+    const request = coordination.requests.find((candidate) => candidate.requestId === requestId);
+    if (!request) return coordinationFailure("COORDINATION_HANDOFF_REQUEST_MISMATCH", "协作 handoff 引用了不存在的证据请求");
     reportId = typeof value.reportId === "string" ? value.reportId : "";
     const report = coordination.reports.find((candidate) => candidate.reportId === reportId && candidate.requestId === requestId);
     const reportReviews = coordination.reviews.filter((candidate) => candidate.reportId === reportId);
@@ -125,6 +152,9 @@ function parseHandoff(value: unknown, coordination: CoordinationRuntimeState["co
     if (value.role !== "architect" || !report || (!newlyReported && !moreReview)) {
       return coordinationFailure("COORDINATION_HANDOFF_STATE_MISMATCH", "审阅 handoff 必须分派给 architect 且引用当前可审阅报告");
     }
+    if (Array.isArray(value.reportIds) && value.reportIds.length > 0) {
+      reportIds = value.reportIds.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    }
   }
   if (typeof value.attemptId !== "string" || !value.attemptId.trim()
     || typeof value.handoffId !== "string" || !value.handoffId.trim()) {
@@ -135,8 +165,10 @@ function parseHandoff(value: unknown, coordination: CoordinationRuntimeState["co
     value: {
       role: value.role as CoordinationRole,
       kind: value.kind as CoordinationHandoff["kind"],
-      requestId,
+      requestId: requestedIds[0] ?? requestId,
+      ...(requestIds.length > 1 ? { requestIds } : {}),
       ...(reportId ? { reportId } : {}),
+      ...(reportIds ? { reportIds } : {}),
       attemptId: value.attemptId,
       handoffId: value.handoffId,
       phase: value.phase as CoordinationHandoff["phase"],

@@ -8,7 +8,9 @@ export type CoordinationHandoff = {
   role: CoordinationRole;
   kind: CoordinationHandoffKind;
   requestId: string;
+  requestIds?: string[];
   reportId?: string;
+  reportIds?: string[];
   attemptId: string;
   handoffId: string;
   phase: CoordinationDispatchPhase;
@@ -22,11 +24,13 @@ export type CoordinationHandoffIdentity = {
   sessionId: string;
   recoveryGeneration: number;
   requestId: string;
+  requestIds?: string[];
   role: CoordinationRole;
   kind: CoordinationHandoffKind;
   attemptId: string;
   handoffId: string;
   reportId?: string;
+  reportIds?: string[];
 };
 
 /** Session-branch durable coordination data. It never owns executable tasks. */

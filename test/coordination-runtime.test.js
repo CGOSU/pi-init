@@ -68,7 +68,9 @@ function actionIdentityFromHandoff(saved) {
     kind: handoff.kind,
     attemptId: handoff.attemptId,
     handoffId: handoff.handoffId,
+    ...(handoff.requestIds ? { requestIds: [...handoff.requestIds] } : {}),
     ...(handoff.reportId ? { reportId: handoff.reportId } : {}),
+    ...(handoff.reportIds ? { reportIds: [...handoff.reportIds] } : {}),
   };
 }
 
@@ -654,5 +656,64 @@ test("证据审阅边界压缩失败停在源角色，用户恢复后才派发 a
     assert.notEqual(latestCoordination(harness).handoff.handoffId, oldHandoffId);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === COORDINATION_REVIEW_MESSAGE_TYPE).length, 1);
     await emitExtensionEvent(harness, "session_shutdown");
+  });
+});
+
+test("无范围重叠的多个取证请求合并为一次 docs 派发，逐份报告后统一进入审阅", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = await makeHarness(directory, { workflowMode: "auto" });
+    const first = {
+      questionId: "input-boundary",
+      question: "解析入口的边界输入契约是什么？",
+      rationale: "开发契约依赖当前实现。",
+      scope: ["src/input.ts::parseInput"],
+      exclusions: ["不修改实现"],
+      completionCriteria: ["给出实现与直接调用方证据"],
+    };
+    const second = {
+      questionId: "docs-coverage",
+      question: "文档中是否记录了该入口？",
+      rationale: "需要确认对外契约是否已写明。",
+      scope: ["docs/decisions.md"],
+      exclusions: ["不修改文档"],
+      completionCriteria: ["给出文档位置证据"],
+    };
+
+    await execute(harness, { action: "request-evidence", request: first });
+    await execute(harness, { action: "request-evidence", request: second });
+    const batched = latestCoordination(harness);
+    assert.equal(batched.handoff.phase, "prepared");
+    assert.deepEqual([...batched.handoff.requestIds].sort(), batched.coordination.requests.map((request) => request.requestId).sort());
+
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.sentMessages.filter(({ message }) => message.customType === COORDINATION_EVIDENCE_MESSAGE_TYPE).length, 1);
+    const prompt = harness.sentMessages.findLast(({ message }) => message.customType === COORDINATION_EVIDENCE_MESSAGE_TYPE).message.content;
+    assert.match(prompt, /本次为批量取证，共 2 个问题/);
+    const docsIdentity = await startCurrentHandoff(harness, COORDINATION_EVIDENCE_MESSAGE_TYPE);
+    const [firstRequest, secondRequest] = batched.coordination.requests;
+
+    await execute(harness, {
+      action: "report-evidence",
+      coordinationIdentity: docsIdentity,
+      report: reportFor(firstRequest.requestId, {
+        findingId: "batch-first", sourceVersion: "source-v1", statement: "已核实入口实现。",
+      }),
+    });
+    assert.equal(latestCoordination(harness).handoff.kind, "evidence");
+    assert.equal(latestCoordination(harness).handoff.reportIds, undefined);
+
+    const docsMessageIdentity = workflowMessageIdentity(harness, COORDINATION_EVIDENCE_MESSAGE_TYPE);
+    const secondReport = await execute(harness, {
+      action: "report-evidence",
+      coordinationIdentity: docsMessageIdentity,
+      report: reportFor(secondRequest.requestId, {
+        findingId: "batch-second", sourceVersion: "source-v2", statement: "文档未记录该入口。", questionId: "docs-coverage",
+      }),
+    });
+    assert.equal(secondReport.terminate, true);
+    const afterAll = latestCoordination(harness);
+    assert.equal(afterAll.handoff.kind, "review");
+    assert.equal(afterAll.handoff.kind, "review");
+    assert.equal(afterAll.handoff.reportIds.length, 2);
   });
 });

@@ -68,6 +68,9 @@ export function createCoordinationHandoffValidator(
       attemptId: nonEmptyText(input.attemptId, "attemptId"),
       handoffId: nonEmptyText(input.handoffId, "handoffId"),
       ...(input.reportId === undefined ? {} : { reportId: nonEmptyText(input.reportId, "reportId") }),
+      ...(Array.isArray(input.reportIds) && input.reportIds.length > 1
+        ? { reportIds: input.reportIds.filter((item): item is string => typeof item === "string" && item.trim().length > 0) }
+        : {}),
     };
     if (hasReference && identity.handoffId !== (handoffReference as string).trim()) {
       throw coordinationError("COORDINATION_HANDOFF_REFERENCE_CONFLICT", "coordinationHandoffId 与 coordinationIdentity.handoffId 不一致；两种输入不得混用为不同 handoff");

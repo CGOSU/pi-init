@@ -75,6 +75,21 @@ export function createCoordinationRuntime(
     }
   }
 
+  function identityToHandoff(identity: CoordinationHandoffIdentity): CoordinationHandoff {
+    return {
+      role: identity.role,
+      kind: identity.kind,
+      requestId: identity.requestId,
+      ...(identity.requestIds && identity.requestIds.length > 1 ? { requestIds: [...identity.requestIds] } : {}),
+      ...(identity.reportId ? { reportId: identity.reportId } : {}),
+      ...(identity.reportIds && identity.reportIds.length > 1 ? { reportIds: [...identity.reportIds] } : {}),
+      attemptId: identity.attemptId,
+      handoffId: identity.handoffId,
+      phase: "executing",
+      createdAt: Date.now(),
+    };
+  }
+
   function createHandoff(
     role: CoordinationRole,
     kind: CoordinationHandoff["kind"],
@@ -534,11 +549,18 @@ export function createCoordinationRuntime(
       : requireCoordinationResult(hydrateCoordinationState({ ...recordedCoordination, workflowLink: undefined }));
     const request = nextCoordination.requests.at(-1);
     if (!request) throw coordinationError("COORDINATION_REQUEST_NOT_CREATED", "取证请求未能生成");
+    const inFlight = nextCoordination.requests.filter((candidate) =>
+      candidate.status === "pending" || candidate.status === "reported" || candidate.status === "follow-up-needed",
+    );
+    const batch = inFlight.length > 1 ? inFlight.map((candidate) => candidate.requestId) : [];
     const next: CoordinationRuntimeState = {
       ...current,
       coordination: nextCoordination,
       sessionId,
-      handoff: createHandoff("docs-commit", "evidence", request.requestId),
+      handoff: {
+        ...createHandoff("docs-commit", "evidence", request.requestId),
+        ...(batch.length > 1 ? { requestIds: batch } : {}),
+      },
     };
     persist(next, ctx);
     return { state: next, request };
@@ -560,6 +582,36 @@ export function createCoordinationRuntime(
     // 身份先于输入形状校验：过期或被消费的 handoff 一律返回身份错误，不得被标为可重提。
     const identity = requireCurrentIdentity(identityInput, ctx, "docs-commit", "evidence", undefined, handoffReference);
     if (!isRecord(input)) throw coordinationError("COORDINATION_REPORT_INVALID_TYPE", "report 必须是对象", reportInputRetry);
+    // 批量取证：同一 handoff 下逐份报告，最终转入一次审阅。
+    const batchRequestIds = current.handoff?.requestIds ?? [];
+    if (batchRequestIds.length > 1) {
+      const normalizedInput = input.requestId === undefined
+        ? { ...input, requestId: identity.requestId }
+        : input;
+      if (!batchRequestIds.includes(normalizedInput.requestId as string)) {
+        throw coordinationError("COORDINATION_REQUEST_ID_MISMATCH", "报告 requestId 不属于当前批量 handoff", reportInputRetry);
+      }
+      const nextCoordination = requireCoordinationResult(recordEvidenceReport(current.coordination, normalizedInput as unknown as EvidenceReportInput));
+      const report = nextCoordination.reports.at(-1);
+      if (!report || report.requestId !== (normalizedInput.requestId as string)) {
+        throw coordinationError("COORDINATION_REPORT_NOT_CREATED", "证据报告未能写入当前请求");
+      }
+      const covered = batchRequestIds
+        .map((id) => nextCoordination.reports.findLast((candidate) => candidate.requestId === id))
+
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined);
+      const batchComplete = covered.length === batchRequestIds.length
+        && batchRequestIds.every((id) => nextCoordination.requests.some((candidate) => candidate.requestId === id && candidate.status === "reported"));
+      const handoff: CoordinationHandoff = batchComplete
+        ? {
+            ...createHandoff("architect", "review", identity.requestId, report.reportId),
+            reportIds: covered.map((candidate) => candidate.reportId),
+          }
+        : { ...identityToHandoff(identity), phase: "queued", requestIds: batchRequestIds };
+      const next: CoordinationRuntimeState = { ...current, coordination: nextCoordination, handoff };
+      persist(next, ctx);
+      return { state: next, report };
+    }
     const normalizedInput = input.requestId === undefined
       ? { ...input, requestId: identity.requestId }
       : input;
@@ -568,7 +620,7 @@ export function createCoordinationRuntime(
     }
     const nextCoordination = requireCoordinationResult(recordEvidenceReport(current.coordination, normalizedInput as unknown as EvidenceReportInput));
     const report = nextCoordination.reports.at(-1);
-    if (!report || report.requestId !== identity.requestId) throw coordinationError("COORDINATION_REPORT_NOT_CREATED", "证据报告未能写入当前请求");
+    if (!report || report.requestId !== (normalizedInput.requestId as string)) throw coordinationError("COORDINATION_REPORT_NOT_CREATED", "证据报告未能写入当前请求");
     const next: CoordinationRuntimeState = {
       ...current,
       coordination: nextCoordination,
