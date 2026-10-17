@@ -29,15 +29,6 @@ export function getNextWorkflowTask(state: WorkflowState | null | undefined): Wo
   }, undefined);
 }
 
-function takeTask(state: WorkflowState, taskId: string): WorkflowTask {
-  const task = getWorkflowTask(state, taskId);
-  if (!task) throw new Error(`工作流任务不存在：${taskId}`);
-  const index = state.tasks.indexOf(task);
-  const detached = { ...task };
-  state.tasks = [...state.tasks.slice(0, index), detached, ...state.tasks.slice(index + 1)];
-  return detached;
-}
-
 export function startWorkflowTask(state: WorkflowState, taskId?: string, now = Date.now()): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不可启动任务");
   if (state.currentTaskId) throw new Error(`工作流已有进行中的任务：${state.currentTaskId}`);
@@ -49,7 +40,8 @@ export function startWorkflowTask(state: WorkflowState, taskId?: string, now = D
   }
 
   const result = cloneState(state, now);
-  const task = takeTask(result, next.id);
+  const task = getWorkflowTask(result, next.id);
+  if (!task) throw new Error("工作流没有可启动的下一个任务");
   task.status = "in_progress";
   delete task.startedAt;
   delete task.executionStartedAt;
@@ -101,7 +93,8 @@ export function markWorkflowTaskStarted(state: WorkflowState, taskId: string, no
   if (!result.handoff) throw new Error("当前任务缺少可验证的 handoff 身份");
   result.handoff.phase = "executing";
   result.handoff.startedAt ??= now;
-  const startedTask = takeTask(result, taskId);
+  const startedTask = getWorkflowTask(result, taskId);
+  if (!startedTask) throw new Error(`任务 ${taskId} 当前不在执行中`);
   startedTask.startedAt = now;
   startedTask.executionStartedAt = now;
   if (result.startedAt === undefined) {
@@ -131,7 +124,8 @@ export function completeWorkflowTask(
   const rationale = requireText(implementationRationale, "实现原因");
   const checks = normalizeTextList(verification, "任务验证结果", { required: true });
   const result = cloneState(state, now);
-  const task = takeTask(result, taskId);
+  const task = getWorkflowTask(result, taskId);
+  if (!task) throw new Error(`只能完成当前任务 ${state.currentTaskId ?? "（无）"}`);
   task.status = "completed";
   task.completionSummary = summary;
   task.implementationRationale = rationale;

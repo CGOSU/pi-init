@@ -213,18 +213,6 @@ export function cloneTask(task: WorkflowTask): WorkflowTask {
   };
 }
 
-function copyTask(task: WorkflowTask): WorkflowTask {
-  return {
-    ...task,
-    files: [...task.files],
-    acceptanceCriteria: [...task.acceptanceCriteria],
-    dependsOn: [...task.dependsOn],
-    ...(task.verification ? { verification: [...task.verification] } : {}),
-    ...(task.contract ? { contract: cloneWorkflowTaskContract(task.contract) } : {}),
-    ...(task.delegation ? { delegation: { ...task.delegation } } : {}),
-  };
-}
-
 export function validateWorkflowExecutionRoles(
   tasks: unknown,
   { unfinishedOnly = false }: WorkflowRoleValidationOptions = {},
@@ -527,7 +515,7 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
     ...(state.authority !== undefined ? { authority: normalizeExecutor(state.authority) } : {}),
     ...(state.subworkflowContract ? { subworkflowContract: structuredClone(state.subworkflowContract) } : {}),
     plan: clonePlan(state.plan),
-    tasks: state.tasks.map((task) => copyTask(task)),
+    tasks: state.tasks.map(cloneTask),
     ...(state.goals ? { goals: state.goals.map((goal) => ({ ...goal, constraints: [...goal.constraints] })) } : {}),
     revisions: (state.revisions ?? []).map(cloneRevision),
     ...(state.pendingRevision ? { pendingRevision: { ...state.pendingRevision } } : {}),
