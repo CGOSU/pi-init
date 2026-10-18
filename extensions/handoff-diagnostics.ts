@@ -1,17 +1,14 @@
 import { appendFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING = 128;
 const routingTools = new Set(["switch_role", "task_workflow"]);
 const fileQueues = new Map<string, Promise<void>>();
-
-function fingerprint(value: unknown) {
-  return value === undefined ? undefined : createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
-}
 
 function routingFields(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") return {};
@@ -46,7 +43,7 @@ function handoffSnapshot(state: ExtensionRuntimeState) {
       workflowId: workflow.workflowId, planVersion: workflow.planVersion, recoveryGeneration: workflow.recoveryGeneration,
       status: workflow.status, pauseReason: workflow.pauseReason, taskPauseReasonHash: fingerprint(workflow.taskPauseReason),
       currentTaskId: workflow.currentTaskId, nudgeCount: workflow.nudgeCount,
-      tasks: workflow.tasks.slice(0, 64).map((item) => ({ id: item.id, role: item.role, status: item.status })),
+      tasks: workflow.tasks.slice(0, 64).map((item) => ({ id: item.id, role: item.role, status: item.status, outcomeUnknown: item.outcomeUnknown, executionStartedAt: item.executionStartedAt })),
       taskCount: workflow.tasks.length,
       clarification: task?.clarification ? { issueId: task.clarification.issueId, category: task.clarification.category, questionHash: fingerprint(task.clarification.question) } : undefined,
       handoff: workflow.handoff, continuation: workflow.continuation,
@@ -55,13 +52,14 @@ function handoffSnapshot(state: ExtensionRuntimeState) {
     coordination: coordination ? {
       coordinationId: coordination.coordination.coordinationId, version: coordination.coordination.version,
       recoveryGeneration: coordination.recoveryGeneration, phase: coordination.coordination.phase,
+      workflowLink: coordination.coordination.workflowLink,
       handoff: coordination.handoff ? { ...routingFields(coordination.handoff), phase: coordination.handoff.phase, kind: coordination.handoff.kind, failureCode: coordination.handoff.failure?.code } : undefined,
       request: request ? { requestId: request.requestId, questionId: request.questionId, round: request.round, status: request.status, followUpOfRequestId: request.followUpOfRequestId, questionHash: fingerprint(request.question), scopeHash: fingerprint(request.scope) } : undefined,
       review: review ? { reportId: review.reportId, decision: review.decision, gapsHash: fingerprint(review.gaps) } : undefined,
     } : undefined,
     compaction: { phase: state.roleCompactionPhase, operationId: state.roleCompactionOperationId, startedAt: state.roleCompactionStartedAt,
       pending: state.pendingRoleCompaction ? { fromRole: state.pendingRoleCompaction.fromRole, toRole: state.pendingRoleCompaction.toRole, continuationKind: state.pendingRoleCompaction.continuation?.kind } : undefined },
-    locks: { dispatch: state.workflowDispatchInFlight, compaction: state.roleCompactionInFlight, continuationPending: state.internalContinuationPending, roleRecovery: state.roleRecoveryPending },
+    locks: { dispatch: state.workflowDispatchInFlight, compaction: state.roleCompactionInFlight, continuationPending: state.internalContinuationPending, roleRecovery: state.roleRecoveryPending, roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: Boolean(state.pendingWorkflowRecovery) },
     restoreErrorCode: state.workflowRestoreError?.code ?? state.coordinationRestoreError?.code,
   };
 }
@@ -117,11 +115,33 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
   pi.on("agent_settled", (_event, ctx) => { trace(ctx, "agent.settled"); });
-  pi.on("tool_call", (event, ctx) => {
-    if (routingTools.has(event.toolName)) trace(ctx, "routing.tool_call", { toolName: event.toolName, toolCallId: event.toolCallId, ...routingFields(event.input) });
+  async function observeTool(ctx: ExtensionContext, event: string, toolName: string, toolCallId: string, input: unknown, extra: Record<string, unknown> = {}, inspectFiles = false) {
+    try {
+      if (writeFailed || !ctx.isProjectTrusted()) return;
+      const summary = await summarizeToolInput(ctx.cwd, input, inspectFiles);
+      trace(ctx, event, { toolName, toolCallId, ...summary, ...extra });
+    } catch {
+      // A malformed diagnostic payload must not interrupt a tool.
+    }
+  }
+  pi.on("tool_call", async (event, ctx) => {
+    await observeTool(ctx, routingTools.has(event.toolName) ? "routing.tool_call" : "tool.call", event.toolName, event.toolCallId, event.input,
+      { parentToolCallId: event.parentToolCallId, ...(routingTools.has(event.toolName) ? routingFields(event.input) : {}) }, true);
   });
-  pi.on("tool_result", (event, ctx) => {
-    if (routingTools.has(event.toolName)) trace(ctx, "routing.tool_result", { toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError, errorHash: event.isError ? fingerprint(event.content) : undefined, ...routingFields(event.details) });
+  pi.on("tool_result", async (event, ctx) => {
+    await observeTool(ctx, routingTools.has(event.toolName) ? "routing.tool_result" : "tool.result", event.toolName, event.toolCallId, event.input,
+      { parentToolCallId: event.parentToolCallId, isError: event.isError, ...summarizeToolResult(event), ...(routingTools.has(event.toolName) ? routingFields(event.details) : {}) }, true);
+  });
+  pi.on("tool_execution_start", async (event, ctx) => {
+    await observeTool(ctx, "tool.execution_start", event.toolName, event.toolCallId, event.args, { parentToolCallId: event.parentToolCallId });
+  });
+  pi.on("tool_execution_end", (event, ctx) => {
+    try {
+      trace(ctx, "tool.execution_end", { toolName: event.toolName, toolCallId: event.toolCallId, parentToolCallId: event.parentToolCallId,
+        durationMs: event.durationMs, isError: event.isError, ...summarizeToolResult(event.result) });
+    } catch {
+      // Diagnostics must never change execution results.
+    }
   });
   pi.on("message_start", (event, ctx) => {
     const message = event.message as unknown as Record<string, unknown>;
@@ -129,12 +149,13 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
       trace(ctx, "handoff.message_consumed", { customType: message.customType, ...routingFields(message.details) });
     }
   });
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", async (event, ctx) => {
     const message = event.message as unknown as Record<string, unknown>;
     if (message.role !== "assistant" || !Array.isArray(message.content)) return;
     for (const item of message.content) {
-      if (item.type === "toolCall" && routingTools.has(item.name)) {
-        trace(ctx, "routing.model_proposed", { toolName: item.name, toolCallId: item.id, ...routingFields(item.arguments) });
+      if (item.type === "toolCall") {
+        await observeTool(ctx, routingTools.has(item.name) ? "routing.model_proposed" : "tool.model_proposed", item.name, item.id, item.arguments,
+          routingTools.has(item.name) ? routingFields(item.arguments) : {});
       }
     }
   });
