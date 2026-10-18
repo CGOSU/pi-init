@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-18：优化架构取证复用与交接提示
+
+- 完成：更新 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/docs-commit.md`，将正式证据协作限定在确需架构决策、跨职责协调或用户明确要求的情形；普通明确低风险工作直接按职责完成。更新 `extensions/coordination-messages.ts` 和 `extensions/workflow-messages.ts`，允许同轮集中处理共享来源、按请求分别报告，并仅在已接受证据的来源版本、当前 revision、适用范围或失效状态不再满足、存在明确刷新理由或决策关键缺口时针对性补查。非阻塞未知项如实披露，但不自动补证或绕过关键未决及既有门控。
+- 取舍：只改规则和提示文本，复用现有批量能力；保留 request/report/handoff 身份、revision/source-validity、readiness 与任务契约运行时逻辑，不新增字段、持久化、测试断言或性能指标。
+- 验证：前置提示修改实际执行 `git diff --check`，通过（退出码 0，无输出）；本次收尾静态核对了完整变更范围、模板插值/身份引用和项目 Git 状态。未运行测试或构建，未进行性能基准，不声称任何提速比例。
+- 收尾范围：本工作流包含五个 Skill/角色/提示文件及三份项目记录；提交前未发现其他暂存或未跟踪改动。按项目 Git 身份 `CGOSU <dev@cgosu.com>` 创建中文 commit；不 push。
+
 ### 2026-10-16：退役测试价值审阅功能并保留结构审阅
 
 - 完成：移除测试价值候选的领域/运行时、专属测试、共享双维候选与增量通知接线、`file_review` 价值字段/结论和 `/large` 价值派发路径。`file_review` 仅保留超过 500 个物理行的结构审阅、`keep`/`recommend-split`、完整读取门、指纹失效和结构记录恢复；旧非结构 `reviewKind` 明确失败，不传参数和 `structure` 继续支持。历史 `pi-init-test-value-review` session entries 保持原样并忽略，不读取、迁移、写入或删除。

@@ -284,7 +284,7 @@ export function createWorkflowMessages(
           ? `父工作流仍保留的澄清与副作用记录（属于父层，不要求子计划代替解决）：\n${clarifications.join("\n")}`
           : `开发者正式退回的澄清（必须逐项处置）：\n${clarifications.join("\n")}`
         : "",
-      "规划边界：architect 不直接取证、不执行代码、不连接 MCP；允许通过 request-evidence 安排 docs-commit 查证，并通过 review-evidence 接受、补查或阻塞。缺关键事实时先取证；契约冲突应依据已接受证据/明确需求解决；业务决策缺失必须向用户确认，不能猜测或应用含 blockingQuestions 的计划。",
+      "规划边界：architect 不直接取证、不执行代码、不连接 MCP；允许通过 request-evidence 安排 docs-commit 查证，并通过 review-evidence 接受、补查或阻塞。复用已在当前 revision 接受、来源版本匹配且适用范围与既有失效规则仍有效的证据；仅在来源/范围实际变化、失效规则触发、明确刷新理由或影响方案、正确性或安全的决策关键缺口时安排针对性取证。非阻塞未知项须如实披露，不因其存在自动补证或阻止计划；影响方案、正确性或安全的关键未决问题必须解决，未解决时不得提交计划或从 blockingQuestions 移除。契约冲突应依据已接受证据/明确需求解决；业务决策缺失必须向用户确认。不得绕过既有任务契约、readiness、stale、revision 或 handoff 身份门控。",
       request.kind === "nested"
         ? "只规划 childGoal 对应的独立子工作流；不要覆盖父层计划或把父层未完成任务搬入子层。父层任务、澄清、身份与已完成成果会被原样挂起，子层完成后返回父层审阅结果与计划有效性，不直接恢复执行。提交 replan 必须提供独立 subworkflowContract={inputs:[...],expectedOutputs:[...],acceptanceCriteria:[...],allowedFiles:[...]}；返回位置由运行时父层身份绑定，仅允许一层活动子流程。不得重放父层副作用为 occurred/unknown 的任务。"
         : "请只规划未完成的后续工作；不要修改已完成任务的摘要或验证记录。旧任务的 completedWork 与验证已持久化在澄清报告中，不得将被澄清任务伪报完成。副作用为 occurred/unknown 时不得自动重放；新任务契约必须通过 clarificationResolutions 明确说明处理方式，未核实则不得派发。",

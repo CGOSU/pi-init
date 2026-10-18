@@ -62,7 +62,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
         "[PI-INIT 证据取证交接]",
         `当前协作 handoff 短引用（report-evidence 时按原样传回 coordinationHandoffId）：${handoff.handoffId}`,
         batchRequests.length > 1
-          ? `本次为批量取证，共 ${batchRequests.length} 个问题，可在同一回合内逐一核对后分别报告：\n${batchRequests.map((item, index) => `${index + 1}. requestId ${item.requestId} / questionId ${item.questionId}\n   问题：${item.question}\n   理由：${item.rationale}\n   范围：${item.scope.join("；")}${item.exclusions.length ? `\n   排除：${item.exclusions.join("；")}` : ""}\n   完成条件：${item.completionCriteria.join("；")}${item.addressesGaps.length ? `\n   需回应的缺口：${item.addressesGaps.join("；")}` : ""}`).join("\n")}`
+          ? `本次为批量取证，共 ${batchRequests.length} 个问题；请在同一回合集中处理，可合并共享来源的重复核查，但必须分别按各请求的问题、范围和完成条件回答并报告：\n${batchRequests.map((item, index) => `${index + 1}. requestId ${item.requestId} / questionId ${item.questionId}\n   问题：${item.question}\n   理由：${item.rationale}\n   范围：${item.scope.join("；")}${item.exclusions.length ? `\n   排除：${item.exclusions.join("；")}` : ""}\n   完成条件：${item.completionCriteria.join("；")}${item.addressesGaps.length ? `\n   需回应的缺口：${item.addressesGaps.join("；")}` : ""}`).join("\n")}`
           : `问题 ID：${request.questionId}`,
         batchRequests.length > 1 ? "" : `待回答问题：${request.question}`,
         batchRequests.length > 1 ? "" : `取证理由：${request.rationale}`,
@@ -71,8 +71,8 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
         batchRequests.length > 1 ? "" : `完成条件：${request.completionCriteria.map((item) => `- ${item}`).join("\n")}`,
         request.addressesGaps.length ? `需回应的先前缺口：${request.addressesGaps.map((item) => `- ${item}`).join("\n")}` : "",
         priorGaps.length ? `上一轮 architect 指出的缺口：${priorGaps.map((item) => `- ${item}`).join("\n")}` : "",
-        priorAcceptedFacts.length ? `本问题先前已接受事实（历史来源版本，须按本轮范围重新核实）：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
-        "你是受派发的 docs-commit 取证角色。当前交接包只包含本问题和相关历史事实，不得推断完整协作账本。核对最新实现、直接调用方和相关测试；报告必须区分 fact/inference/unconfirmed/conflict，并给每条发现附来源 location 与当前版本。测试源码已定位与实际执行验证分开填写；没有运行的测试不得声称通过。不要代替 architect 接受证据、决定业务方案或派发开发。",
+        priorAcceptedFacts.length ? `本问题先前已接受事实（历史来源版本；仅在来源版本、当前 revision 绑定、适用范围及既有失效规则均仍有效时复用，不一概重新核实。仅在来源/范围实际变化、失效规则触发、明确刷新理由或影响决策的关键缺口时针对性核查；无法确认有效性时如实标为未确认，不得视作当前事实）：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
+        "你是受派发的 docs-commit 取证角色。当前交接包只包含本次请求和相关历史事实，不得推断完整协作账本。围绕各请求的决策关键问题，核查必要的最新实现、直接调用方和相关测试；仅当这些内容影响问题回答或为完成条件所必需时查阅。只复用已能从当前协调状态确认满足来源版本、当前 revision 绑定、适用范围及既有失效规则的已接受事实；仅在来源/范围实际变化、失效规则触发、明确刷新理由或决策关键缺口时针对性核查，不为确认每条历史事实而扩大取证。无法确认有效性的历史事实及非阻塞未知项如实标为 unconfirmed，不得作为当前事实或机械触发补证。报告必须区分 fact/inference/unconfirmed/conflict，并给每条发现附来源 location 与当前版本。测试源码已定位与实际执行验证分开填写；没有运行的测试不得声称通过。不要代替 architect 接受证据、决定业务方案或派发开发。",
         batchRequests.length > 1
           ? `每个问题核对完成后分别调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={requestId: 对应 requestId, ...})；同一 handoff 可连续提交多个报告，全部完成后停止。`
           : `完成后调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={...})。一次报告后停止；若证据不完整，明确列出未确认项。若报告输入校验失败，可在同一有效 handoff 内修正后重提，不要新建 attempt、重复取证或复用已消费身份。`,
@@ -107,7 +107,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
       report.findings.some((finding) => finding.sources.length > 0)
         ? `可核对引用（findingId · sourceId · sourceVersion）：\n${report.findings.flatMap((finding) => finding.sources.map((source) => `- ${finding.findingId} · ${source.id} · ${source.version}（${finding.classification}）`)).join("\n")}`
         : "",
-      priorAcceptedFacts.length ? `本问题之前已接受的事实：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
+      priorAcceptedFacts.length ? `本问题之前已接受的事实（仅在来源版本、当前 revision 绑定、适用范围及既有失效规则仍有效时复用；本轮出现实际变化或决策关键缺口时再针对性核查）：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
       reopening && previousBlockReview
         ? `本轮为显式重开审阅（不是新取证）；重开原因：${reopening.reason}\n此前阻塞审阅：${previousBlockReview.reviewId}（${previousBlockReview.reason ?? previousBlockReview.gaps.join("；")}）`
         : "",
