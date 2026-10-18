@@ -44,7 +44,7 @@ async function makeHarness(directory, options = {}) {
   return harness;
 }
 
-function restartHarness(branch, directory) {
+function restartHarness(branch, directory, options = {}) {
   return createExtensionHarness(branch, {
     cwd: directory,
     trusted: true,
@@ -52,6 +52,7 @@ function restartHarness(branch, directory) {
     availableModels: [architect, docs, developer],
     sessionId: "task-contract-session",
     isIdle: false,
+    ...options,
   });
 }
 
@@ -176,19 +177,11 @@ test("无协调证据的普通计划携带契约时返回双向门控诊断", as
   });
 });
 
-test("协调 plan/replan 强制任务契约；clarify 退回 architect，补证据后仅以新 revision 继续", async () => {
+test("显式 formal plan/replan 保持契约门控；clarify 退回 architect，补证据后仅以新 revision 继续", async () => {
   await withTempDirectory(async (directory) => {
     const harness = await makeHarness(directory);
     const { evidence } = await prepareEvidence(harness);
 
-    await assert.rejects(execute(harness, taskParams(evidence, null)), (error) => {
-      assert.equal(error.code, "TASK_CONTRACT_REQUIRED");
-      assert.equal(error.details.taskId, "input-implementation");
-      assert.match(error.details.precondition, /结构化任务契约/);
-      assert.match(error.details.nextAction, /重新提交 plan\/replan/);
-      assert.doesNotMatch(error.details.nextAction, /删除契约|环境权限/);
-      return true;
-    });
     await assert.rejects(execute(harness, taskParams(evidence, contract(evidence, {
       blockingQuestions: ["尚未确认失败后是否回滚副作用"],
     }))), (error) => {
@@ -340,6 +333,15 @@ test("协调 plan/replan 强制任务契约；clarify 退回 architect，补证�
       summary: "依据已接受事实继续且不重放写操作",
       constraints: ["未知副作用必须先核对，不能重复提交"],
     };
+    await assert.rejects(execute(harness, {
+      ...replanBase,
+      confirmUnknownOutcome: true,
+      tasks: [{ id: "contract-deleted", task: "不能删契约绕过未知副作用", files: ["src/input.ts"], acceptanceCriteria: ["保持澄清守卫"] }],
+    }), error => error.code === "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED");
+    await assert.rejects(execute(harness, {
+      ...replanBase,
+      tasks: [{ id: "contract-deleted-without-confirm", task: "没有自签确认也不能删除契约", files: ["src/input.ts"], acceptanceCriteria: ["保持澄清守卫"] }],
+    }), error => error.code === "WORKFLOW_CLARIFICATION_UNRESOLVED");
     const unresolvedContract = contract(latestEvidence);
     await assert.rejects(execute(harness, {
       ...replanBase,
@@ -639,4 +641,137 @@ test("同步失败后直接补充证据也可受限补偿，不再误报未关�
     assertCurrentLink(harness);
     assert.equal(latestCoordination(harness).coordination.requests.at(-1).questionId, "additional-fact");
   });
+});
+
+
+test("ready 旁账不将普通 auto 小计划升级为 formal，也不绑定工作流", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    const { evidence } = await prepareEvidence(harness);
+    const before = structuredClone(latestCoordination(harness));
+    const result = await execute(harness, taskParams(evidence, null));
+    assert.equal(result.details.orchestrated, false);
+    assert.equal(latestWorkflow(harness), undefined);
+    assert.deepEqual(latestCoordination(harness), before);
+  });
+});
+
+test("ready 旁账下普通多任务 plan/replan 可执行且不生成契约或绑定", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    const { evidence } = await prepareEvidence(harness);
+    const before = structuredClone(latestCoordination(harness));
+    const params = taskParams(evidence, null);
+    params.tasks = ["one", "two", "three"].map(id => ({ ...params.tasks[0], id }));
+    await execute(harness, params);
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(workflowMessageIdentity(harness, "pi-init-workflow-task").taskId, "one");
+    await execute(harness, { action: "block", ...workflowMessageIdentity(harness, "pi-init-workflow-task"), reason: "在安全边界重规划" });
+    await switchToArchitect(harness);
+    await execute(harness, { action: "request-replan", ...workflowActionIdentity(latestWorkflow(harness)), summary: "调整普通任务顺序" });
+    await emitExtensionEvent(harness, "agent_settled");
+    await execute(harness, { ...params, action: "replan", tasks: params.tasks.map(task => ({ ...task, id: `revised-${task.id}` })), ...workflowMessageIdentity(harness, "pi-init-workflow-replan"), confirmUnknownOutcome: true });
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(latestWorkflow(harness).tasks.some(task => task.contract !== undefined), false);
+    assert.deepEqual(latestCoordination(harness), before);
+    assert.equal(harness.sentMessages.filter(item => item.message.customType === "pi-init-workflow-task").length, 2);
+  });
+});
+
+test("显式进行中和阻塞取证不能通过无 contract 普通 plan 绕过", async () => {
+  for (const phase of ["evidence-gathering", "evidence-review", "blocked"]) {
+    await withTempDirectory(async directory => {
+      const harness = await makeHarness(directory);
+      await prepareEvidence(harness);
+      latestCoordination(harness).coordination.phase = phase;
+      latestCoordination(harness).coordination.requests[0].status = phase === "blocked" ? "blocked" : "pending";
+      await assert.rejects(execute(harness, taskParams(undefined, null)), error => /^COORDINATION_/.test(error.code));
+      assert.equal(latestWorkflow(harness), undefined);
+    });
+  }
+});
+
+test("显式 legacy workflow link 即使无 contract 仍 fail closed", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    await coordinatedPlan(harness);
+    const identity = workflowMessageIdentity(harness, "pi-init-workflow-task");
+    await execute(harness, { action: "complete", ...identity, completionSummary: "完成", implementationRationale: "保持绑定", verification: ["通过"] });
+    for (const task of latestWorkflow(harness).tasks) delete task.contract;
+    await emitExtensionEvent(harness, "agent_settled");
+    assert.equal(harness.sentMessages.filter(item => item.message.customType === "pi-init-workflow-task").length, 1);
+    assert.ok(harness.notifications.some(item => /TASK_CONTRACT_REQUIRED/.test(item.message)));
+  });
+});
+
+
+test("无关 coordinationRestoreError 不污染普通计划，显式 formal/取证仍阻断", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    const { evidence } = await prepareEvidence(harness);
+    latestCoordination(harness).runtimeVersion = -1;
+    const restarted = restartHarness(harness.branch, directory, { isIdle: true });
+    await emitExtensionEvent(restarted, "session_start");
+    await switchToArchitect(restarted);
+    const ordinary = await execute(restarted, taskParams(evidence, null));
+    assert.equal(ordinary.details.orchestrated, false);
+    await assert.rejects(execute(restarted, taskParams(evidence)), error => /^COORDINATION_/.test(error.code));
+    await assert.rejects(execute(restarted, { action: "request-evidence", request: {} }), error => /^COORDINATION_/.test(error.code));
+    assert.equal(latestWorkflow(restarted), undefined);
+    const params = taskParams(undefined, null);
+    params.tasks = ["one", "two", "three"].map(id => ({ ...params.tasks[0], id }));
+    await execute(restarted, params);
+    await emitExtensionEvent(restarted, "agent_settled");
+    assert.equal(workflowMessageIdentity(restarted, "pi-init-workflow-task").taskId, "one");
+    await execute(restarted, { action: "complete", ...workflowMessageIdentity(restarted, "pi-init-workflow-task"), completionSummary: "普通结果", implementationRationale: "不依赖损坏旁账", verification: ["通过"] });
+    assert.equal(latestWorkflow(restarted).tasks[0].status, "completed");
+  });
+});
+
+test("formal replan 不得删除 contract 并借失配绑定降级为普通流程", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    await coordinatedPlan(harness);
+    await execute(harness, { action: "block", ...workflowMessageIdentity(harness, "pi-init-workflow-task"), reason: "在安全边界重规划" });
+    await switchToArchitect(harness);
+    await execute(harness, { action: "request-replan", ...workflowActionIdentity(latestWorkflow(harness)), summary: "保留 formal 边界" });
+    await emitExtensionEvent(harness, "agent_settled");
+    latestCoordination(harness).coordination.workflowLink.planVersion += 1;
+    const before = structuredClone(latestWorkflow(harness));
+    const params = taskParams(undefined, null);
+    await assert.rejects(execute(harness, { ...params, action: "replan", ...workflowMessageIdentity(harness, "pi-init-workflow-replan"), confirmUnknownOutcome: true }), error => /^(TASK_CONTRACT_|COORDINATION_)/.test(error.code));
+    assert.deepEqual(latestWorkflow(harness), before);
+  });
+});
+
+
+test("绑定 legacy 账本损坏且已无 contract 时恢复仍 fail closed", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await makeHarness(directory);
+    await coordinatedPlan(harness);
+    for (const task of latestWorkflow(harness).tasks) delete task.contract;
+    latestCoordination(harness).runtimeVersion = -1;
+    const restarted = restartHarness(harness.branch, directory);
+    await emitExtensionEvent(restarted, "session_start");
+    await switchToArchitect(restarted);
+    await assert.rejects(execute(restarted, { action: "request-replan", ...workflowActionIdentity(latestWorkflow(restarted)), summary: "不得绕过绑定的恢复错误" }), error => error.code === "COORDINATION_RUNTIME_VERSION_UNSUPPORTED");
+    assert.equal(restarted.sentMessages.some(item => item.message.customType === "pi-init-workflow-task"), false);
+  });
+});
+
+
+test("恢复错误不能掩盖同 session 显式进行中或 blocked 取证", async () => {
+  for (const phase of ["evidence-gathering", "evidence-review", "blocked"]) {
+    await withTempDirectory(async directory => {
+      const harness = await makeHarness(directory);
+      await prepareEvidence(harness);
+      latestCoordination(harness).runtimeVersion = -1;
+      latestCoordination(harness).coordination.phase = phase;
+      const restarted = restartHarness(harness.branch, directory);
+      await emitExtensionEvent(restarted, "session_start");
+      await switchToArchitect(restarted);
+      await assert.rejects(execute(restarted, taskParams(undefined, null)), error => error.code === "COORDINATION_RUNTIME_VERSION_UNSUPPORTED");
+      assert.equal(latestWorkflow(restarted), undefined);
+    });
+  }
 });

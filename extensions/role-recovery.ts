@@ -1,5 +1,5 @@
 import type { ContextEvent, ContextEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isWorkflowActive } from "../src/workflow.ts";
+import { } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
@@ -84,14 +84,14 @@ export function createRoleRecovery(
   }
 
   function context(event: ContextEvent, ctx: ExtensionContext) {
-    const view = state.roleRecoveryPending ? undefined : contextView?.(event, ctx);
+    const view = state.roleRecoveryPending && state.workflowState?.status !== "paused" ? undefined : contextView?.(event, ctx);
     if (!state.roleRecoveryPending) return view;
     const messages = (view?.messages ?? event.messages).filter((message) => {
       const candidate = message as { customType?: unknown };
       return candidate.customType !== ROLE_RECOVERY_MESSAGE_TYPE;
     });
     const activeRole = state.activeRole?.role ? roleLabel(state.activeRole.role) : "未知";
-    const activeWorkflow = Boolean(state.workflowState && isWorkflowActive(state.workflowState));
+    const activeWorkflow = Boolean(state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status));
     const roleRecoveryAction = state.roleModeStatus === "manual"
       ? "当前为 manual 模式：若当前角色与模型匹配，可用 switch_role 验证；否则需用户执行 /pi-init role <role>，不能反复调用 switch_role。"
       : "需要执行前调用 switch_role(role=...) 并等待成功。";
@@ -121,13 +121,31 @@ export function createRoleRecovery(
   }
 
   function guardToolCall(event: { toolName: string; input?: Record<string, unknown> }) {
-    if (!state.roleRecoveryPending) return undefined;
     if (event.toolName === "switch_role") return undefined;
-    if (state.activeRole?.role && state.activeRole.role !== "architect" && READ_ONLY_TOOLS.has(event.toolName)) return undefined;
-    if (event.toolName === "task_workflow" && event.input?.action === "status") return undefined;
+    const readOnly = READ_ONLY_TOOLS.has(event.toolName);
+    const workflowAction = event.toolName === "task_workflow" ? event.input?.action : undefined;
+    if (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) {
+      if (workflowAction !== "status" && !(state.activeRole?.role && state.activeRole.role !== "architect" && readOnly)) {
+        return { block: true, reason: "[pi-init-role-recovery] " + ROLE_RECOVERY_REASON };
+      }
+    }
+    const workflow = state.workflowState;
+    if (workflowAction === "retry" || (workflowAction === "replan" && event.input?.confirmUnknownOutcome === true)) {
+      const taskId = event.input?.taskId;
+      const task = workflowAction === "replan"
+        ? workflow?.tasks.find(item => item.outcomeUnknown || item.clarification?.sideEffects.status === "unknown")
+        : workflow?.tasks.find(item => taskId === undefined ? item.status === "blocked" : item.id === taskId);
+      if (task?.outcomeUnknown || task?.clarification?.sideEffects.status === "unknown") return {
+        block: true,
+        reason: "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。请核对副作用，由用户执行 /pi-init workflow retry <taskId> --confirm-unknown-outcome 或使用工作流面板确认。",
+      };
+    }
+    const unavailable = state.workflowRestoreError || state.pendingWorkflowRecovery || workflow?.status === "paused" || workflow?.status === "replanning";
+    if (!unavailable || readOnly) return undefined;
+    if (workflowAction && !["complete", "block", "clarify"].includes(String(workflowAction))) return undefined;
     return {
       block: true,
-      reason: `[pi-init-role-recovery] ${ROLE_RECOVERY_REASON}`,
+      reason: "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。先查询 task_workflow(status)，按暂停原因恢复或由用户确认未知结果重试。",
     };
   }
 

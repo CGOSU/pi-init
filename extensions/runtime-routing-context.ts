@@ -1,5 +1,5 @@
 import type { BeforeAgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getWorkflowTask, isWorkflowActive } from "../src/workflow.ts";
+import { getWorkflowTask } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 
@@ -12,20 +12,25 @@ type RuntimeRoutingDependencies = {
 
 function workflowSummary(state: ExtensionRuntimeState) {
   const workflow = state.workflowState;
-  if (!workflow || !isWorkflowActive(workflow)) return "无活动工作流";
+  if (!workflow || workflow.status === "completed" || workflow.status === "cancelled") return "无活动工作流";
   const task = workflow.currentTaskId ? getWorkflowTask(workflow, workflow.currentTaskId) : undefined;
   const taskSummary = task ? `${task.id}（${task.role}/${task.status}）` : "等待任务";
-  return `活动工作流：${workflow.executor}/${workflow.status}，当前任务：${taskSummary}`;
+  const pause = workflow.status === "paused" ? `，暂停原因：${workflow.pauseReason ?? "未记录"}${workflow.taskPauseReason ? `（${workflow.taskPauseReason}）` : ""}。暂停不是当前任务执行授权，不沿用旧 attempt/handoff` : "";
+  return `未结束工作流：${workflow.executor}/${workflow.status}，当前任务：${taskSummary}${pause}`;
 }
 
 function recoveryGuidance(state: ExtensionRuntimeState) {
+  const workflow = state.workflowState;
+  if (!state.roleRecoveryPending && workflow?.status === "paused") {
+    return '职责恢复：已确认，但工作流暂停不是当前任务执行授权。先调用 task_workflow(action="status") 读取暂停原因与当前引用；通过有效的恢复/重试/重规划转换后才能执行，不沿用旧 attempt/handoff。';
+  }
   if (!state.roleRecoveryPending) {
     return "职责恢复：已确认。简单无工具问答直接回答；不要调用 task_workflow(status)，当前职责匹配时不要重复 switch_role。自动交接已确认时只继续未完成工作，不为压缩重复换角。";
   }
   const roleAction = state.roleModeStatus === "manual"
     ? "当前为 manual 模式；若当前角色可验证，使用 switch_role，否则请用户执行 /pi-init role <role>，不要反复调用 switch_role。"
     : "先按目标调用 switch_role 并等待成功。";
-  if (state.workflowState && isWorkflowActive(state.workflowState)) {
+  if (workflow && workflow.status !== "completed" && workflow.status !== "cancelled") {
     return `职责恢复：pending。先调用 task_workflow(action="status")，重新确认当前任务角色；${roleAction}恢复前不要执行其他工具。`;
   }
   return `职责恢复：pending。无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}`;

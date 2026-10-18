@@ -1,5 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkTaskContractAgainstCoordination } from "../src/coordination.ts";
+import { checkCoordinationWorkflowReadiness } from "./coordination-readiness.ts";
+import { COORDINATION_ENTRY_TYPE, isRecord } from "./coordination-runtime-protocol.ts";
 import {
   blockWorkflowTask,
   cloneState,
@@ -61,24 +63,59 @@ function sameReplanIdentity(left: WorkflowReplanIdentity, right: WorkflowReplanI
     && left.handoffId === right.handoffId;
 }
 
-function workflowCoordinationReadiness(current: WorkflowState, state: ExtensionRuntimeState) {
+function failedCoordinationSource(state: ExtensionRuntimeState, ctx: ExtensionContext) {
+  if (!state.coordinationRestoreError) return;
+  const sourceId = state.coordinationRestoreError.sourceEntryId;
+  const source = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "custom"
+    && entry.customType === COORDINATION_ENTRY_TYPE && (!sourceId || entry.id === sourceId));
+  return source && "data" in source && isRecord(source.data) ? source.data : undefined;
+}
+
+export function hasUnfinishedRestoringEvidence(state: ExtensionRuntimeState, ctx: ExtensionContext) {
+  const source = failedCoordinationSource(state, ctx);
+  return Boolean(source?.sessionId === ctx.sessionManager.getSessionId() && isRecord(source?.coordination)
+    && !source.coordination.workflowLink
+    && ["evidence-gathering", "evidence-review", "blocked"].includes(String(source.coordination.phase)));
+}
+
+// An accepted side ledger is not an opt-in. Existing contracts or an explicit
+// workflow link are: deleting a contract must not downgrade an old formal plan.
+export function workflowUsesFormalEvidence(current: WorkflowState, state: ExtensionRuntimeState, ctx: ExtensionContext) {
+  if (current.tasks.some((task) => task.contract !== undefined)
+    || current.revisions.some((revision) => revision.replacedTasks?.some((task) => task.contract !== undefined))
+    || state.coordinationRuntimeState?.coordination.workflowLink?.workflowId === current.workflowId) return true;
+  // A malformed legacy ledger may not hydrate, but its explicit binding still
+  // prevents the linked workflow from treating that restore error as unrelated.
+  const source = failedCoordinationSource(state, ctx);
+  return Boolean(isRecord(source?.coordination) && isRecord(source.coordination.workflowLink)
+    && source.coordination.workflowLink.workflowId === current.workflowId);
+}
+
+function workflowCoordinationReadiness(current: WorkflowState, state: ExtensionRuntimeState, ctx: ExtensionContext) {
   const unfinishedTasks = current.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded");
-  const hasContracts = unfinishedTasks.some((task) => task.contract !== undefined);
+  const formal = workflowUsesFormalEvidence(current, state, ctx);
   if (state.coordinationRestoreError) {
-    return hasContracts
+    return formal || hasUnfinishedRestoringEvidence(state, ctx)
       ? { ok: false as const, code: state.coordinationRestoreError.code, message: state.coordinationRestoreError.message }
       : { ok: true as const };
   }
   const coordination = state.coordinationRuntimeState;
   if (!coordination) {
-    return hasContracts
+    return formal
       ? { ok: false as const, code: "COORDINATION_STATE_MISSING", message: "协调任务缺少已恢复的证据账本" }
       : { ok: true as const };
   }
   const link = coordination.coordination.workflowLink;
   const linkMatches = Boolean(link && link.workflowId === current.workflowId && link.planVersion === current.planVersion
     && link.recoveryGeneration === current.recoveryGeneration);
-  if (!hasContracts && !linkMatches) return { ok: true as const };
+  if (!formal) {
+    // Explicit unfinished/blocked evidence work remains a gate even for an
+    // ordinary queue; a ready, unbound ledger imposes no contract protocol.
+    if (!link && coordination.coordination.phase !== "ready") {
+      return checkCoordinationWorkflowReadiness(coordination.coordination);
+    }
+    return { ok: true as const };
+  }
   if (!linkMatches) {
     return { ok: false as const, code: "COORDINATION_WORKFLOW_LINK_MISMATCH", message: "协作证据未绑定当前 workflow revision" };
   }
@@ -461,7 +498,7 @@ export function createWorkflowDispatch(
       await scheduleWorkflowReplan(ctx);
       return;
     }
-    const coordinationReadiness = workflowCoordinationReadiness(current, state);
+    const coordinationReadiness = workflowCoordinationReadiness(current, state, ctx);
     if (!coordinationReadiness.ok) {
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`协调开发任务未通过就绪门（${coordinationReadiness.code}）：${coordinationReadiness.message}；不会派发。`, "error");

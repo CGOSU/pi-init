@@ -20,6 +20,80 @@ import {
   ensureWorkflowReplanHandoff,
 } from "../src/workflow.ts";
 import { createExtensionHarness } from "./helpers.js";
+import { blockWorkflowTask } from "../src/workflow.ts";
+
+test("paused recovery keeps the trusted task window and user goal without reviving the old authorization", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Need confirmed input behavior" }, 20);
+  harness.branch.push({ type: "custom", id: "paused-source", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const messages = [
+    { role: "assistant", content: [{ type: "text", text: "unrelated ancient history" }], timestamp: 0 },
+    { role: "user", content: "Original user goal: preserve caller errors", timestamp: 1 },
+    ...Array.from({ length: 40 }, (_, index) => ({ role: "user", content: `Additional constraint ${index}`, timestamp: 2 + index })),
+    handoffMessage,
+    { role: "assistant", content: [{ type: "toolCall", id: "read-current-fact", name: "read", arguments: {} }], stopReason: "toolUse", timestamp: 43 },
+    { role: "toolResult", toolCallId: "read-current-fact", toolName: "read", content: [{ type: "text", text: "Current verified caller fact" }], isError: false, timestamp: 44 },
+    { role: "user", content: "Resume only after clarifying the blocker", timestamp: 45 },
+  ];
+  const original = structuredClone({ messages, branch: harness.branch, workflow: state.workflowState });
+  state.roleRecoveryPending = true;
+  const roleRecovery = createRoleRecovery({ on() {}, appendEntry() {} }, state, createRoleContextView(state).context);
+  const result = roleRecovery.context({ type: "context", messages }, harness.context);
+  assert.ok(result, "paused workflows still require a bounded recovery view while role recovery is pending");
+  assert.equal(result.messages.some(message => message.content?.[0]?.text === "unrelated ancient history"), false);
+  assert.ok(result.messages.some(message => message.content === "Original user goal: preserve caller errors"));
+  assert.equal(result.messages.filter(message => typeof message.content === "string" && message.content.startsWith("Additional constraint")).length, 40);
+  assert.ok(result.messages.some(message => message.role === "toolResult" && message.content[0].text === "Current verified caller fact"));
+  assert.ok(result.messages.some(message => message.role === "assistant" && message.content[0].id === "read-current-fact"));
+  assert.equal(result.messages.some(message => message.customType === "pi-init-workflow-task"), false);
+  const recovery = result.messages.find(message => message.customType === "pi-init-workflow-paused-context");
+  assert.ok(recovery);
+  assert.match(recovery.content, /paused/);
+  assert.match(recovery.content, /Need confirmed input behavior/);
+  assert.match(recovery.content, /不是.*执行授权/);
+  assert.equal(recovery.details.recoveryGeneration, state.workflowState.recoveryGeneration);
+  assert.equal(recovery.details.attemptId, undefined);
+  assert.equal(state.roleRecoveryPending, true);
+  assert.deepEqual({ messages, branch: harness.branch, workflow: state.workflowState }, original);
+});
+
+test("paused recovery rejects stale snapshot identities and broken pairs with bounded diagnostics and an execution gate", () => {
+  for (const failure of ["generation", "session", "snapshot-status", "snapshot-missing", "broken-pair"]) {
+    const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+    state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+    const source = structuredClone(state.workflowState);
+    if (failure === "generation") source.recoveryGeneration -= 1;
+    if (failure === "session") source.sessionId = "other-session";
+    if (failure === "snapshot-status") source.status = "running";
+    if (failure !== "snapshot-missing") harness.branch.push({ type: "custom", id: "paused-source", customType: "pi-init-workflow", data: source });
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "untrusted ancient history" }], timestamp: 0 },
+      handoffMessage,
+      ...(failure === "broken-pair" ? [{ role: "toolResult", toolCallId: "absent", toolName: "read", content: [], isError: true, timestamp: 21 }] : []),
+      { role: "user", content: "Recover safely", timestamp: 22 },
+    ];
+    const branch = structuredClone(harness.branch);
+    const result = createRoleContextView(state).context({ type: "context", messages }, harness.context);
+    assert.ok(result, failure);
+    assert.ok(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), failure);
+    assert.equal(result.messages.some(message => message.customType === "pi-init-workflow-task"), false, failure);
+    assert.equal(result.messages.some(message => message.content?.[0]?.text === "untrusted ancient history"), false, failure);
+    assert.equal(state.roleRecoveryPending, false, "a context projection must not mutate role confirmation");
+    assert.equal(state.workflowState.status, "paused", "workflow execution protection stays in force");
+    assert.deepEqual(harness.branch, branch, failure);
+  }
+});
+
+test("a first architecture-review pause can recover from its persisted snapshot without a historical task handoff", () => {
+  const state = createExtensionRuntimeState();
+  state.workflowState = createWorkflowState({ summary: "Review before execution", sessionId, reviewRequired: true, tasks: [{ id: "first", task: "First task", files: ["src/input.ts"], acceptanceCriteria: ["Reviewed"] }] }, 10);
+  const harness = createExtensionHarness([], { sessionId });
+  harness.branch.push({ type: "custom", id: "initial-review", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const result = createRoleContextView(state).context({ type: "context", messages: [{ role: "user", content: "Original review goal", timestamp: 1 }] }, harness.context);
+  assert.ok(result);
+  assert.match(result.messages.find(message => message.customType === "pi-init-workflow-paused-context").content, /architecture-review/);
+  assert.equal(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), false);
+});
 
 const sessionId = "role-context-session";
 const provider = "test-provider";
@@ -441,7 +515,7 @@ test("task and evidence handoff packages contain only relevant facts and direct 
   assert.match(docsMessage.content, /Prior accepted caller behavior/);
   assert.match(docsMessage.content, /include caller error handling/);
   assert.doesNotMatch(docsMessage.content, /UNRELATED FACT MUST NOT LEAK/);
-  assert.match(docsMessage.content, /当前交接包只包含本问题和相关历史事实/);
+  assert.match(docsMessage.content, /当前交接包只包含(?:本问题|本次请求)和相关历史事实/);
 
   const { current: architectState } = coordinationRuntimeState({ role: "architect", kind: "review" });
   const architectMessage = compileCoordinationMessage(architectState);

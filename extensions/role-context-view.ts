@@ -1,6 +1,10 @@
 import type { ContextEvent, ContextEventResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isDeepStrictEqual } from "node:util";
+import { latestWorkflowRecoverySource } from "./workflow-recovery.ts";
 import {
+  hydrateWorkflowState,
   isWorkflowActive,
+  workflowActionIdentity,
   workflowHandoffIdentity,
   workflowReplanIdentity,
 } from "../src/workflow.ts";
@@ -308,13 +312,125 @@ function needsManagedView(state: ExtensionRuntimeState, sessionId: string) {
   );
 }
 
+// A paused workflow has no executable handoff. Its persisted state is the trust
+// anchor; a historical handoff is only a boundary for observations, never authority.
+function pausedContextView(
+  state: ExtensionRuntimeState,
+  messages: ContextMessage[],
+  ctx: ExtensionContext,
+): ContextEventResult {
+  const fail = (code: string, reason: string): ContextEventResult => ({
+    messages: [
+      ...messages.filter((message) => messageRecord(message)?.role === "user"),
+      {
+        ...diagnosticMessage(code, reason),
+        content: `[PI-INIT 暂停恢复视图不可确认]\n错误码：${code}\n原因：${reason}\n仅保留用户指令；原始 branch 未改写。旧任务交接不是当前执行授权。暂停和职责恢复保护仍有效；先读取 task_workflow(action="status")，不得凭旧身份执行。`,
+      } as ContextMessage,
+    ],
+  });
+  try {
+    const workflow = state.workflowState!;
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (workflow.sessionId !== sessionId) return fail("ROLE_CONTEXT_VIEW_SESSION_MISMATCH", "暂停工作流属于其他 session");
+    if (state.workflowRestoreError || state.coordinationRestoreError || state.roleRecoveryPersistenceFailed) {
+      return fail("ROLE_CONTEXT_VIEW_RESTORE_UNCERTAIN", "持久状态或恢复门尚未可靠恢复");
+    }
+    if (state.roleCompactionInFlight || state.roleCompactionPhase === "compacting" || state.activeRoleCompaction || state.pendingRoleCompaction) {
+      return fail("ROLE_CONTEXT_VIEW_COMPACTION_UNCERTAIN", "压缩边界尚未确认");
+    }
+    const branch = ctx.sessionManager.getBranch();
+    const source = latestWorkflowRecoverySource(branch);
+    const saved = hydrateWorkflowState(source.entry?.data);
+    const current = hydrateWorkflowState(workflow);
+    if (!source.entryId || branch.filter((entry) => entry.id === source.entryId).length !== 1
+      || !saved.ok || !current.ok || !isDeepStrictEqual(saved.value, current.value)) {
+      return fail("ROLE_CONTEXT_VIEW_PAUSED_SNAPSHOT_MISMATCH", "最新 branch 工作流快照与当前暂停状态/身份不一致");
+    }
+    const historical = branch.slice(0, source.index).filter((entry) => {
+      const record = messageRecord(entry);
+      return record?.type === "custom_message"
+        && (record.customType === WORKFLOW_TASK_MESSAGE_TYPE || record.customType === WORKFLOW_REPLAN_MESSAGE_TYPE)
+        && isRecord(record.details) && record.details.workflowId === workflow.workflowId;
+    });
+    const last = messageRecord(historical.at(-1));
+    let selected: ContextMessage[];
+    if (last) {
+      const identity = last.details;
+      if (!isRecord(identity) || identity.sessionId !== sessionId
+        || typeof identity.planVersion !== "number" || identity.planVersion > workflow.planVersion
+        || typeof identity.recoveryGeneration !== "number" || identity.recoveryGeneration > workflow.recoveryGeneration
+        || typeof last.customType !== "string" || !branchContainsExactlyOneAnchor(branch, last.customType, identity)) {
+        return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "历史任务边界身份不可核对");
+      }
+      const indices = messages.flatMap((message, index) => {
+        const record = messageRecord(message);
+        return record?.role === "custom" && record.customType === last.customType && identityMatches(record.details, identity) ? [index] : [];
+      });
+      if (indices.length !== 1) return fail("ROLE_CONTEXT_VIEW_MESSAGE_BOUNDARY_UNAVAILABLE", "历史任务边界在当前 context 中缺失或重复");
+      const anchorIndex = indices[0];
+      // Preserve user intent across the workflow, not just the last N messages.
+      // The suffix retains current observations (including successful tool output).
+      const first = messageRecord(historical[0]);
+      const firstIndex = messages.findIndex((message) => {
+        const record = messageRecord(message);
+        return record?.role === "custom" && record.customType === first?.customType
+          && isRecord(first?.details) && identityMatches(record.details, first.details);
+      });
+      if (firstIndex < 0) return fail("ROLE_CONTEXT_VIEW_PREVIOUS_BOUNDARY_UNAVAILABLE", "工作流起始消息边界不可核对");
+      const previous = priorHandoffBoundary(messages, firstIndex, branch, sessionId);
+      if (!previous.ok) return fail("ROLE_CONTEXT_VIEW_PREVIOUS_BOUNDARY_UNAVAILABLE", "工作流之前的交接边界不可核对");
+      selected = [
+        ...messages.slice(previous.index + 1, anchorIndex).filter((message) => messageRecord(message)?.role === "user"),
+        ...messages.slice(anchorIndex + 1).filter((message) => !isManagedHandoffMessage(message)
+          && messageRecord(message)?.customType !== ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE),
+      ];
+    } else {
+      if (workflow.tasks.some((task) => task.status !== "pending") || workflow.currentTaskId || workflow.handoff) {
+        return fail("ROLE_CONTEXT_VIEW_HANDOFF_UNAVAILABLE", "存在执行历史但无可验证的任务观察边界");
+      }
+      selected = messages.filter((message) => messageRecord(message)?.role === "user");
+    }
+    if (!hasCompleteToolPairs(selected)) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "恢复窗口中的工具调用/结果配对不完整或重复");
+    const identity = workflowActionIdentity(workflow);
+    const snapshot = {
+      ...identity,
+      status: workflow.status,
+      pauseReason: workflow.pauseReason,
+      taskPauseReason: workflow.taskPauseReason,
+      plan: workflow.plan,
+      pendingRevision: workflow.pendingRevision,
+      tasks: workflow.tasks.map((task) => ({
+        taskId: task.id, status: task.status, blockReason: task.blockReason,
+        outcomeUnknown: task.outcomeUnknown, contractRef: task.contract ? task.id : undefined,
+        verificationRef: task.verification?.length ? task.id : undefined,
+      })),
+    };
+    return { messages: [...selected, {
+      role: "custom",
+      customType: "pi-init-workflow-paused-context",
+      content: [
+        "系统生成的暂停恢复轻量快照（引用按需读取，不代表任务完成或证据已接受）：",
+        JSON.stringify(snapshot),
+        '工作流暂停不是当前任务执行授权；历史观察和旧交接仅供参考，不得复用旧 attempt/handoff。先调用 task_workflow(action="status") 核对暂停原因、契约和当前有效事实引用；通过有效恢复/重试/重规划转换且职责确认后才能执行，不重做已完成工作。',
+      ].join("\n"),
+      details: identity,
+      display: false,
+      timestamp: Date.now(),
+    } as ContextMessage] };
+  } catch {
+    return fail("ROLE_CONTEXT_VIEW_PAUSED_BOUNDARY_UNAVAILABLE", "暂停恢复状态或 branch 边界不可读取");
+  }
+}
+
 export function createRoleContextView(state: ExtensionRuntimeState) {
   function context(event: ContextEvent, ctx: ExtensionContext): ContextEventResult | undefined {
     if (!Array.isArray(event.messages)) {
       ctx.ui.notify("请求局部上下文视图无法识别 Pi 消息数组；未修改输入，保留宿主完整上下文。", "warning");
       return undefined;
     }
-    if (state.runtimeDisposed || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) return undefined;
+    if (state.runtimeDisposed) return undefined;
+    if (state.workflowState?.status === "paused") return pausedContextView(state, event.messages, ctx);
+    if (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) return undefined;
     let managedWork: boolean;
     try {
       managedWork = hasManagedWork(state);

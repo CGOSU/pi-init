@@ -49,6 +49,7 @@ import {
 } from "./contracts.ts";
 import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
+import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -138,6 +139,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     report: workflowReport,
     coordination: coordinationRuntime,
   });
+  const workflowBinding = createWorkflowToolBinding(pi, runtimeState);
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;
   function loadScaffoldRuntime() {
@@ -313,6 +315,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     settleExternalRunTiming();
     roleRuntime.startPendingRoleCompaction(ctx);
     await coordinationRuntime.schedule(ctx);
+    if ((runtimeState.coordinationRuntimeState?.handoff && runtimeState.internalContinuationPending) || runtimeState.roleCompactionInFlight || runtimeState.pendingRoleCompaction) return;
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -544,7 +547,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",
       "Never assign architect as an executable task role; planning validation rejects it, retained architect tasks cannot be applied by replan, and old active plans with architect execution tasks are not recovered or dispatched.",
-      "Architect 不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；architect 不得读取、搜索、浏览、运行 shell、编辑、写入或调用任何其他工具。需要最新实现、直接调用方或测试等结构化证据时，先 switch_role 到 docs-commit，由 docs-commit 核对 latest implementation, direct callers, and tests 后再交回 architect 规划。fresh structured evidence from docs-commit 必须由 docs-commit 提供，architect 不得自行完成低风险只读检查。",
+      "Architect 只规划与决策，不读取、执行或连接 MCP。优先复用已有调查；缺少决策关键事实时才交给 docs-commit 集中补查，不因切角重读规则或重复调查。普通任务无需正式取证协议。",
+      "本轮工具调用的工作流与协调身份由运行时绑定，通常只提交业务参数和真实结果，无需手填 workflow/session/attempt/handoff 等身份。兼容显式身份仍严格校验；不能套用最新状态提交旧回合结果。",
       `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；请求与审阅证据是纯协议动作，可传回当前 coordinationHandoffId 短引用，report-evidence 等执行动作仍被阻断。`,
       "task contract 与协调状态是双向门控：携带 contract 的任务必须有绑定当前 workflow revision 且已接受、未过期的协调证据，contract.evidence 必须引用该账本；没有协调证据的普通计划不要附带 contract，否则会被拒。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
@@ -584,7 +588,19 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return workflowActions.runTaskWorkflowAction(params, signal, ctx);
+      if (signal?.aborted || runtimeState.workflowRestoreError) return workflowActions.runTaskWorkflowAction(params, signal, ctx);
+      const guard = roleRecovery.guardToolCall({ toolName: "task_workflow", input: params });
+      if (guard?.block && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
+        throw Object.assign(new Error(guard.reason), { code: guard.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED" });
+      }
+      let bound: typeof params;
+      try { bound = workflowBinding.bind(_toolCallId, params, ctx); }
+      catch (error) {
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "WORKFLOW_RUN_BINDING_MISSING") throw error;
+        // Legacy validators provide precise missing-identity/role diagnostics without filling current identity.
+        return workflowActions.runTaskWorkflowAction(params, signal, ctx);
+      }
+      return workflowActions.runTaskWorkflowAction(bound, signal, ctx);
     },
   });
 

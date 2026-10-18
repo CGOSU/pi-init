@@ -84,7 +84,8 @@ test("status 的模型可见内容包含可直接提交的当前身份且保持�
     assert.deepEqual(identityFromText(content, "当前基础动作身份 JSON（后续变更动作仍须满足状态限制）："), baseIdentity);
     assert.deepEqual(identityFromText(content, "当前任务结果身份 JSON（complete/block）："), identity);
     const taskPrompt = harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message.content;
-    assert.deepEqual(identityFromText(taskPrompt, "当前任务结果身份 JSON（complete/block 时按原样传回）："), identity);
+    assert.match(taskPrompt, /身份由运行时绑定/);
+    assert.deepEqual(harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message.details, identity);
     assert.equal(harness.branch.length, branchLength);
     assert.equal(status.details.workflowPresentation.kind, "workflow-status");
     assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
@@ -452,7 +453,8 @@ test("新用户方向使旧 revision handoff 失效，只有最新身份能应�
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-replan").length, 2);
     const currentIdentity = workflowMessageIdentity(harness, "pi-init-workflow-replan");
     const replanPrompt = harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-replan").message.content;
-    assert.deepEqual(identityFromText(replanPrompt, "当前重规划身份 JSON（replan 时按原样传回）："), currentIdentity);
+    assert.match(replanPrompt, /身份由运行时绑定/);
+    assert.deepEqual(harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-replan").message.details, currentIdentity);
     await assert.rejects(
       workflow.execute("wrong-revision", {
         ...params,
@@ -478,5 +480,40 @@ test("新用户方向使旧 revision handoff 失效，只有最新身份能应�
       workflow.execute("duplicate-replan", params, undefined, undefined, harness.context),
       /没有等待应用的工作流重规划/,
     );
+  });
+});
+test("真实模型消息可只提交业务结果，由运行时绑定派发身份完成任务", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await taskHarness(directory);
+    const params = { action: "complete", completionSummary: "真实完成", implementationRationale: "复用已确认方案", verification: ["定向验证实际通过"] };
+    const message = { role: "assistant", content: [{ type: "toolCall", id: "runtime-bound-complete", name: "task_workflow", arguments: params }] };
+    await emitExtensionEvent(harness, "before_provider_request");
+    await emitExtensionEvent(harness, "message_start", { message });
+    await emitExtensionEvent(harness, "message_end", { message });
+    await harness.tools.find(tool => tool.name === "task_workflow").execute("runtime-bound-complete", params, undefined, undefined, harness.context);
+    const workflow = harness.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+    assert.equal(workflow.status, "completed");
+    assert.equal(workflow.tasks[0].completionSummary, "真实完成");
+    assert.equal(params.workflowId, undefined);
+  });
+});
+
+test("结果未知恢复不接受模型自签确认，用户重试命令仍可创建新 attempt", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await taskHarness(directory);
+    await emitExtensionEvent(harness, "before_provider_request");
+    await emitExtensionEvent(harness, "message_start", { message: { role: "assistant", content: [] } });
+    await emitExtensionEvent(harness, "session_shutdown");
+    await emitExtensionEvent(harness, "session_start", { reason: "resume" });
+    await harness.tools.find(tool => tool.name === "switch_role").execute("confirm-role", { role: "developer-test" }, undefined, undefined, harness.context);
+    const workflow = harness.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+    assert.equal(workflow.tasks[0].outcomeUnknown, true);
+    const params = { action: "retry", workflowId: workflow.workflowId, planVersion: workflow.planVersion, sessionId: workflow.sessionId, recoveryGeneration: workflow.recoveryGeneration, taskId: "first", confirmUnknownOutcome: true };
+    await assert.rejects(harness.tools.find(tool => tool.name === "task_workflow").execute("self-authorized", params, undefined, undefined, harness.context), /模型布尔值不构成用户授权/);
+    await harness.commands.get("pi-init").handler("workflow retry first --confirm-unknown-outcome", harness.context);
+    const retried = harness.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+    assert.equal(retried.status, "running");
+    assert.equal(retried.tasks[0].outcomeUnknown, undefined);
+    assert.ok(retried.recoveryGeneration > workflow.recoveryGeneration);
   });
 });

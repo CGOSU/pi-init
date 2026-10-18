@@ -19,7 +19,7 @@ import { checkWorkflowTaskContractReadiness } from "../src/workflow-task-contrac
 import { parseWorkflowTaskClarificationInput } from "../src/workflow-clarification.ts";
 import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from "./runtime-state.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
-import type { WorkflowDispatch } from "./workflow-dispatch.ts";
+import { hasUnfinishedRestoringEvidence, workflowUsesFormalEvidence, type WorkflowDispatch } from "./workflow-dispatch.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
 import type { CoordinationRuntime } from "./coordination-runtime.ts";
 import { taskWorkflowParameters } from "./contracts.ts";
@@ -320,7 +320,11 @@ export function createWorkflowActions(
       && !mayStartFreshSessionWorkflow && !mayCancelInvalidExecutionRole) {
       throw missingWorkflowError();
     }
-    if (params.action !== "status" && state.coordinationRestoreError) {
+    const usesFormalEvidence = ["request-evidence", "report-evidence", "review-evidence"].includes(params.action)
+      || (Array.isArray(params.tasks) && params.tasks.some((task) => task.contract !== undefined))
+      || (params.action !== "plan" && Boolean(state.workflowState && workflowUsesFormalEvidence(state.workflowState, state, ctx)));
+    if (params.action !== "status" && state.coordinationRestoreError
+      && (usesFormalEvidence || hasUnfinishedRestoringEvidence(state, ctx))) {
       throw Object.assign(new Error(`无法恢复协作状态（${state.coordinationRestoreError.code}）：${state.coordinationRestoreError.message}`), {
         code: state.coordinationRestoreError.code,
         details: { ok: false, ...state.coordinationRestoreError },
@@ -444,8 +448,13 @@ export function createWorkflowActions(
           reviewRequired: params.reviewRequired,
         });
         assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
-        const coordinatedPlan = deps.coordination.isRelevantForNewWorkflowPlan();
-        const acceptedEvidence: AcceptedEvidenceReference[] = coordinatedPlan ? deps.coordination.assertReadyForWorkflow() : [];
+        const relevantCoordination = deps.coordination.isRelevantForNewWorkflowPlan();
+        const coordinatedPlan = plan.tasks.some((task) => task.contract !== undefined) && relevantCoordination;
+        // Only contracts opt a fresh plan into the formal protocol. Explicit
+        // evidence still in progress/blocked cannot be abandoned via plain plan.
+        const evidenceGate = coordinatedPlan || (relevantCoordination
+          && state.coordinationRuntimeState?.coordination.phase !== "ready");
+        const acceptedEvidence: AcceptedEvidenceReference[] = evidenceGate ? deps.coordination.assertReadyForWorkflow() : [];
         requireTaskContractsReady(plan.tasks, acceptedEvidence, coordinatedPlan);
         if (config.workflowMode === "off") {
           throw new Error(
@@ -523,8 +532,15 @@ export function createWorkflowActions(
         });
         assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
         requireIdentity(validateWorkflowReplanIdentity(state.workflowState, params, ctx));
-        const coordinatedPlan = deps.coordination.isLinkedToWorkflow(state.workflowState);
-        const acceptedEvidence: AcceptedEvidenceReference[] = coordinatedPlan ? deps.coordination.assertReadyForWorkflow() : [];
+        const coordinatedPlan = workflowUsesFormalEvidence(state.workflowState, state, ctx);
+        if (coordinatedPlan && !deps.coordination.isLinkedToWorkflow(state.workflowState)) {
+          throw Object.assign(new Error("协作证据未绑定当前 workflow revision；不得通过删除契约降级正式计划"), {
+            code: "COORDINATION_WORKFLOW_LINK_MISMATCH",
+          });
+        }
+        const evidenceGate = coordinatedPlan || (deps.coordination.isRelevantForNewWorkflowPlan()
+          && state.coordinationRuntimeState?.coordination.phase !== "ready");
+        const acceptedEvidence: AcceptedEvidenceReference[] = evidenceGate ? deps.coordination.assertReadyForWorkflow() : [];
         const nested = state.workflowState.pendingRevision?.kind === "nested";
         if (state.workflowState.pauseReason === "child-result-review") {
           const child = state.workflowState.subworkflowHistory?.findLast((entry) => entry.parentWorkflowId === state.workflowState!.workflowId);

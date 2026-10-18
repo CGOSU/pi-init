@@ -179,16 +179,16 @@ sh ./scripts/install-launchers.sh
 
 ### 读取与探索策略
 
-完整的读取、精确编辑、证据门控和验证规则统一遵循随 package 发布的公共 `pi-init-role-routing` Skill；README 不重复维护细节。简单只读咨询可直接由适合的非 `architect` 角色完成；目标明确的低风险开发由 `developer-test` 直接调查、实现和验证，不因普通实现选择建立工作流。需要仓库、代码、测试、文档或外部事实取证时，统一由 `docs-commit` 完成并结构化交接给 `architect`；只有业务/契约冲突、权限或凭据缺失、不可逆或外部状态操作、已有改动无法安全合并或真实验证阻塞时才询问。
+普通任务由匹配角色连续调查、实现和验证，切角不重启任务，也不默认创建正式证据链。已确认事实、有效验证与进度按需复用；身份由运行时绑定实际派发回合，模型通常只提交业务结果。暂停恢复、兼容行为和授权边界见 [`docs/role-continuity.md`](docs/role-continuity.md)；详细职责规则仍由公共 `pi-init-role-routing` Skill 维护。
 
 `architect` 只负责思考、分析、决策、规划和安排。其运行时仅允许 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status"/"request-replan"/"request-child"/"review-child"/"request-evidence"/"review-evidence")`；后两项是纯协议规划/审阅动作，不授权读取仓库、运行取证或执行开发。`report-evidence`、`clarify`、`complete`、`block`、`resume`、`retry`、`cancel`，以及 `read`、搜索、shell、编辑、浏览器、脚本、协作和未知工具均由运行时 fail-closed 阻断。提示层只用于降低错误率，运行时守卫负责权限执行。
 
 ### 证据协作、开发契约与模型上下文
 
 - `request-evidence` / `review-evidence` 由 architect 创建问题并明确接受、补查或阻塞；受派发的 `docs-commit` 用 `report-evidence` 回报事实、推断或未知、来源及版本、检查范围、测试位置和实际执行验证。取证报告不会自动变成已接受证据；docs 取证阶段不例行 commit。
-- 需要身份的协调动作优先回传运行时交接消息给出的 `coordinationHandoffId` 短引用（如 `task_workflow(action="report-evidence", coordinationHandoffId="...", report={...})`）；完整 `coordinationIdentity` 仍然兼容。短引用只能来自运行时当前签发的 handoff：不得自造、不得从任务文本补齐，省略身份也不会套用当前状态，显式提交已过期引用会失败而不回退。两者同时提供时必须指向同一 handoff，否则返回 `COORDINATION_HANDOFF_REFERENCE_CONFLICT`。成功提交后该 handoff 短引用即被消费，旧引用不能再次推进状态。
+- 正式协调动作通常由运行时绑定本轮派发身份，兼容显式 `coordinationHandoffId` 或完整 `coordinationIdentity`。未观察到真实派发消息的隐式提交不会套用当前状态；显式过期身份和冲突引用继续拒绝。
 - 报告输入校验失败（来源版本/位置冲突、重复 acceptedEvidence、未解决缺口等）且尚未持久化时，可在同一有效 handoff 内用同一身份修正后重提，不新建 attempt、不自动重试、不重新取证；权限失败、身份过期、恢复失败、持久化结果未知或已提交成功的动作不属于可直接重提。单条 finding 内 `id`/`location`/`version` 完全一致的来源会去重保留首次顺序，同 `id` 不同版本或位置仍拒绝；`acceptedEvidence` 只合并完全一致的三元引用，不会自动接受任何未明确引用的结论。
-- 协调任务的开发契约记录用户可观察结果、固定决策/不变量、非目标、有效证据引用、关键未决问题、普通工程自由度和验证要求。契约与协调状态是双向门控：携带契约必须有绑定当前 workflow revision 且已接受、未过期的协调证据，关键问题未解决或证据缺失/过期时不派发开发；没有协调证据的普通计划不要附带契约，普通低风险任务也不因协议被强制创建协调账本。开发者发现关键业务、权限或公共契约缺口时，以当前身份调用 `clarify` 保存问题、观察、已完成工作/验证与副作用状态，再由 architect 显式处置并生成新 revision；未知副作用不会自动重放。
+- 普通计划不因 ready 旁账强制生成契约；主动携带 contract 或已绑定的正式/legacy 工作流仍校验有效证据、当前 revision、关键未决和副作用处置。不得删除契约降级或绕过正在进行/blocked 的显式取证。
 - 协调状态复用 Pi 当前 session 的 append/branch 和既有 local task executor；协调记录本身不是 architect 执行任务，不新增第二个 executor，也不占用开发任务额度。
 - 扩展通过公开 `context` 钩子为当前交接裁剪实际模型输入，保留原 session/branch 历史；Pi 管理的 system/tool state 不由扩展接管，不使用 `context_with_system`。边界可靠时保留当前角色工作窗口、真实工具调用与结果配对和新用户指令；交接、branch 或压缩映射不确定时保留完整输入并明确报告未裁剪。测试 harness 结果不代表已验证真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益。
 

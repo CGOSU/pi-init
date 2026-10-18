@@ -17,7 +17,7 @@ metadata:
 1. 明确对应实现/测试的指令直接交给 `developer-test`；明确对应文档、版本或 Git 收尾的指令直接交给 `docs-commit`。
 2. 简单只读咨询可直接交给当前适合的非 `architect` 角色完成，不创建工作流，也不要求正式证据交接；目标明确的日常开发由 `developer-test` 一次完成调查、修改和验证。若 `before_agent_start` 注入的运行状态已确认当前职责且没有活动工作流，不调用 `task_workflow(status)`，也不重复 `switch_role`；若 `roleRecoveryPending` 且没有活动工作流、请求无需工具或新证据，可以直接回答，但不能因此解除恢复门；需要任何工具或执行时仍先 `switch_role`。
 3. 不明确、含糊、需要需求判断或跨职责的指令从 `architect` 开始，由架构师负责澄清目标、边界、非目标，并安排后续职责。
-4. 只有任务确需架构决策、跨职责协调或用户明确要求正式取证时，才由 `architect` 规划证据协作；普通明确、局部低风险任务按对应职责直接调查、实现和验证，不为取证形式额外路由。架构取证由 `docs-commit` 完成并交回结构化报告，范围围绕会影响方案、正确性或安全的具体问题；仅在回答这些问题必要时核对最新实现、直接调用方和测试，不把固定文件清单或完整审计当作默认前提。
+4. 架构决策不等于正式取证：优先复用已有调查，缺少决策关键事实时再交给 `docs-commit` 集中补查。普通读取、实现和测试结果直接交接，不默认创建 request/report/review/accept/contract 链。只有确实需要正式证据审阅或用户明确要求时启用该协议；已进入的关键未决、契约与未知副作用保护不得绕过。
 5. 任务完成并通过适用检查后，由 `docs-commit` 核对 diff 并默认创建中文 commit，仅提交明确归属于本任务的改动；若已有/暂存改动无法安全区分则暂停提交并说明。push 仍须用户明确授权。
 
 角色说明按需读取：
@@ -59,19 +59,19 @@ metadata:
 - 讨论与纠正不自动写入编排。明确修正/追加工作用 request-replan；显式新目标用 request-goal（request-child/“子流程：…”兼容为同队列目标）。父子归属仅展示，不建立运行栈或独立执行器；默认 priority=0，依赖先于优先级，同级稳定顺序，不抢占当前工具。插入目标须保留仍有效的全部原 pending 任务；失效则转普通重规划。只保留/撤销可提交 tasks=[]，但最终队列须非空。分组结束不等于根目标验收，未知副作用不得自动重试；旧栈按兼容协议收尾。
 - pi-init 工作流仅支持当前主会话内 local 顺序执行；缺省及旧 `workflowExecutor: "local"` 配置可用。旧 `runtime` 配置和 Runtime executor/authority 状态返回结构化退役错误，不会回退、自动恢复或改写 session entry。
 - `task_workflow` 是唯一的规划、依赖、验收、阻塞和重规划状态机；Agent 完成、进程退出或返回文本都不自动等于任务验收完成。证据请求/报告/审阅和澄清是同一工具内的协调记录，不是新的执行队列，不产生第二个 executor，也不占用开发任务的规划额度（开发任务数量没有硬上限，12 仅为规划规模软建议）。architect 不得作为执行任务角色，也不得调用 `complete`/`block` 验收。
-- 工作流记录通过 Pi Extension API 的 `appendEntry` 保存到当前 session，并从活动 branch 恢复；这不是 AgentHarness durable operation 集成，不能保证事务/fsync 或外部副作用 exactly-once。任务 `complete`/`block` 必须匹配当前 `workflowId`、`planVersion`、`sessionId`、`recoveryGeneration`、`taskId`、`attemptId` 和 `handoffId`；`replan` 必须匹配当前基础身份、`revisionId` 和 `handoffId`。只使用当前交接提示提供的身份，不得从任务文本补齐，旧 branch/attempt/revision 结果必须拒绝。
-- 恢复时仅未派发的准备阶段可安全续接；已派发/启动但无业务结果的任务按结果未知暂停，禁止自动重放。核对可能的外部副作用后，显式 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 才能创建新 attempt；legacy `in_progress` 缺少身份时同样转为需核对状态，旧 session entry 不原地改写，已退役 Runtime 状态继续 fail-closed。
+- 工作流通过 Pi Extension API 的 `appendEntry` 保存到当前 session/branch，不承诺事务、fsync 或外部副作用 exactly-once。模型通常只提交业务参数与真实结果；运行时在真实 Provider 请求/消息与工具调用之间绑定派发时的 workflow、session、revision、attempt 和 handoff 身份，不在提交时套用最新状态。旧 branch/attempt/revision 或角色回合必须拒绝；兼容显式身份仍严格校验，不覆盖调用者的过期字段。
+- 恢复时仅未派发的准备阶段可安全续接；已派发/启动但无业务结果的任务按结果未知暂停，禁止自动重放。核对可能的外部副作用后，显式 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 才能创建新 attempt；legacy `in_progress` 缺少身份时同样转为需核对状态，旧 session entry 不原地改写，已退役 Runtime 状态继续 fail-closed。 模型自行填写 `confirmUnknownOutcome=true` 不构成用户授权；暂停时确认角色不会放行修改、普通 shell 或任务重放，须用户命令/面板确认。
 - `task_workflow(action="status")` 的模型可见 content 提供基础动作身份，以及当前 task/replan handoff 的完整 JSON 身份；task/replan 提示复用相同身份结构。status 只读。身份失败会在模型可见错误消息中提供稳定错误码、差异字段、白名单 expected/received 值与下一步；只读查询一次后，只有确认仍是同一活动 attempt/handoff 的参数抄录错误才可修正重提。不得把旧结果改贴到新身份；结果未知仍必须核对潜在副作用并显式授权 retry。若结果调用面对 queued handoff，只有当前身份、角色和活动 branch 中精确消息全部匹配，系统才会先记录真实开始再执行原严格校验；其他阶段不因该路径放宽。压缩由任务交接边界统一管理，不由普通 switch_role 触发；先保存结果与交接身份，按需压缩成功后才切换角色并派发。压缩交接须绑定 operation、仍活动的源角色、session/branch 上下文代次及当前 workflow/coordination 身份；只有该操作自己的完成/失败回调能收敛，任意 `session_compact` 事件不能冒认完成。身份过期的回调不续跑；压缩失败以不触发新 turn 的诊断报告，任务只能在检查当前状态后显式恢复：工作流使用 `/pi-init workflow resume`；已确认尚未派发的协作压缩失败由用户使用 `/pi-init coordination resume`，未知结果不得用该命令重放。架构审阅不得被自动 resume 绕过。
 
 ## 证据协作、任务契约与模型上下文
 
 - `request-evidence` 与 `review-evidence` 仅允许 `architect` 规划问题和审阅报告；`report-evidence` 仅由当前受派发的 `docs-commit` 提交；`clarify` 仅由当前 `developer-test` 任务提交。报告必须区分事实、推断和未知，记录来源及版本、检查范围、测试位置与实际执行的验证。docs 取证不自动接受证据、不决定方案，也不例行产生 docs/Git commit。
-- 需要身份的协调动作必须使用运行时签发的交接身份：交接消息给出当前 `coordinationHandoffId` 短引用，调用时按原样回传即可，完整 `coordinationIdentity` 仍然兼容。短引用只能来自运行时当前签发的 handoff，不得自行编造、从任务文本补齐，也不得在省略身份时套用当前状态；显式提交已过期引用会失败而不回退当前状态。成功提交后该 handoff 的短引用随之消费，旧引用不能再次推进状态（已阻塞 handoff 的显式重试也须精确匹配当前引用）。
+- 正式协调动作同样由运行时绑定本轮实际派发身份，通常省略 coordinationIdentity/coordinationHandoffId；兼容显式短引用或完整身份，仍按原协议校验。未观察到真实派发消息的隐式提交会拒绝，不从当前状态补齐旧结果。
 - 报告输入校验失败（如来源版本/位置冲突、acceptedEvidence 重复或未解决缺口）发生在持久化之前时，可在同一有效 handoff 内用同一身份修正后重提，不需要新建 attempt 或重新取证；权限失败、身份过期、状态恢复失败、持久化结果未知或已提交成功的动作不属于可直接重提。
 - 单条 finding 内 `id`/`location`/`version` 规范化后完全一致的来源会无损合并并保留首次出现顺序，同一 `id` 但版本或位置不同仍明确拒绝；`acceptedEvidence` 只合并完全一致的 `findingId`/`sourceId`/`sourceVersion` 引用，不因去重自动接受任何 fact、推断、未确认项或冲突项，事实类别、版本匹配和任务契约就绪门不变。
-- 协调任务的开发契约记录预期行为、固定决策/不变量、非目标、已接受且来源版本有效的证据、关键未决问题、工程自由度和验证要求；关键问题未解或证据缺失/过期时就绪门阻断开发。契约与协调状态是双向门控：携带契约的任务必须同时存在绑定当前 workflow revision 且已接受、未过期的协调证据，`contract.evidence` 必须引用该账本；没有协调证据的普通计划不要附带契约。历史普通任务仍兼容，普通低风险任务不因协议而强制创建协调状态。关键业务事实、权限或公共契约不得以假设补齐；developer 通过身份绑定的 `clarify` 保存缺口、观察、已完成工作/验证和副作用状态，architect 用新 revision 显式处置后继续。未知副作用不得自动重放。
+- 普通计划不因旁边存在已 ready 的证据账本而强制升级为正式契约流程。主动携带任务 contract 或已有正式工作流绑定时，继续验证需求来源、已接受且有效的证据、当前 revision、关键未决及副作用处置；不得删除契约降级或绕过正在进行/blocked 的显式取证。普通任务不伪造正式证据，关键需求/权限/业务冲突通过 block 或已有正式任务的 clarify 如实上报。
 - 协作状态通过 Pi session append/当前 branch 恢复，消息只携带交接需要的信息；不宣称 append/sendMessage 提供事务、fsync 或外部副作用 exactly-once。
-- 公开 `context` hook 可为当前角色/request/task 返回实际模型输入视图，但不会删除或改写 session/branch 历史。Pi 管理的 system prompt 与 tool state 不由扩展接管或裁剪；不使用 `context_with_system`。可确认交接边界时保留当前角色执行窗口、关联的工具调用/结果配对和新用户指令；边界、branch 或压缩映射不可靠时保留完整输入并报告未裁剪。扩展 harness 测试不等于真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益验证。
+- 公开 `context` hook 可为当前角色/request/task 返回实际模型输入视图，但不会删除或改写 session/branch 历史。Pi 管理的 system prompt 与 tool state 不由扩展接管或裁剪；不使用 `context_with_system`。可确认交接边界时保留当前角色执行窗口、关联的工具调用/结果配对和新用户指令；边界、branch 或压缩映射不可靠时保留完整输入并报告未裁剪。扩展 harness 测试不等于真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益验证。 暂停恢复使用当前 branch 快照与完整工具配对生成有界、非执行授权的恢复视图；失败不回退到全部历史。
 
 ## 交付
 

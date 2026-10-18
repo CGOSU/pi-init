@@ -60,7 +60,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
       identity,
       content: [
         "[PI-INIT 证据取证交接]",
-        `当前协作 handoff 短引用（report-evidence 时按原样传回 coordinationHandoffId）：${handoff.handoffId}`,
+        `兼容短引用（本轮身份自动绑定，可省略）：coordinationHandoffId="${handoff.handoffId}"`,
         batchRequests.length > 1
           ? `本次为批量取证，共 ${batchRequests.length} 个问题；请在同一回合集中处理，可合并共享来源的重复核查，但必须分别按各请求的问题、范围和完成条件回答并报告：\n${batchRequests.map((item, index) => `${index + 1}. requestId ${item.requestId} / questionId ${item.questionId}\n   问题：${item.question}\n   理由：${item.rationale}\n   范围：${item.scope.join("；")}${item.exclusions.length ? `\n   排除：${item.exclusions.join("；")}` : ""}\n   完成条件：${item.completionCriteria.join("；")}${item.addressesGaps.length ? `\n   需回应的缺口：${item.addressesGaps.join("；")}` : ""}`).join("\n")}`
           : `问题 ID：${request.questionId}`,
@@ -74,8 +74,8 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
         priorAcceptedFacts.length ? `本问题先前已接受事实（历史来源版本；仅在来源版本、当前 revision 绑定、适用范围及既有失效规则均仍有效时复用，不一概重新核实。仅在来源/范围实际变化、失效规则触发、明确刷新理由或影响决策的关键缺口时针对性核查；无法确认有效性时如实标为未确认，不得视作当前事实）：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
         "你是受派发的 docs-commit 取证角色。当前交接包只包含本次请求和相关历史事实，不得推断完整协作账本。围绕各请求的决策关键问题，核查必要的最新实现、直接调用方和相关测试；仅当这些内容影响问题回答或为完成条件所必需时查阅。只复用已能从当前协调状态确认满足来源版本、当前 revision 绑定、适用范围及既有失效规则的已接受事实；仅在来源/范围实际变化、失效规则触发、明确刷新理由或决策关键缺口时针对性核查，不为确认每条历史事实而扩大取证。无法确认有效性的历史事实及非阻塞未知项如实标为 unconfirmed，不得作为当前事实或机械触发补证。报告必须区分 fact/inference/unconfirmed/conflict，并给每条发现附来源 location 与当前版本。测试源码已定位与实际执行验证分开填写；没有运行的测试不得声称通过。不要代替 architect 接受证据、决定业务方案或派发开发。",
         batchRequests.length > 1
-          ? `每个问题核对完成后分别调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={requestId: 对应 requestId, ...})；同一 handoff 可连续提交多个报告，全部完成后停止。`
-          : `完成后调用 task_workflow(action=\"report-evidence\", coordinationHandoffId="${handoff.handoffId}", report={...})。一次报告后停止；若证据不完整，明确列出未确认项。若报告输入校验失败，可在同一有效 handoff 内修正后重提，不要新建 attempt、重复取证或复用已消费身份。`,
+          ? '每个问题核对完成后分别调用 task_workflow(action="report-evidence", report={requestId: 对应 requestId, ...})；身份由运行时绑定，全部报告完成后停止。'
+          : '完成后调用 task_workflow(action="report-evidence", report={...})；身份由运行时绑定，报告缺口如实列出。输入校验失败可在当前有效交接内修正后重提，不重复取证。',
       ].filter(Boolean).join("\n\n"),
     };
   }
@@ -92,7 +92,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
     identity,
     content: [
       "[PI-INIT 证据审阅交接]",
-      `当前审阅 handoff 短引用（review-evidence 与后续 request-evidence 使用时按原样传回 coordinationHandoffId）：${handoff.handoffId}`,
+      `兼容短引用（本轮身份自动绑定，可省略）：coordinationHandoffId="${handoff.handoffId}"`,
       `问题 ${request.questionId}：${request.question}`,
       `取证范围：${request.scope.join("；")}`,
       handoff.reportIds && handoff.reportIds.length > 1
@@ -118,7 +118,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
       reopening
         ? "当前为重开后的待审阅轮次；此前审阅记录保留在账本中。"
         : review ? `当前最新审阅 decision：${review.decision}` : "该报告尚未审阅。",
-      `你是 architect，只做证据审阅和架构决策。调用 task_workflow(action="review-evidence", coordinationHandoffId="${handoff.handoffId}", review={reportId, decision: accept|more|block, acceptedEvidence, gaps, reason})；从上方可核对引用中显式选择要接受的 fact。accept 必须逐条引用来源版本匹配的 fact，more 必须给出具体 gaps。若 decision=more，随后用同一短引用调用 request-evidence，设置 followUpOfRequestId 并明确 addressesGaps。不得执行取证、调用代码工具或派发开发；关键证据未接受前不得 plan。`,
+      `你是 architect，只做证据审阅和架构决策。调用 task_workflow(action="review-evidence", review={reportId, decision: accept|more|block, acceptedEvidence, gaps, reason})；从上方可核对引用中显式选择要接受的 fact。accept 必须逐条引用来源版本匹配的 fact，more 必须给出具体 gaps。身份由本轮运行时绑定，无需填写。若 decision=more，随后调用 request-evidence，设置 followUpOfRequestId 并明确 addressesGaps。不得执行取证或调用代码工具；关键证据未接受前不得 plan。accept 后若原用户目标仍需实现，继续规划未完成任务，不要等待用户再次要求继续。`,
     ].join("\n\n"),
   };
 }
