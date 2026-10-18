@@ -126,6 +126,7 @@
 - 2026-10-08：完成可恢复任务交接与执行尝试隔离：工作流身份绑定当前 session、plan、recovery generation、task attempt/handoff 与 replan revision；恢复仅续接可证明尚未派发的准备阶段，对已派发/启动但无业务验收结果的任务 fail-closed 暂停，并要求人工核对后显式 retry。定向测试 45 项通过；最终 `npm test`（含 500 行检查）162 项全部通过、0 失败、0 跳过。代码分阶段提交为 `bb46a7a` 和 `85bb460`。Pi Extension session append 与 AgentHarness durable operation 的区别、实现约束及验证边界见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)；未运行真实 Pi E2E、安装/reload 或依赖升级。
 - 2026-10-08：编排可靠性优化第一阶段已修复 session entry 写入失败时的内存状态提前推进和调度锁残留；故障注入与工作流相关测试 16 项通过。
 - 2026-10-06：移除 pi-init 自建外部 Runtime workflow executor、客户端、配置、wire、Graph/事件投影和运行时接线；保留 local 顺序工作流。旧 Runtime 配置和 session entry 明确 fail-closed，不静默 fallback 或改写原数据；`npm test` 152 项全部通过，500 行检查及 `git diff --check` 通过。未接入官方接口或执行真实 Pi E2E、安装与 reload，详见 [`docs/session-log.md`](session-log.md)。
+- 2026-10-18：角色交接简化为连续任务与按需证据，身份由运行时绑定；删除无调用代码并开启未使用检查；`npm test` 483 项通过，详见 [`docs/session-log.md`](session-log.md)。真实 Pi 会话回归仍未执行。
 - 2026-10-06：`/fast` 改为用户显式单次选择精简流程，不再按自动任务类型、规模和修改范围复核资格；安全、职责、工作流保护和必要验证仍优先。扩展生命周期与中英文脚手架定向测试 25 项通过；未运行全量测试，尚未在真实 Pi 会话确认模型遵循效果。
 - 2026-10-06：移除内置标准角色模型预设，允许 schema v2 缺少 `roleModels` 时沿用会话模型，并精简暂停报告；`npm test` 为 167 项（164 通过、3 项因 Runtime daemon 环境缺失跳过），详见 [`docs/session-log.md`](session-log.md)。未执行 package 安装或真实 Pi reload/E2E。
 - 2026-09-30：新增 `/fast <任务描述>` 一次性 Fast Path 请求命令；非强制、不持久更改配置，拒绝忙碌 Agent 与未结束工作流；扩展生命周期定向测试和 `npm test` 均通过（155 项通过、3 项因 runtime-daemon 未构建而跳过）。

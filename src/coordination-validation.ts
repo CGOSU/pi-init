@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
   AcceptedEvidenceReference,
-  CoordinationFailure,
   CoordinationPhase,
   CoordinationResult,
   CoordinationState,
@@ -640,20 +639,4 @@ export function hydrateCoordinationState(input: CoordinationStateInput): Coordin
   } catch (error) {
     return asFailure(error);
   }
-}
-
-export function isEvidenceClassification(value: unknown): value is EvidenceClassification {
-  return typeof value === "string" && (FINDING_CLASSIFICATIONS as readonly string[]).includes(value);
-}
-
-export function isEvidenceRequestStatus(value: unknown): value is EvidenceRequestStatus {
-  return typeof value === "string" && (REQUEST_STATUSES as readonly string[]).includes(value);
-}
-
-export function isCoordinationPhase(value: unknown): value is CoordinationPhase {
-  return typeof value === "string" && (COORDINATION_PHASES as readonly string[]).includes(value);
-}
-
-export function isEvidenceReviewDecision(value: unknown): value is EvidenceReviewDecision {
-  return typeof value === "string" && (REVIEW_DECISIONS as readonly string[]).includes(value);
 }

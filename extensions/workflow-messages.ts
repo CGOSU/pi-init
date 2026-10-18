@@ -198,7 +198,7 @@ export function createWorkflowMessages(
     }
   }
 
-  function workflowReplanPrompt(identity: WorkflowReplanIdentity) {
+  function workflowReplanPrompt() {
     const workflowState = state.workflowState;
     const request = workflowState?.pendingRevision;
     if (!workflowState || !request) throw new Error("工作流缺少待处理的重规划请求");
@@ -305,7 +305,7 @@ export function createWorkflowMessages(
     const transition = transitionWorkflowDispatch(current, { type: "replan-dispatch-requested", identity }, Date.now());
     if (!transition.effects.length) return false;
     try {
-      const content = [handoffSnapshotPrompt(state, "architect"), workflowReplanPrompt(identity)].join("\n\n");
+      const content = [handoffSnapshotPrompt(state, "architect"), workflowReplanPrompt()].join("\n\n");
       deps.persistWorkflowState(transition.state, ctx);
       deps.setInternalContinuationPending(true);
       deps.pi.sendMessage(

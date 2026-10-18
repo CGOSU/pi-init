@@ -32,7 +32,6 @@ const {
   filterRoleModels,
   findMatchingRole,
   getRoleNames,
-  isRoleAvailable,
   normalizeModelReference,
   resolveRoleConfig,
   resolveRoleMode,
@@ -41,7 +40,6 @@ const {
   resolveRoleModel,
   unwrapRoleResult,
   shouldOrchestrateWorkflow,
-  shouldCompactOnRoleSwitch,
   WORKFLOW_MAX_NUDGES,
   blockWorkflowTask,
   cancelWorkflow,
@@ -343,66 +341,6 @@ test("init_project 首次使用按需加载脚手架并支持 dryRun", async () 
   });
 });
 
-test("自动跨角色且上下文达到阈值时才触发压缩", () => {
-  assert.equal(ROLE_SWITCH_COMPACTION_THRESHOLD, 50);
-  const usage = { percent: 50 };
-
-  assert.equal(
-    shouldCompactOnRoleSwitch({
-      mode: "auto",
-      previousRole: "architect",
-      nextRole: "developer-test",
-      contextUsage: usage,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldCompactOnRoleSwitch({
-      mode: "auto",
-      previousRole: "architect",
-      nextRole: "architect",
-      contextUsage: { percent: 90 },
-    }),
-    false,
-  );
-  assert.equal(
-    shouldCompactOnRoleSwitch({
-      mode: "auto",
-      previousRole: undefined,
-      nextRole: "architect",
-      contextUsage: usage,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldCompactOnRoleSwitch({
-      mode: "confirm",
-      previousRole: "architect",
-      nextRole: "developer-test",
-      contextUsage: { percent: 90 },
-    }),
-    false,
-  );
-  assert.equal(
-    shouldCompactOnRoleSwitch({
-      mode: "auto",
-      previousRole: "architect",
-      nextRole: "developer-test",
-      contextUsage: { percent: 49.9 },
-    }),
-    false,
-  );
-  assert.equal(
-    shouldCompactOnRoleSwitch({
-      mode: "auto",
-      previousRole: "architect",
-      nextRole: "developer-test",
-      contextUsage: { percent: null },
-    }),
-    false,
-  );
-});
-
 test("角色 ID 规范化以结构化结果区分类型和格式错误", () => {
   assert.deepEqual(normalizeRoleId(" developer-test "), { ok: true, value: "developer-test" });
   assert.deepEqual(normalizeRoleId(undefined), { ok: false, code: "ROLE_ID_TYPE_INVALID", message: "角色必须是文本" });
@@ -472,8 +410,6 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     unwrapRoleResult(getRoleNames({ roleModels: { reviewer: { provider: "test", model: "reviewer", thinkingLevel: "low" } } })),
     [...DEFAULT_ROLE_NAMES, "reviewer"],
   );
-  assert.deepEqual(isRoleAvailable(undefined, "architect"), { ok: true, value: true });
-  assert.deepEqual(isRoleAvailable(undefined, "reviewer"), { ok: true, value: false });
   assert.deepEqual(
     unwrapRoleResult(resolveRoleConfig({ schemaVersion: 2, roleModels: {} })).roleModels,
     {},

@@ -36,7 +36,6 @@ const {
   resolveWorkflowMode,
   resolveRoleModel,
   shouldOrchestrateWorkflow,
-  shouldCompactOnRoleSwitch,
   WORKFLOW_MAX_NUDGES,
   blockWorkflowTask,
   cancelWorkflow,

@@ -7,8 +7,6 @@ import type {
 } from "../src/coordination-runtime-types.ts";
 import type {
   WorkflowActionIdentity,
-  WorkflowContinuation,
-  WorkflowHandoff,
   WorkflowHandoffIdentity,
   WorkflowReplanIdentity,
   WorkflowState,

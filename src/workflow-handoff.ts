@@ -76,10 +76,6 @@ function sameIdentity(actual: unknown, expected: unknown, fields: readonly strin
   return fields.every((field) => actual[field] === expected[field]);
 }
 
-function profileBaseIdentity(source: unknown, fields: readonly string[]): Record<string, unknown> {
-  return { ...safeIdentityValues(source, BASE_IDENTITY_FIELDS), present: fields.filter((field) => isRecord(source) && source[field] !== undefined) };
-}
-
 export function workflowHandoffNotExecutingFailure(
   phase: string,
   { branchMatched = false }: { branchMatched?: boolean } = {},

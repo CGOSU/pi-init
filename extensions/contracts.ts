@@ -2,33 +2,14 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ROLE_ID_PATTERN, THINKING_LEVELS, WORKFLOW_MODES } from "../src/roles.ts";
-import type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
+import type { RoleModelConfig } from "../src/role-types.ts";
 export type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
 import { WORKFLOW_RECOMMENDED_TASKS } from "../src/workflow.ts";
 
 export type RunTimingEntryData = {
   source?: unknown;
-  inputAt?: unknown;
-  beforeAgentStartAt?: unknown;
   startedAt?: unknown;
-  agentStartCount?: unknown;
-  beforeProviderRequestAt?: unknown;
-  lastProviderRequestAt?: unknown;
-  providerRequestCount?: unknown;
-  providerRequestDurations?: unknown;
-  firstMessageUpdateAt?: unknown;
-  assistantMessageEndAt?: unknown;
-  assistantMessageEndCount?: unknown;
-  agentEndAt?: unknown;
-  agentEndCount?: unknown;
-  toolExecutionStartAt?: unknown;
-  toolExecutionEndAt?: unknown;
-  toolExecutionDurationMs?: unknown;
-  toolExecutionCount?: unknown;
-  toolNames?: unknown;
-  toolDurations?: unknown;
   completedAt?: unknown;
-  settledAt?: unknown;
 };
 
 export type ReportTheme = Pick<Theme, "fg" | "bold">;

@@ -94,7 +94,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
   }
 
   async function switchRole(requested: string | undefined, ctx: ExtensionCommandContext) {
-    const config = await roleRuntime.readSessionRoleConfig(ctx);
     const roleNames = state.configuredRoleNames;
     const role = requested || await showMenu(
       ctx,

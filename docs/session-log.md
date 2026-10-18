@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-18：清理无调用代码并启用未使用检查
+
+- 完成：删除经引用检查和执行覆盖审计确认无用的代码，移除不再生效的详细计时采集与展示，并开启 `noUnusedLocals` / `noUnusedParameters`。
+- 验证：`npm run typecheck` 通过；`npm test` 483 项全部通过；`git diff --check` 通过。
+- 遗留问题：未在真实 Pi 会话做回归；本次尚未提交。
+
 ### 2026-10-18：优化架构取证复用与交接提示
 
 - 完成：更新 `skills/pi-init-role-routing/SKILL.md` 及 `roles/architect.md`、`roles/docs-commit.md`，将正式证据协作限定在确需架构决策、跨职责协调或用户明确要求的情形；普通明确低风险工作直接按职责完成。更新 `extensions/coordination-messages.ts` 和 `extensions/workflow-messages.ts`，允许同轮集中处理共享来源、按请求分别报告，并仅在已接受证据的来源版本、当前 revision、适用范围或失效状态不再满足、存在明确刷新理由或决策关键缺口时针对性补查。非阻塞未知项如实披露，但不自动补证或绕过关键未决及既有门控。

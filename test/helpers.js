@@ -30,7 +30,6 @@ import {
   filterRoleModels,
   findMatchingRole,
   getRoleNames,
-  isRoleAvailable,
   normalizeModelReference,
   resolveRoleConfig,
   resolveRoleMode,
@@ -39,7 +38,6 @@ import {
   resolveRoleModel,
   shouldOrchestrateWorkflow,
   unwrapRoleResult,
-  shouldCompactOnRoleSwitch,
   shouldCompactAfterWorkflowTask,
 } from "../src/roles.ts";
 import {
@@ -526,7 +524,6 @@ export {
   filterRoleModels,
   findMatchingRole,
   getRoleNames,
-  isRoleAvailable,
   normalizeModelReference,
   resolveRoleConfig,
   resolveRoleMode,
@@ -535,7 +532,6 @@ export {
   resolveRoleModel,
   shouldOrchestrateWorkflow,
   unwrapRoleResult,
-  shouldCompactOnRoleSwitch,
   shouldCompactAfterWorkflowTask,
   WORKFLOW_MAX_NUDGES,
   blockWorkflowTask,

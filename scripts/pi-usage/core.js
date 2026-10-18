@@ -20,10 +20,6 @@ const CHECKPOINT_TAIL_BYTES = 64 * 1024;
 const APPENDER_BATCH_SIZE = 1024;
 
 
-function emptyUsage() {
-  return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
-}
-
 export function localDateString(date) {
   return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
     .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")))
@@ -444,9 +440,4 @@ export function calculateDuration(activityEvents, range) {
 
 export async function scanSessionFile(file, options = {}) {
   return scanFile(file, options);
-}
-
-export async function scanSpeedEvents(file) {
-  const parsed = await scanSessionFile(file);
-  return parsed.speedEvents;
 }

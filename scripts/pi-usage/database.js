@@ -132,11 +132,6 @@ export async function readUsageSchemaVersion(connection) {
   return row ? numberValue(row.schema_version) : undefined;
 }
 
-export async function hasStoredSessionFiles(connection) {
-  const reader = await connection.runAndReadAll("SELECT COUNT(*) AS count FROM session_files");
-  return numberValue(reader.getRowObjects()[0]?.count) > 0;
-}
-
 export async function markUsageChecked(connection, now = new Date()) {
   await connection.run(
     `

@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve, basename, join } from "node:path";
 import {
   withFileMutationQueue,
@@ -97,30 +97,6 @@ function formatCompactResult(result: ScaffoldOutcome) {
   const prefix = result.dryRun ? "预览" : "✓ 已生成";
   const conflicts = result.conflicts.length > 0 ? ` · 覆盖 ${result.conflicts.length} 个文件` : " · 无文件冲突";
   return `${prefix} ${result.files.length} 个文件${conflicts}\n${result.targetDir}`;
-}
-
-export function formatSyncResult(result: SyncOutcome) {
-  const lines = [
-    result.dryRun ? `项目 ${result.projectName} 的模板同步预览：` : `已同步项目 ${result.projectName} 的模板：`,
-    `目标目录：${result.targetDir}`,
-  ];
-  for (const [label, files] of [
-    ["新增", result.created],
-    ["更新", result.updated],
-    ["保留", result.preserved],
-  ] as const) {
-    if (files.length > 0) lines.push(`${label}：`, ...files.map((file) => `- ${file}`));
-  }
-  if (result.conflicts.length > 0) {
-    lines.push(
-      "冲突（未写入）：",
-      ...result.conflicts.map(({ path, code, message }) => `- ${path} [${code}]：${message}`),
-    );
-  }
-  if (result.conflicts.length === 0 && result.created.length === 0 && result.updated.length === 0) {
-    lines.push("没有需要同步的变更。");
-  }
-  return lines.join("\n");
 }
 
 function formatCompactSyncResult(result: SyncOutcome) {

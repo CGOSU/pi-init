@@ -356,18 +356,6 @@ export function createWorkflowDispatch(
     persistCurrentTaskStarted(ctx, candidate);
   }
 
-  function confirmCurrentTaskStarted() {
-    const current = state.workflowState;
-    if (!current || current.handoff?.phase !== "queued") return;
-    const task = current.currentTaskId
-      ? current.tasks.find((item) => item.id === current.currentTaskId)
-      : undefined;
-    const identity = workflowHandoffIdentity(current);
-    if (!task || !identity) return;
-    const ctx = deps.messages.lastContext?.();
-    if (ctx) persistCurrentTaskStarted(ctx, { current, task, identity });
-  }
-
   function markCurrentTaskStartedFromMessage(ctx: ExtensionContext, message: unknown) {
     const candidate = currentTaskStartCandidate(ctx);
     if (!candidate || !validateWorkflowTaskStartMessage(message, candidate.identity).ok) return;
@@ -386,19 +374,6 @@ export function createWorkflowDispatch(
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`无法记录任务 ${taskId} 的暂停状态：${textOf(error)}`, "error");
       return false;
-    }
-  }
-
-  function blockWorkflowTaskFromDispatch(ctx: ExtensionContext, taskId: string, reason: string) {
-    if (state.runtimeDisposed || !state.workflowState || state.workflowState.currentTaskId !== taskId || !isWorkflowActive(state.workflowState)) return;
-    try {
-      const blocked = blockWorkflowTask(state.workflowState, { taskId, reason });
-      deps.report.persistWorkflowState(blocked, ctx);
-      state.workflowDispatchInFlight = false;
-      ctx.ui.notify(deps.report.formatWorkflowPauseSummary(blocked), "warning");
-    } catch (error) {
-      state.workflowDispatchInFlight = false;
-      ctx.ui.notify(`无法记录任务 ${taskId} 的失败：${textOf(error)}`, "error");
     }
   }
 

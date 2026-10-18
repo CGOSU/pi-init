@@ -3,6 +3,7 @@ import test from "node:test";
 import * as helpers from "./helpers.js";
 import { createRunTimingView } from "../extensions/run-timing-view.ts";
 import { formatRunTimingText } from "../extensions/run-timing-renderer.ts";
+import { createRunTimingDiagnostics } from "../extensions/run-timing-diagnostics.ts";
 
 const {
   completeRunTiming,
@@ -96,5 +97,57 @@ test("普通执行扩展按首次开始和最终 settled 写入普通计时条�
     assert.equal(typeof entry.data.completedAt, "number");
     assert.equal(getRunTimingDuration(entry.data), entry.data.completedAt - entry.data.startedAt);
   }
+});
+test("基础计时不依赖 Provider 和工具生命周期事件，重复启动只记一次总耗时", t => {
+  let now = 100;
+  t.mock.method(Date, "now", () => now);
+  const entries = [];
+  const timing = createRunTimingDiagnostics({ appendEntry: (type, data) => entries.push({ type, data }) }, () => false);
+  assert.equal(timing.captureInput("interactive"), true);
+  timing.beforeAgentStart(false);
+  timing.agentStart();
+  now = 150;
+  timing.agentStart();
+  now = 200;
+  timing.settle();
+  timing.settle();
+  assert.deepEqual(entries, [{ type: "pi-init-run-timing", data: { source: "interactive", startedAt: 100, completedAt: 200 } }]);
+});
+
+test("内部续跑、活动工作流与 reset 不产生或泄漏普通计时", t => {
+  let now = 100;
+  let workflowActive = false;
+  t.mock.method(Date, "now", () => now);
+  const entries = [];
+  const timing = createRunTimingDiagnostics({ appendEntry: (type, data) => entries.push({ type, data }) }, () => workflowActive);
+  assert.equal(timing.captureInput("extension"), false);
+  timing.captureInput("rpc");
+  timing.beforeAgentStart(true);
+  timing.agentStart();
+  timing.settle();
+  timing.captureInput("rpc");
+  timing.beforeAgentStart(false);
+  workflowActive = true;
+  timing.agentStart();
+  workflowActive = false;
+  timing.settle();
+  timing.captureInput("interactive");
+  timing.beforeAgentStart(false);
+  timing.agentStart();
+  timing.reset();
+  timing.settle();
+  assert.deepEqual(entries, []);
+  now = 300;
+  timing.captureInput("rpc");
+  timing.beforeAgentStart(false);
+  timing.agentStart();
+  now = 400;
+  timing.settle();
+  assert.deepEqual(entries, [{ type: "pi-init-run-timing", data: { source: "rpc", startedAt: 300, completedAt: 400 } }]);
+});
+
+test("旧计时记录携带额外阶段字段仍按原有起止时间显示", () => {
+  const basic = { source: "rpc", startedAt: 100, completedAt: 200 };
+  assert.deepEqual(createRunTimingView({ ...basic, inputAt: 50, providerRequestCount: 3, toolDurations: [{ name: "read", durationMs: 10 }] }), createRunTimingView(basic));
 });
 

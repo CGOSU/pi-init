@@ -27,8 +27,6 @@ import type {
   HydratedWorkflowState,
   WorkflowHydrationResult,
   WorkflowRevision,
-  WorkflowRevisionStatus,
-  WorkflowState,
   WorkflowStateRecord,
   WorkflowStateVersion,
   WorkflowTask,
@@ -36,8 +34,6 @@ import type {
   WorkflowParentFrame,
   WorkflowStateCore,
   WorkflowSubworkflowSummary,
-  WorkflowTaskStatus,
-  WorkflowStatus,
   WorkflowValidationFailure,
 } from "./workflow-types.ts";
 import { normalizeSubworkflowContract, normalizeSubworkflowReview, assertSubworkflowReview, assertSubworkflowTaskScope } from "./workflow-subworkflow.ts";

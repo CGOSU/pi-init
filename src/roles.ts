@@ -124,26 +124,6 @@ export function normalizeModelReference(value: unknown, label = "模型"): RoleC
   return resolveModelReference(value, label);
 }
 
-export function shouldCompactOnRoleSwitch({
-  mode,
-  previousRole,
-  nextRole,
-  contextUsage,
-}: {
-  mode: RoleMode;
-  previousRole?: string;
-  nextRole: string;
-  contextUsage?: { percent?: number | null } | null;
-}): boolean {
-  return (
-    mode === "auto" &&
-    typeof previousRole === "string" &&
-    previousRole !== nextRole &&
-    contextUsage?.percent != null &&
-    contextUsage.percent >= ROLE_SWITCH_COMPACTION_THRESHOLD
-  );
-}
-
 export function shouldCompactAfterWorkflowTask({
   mode,
   contextUsage,
@@ -308,17 +288,6 @@ export function getRoleNames(config: unknown): RoleConfigResult<string[]> {
   const resolved = resolveRoleConfig(config);
   if (!resolved.ok) return resolved;
   return { ok: true, value: [...new Set([...DEFAULT_ROLE_NAMES, ...Object.keys(resolved.value.roleModels)])] };
-}
-
-export function isRoleAvailable(config: unknown, role: unknown): RoleConfigResult<boolean> {
-  const resolved = resolveRoleConfig(config);
-  if (!resolved.ok) return resolved;
-  const normalizedRole = normalizeRoleId(role);
-  if (!normalizedRole.ok) return normalizedRole;
-  return {
-    ok: true,
-    value: DEFAULT_ROLE_NAME_SET.has(normalizedRole.value) || hasOwn(resolved.value.roleModels, normalizedRole.value),
-  };
 }
 
 export function resolveRoleMode(config: unknown): RoleConfigResult<RoleMode> {

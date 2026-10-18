@@ -1,181 +1,61 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeRunTiming, createRunTiming, isExternalRunSource, type ExternalRunSource } from "../src/run-timing.ts";
-import type { RunTimingEntryData } from "./contracts.ts";
-
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 // Keep basic total timing for Worked for; detailed Provider/tool lifecycle diagnostics are disabled.
-const DETAILED_TIMING_DIAGNOSTICS_ENABLED = false;
 
-type PendingProbe = {
-  source: ExternalRunSource;
-  inputAt: number;
-};
-
-type AcceptedProbe = PendingProbe & {
-  beforeAgentStartAt: number;
-};
-
-type ActiveTiming = NonNullable<ReturnType<typeof createRunTiming>> & RunTimingEntryData;
-
-export function createRunTimingDiagnostics(
-  pi: ExtensionAPI,
-  isWorkflowActive: () => boolean,
-) {
-  let pendingProbe: PendingProbe | undefined;
-  let acceptedProbe: AcceptedProbe | undefined;
-  let activeTiming: ActiveTiming | undefined;
-  let providerRequestStartedAt: number | undefined;
-  const toolStarts = new Map<string, { name: string; startedAt: number }>();
+export function createRunTimingDiagnostics(pi: ExtensionAPI, isWorkflowActive: () => boolean) {
+  let pendingSource: ExternalRunSource | undefined;
+  let acceptedSource: ExternalRunSource | undefined;
+  let activeTiming: ReturnType<typeof createRunTiming>;
 
   function clearProbes() {
-    pendingProbe = undefined;
-    acceptedProbe = undefined;
+    pendingSource = undefined;
+    acceptedSource = undefined;
   }
 
   function captureInput(source: unknown) {
-    if (typeof source !== "string" || !isExternalRunSource(source)) return false;
+    if (!isExternalRunSource(source)) return false;
     if (isWorkflowActive()) {
       clearProbes();
       return true;
     }
-    if (!activeTiming && !pendingProbe) {
-      pendingProbe = { source, inputAt: Date.now() };
-    }
+    if (!activeTiming && !pendingSource) pendingSource = source;
     return true;
   }
 
   function beforeAgentStart(internalContinuationPending: boolean) {
-    if (internalContinuationPending) {
+    if (internalContinuationPending || activeTiming || isWorkflowActive()) {
       clearProbes();
       return;
     }
-    if (!pendingProbe) return;
-    if (activeTiming || isWorkflowActive()) {
-      clearProbes();
-      return;
-    }
-    acceptedProbe = { ...pendingProbe, beforeAgentStartAt: Date.now() };
-    pendingProbe = undefined;
+    if (!pendingSource) return;
+    acceptedSource = pendingSource;
+    pendingSource = undefined;
   }
 
   function agentStart() {
-    const probe = acceptedProbe;
-    acceptedProbe = undefined;
-    pendingProbe = undefined;
+    const source = acceptedSource;
+    clearProbes();
     if (isWorkflowActive()) {
       activeTiming = undefined;
-      providerRequestStartedAt = undefined;
-      toolStarts.clear();
       return;
     }
-    if (activeTiming) {
-      if (DETAILED_TIMING_DIAGNOSTICS_ENABLED) {
-        activeTiming.agentStartCount = (activeTiming.agentStartCount as number ?? 0) + 1;
-      }
-      return;
-    }
-    if (!probe) return;
-    const timing = createRunTiming(probe.source);
-    if (timing) {
-      activeTiming = DETAILED_TIMING_DIAGNOSTICS_ENABLED
-        ? { ...timing, ...probe, agentStartCount: 1 }
-        : timing;
-    }
+    if (!activeTiming && source) activeTiming = createRunTiming(source);
   }
 
-  function finishProviderRequest(endedAt: number) {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming || providerRequestStartedAt === undefined || endedAt < providerRequestStartedAt) return;
-    const durations = Array.isArray(activeTiming.providerRequestDurations)
-      ? activeTiming.providerRequestDurations.filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-      : [];
-    if (durations.length < 8) durations.push(endedAt - providerRequestStartedAt);
-    activeTiming.providerRequestDurations = durations;
-    providerRequestStartedAt = undefined;
+  function reset() {
+    activeTiming = undefined;
+    clearProbes();
   }
 
   function settle() {
     const timing = activeTiming;
     const settledAt = Date.now();
-    finishProviderRequest(settledAt);
-    activeTiming = undefined;
-    providerRequestStartedAt = undefined;
-    toolStarts.clear();
-    clearProbes();
+    reset();
     if (!timing || isWorkflowActive()) return;
-    if (DETAILED_TIMING_DIAGNOSTICS_ENABLED) timing.settledAt = settledAt;
     const completed = completeRunTiming(timing, settledAt);
     if (completed) pi.appendEntry(RUN_TIMING_ENTRY_TYPE, completed);
   }
-
-  function reset() {
-    activeTiming = undefined;
-    providerRequestStartedAt = undefined;
-    toolStarts.clear();
-    clearProbes();
-  }
-
-  pi.on("before_provider_request", () => {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
-    const requestedAt = Date.now();
-    finishProviderRequest(requestedAt);
-    providerRequestStartedAt = requestedAt;
-    activeTiming.beforeProviderRequestAt ??= requestedAt;
-    activeTiming.lastProviderRequestAt = requestedAt;
-    activeTiming.providerRequestCount = (activeTiming.providerRequestCount as number ?? 0) + 1;
-  });
-
-  pi.on("message_update", (event) => {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED) return;
-    if (
-      activeTiming
-      && activeTiming.firstMessageUpdateAt === undefined
-      && event.message?.role === "assistant"
-    ) {
-      activeTiming.firstMessageUpdateAt = Date.now();
-    }
-  });
-
-  pi.on("message_end", (event) => {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming || event.message?.role !== "assistant") return;
-    const endedAt = Date.now();
-    finishProviderRequest(endedAt);
-    activeTiming.assistantMessageEndAt = endedAt;
-    activeTiming.assistantMessageEndCount = (activeTiming.assistantMessageEndCount as number ?? 0) + 1;
-  });
-
-  pi.on("agent_end", () => {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
-    const endedAt = Date.now();
-    finishProviderRequest(endedAt);
-    activeTiming.agentEndAt = endedAt;
-    activeTiming.agentEndCount = (activeTiming.agentEndCount as number ?? 0) + 1;
-  });
-
-  pi.on("tool_execution_start", (event) => {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
-    const startedAt = Date.now();
-    toolStarts.set(event.toolCallId, { name: event.toolName, startedAt });
-    activeTiming.toolExecutionStartAt ??= startedAt;
-    activeTiming.toolExecutionCount = (activeTiming.toolExecutionCount as number ?? 0) + 1;
-    const names = Array.isArray(activeTiming.toolNames) ? activeTiming.toolNames : [];
-    if (typeof event.toolName === "string" && names.length < 8 && !names.includes(event.toolName)) names.push(event.toolName);
-    activeTiming.toolNames = names;
-  });
-
-  pi.on("tool_execution_end", (event) => {
-    if (!DETAILED_TIMING_DIAGNOSTICS_ENABLED || !activeTiming) return;
-    const endedAt = Date.now();
-    activeTiming.toolExecutionEndAt = endedAt;
-    const started = toolStarts.get(event.toolCallId);
-    if (started !== undefined) {
-      const durationMs = Math.max(0, endedAt - started.startedAt);
-      activeTiming.toolExecutionDurationMs = (activeTiming.toolExecutionDurationMs as number ?? 0) + durationMs;
-      const durations = Array.isArray(activeTiming.toolDurations) ? activeTiming.toolDurations : [];
-      if (durations.length < 8) durations.push({ name: started.name, durationMs });
-      activeTiming.toolDurations = durations;
-      toolStarts.delete(event.toolCallId);
-    }
-  });
 
   return { captureInput, beforeAgentStart, agentStart, settle, reset };
 }

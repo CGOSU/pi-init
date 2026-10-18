@@ -185,9 +185,6 @@ export function createWorkflowActions(
     const current = state.workflowState;
     const phase = current?.handoff?.phase;
     if (!current || phase !== "queued") return;
-    const task = current.currentTaskId
-      ? current.tasks.find((item) => item.id === current.currentTaskId)
-      : undefined;
     const identity = workflowHandoffIdentity(current);
     const branchMatched = identity !== undefined && workflowHandoffMessageOnBranch(ctx, identity);
     if (branchMatched) return;

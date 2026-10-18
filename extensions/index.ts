@@ -1,6 +1,5 @@
 import {
   type ExtensionAPI,
-  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
