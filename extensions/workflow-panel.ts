@@ -1,5 +1,5 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, SelectList, Text, truncateToWidth, type SelectItem } from "@earendil-works/pi-tui";
+import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Box, Key, matchesKey, SelectList, Text, truncateToWidth, type SelectItem } from "@earendil-works/pi-tui";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import { formatWorkflowStatusText, workflowStatusActivityLabel, workflowStatusTaskItems } from "./workflow-status-renderer.ts";
@@ -17,6 +17,7 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
       let selectedTaskId: string | undefined;
       let taskListTop = 0;
       let taskListHeight = 0;
+      let listWidth = 80;
       let notice = "";
       let workflowId = state.workflowState?.workflowId;
       let capacity = 5;
@@ -42,7 +43,8 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
         if (page === "detail" && !state.workflowState?.tasks.some((task) => task.id === detailId)) { page = "tasks"; scroll = 0; }
         const view = createCurrentWorkflowStatusView(state);
         const choices = workflowPanelChoices(state);
-        const showTaskIds = view.kind === "workflow" && Boolean(state.workflowState?.tasks.some((item) => item.dependsOn.length > 0));
+        const compactList = listWidth < 40;
+        const showTaskIds = !compactList && view.kind === "workflow" && Boolean(state.workflowState?.tasks.some((item) => item.dependsOn.length > 0));
         const items: SelectItem[] = page === "actions"
           ? choices.map((choice) => ({ value: choice.value, label: (choice.disabledReason ? "不可用 · " : "› ") + choice.label, description: choice.disabledReason ?? choice.description }))
           : view.kind === "workflow"
@@ -50,7 +52,9 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
                 const glyph = task.status === "completed" ? "✓" : task.status === "in_progress" ? "◐" : task.status === "blocked" ? "!" : task.status === "superseded" ? "↪" : "○";
                 const color = task.status === "completed" ? "success" : task.status === "in_progress" ? "accent" : task.status === "blocked" ? "error" : "muted";
                 const branch = index === view.tasks.length - 1 ? "└─" : "├─";
-                const label = theme.fg(color, `${branch} ${glyph}${showTaskIds ? ` #${task.id}` : ""}`);
+                const label = theme.fg(color, compactList
+                  ? `${glyph} ${task.task}`
+                  : `${branch} ${glyph}${showTaskIds ? ` #${task.id}` : ""}`);
                 const activity = task.status === "in_progress" ? ` (${workflowStatusActivityLabel(view.activity)})` : "";
                 const subject = task.status === "completed"
                   ? (theme.strikethrough?.(theme.fg("muted", task.task)) ?? theme.fg("muted", task.task))
@@ -97,25 +101,31 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
       timer.unref?.();
       return {
         render(width: number) {
+          listWidth = width;
           const view = refresh();
           const inner = Math.max(1, width - 4);
-          const height = Math.max(4, Math.min(28, (tui.terminal?.rows ?? 30) - 4));
+          const height = Math.max(6, Math.min(28, (tui.terminal?.rows ?? 30) - 4));
           const footer = page === "tasks"
             ? (width < 32 ? ["Esc关闭 · Enter", "↑↓ a操作 d技术"] : width < 55 ? ["↑↓ 浏览 · Enter 查看", "a 操作 · d 技术 · Esc 关闭"] : ["↑↓ 浏览 · Enter 查看 · Esc 关闭", "a 操作 · d 技术详情"])
             : page === "actions"
               ? [width < 32 ? "↑↓选择 · Enter · Esc返回" : "↑↓ 选择 · Enter 执行 · Esc 返回"]
               : [width < 32 ? "↑↓滚动 · Esc返回" : width < 55 ? "↑↓ 滚动 · Esc 返回" : "↑↓ / PgUp / PgDn 滚动 · Esc 返回"];
-          const totalBudget = Math.max(1, height - footer.length - 1);
+          const totalBudget = Math.max(1, height - footer.length - 3);
           const budget = Math.max(1, totalBudget - (notice ? 1 : 0));
           const headline = view.kind === "workflow"
-            ? theme.fg("accent", theme.bold(`● 工作流 · ${workflowStatusActivityLabel(view.activity)}`))
+            ? theme.fg("accent", theme.bold(listWidth < 40
+              ? `${view.status === "running" ? "●" : view.status === "completed" ? "✓" : "⏸"} 工作流 · ${view.status === "running" ? "运行" : view.status === "completed" ? "完成" : "暂停"}`
+              : `● 工作流 · ${workflowStatusActivityLabel(view.activity)}`))
             : theme.fg(view.kind === "restore-error" ? "error" : "muted", theme.bold(view.kind === "restore-error" ? "! 工作流恢复失败" : "○ 暂无活动工作流"));
           const headerContent: string[] = [headline];
           if (view.kind === "workflow") {
-            const filled = view.progress.total > 0 ? Math.round(view.progress.completed / view.progress.total * 8) : 0;
-            const progress = theme.fg("accent", "●".repeat(filled)) + theme.fg("dim", "○".repeat(8 - filled));
-            headerContent.push(`${progress}  ${view.progress.completed}/${view.progress.total} 已完成`);
-            headerContent.push(theme.fg("muted", `› ${view.planSummary}`));
+            const segments = listWidth < 40 ? 4 : 8;
+            const filled = view.progress.total > 0 ? Math.round(view.progress.completed / view.progress.total * segments) : 0;
+            const progress = theme.fg("accent", "●".repeat(filled)) + theme.fg("dim", "○".repeat(segments - filled));
+            headerContent.push(listWidth < 40
+              ? `${progress}  ${view.progress.completed}/${view.progress.total}`
+              : `${progress}  ${view.progress.completed}/${view.progress.total} 已完成`);
+            if (listWidth >= 40) headerContent.push(theme.fg("muted", `› ${view.planSummary}`));
             if (view.activity === "paused") {
               const pauseSummary = view.pause.blockedTasks.length > 0
                 ? view.pause.blockedTasks.map((task) => `${task.taskId}：${task.reason}`).join(" · ")
@@ -133,17 +143,33 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
             scroll = Math.max(0, Math.min(scroll, Math.max(0, lines.length - pageSize)));
             body = [...header, theme.fg("accent", theme.bold(page === "detail" ? "任务详情" : "技术详情 · 只读")), ...lines.slice(scroll, scroll + pageSize)];
           } else {
-            body = [...header, theme.fg("accent", theme.bold(page === "actions" ? "当前可用操作" : `任务 · ${view.kind === "workflow" ? view.tasks.length : 0}`))];
-            capacity = Math.max(1, Math.min(8, budget - body.length - 1));
+            body = [...header];
+            if (page === "actions" || listWidth >= 40) {
+              body.push(theme.fg("accent", theme.bold(page === "actions" ? "当前可用操作" : `任务 · ${view.kind === "workflow" ? view.tasks.length : 0}`)));
+            }
+            capacity = Math.max(1, Math.min(8, budget - body.length));
             refresh();
-            taskListTop = body.length;
+            taskListTop = body.length + 1;
             const renderedList = list.render(inner);
             taskListHeight = renderedList.length;
             body.push(...renderedList);
           }
           if (notice) body.push(theme.fg("warning", truncateToWidth(notice, inner)));
-          const lines = [...body.slice(0, totalBudget), theme.fg("dim", "─".repeat(inner)), ...footer.map((line) => theme.fg("muted", line))];
-          return lines.map((line) => `  ${truncateToWidth(line, inner)}`).slice(0, height);
+          const lines = [
+            ...body.slice(0, totalBudget),
+            theme.fg("dim", "─".repeat(inner)),
+            ...footer.map((line) => theme.fg("muted", line)),
+          ].map((line) => truncateToWidth(line, inner));
+          const panel = new Box(1, 0, (line) => theme.bg("toolPendingBg", line));
+          panel.addChild(new Text(lines.join("\n"), 0, 0));
+          const verticalBorder = theme.bg("toolPendingBg", theme.fg("borderAccent", "│"));
+          const framedContent = panel.render(Math.max(1, width - 2)).map((line) => `${verticalBorder}${line}${verticalBorder}`);
+          const horizontalBorder = new DynamicBorder((line) => theme.fg("borderAccent", line));
+          return [
+            ...horizontalBorder.render(width),
+            ...framedContent,
+            ...horizontalBorder.render(width),
+          ].slice(0, height);
         },
         invalidate() { list.invalidate(); },
         handleInput(data: string) {
@@ -176,6 +202,7 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
         handleMouse(event: Parameters<SelectList["handleMouse"]>[0]) {
           refresh();
           if (page !== "tasks" && page !== "actions") return undefined;
+          if (event.width > 0 && (event.x < 2 || event.x >= event.width - 2)) return undefined;
           const row = event.y - taskListTop;
           if (row < 0 || row >= taskListHeight) return undefined;
           const result = list.handleMouse({ ...event, y: row });

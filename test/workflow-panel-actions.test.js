@@ -100,11 +100,14 @@ test("鼠标按面板中的实际行定位任务，标题和页脚不触发选�
   state.workflowState.tasks.push({ ...state.workflowState.tasks[0], id: "second", task: "第二项任务", acceptanceCriteria: ["第二项验收标准"] });
   const h = createExtensionHarness([], { mode: "tui", hasUI: true, trusted: true, custom: async call => {
     const lines = call.component.render(80);
-    const click = y => call.component.handleMouse({ type: "click", button: "left", x: 8, y });
-    click(0);
+    const click = (x, y) => call.component.handleMouse({ type: "click", button: "left", x, y, width: 80, height: lines.length });
+    click(8, 0);
     assert.notEqual(call.done, true);
     assert.doesNotMatch(call.component.render(80).join("\n"), /验收标准/);
-    click(lines.findIndex(line => line.includes("第二项任务")));
+    const taskRow = lines.findIndex(line => line.includes("第二项任务"));
+    click(0, taskRow);
+    assert.doesNotMatch(call.component.render(80).join("\n"), /验收标准/);
+    click(8, taskRow);
     assert.match(call.component.render(80).join("\n"), /第二项验收标准/);
     call.component.handleInput("\u001b");
     const returned = call.component.render(80);
