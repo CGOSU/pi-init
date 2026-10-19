@@ -126,3 +126,21 @@ test("requests without a correlated final observation stay explicitly unclosed",
   assert.equal(result.provider.unclosedRequests[0].requestNumber, 1);
   assert.equal(result.provider.unfinished, 0);
 });
+
+test("context budgets and workflow rejection codes remain distinct from provider failures", () => {
+  const result = analyzeHandoffLog([row(1, "context.projected", { inputBytes: 500000, outputBytes: 180000, checkpointed: true, overBudget: false, reasonCode: "ROLE_CONTEXT_VIEW_HANDOFF_UNAVAILABLE" }),
+    row(2, "workflow.action_rejected", { action: "switch_role", code: "WORKFLOW_TASK_BOUNDARY_REQUIRED" })]);
+  assert.equal(result.context.checkpoints, 1);
+  assert.equal(result.context.maxOutputBytes, 180000);
+  assert.equal(result.context.degradations.ROLE_CONTEXT_VIEW_HANDOFF_UNAVAILABLE, 1);
+  assert.equal(result.workflowRejections[0].code, "WORKFLOW_TASK_BOUNDARY_REQUIRED");
+  assert.equal(result.provider.assistantErrors, 0);
+});
+
+test("same-state status polling is reported, but intervening progress starts a new observation", () => {
+  const status = sequence => row(sequence, "routing.tool_result", { action: "status", outputHash: "same" }, { snapshot: { workflow: { workflowId: "w", recoveryGeneration: 1, status: "paused" } } });
+  const result = analyzeHandoffLog([status(1), status(2), status(3), status(4), row(5, "workflow.persisted"), status(6), status(7)]);
+  assert.equal(result.statusLoops.length, 1);
+  assert.equal(result.statusLoops[0].count, 4);
+  assert.equal(result.statusLoops[0].elapsedMs, 3000);
+});

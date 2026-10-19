@@ -146,6 +146,8 @@ export function analyzeHandoffLog(input) {
   const responses = rows.filter(row => row.event === "provider.response");
   const assistants = rows.filter(row => row.event === "assistant.result");
   const contexts = rows.filter(row => row.event === "context.reused");
+  const projections = rows.filter(row => row.event === "context.projected");
+  const rejections = rows.filter(row => row.event === "workflow.action_rejected");
   const safeNumber = value => Number.isFinite(value) && value >= 0 ? value : 0;
   const provider = {
     available: requests.length > 0 || responses.length > 0 || assistants.length > 0,
@@ -172,13 +174,24 @@ export function analyzeHandoffLog(input) {
   };
   return {
     events: rows.length, duplicateEvents, dropped, provider, reuse,
+    context: { available: projections.length > 0, views: projections.length,
+      checkpoints: projections.filter(row => row.data.checkpointed === true).length,
+      overBudgetViews: projections.filter(row => row.data.overBudget === true).length,
+      maxInputBytes: projections.reduce((peak, row) => Math.max(peak, safeNumber(row.data.inputBytes)), 0),
+      maxOutputBytes: projections.reduce((peak, row) => Math.max(peak, safeNumber(row.data.outputBytes)), 0),
+      degradations: Object.fromEntries([...new Set(projections.map(row => row.data.reasonCode).filter(code => typeof code === "string"))]
+        .map(code => [code, projections.filter(row => row.data.reasonCode === code).length])) },
+    workflowRejections: rejections.map(row => ({ runtimeId: row.runtimeId, sessionId: row.sessionId, run: row.run,
+      sequence: row.sequence, toolCallId: row.data.toolCallId, action: row.data.action, code: row.data.code })),
+    statusLoops: findStatusLoops(rows),
     tools: { calls: tools.filter(call => call.called).length, executions: tools.filter(call => call.executed).length,
       errors: tools.filter(call => call.error).length, missingResults: tools.filter(call => !call.result).length,
       sdkDurationMs: tools.reduce((total, call) => total + (call.durationMs ?? 0), 0) },
     runs: runSummaries, sameRoleSwitches, handoffs,
     repeatedReads: [...reads.values()].filter(read => read.overlapLines > 0).map(({ ranges, ...read }) => read),
     warnings,
-    caveats: ["Provider 事件仅反映公开 hook 观察；旧日志 available=false 不代表没有网络错误。HTTP 状态与 assistant 错误可属于同一请求，不能相加当失败请求数；不推断重试或网络根因。复用组次数为各次模型视图累计，不是节省的读取次数。",
+    caveats: ["statusLoops 只标识同一状态输出的连续查询候选，不自动判定错误或修改工作流。context 字节是序列化消息估算，不含宿主管理的 system/tool schema，不是精确 token 数或账单节省。",
+      "Provider 事件仅反映公开 hook 观察；旧日志 available=false 不代表没有网络错误。HTTP 状态与 assistant 错误可属于同一请求，不能相加当失败请求数；不推断重试或网络根因。复用组次数为各次模型视图累计，不是节省的读取次数。",
       "读取重叠按成功结果中显式请求范围计算；不证明实际返回行数或读取冗余。stat 版本不是内容哈希。",
       "同角色切换仅为候选；可能用于模型配置或职责恢复。缺少结果不等于被拒绝或执行失败。",
       "SDK 耗时可包含嵌套或并行工具，不能从回合耗时相减推算模型推理时间。未闭合回合 durationMs 为 null。"],
@@ -202,4 +215,30 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch(error => { console.error(error.message); process.exitCode = 1; });
+}
+function findStatusLoops(rows) {
+  const streaks = new Map();
+  const loops = [];
+  for (const row of rows) {
+    const scope = JSON.stringify([row.runtimeId, row.sessionId, row.run]);
+    const data = row.data;
+    if (["input", "workflow.persisted", "session.tree"].includes(row.event)
+      || (["tool.call", "routing.tool_call"].includes(row.event) && !(data.toolName === "task_workflow" && data.action === "status"))) {
+      streaks.delete(scope);
+    }
+    if (row.event !== "routing.tool_result" || data.action !== "status" || data.isError || data.businessOk === false || typeof data.outputHash !== "string") continue;
+    const workflow = row.snapshot?.workflow ?? {};
+    const key = JSON.stringify([data.outputHash, workflow.workflowId, workflow.planVersion, workflow.recoveryGeneration, workflow.status, workflow.currentTaskId]);
+    let streak = streaks.get(scope);
+    if (!streak || streak.key !== key) {
+      streak = { key, runtimeId: row.runtimeId, sessionId: row.sessionId, run: row.run, count: 0,
+        startSequence: row.sequence, endSequence: row.sequence, startedAt: row.timestamp, elapsedMs: 0, paused: workflow.status === "paused", outputHash: data.outputHash };
+      streaks.set(scope, streak);
+    }
+    streak.count++;
+    streak.endSequence = row.sequence;
+    streak.elapsedMs = Math.max(0, Date.parse(row.timestamp) - Date.parse(streak.startedAt));
+    if (streak.count === 3) loops.push(streak);
+  }
+  return loops.map(({ key, ...streak }) => streak);
 }

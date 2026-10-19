@@ -623,3 +623,73 @@ test("reuse does not cross prior branch boundary and never crops a partially pai
   const mismatch = callContextHandler(state, harness, [foreign, call, partial, handoffMessage]);
   assert.ok(mismatch.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
 });
+
+function pausedStatusObservation() {
+  return [
+    { role: "assistant", content: [{ type: "toolCall", id: "paused-status", name: "task_workflow", arguments: { action: "status" } }], timestamp: 30 },
+    { role: "toolResult", toolCallId: "paused-status", toolName: "task_workflow", content: [{ type: "text", text: "current persisted paused status" }], isError: false, timestamp: 31 },
+  ];
+}
+
+test("paused status survives missing ancient handoffs and repeated projections", () => {
+  const { state, harness, handoffMessage, identity } = makeWorkflowContextFixture();
+  harness.branch.unshift({ type: "custom_message", customType: "pi-init-workflow-task", details: { ...identity, taskId: "dependency", attemptId: "older-attempt", handoffId: "older-handoff" } });
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+  harness.branch.push({ type: "custom", id: "paused-source", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const observations = pausedStatusObservation();
+  let messages = [{ role: "user", content: "Original goal", timestamp: 1 }, handoffMessage, ...observations];
+  for (let projection = 0; projection < 3; projection++) {
+    messages = createRoleContextView(state).context({ type: "context", messages }, harness.context).messages;
+    for (const observation of observations) assert.ok(messages.includes(observation), `projection ${projection} retains status`);
+    assert.equal(messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), false);
+    assert.equal(messages.some(message => message.customType === "pi-init-workflow-task"), false);
+    assert.equal(messages.filter(message => message.customType === "pi-init-workflow-paused-context").length, 1);
+    assert.equal(messages.at(-1).details.attemptId, undefined);
+  }
+});
+
+test("architecture-review without handoff history retains complete read-only status observations", () => {
+  const state = createExtensionRuntimeState();
+  state.workflowState = createWorkflowState({ summary: "Review before execution", sessionId, reviewRequired: true, tasks: [{ id: "first", task: "First task", files: ["src/input.ts"], acceptanceCriteria: ["Reviewed"] }] }, 10);
+  const harness = createExtensionHarness([], { sessionId });
+  harness.branch.push({ type: "custom", id: "initial-review", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const observations = pausedStatusObservation();
+  const result = createRoleContextView(state).context({ type: "context", messages: [{ role: "user", content: "Review goal", timestamp: 1 }, ...observations] }, harness.context);
+  for (const observation of observations) assert.ok(result.messages.includes(observation));
+});
+
+test("markerless paused status remains fail closed for corrupt snapshots and incomplete or mutating groups", () => {
+  for (const failure of ["foreign-snapshot", "malformed-snapshot", "missing-result", "mixed-execution", "foreign-marker"]) {
+    const { state, harness } = makeWorkflowContextFixture();
+    state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+    const snapshot = structuredClone(state.workflowState);
+    if (failure === "foreign-snapshot") snapshot.sessionId = "foreign";
+    if (failure === "malformed-snapshot") snapshot.tasks = null;
+    harness.branch.push({ type: "custom", id: "paused-source", customType: "pi-init-workflow", data: snapshot });
+    const observations = pausedStatusObservation();
+    if (failure === "missing-result") observations.pop();
+    if (failure === "mixed-execution") {
+      observations[0].content.push({ type: "toolCall", id: "old-start", name: "task_workflow", arguments: { action: "start", taskId: "current" } });
+      observations.push({ role: "toolResult", toolCallId: "old-start", toolName: "task_workflow", content: [], timestamp: 32 });
+    }
+    const messages = [{ role: "user", content: "Recover safely", timestamp: 1 }, ...observations];
+    if (failure === "foreign-marker") messages.unshift({ role: "custom", customType: "pi-init-workflow-task", details: { sessionId: "foreign" }, content: "foreign", timestamp: 0 });
+    const result = createRoleContextView(state).context({ type: "context", messages }, harness.context);
+    assert.equal(result.messages.some(message => message.role === "toolResult"), false, failure);
+    assert.equal(result.messages.some(message => message.role === "assistant"), false, failure);
+    if (failure !== "mixed-execution") assert.ok(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), failure);
+    assert.equal(state.workflowState.status, "paused", failure);
+  }
+});
+
+test("unconfirmed paused snapshots report a completed status observation instead of requesting endless polling", () => {
+  const { state, harness } = makeWorkflowContextFixture();
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+  const messages = [{ role: "user", content: "Recover safely", timestamp: 1 }, ...pausedStatusObservation()];
+  const result = createRoleContextView(state).context({ type: "context", messages }, harness.context);
+  const diagnostic = result.messages.find(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE);
+  assert.equal(diagnostic.details.statusObserved, true);
+  assert.match(diagnostic.content, /不要反复查询/);
+  assert.equal(result.messages.some(message => message.role === "toolResult"), false);
+  assert.equal(state.workflowState.status, "paused");
+});

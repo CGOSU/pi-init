@@ -5,6 +5,7 @@ import { coordinationHandoffIdentity } from "./coordination-runtime-protocol.ts"
 import { roleLabel } from "../src/roles.ts";
 import { textOf, type ActiveRole, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
+import { checkWorkflowRoleSwitch } from "./workflow-action-policy.ts";
 
 export const ROLE_HANDOFF_MESSAGE_TYPE = "pi-init-role-handoff";
 const ROLE_HANDOFF_ENTRY_TYPE = "pi-init-role-handoff-state";
@@ -126,5 +127,5 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
   }
 
   function reset() { pending = undefined; sending = undefined; }
-  return { capture, finishSwitch, schedule, reset };
+  return { capture, finishSwitch, schedule, reset, checkSwitchRole: (targetRole: string) => checkWorkflowRoleSwitch(state, targetRole) };
 }

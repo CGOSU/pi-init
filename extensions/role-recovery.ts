@@ -2,6 +2,7 @@ import type { ContextEvent, ContextEventResult, ExtensionAPI, ExtensionContext }
 import { } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
 
 export const ROLE_RECOVERY_ENTRY_TYPE = "pi-init-role-recovery";
 export const ROLE_RECOVERY_MESSAGE_TYPE = "pi-init-role-recovery";
@@ -85,7 +86,22 @@ export function createRoleRecovery(
 
   function context(event: ContextEvent, ctx: ExtensionContext) {
     const view = state.roleRecoveryPending && state.workflowState?.status !== "paused" ? undefined : contextView?.(event, ctx);
-    if (!state.roleRecoveryPending) return view;
+    function finalize(result: ContextEventResult | undefined) {
+      if (!result?.messages) return result;
+      const bounded = boundContextWindow(result.messages, contextByteBudget(ctx.model?.contextWindow));
+      const projected = bounded.checkpointed ? bounded.messages.map(message => {
+        if (message.role !== "custom" || message.customType !== "pi-init-role-context-view-diagnostic" || typeof message.content !== "string") return message;
+        return { ...message, content: message.content.replaceAll("完整模型消息已保留", "交接边界投影未执行，随后已应用有界预算检查点")
+          .replaceAll("现有完整上下文", "现有有界观察").replaceAll("不要把本次视图描述为已隔离或已缩减。", "预算检查点不代表交接边界已可靠隔离。") };
+      }) : bounded.messages;
+      const diagnostic = result.messages.find(message => message.role === "custom" && message.customType === "pi-init-role-context-view-diagnostic");
+      const code = diagnostic?.role === "custom" ? (diagnostic.details as { code?: string } | undefined)?.code : undefined;
+      state.traceHandoff?.(ctx, "context.projected", { mode: state.workflowState?.status ?? "recovery", reasonCode: code,
+        ...Object.fromEntries(Object.entries(bounded).filter(([key]) => key !== "messages")),
+        outputBytes: Buffer.byteLength(JSON.stringify(projected)) });
+      return { ...result, messages: projected };
+    }
+    if (!state.roleRecoveryPending) return finalize(view);
     const messages = (view?.messages ?? event.messages).filter((message) => {
       const candidate = message as { customType?: unknown };
       return candidate.customType !== ROLE_RECOVERY_MESSAGE_TYPE;
@@ -117,7 +133,7 @@ export function createRoleRecovery(
       details: { activeRole: state.activeRole?.role },
       timestamp: Date.now(),
     } as ContextEvent["messages"][number]);
-    return { messages };
+    return finalize({ messages });
   }
 
   function guardToolCall(event: { toolName: string; input?: Record<string, unknown> }) {

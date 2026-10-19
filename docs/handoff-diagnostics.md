@@ -65,6 +65,17 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 
 修改后需 reload 或重启 Pi，且仍需 `PI_INIT_HANDOFF_LOG=1` 才收集诊断；角色幂等与上下文复用本身不依赖日志开关。收益需后续真实会话对照，不能从测试 harness 或历史日志推算。
 
+## 上下文检查点与安全重规划
+
+- 暂停恢复不再要求最早历史 handoff 仍在模型输入中；最新持久快照和 branch 身份仍须可靠。有效当前观察保留完整 status 配对，反复投影不使模型忘记已查询状态。状态快照不可确认时仍关闭执行授权；本轮已有完整只读状态查询则在诊断中说明应报告错误码而非重复轮询，不把不可信结果当作恢复授权。
+- `context.projected` 记录最终投影模式、边界降级 reasonCode、输入/输出序列化字节、budgetBytes、checkpointed、omittedMessages 与 overBudget。预算按接收模型窗口估算，最大 192000 字节；不含 system/tool schema，不是精确 token 或费用上限。长任务当前窗口和原先未裁剪降级视图都接受预算检查。
+- 超预算时旧完整工具组和旧回复形成 `pi-init-context-checkpoint`（只存在于本次模型视图）；保留用户指令、最新工具组、当前交接/恢复标记和失败配对，历史不改写、不执行工具。摘要明确标注观察不完整和历史性，带命令/参数及结果片段与指纹，不能证明当前源码版本或验证结果仍有效，不得据此重放修改、命令或提交。
+- 用户指令/最新输出/失败本身超限，或工具配对损坏、输入包含宿主管理的 system 消息时，不为满足预算而破坏语义或工具配对；记录 overBudget 和原因，不声称已成功压缩。此检查点不是 SDK session_compact，不改变恢复代次，不会自动重试或解除暂停。
+- `workflow.action_rejected` 保留工作流动作稳定错误码和工具调用 ID，不写错误正文；SDK 丢失 Error.code 时仍可从此事件定位。离线报告新增 context、workflowRejections 与 statusLoops；连续同状态查询只是候选，遇到其他工具/状态变化即重置，不自动改动业务状态。
+- 执行者在 executing 身份下可用已有 request-replan 登记方向，仍须真实 complete/block 后才规划；已登记请求且不存在未知副作用的 block 进入重规划而非重复执行任务。仅 architect 可 plan/replan，目标插入权限不变。切角前检查阻止模型提前离开正在执行的任务；queued/恢复阶段保留合法确认/取证路径。
+
+重新加载扩展后生效，不需要新增配置或修改 pi-graph。真实 Provider 收益仍需新会话对照。
+
 ## 工具与文件观察
 
 除原有 routing.* 事件外，普通工具也记录 tool.model_proposed、tool.call、tool.result。提议、进入观察器和结果是不同阶段，用 toolCallId 关联，不要把它们统计成三次执行。model_proposed 可保留被前置守卫阻断的提议；tool.call 仅表示调用到达诊断处理器，不代表所有守卫已经授权。

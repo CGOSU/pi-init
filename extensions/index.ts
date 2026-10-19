@@ -49,6 +49,7 @@ import {
 import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
+import { fingerprint } from "./handoff-tool-diagnostics.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -587,19 +588,25 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (signal?.aborted || runtimeState.workflowRestoreError) return workflowActions.runTaskWorkflowAction(params, signal, ctx);
-      const guard = roleRecovery.guardToolCall({ toolName: "task_workflow", input: params });
-      if (guard?.block && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
-        throw Object.assign(new Error(guard.reason), { code: guard.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED" });
+      try {
+        if (signal?.aborted || runtimeState.workflowRestoreError) return await workflowActions.runTaskWorkflowAction(params, signal, ctx);
+        const guard = roleRecovery.guardToolCall({ toolName: "task_workflow", input: params });
+        if (guard?.block && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
+          throw Object.assign(new Error(guard.reason), { code: guard.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED" });
+        }
+        let bound: typeof params;
+        try { bound = workflowBinding.bind(_toolCallId, params, ctx); }
+        catch (error) {
+          if (!(error instanceof Error) || !("code" in error) || error.code !== "WORKFLOW_RUN_BINDING_MISSING") throw error;
+          return await workflowActions.runTaskWorkflowAction(params, signal, ctx);
+        }
+        return await workflowActions.runTaskWorkflowAction(bound, signal, ctx);
+      } catch (error) {
+        const value = error as { code?: unknown; message?: unknown };
+        const code = typeof value?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(value.code) ? value.code : "WORKFLOW_ACTION_REJECTED";
+        runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: params.action, code, errorHash: fingerprint(value?.message) });
+        throw error;
       }
-      let bound: typeof params;
-      try { bound = workflowBinding.bind(_toolCallId, params, ctx); }
-      catch (error) {
-        if (!(error instanceof Error) || !("code" in error) || error.code !== "WORKFLOW_RUN_BINDING_MISSING") throw error;
-        // Legacy validators provide precise missing-identity/role diagnostics without filling current identity.
-        return workflowActions.runTaskWorkflowAction(params, signal, ctx);
-      }
-      return workflowActions.runTaskWorkflowAction(bound, signal, ctx);
     },
   });
 
@@ -621,7 +628,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return new Text(theme.fg("toolTitle", theme.bold("角色切换 ")) + theme.fg("muted", roleLabel(args.role)), 0, 0);
     },
     renderResult(result, _options, theme, context) {
-      if (context.isError) return new Text(theme.fg("error", "角色切换失败"), 0, 0);
+      if (context.isError || (result.details as { ok?: boolean } | undefined)?.ok === false) return new Text(theme.fg("error", "角色切换失败"), 0, 0);
       const details = result.details as { role?: string; model?: string; thinkingLevel?: string } | undefined;
       return new Text(
         theme.fg("success", "✓ ") + theme.fg("accent", roleLabel(details?.role ?? "")) +
@@ -634,6 +641,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "角色切换已取消。" }], details: {} };
+      }
+      const boundary = roleHandoff.checkSwitchRole(params.role);
+      if (!boundary.allowed) {
+        runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: "switch_role", code: boundary.code, requiredRole: boundary.requiredRole });
+        return { content: [{ type: "text", text: boundary.message + "\n" + boundary.nextAction }], details: { ok: false, ...boundary } };
       }
       const source = roleHandoff.capture(ctx);
       const selection = await roleRuntime.automaticRole(params.role, ctx);

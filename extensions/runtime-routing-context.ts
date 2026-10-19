@@ -3,6 +3,8 @@ import { getWorkflowTask } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 
+import { nextWorkflowAction } from "./workflow-action-policy.ts";
+
 const SECTION_KEY = "pi_init_runtime";
 
 type RuntimeRoutingDependencies = {
@@ -51,6 +53,7 @@ function buildRuntimeSection(
     `当前模型：${model}，推理强度：${thinkingLevel}`,
     workflowSummary(state),
     recoveryGuidance(state),
+    `工作流下一步：${nextWorkflowAction(state).action}。${nextWorkflowAction(state).nextAction}`,
   ].join("\n");
 }
 

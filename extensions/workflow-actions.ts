@@ -38,6 +38,7 @@ import { transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
 import type { WorkflowLifecycleTransition } from "../src/workflow-orchestrator.ts";
 import { assertSubworkflowTaskScope } from "../src/workflow-subworkflow.ts";
 import { runWorkflowPanelRequest } from "./workflow-panel-actions.ts";
+import { nextWorkflowAction } from "./workflow-action-policy.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
@@ -69,7 +70,7 @@ export function createWorkflowActions(
   }
 
   function statusDetails(details: object, workflowState = state.workflowState) {
-    return attachWorkflowPresentation(details, {
+    return attachWorkflowPresentation({ ...details, workflowNextStep: nextWorkflowAction({ ...state, workflowState }) }, {
       kind: "workflow-status",
       view: createCurrentWorkflowStatusView(state, workflowState),
     });
@@ -334,14 +335,24 @@ export function createWorkflowActions(
       case "request-goal": {
         if (!state.workflowState) throw missingWorkflowError();
         requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") throw new Error("只有 architect 可以安排目标归属或修正计划；所有执行任务共用同一队列");
+        const actor = deps.roleRuntime.activeRoleFor(ctx)?.role;
+        const currentTask = state.workflowState.tasks.find(task => task.id === state.workflowState!.currentTaskId);
+        const executorRequest = params.action === "request-replan" && state.workflowState.status === "running"
+          && state.workflowState.handoff?.phase === "executing" && currentTask?.role === actor;
+        if (actor !== "architect" && !executorRequest) {
+          const step = nextWorkflowAction(state);
+          const code = state.workflowState.currentTaskId ? "WORKFLOW_TASK_BOUNDARY_REQUIRED" : "WORKFLOW_ARCHITECT_REQUIRED";
+          throw Object.assign(new Error("只有 architect 可以安排目标归属或修正计划；所有执行任务共用同一队列。" + step.nextAction), {
+            code, details: { ok: false, code, ...step },
+          });
+        }
         const grouped = params.action === "request-child" || params.action === "request-goal";
         const next = grouped
           ? requestWorkflowGoal(state.workflowState, { direction: params.summary, parentGoalId: params.parentGoalId })
           : requestWorkflowReplan(state.workflowState, { direction: params.summary });
         if (deps.coordination.isLinkedToWorkflow(state.workflowState)) deps.coordination.linkWorkflow(next, ctx);
         deps.report.persistWorkflowState(next, ctx);
-        return { content: [{ type: "text", text: grouped ? "已记录插入目标；在安全边界规划同一任务队列，父子关系仅表达归属，不创建子工作流。" : "已记录父计划修正/追加请求；保留有效任务，在安全边界重规划当前队列。" }], details: statusDetails(next), terminate: true };
+        return { content: [{ type: "text", text: (grouped ? "已记录插入目标；在安全边界规划同一任务队列，父子关系仅表达归属，不创建子工作流。" : "已记录父计划修正/追加请求；保留有效任务，在安全边界重规划当前队列。") + "\n" + nextWorkflowAction({ ...state, workflowState: next }).nextAction }], details: statusDetails(next), terminate: !next.currentTaskId };
       }
       case "review-child": {
         if (!state.workflowState) throw missingWorkflowError();
@@ -514,6 +525,12 @@ export function createWorkflowActions(
       }
       case "replan": {
         if (!state.workflowState) throw missingWorkflowError();
+        if (state.workflowState.currentTaskId) {
+          const step = nextWorkflowAction(state);
+          throw Object.assign(new Error("当前任务尚未结束，不能应用工作流重规划。" + step.nextAction), {
+            code: "WORKFLOW_TASK_BOUNDARY_REQUIRED", details: { ok: false, code: "WORKFLOW_TASK_BOUNDARY_REQUIRED", ...step },
+          });
+        }
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") {
           throw new Error("只有架构角色可以应用工作流重规划；请先调用 switch_role(role=architect)");
         }
