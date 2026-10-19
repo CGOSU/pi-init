@@ -80,6 +80,40 @@ test("操作菜单和技术详情逐层返回，刷新不替用户执行动作",
   await createWorkflowReport(state, { pi: {}, roleRuntime: { refreshRoleStatus() {} } }).showWorkflowProgress(h.context);
 });
 
+test("任务与操作列表分别保留选择，返回后仍查看原任务", async () => {
+  const state = fixture();
+  state.workflowState.tasks.push({ ...state.workflowState.tasks[0], id: "second", task: "第二项任务", acceptanceCriteria: ["第二项验收标准"] });
+  const h = createExtensionHarness([], { mode: "tui", hasUI: true, trusted: true, custom: async call => {
+    call.component.render(80);
+    call.component.handleInput("\u001b[B");
+    call.component.handleInput("a");
+    call.component.render(80);
+    call.component.handleInput("\u001b");
+    call.component.render(80);
+    call.component.handleInput("\r");
+    assert.match(call.component.render(80).join("\n"), /第二项验收标准/);
+  } });
+  await showWorkflowPanel(h.context, state);
+});
+test("鼠标按面板中的实际行定位任务，标题和页脚不触发选择", async () => {
+  const state = fixture();
+  state.workflowState.tasks.push({ ...state.workflowState.tasks[0], id: "second", task: "第二项任务", acceptanceCriteria: ["第二项验收标准"] });
+  const h = createExtensionHarness([], { mode: "tui", hasUI: true, trusted: true, custom: async call => {
+    const lines = call.component.render(80);
+    const click = y => call.component.handleMouse({ type: "click", button: "left", x: 8, y });
+    click(0);
+    assert.notEqual(call.done, true);
+    assert.doesNotMatch(call.component.render(80).join("\n"), /验收标准/);
+    click(lines.findIndex(line => line.includes("第二项任务")));
+    assert.match(call.component.render(80).join("\n"), /第二项验收标准/);
+    call.component.handleInput("\u001b");
+    const returned = call.component.render(80);
+    click(returned.length - 1);
+    assert.doesNotMatch(call.component.render(80).join("\n"), /验收标准/);
+  } });
+  await showWorkflowPanel(h.context, state);
+});
+
 test("面板取消入口经过确认后复用业务命令，默认返回不写状态", async () => {
   for (const accept of [false, true]) {
     const state = fixture(); const writes = []; const retired = [];
@@ -135,6 +169,7 @@ test("打开的进度面板按最新持久状态刷新任务集合与状态", as
         {
           id: "parent-next",
           task: "继续父层计划",
+          dependsOn: ["parent-task"],
           files: ["src/parent-next.ts"],
           acceptanceCriteria: ["父计划继续"],
         },
@@ -188,9 +223,9 @@ test("打开的进度面板按最新持久状态刷新任务集合与状态", as
   assert.match(before, /parent-task/);
   assert.doesNotMatch(before, /child-task/);
   assert.match(after, /child-task/);
-  assert.match(after, /✓ 已完成 · parent-task/);
-  assert.match(after, /当前任务：动态新增的子工作流任务/);
-  assert.match(after, /已完成 1\/3/);
+  assert.match(after, /✓ #parent-task[\s\S]*推进父层工作/);
+  assert.match(after, /◐ #child-task.*动态新增的子工作流任务/);
+  assert.match(after, /1\/3 已完成/);
   assert.match(after, /→ .*parent-next/);
   assert.doesNotMatch(after, /→ .*child-task/);
 
