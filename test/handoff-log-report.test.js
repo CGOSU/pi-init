@@ -144,3 +144,10 @@ test("same-state status polling is reported, but intervening progress starts a n
   assert.equal(result.statusLoops[0].count, 4);
   assert.equal(result.statusLoops[0].elapsedMs, 3000);
 });
+
+test("paused polling termination is explicit and not counted as task completion or provider failure", () => {
+  const result = analyzeHandoffLog([row(1, "workflow.status_polling_stopped", { toolCallId: "status-2", code: "WORKFLOW_STATUS_NO_PROGRESS" })]);
+  assert.equal(result.statusPollingStops.length, 1);
+  assert.equal(result.statusPollingStops[0].code, "WORKFLOW_STATUS_NO_PROGRESS");
+  assert.equal(result.provider.assistantErrors, 0);
+});

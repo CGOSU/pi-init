@@ -4,7 +4,7 @@ import { hydrateWorkflowState, workflowActionIdentity } from "../src/workflow.ts
 import { latestWorkflowRecoverySource } from "./workflow-recovery.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { type ContextMessage, ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE, WORKFLOW_TASK_MESSAGE_TYPE, WORKFLOW_REPLAN_MESSAGE_TYPE,
-  isRecord, messageRecord, identityMatches, isManagedHandoffMessage, branchContainsExactlyOneAnchor, toolCallIds, hasCompleteToolPairs, diagnosticMessage } from "./role-context-protocol.ts";
+  isRecord, messageRecord, identityMatches, isManagedHandoffMessage, toolCallIds, hasCompleteToolPairs, diagnosticMessage } from "./role-context-protocol.ts";
 
 // Repeated projections have no executable marker. Only complete read-only
 // status groups may cross that boundary; old execution calls are never revived.
@@ -38,13 +38,22 @@ export function pausedContextView(
   ctx: ExtensionContext,
 ): ContextEventResult {
   const lastUser = messages.findLastIndex(message => messageRecord(message)?.role === "user");
-  const statusObserved = (pausedStatusObservations(messages.slice(lastUser + 1))?.size ?? 0) > 0;
+  const recentObservation = (pausedStatusObservations(messages.slice(lastUser + 1))?.size ?? 0) > 0;
+  const allObservations = pausedStatusObservations(messages);
+  const workflowState = state.workflowState;
+  const unchangedObservation = workflowState && [...(allObservations ?? [])].some(message => {
+    const record = messageRecord(message);
+    return record?.role === "toolResult" && record.isError !== true && isRecord(record.details)
+      && identityMatches(record.details, workflowActionIdentity(workflowState))
+      && record.details.status === workflowState.status && record.details.updatedAt === workflowState.updatedAt;
+  });
+  const statusObserved = recentObservation || Boolean(unchangedObservation);
   const fail = (code: string, reason: string): ContextEventResult => ({
     messages: [
-      ...messages.filter((message) => messageRecord(message)?.role === "user"),
+      ...messages.filter((message) => protectedContextMessage(message)),
       {
         ...diagnosticMessage(code, reason),
-        content: `[PI-INIT 暂停恢复视图不可确认]\n错误码：${code}\n原因：${reason}\n仅保留用户指令；原始 branch 未改写。旧任务交接不是当前执行授权。暂停和职责恢复保护仍有效。${statusObserved ? "本轮已有完整只读状态查询，但恢复边界仍无法确认；不要反复查询相同状态，报告此错误码并等待安全恢复检查。" : '本轮尚无完整只读状态观察；可查询一次 task_workflow(action="status")，不得凭旧身份执行。'}`,
+        content: `[PI-INIT 暂停恢复视图不可确认]\n错误码：${code}\n原因：${reason}\n仅保留用户指令与宿主管理的 system 消息；原始 branch 未改写。旧任务交接不是当前执行授权。暂停和职责恢复保护仍有效。${statusObserved ? "本轮已有完整只读状态查询，但恢复边界仍无法确认；不要反复查询相同状态，报告此错误码并等待安全恢复检查。" : '本轮尚无完整只读状态观察；可查询一次 task_workflow(action="status")，不得凭旧身份执行。'}`,
         details: { code, statusObserved },
       } as ContextMessage,
     ],
@@ -80,26 +89,26 @@ export function pausedContextView(
       if (!isRecord(identity) || identity.sessionId !== sessionId
         || typeof identity.planVersion !== "number" || identity.planVersion > workflow.planVersion
         || typeof identity.recoveryGeneration !== "number" || identity.recoveryGeneration > workflow.recoveryGeneration
-        || typeof last.customType !== "string" || !branchContainsExactlyOneAnchor(branch, last.customType, identity)) {
+        || typeof last.customType !== "string") {
         return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "历史任务边界身份不可核对");
       }
       const indices = messages.flatMap((message, index) => {
         const record = messageRecord(message);
         return record?.role === "custom" && record.customType === last.customType && identityMatches(record.details, identity) ? [index] : [];
       });
-      if (indices.length > 1) return fail("ROLE_CONTEXT_VIEW_MESSAGE_BOUNDARY_UNAVAILABLE", "历史任务边界在当前 context 中重复");
-      const anchorIndex = indices[0] ?? -1;
+      // This is a historical observation window, not a current execution grant.
+      const anchorIndex = indices.at(-1) ?? -1;
       // Persisted paused state is the trust anchor; ancient markers may be absent.
       if (anchorIndex < 0) {
         if (messages.some(isManagedHandoffMessage)) return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "当前观察边界缺失但仍有其他交接");
         const observations = pausedStatusObservations(messages);
         if (!observations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
-        selected = messages.filter((message) => messageRecord(message)?.role === "user" || observations.has(message));
+        selected = messages.filter((message) => protectedContextMessage(message) || observations.has(message));
       } else {
         if (messages.slice(anchorIndex + 1).some(isManagedHandoffMessage)) {
           return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "最新观察边界之后存在其他交接消息");
         }
-        selected = messages.filter((message, index) => messageRecord(message)?.role === "user"
+        selected = messages.filter((message, index) => protectedContextMessage(message)
           || (index > anchorIndex && !isManagedHandoffMessage(message)
             && messageRecord(message)?.customType !== ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE
             && messageRecord(message)?.customType !== "pi-init-workflow-paused-context"));
@@ -108,9 +117,9 @@ export function pausedContextView(
       if (messages.some(isManagedHandoffMessage)) return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "无历史记录但存在交接消息");
       const observations = pausedStatusObservations(messages);
       if (!observations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
-      selected = messages.filter((message) => messageRecord(message)?.role === "user" || observations.has(message));
+      selected = messages.filter((message) => protectedContextMessage(message) || observations.has(message));
     }
-    if (!hasCompleteToolPairs(selected)) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "恢复窗口中的工具调用/结果配对不完整或重复");
+    if (!hasCompleteToolPairs(selected.filter(message => messageRecord(message)?.role !== "system"))) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "恢复窗口中的工具调用/结果配对不完整或重复");
     const identity = workflowActionIdentity(workflow);
     const snapshot = {
       ...identity,
@@ -140,4 +149,8 @@ export function pausedContextView(
   } catch {
     return fail("ROLE_CONTEXT_VIEW_PAUSED_BOUNDARY_UNAVAILABLE", "暂停恢复状态或 branch 边界不可读取");
   }
+}
+function protectedContextMessage(message: unknown) {
+  const role = messageRecord(message)?.role;
+  return role === "user" || role === "system";
 }

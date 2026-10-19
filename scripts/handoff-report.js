@@ -184,6 +184,8 @@ export function analyzeHandoffLog(input) {
     workflowRejections: rejections.map(row => ({ runtimeId: row.runtimeId, sessionId: row.sessionId, run: row.run,
       sequence: row.sequence, toolCallId: row.data.toolCallId, action: row.data.action, code: row.data.code })),
     statusLoops: findStatusLoops(rows),
+    statusPollingStops: rows.filter(row => row.event === "workflow.status_polling_stopped").map(row => ({ runtimeId: row.runtimeId,
+      sessionId: row.sessionId, run: row.run, sequence: row.sequence, toolCallId: row.data.toolCallId, code: row.data.code })),
     tools: { calls: tools.filter(call => call.called).length, executions: tools.filter(call => call.executed).length,
       errors: tools.filter(call => call.error).length, missingResults: tools.filter(call => !call.result).length,
       sdkDurationMs: tools.reduce((total, call) => total + (call.durationMs ?? 0), 0) },

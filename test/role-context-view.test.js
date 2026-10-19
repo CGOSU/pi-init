@@ -693,3 +693,49 @@ test("unconfirmed paused snapshots report a completed status observation instead
   assert.equal(result.messages.some(message => message.role === "toolResult"), false);
   assert.equal(state.workflowState.status, "paused");
 });
+
+test("identical historical handoff deliveries do not erase paused observations or grant execution identity", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  harness.branch.push({ type: "custom_message", id: "redelivered", customType: handoffMessage.customType, details: structuredClone(handoffMessage.details) });
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+  harness.branch.push({ type: "custom", id: "paused-source", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const observations = pausedStatusObservation();
+  const messages = [{ role: "user", content: "Recover safely", timestamp: 1 }, handoffMessage, { ...handoffMessage, timestamp: 25 }, ...observations];
+  const result = createRoleContextView(state).context({ type: "context", messages }, harness.context);
+  for (const observation of observations) assert.ok(result.messages.includes(observation));
+  assert.equal(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), false);
+  assert.equal(result.messages.at(-1).details.attemptId, undefined);
+  assert.equal(state.workflowState.status, "paused");
+  const active = makeWorkflowContextFixture();
+  active.harness.branch.push({ type: "custom_message", customType: active.handoffMessage.customType, details: structuredClone(active.handoffMessage.details) });
+  const rejected = createRoleContextView(active.state).context({ type: "context", messages: [active.handoffMessage] }, active.harness.context);
+  assert.ok(rejected.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
+});
+
+test("unchanged current status remains observed across later non-mutating user reminders", () => {
+  const { state, harness } = makeWorkflowContextFixture();
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+  const observations = pausedStatusObservation();
+  observations[1].details = structuredClone(state.workflowState);
+  const result = createRoleContextView(state).context({ type: "context", messages: [{ role: "user", content: "Recover safely", timestamp: 1 }, ...observations,
+    { role: "user", content: "Task list reference only", timestamp: 32 }] }, harness.context);
+  const diagnostic = result.messages.find(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE);
+  assert.equal(diagnostic.details.statusObserved, true);
+});
+
+test("host system messages survive paused projection without being mistaken for broken tool pairs", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Needs confirmation" }, 20);
+  harness.branch.push({ type: "custom", id: "paused-source", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const system = { role: "system", content: "Host-managed role prompt", sections: { host: "untouched" }, timestamp: 29 };
+  const observations = pausedStatusObservation();
+  const messages = [{ role: "user", content: "Recover safely", timestamp: 1 }, handoffMessage, system, ...observations];
+  const result = createRoleContextView(state).context({ type: "context", messages }, harness.context);
+  assert.ok(result.messages.includes(system));
+  for (const observation of observations) assert.ok(result.messages.includes(observation));
+  assert.equal(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), false);
+  harness.branch.pop();
+  const failed = createRoleContextView(state).context({ type: "context", messages }, harness.context);
+  assert.ok(failed.messages.includes(system));
+  assert.equal(state.workflowState.status, "paused");
+});

@@ -50,6 +50,7 @@ import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
+import { createPausedStatusGuard } from "./workflow-status-polling.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -588,8 +589,20 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      function finish(result: Awaited<ReturnType<typeof workflowActions.runTaskWorkflowAction>>) {
+        if (params.action !== "status" || signal?.aborted) return result;
+        const polling = pausedStatusGuard.observe(_toolCallId, ctx);
+        if (!polling.stop) return result;
+        const text = "暂停状态未发生变化，已结束本回合的重复状态轮询。工作流仍暂停，未恢复、完成或重试任务；请按已有状态说明处理阻塞或恢复问题。";
+        if (polling.firstStop) {
+          runtimeState.traceHandoff?.(ctx, "workflow.status_polling_stopped", { toolCallId: _toolCallId, code: polling.code });
+          try { ctx.ui.notify(text, "warning"); } catch {}
+        }
+        return { ...result, content: [...result.content, { type: "text" as const, text }],
+          details: { ...(result.details as Record<string, unknown>), statusPolling: { code: polling.code, stopped: true } }, terminate: true };
+      }
       try {
-        if (signal?.aborted || runtimeState.workflowRestoreError) return await workflowActions.runTaskWorkflowAction(params, signal, ctx);
+        if (signal?.aborted || runtimeState.workflowRestoreError) return finish(await workflowActions.runTaskWorkflowAction(params, signal, ctx));
         const guard = roleRecovery.guardToolCall({ toolName: "task_workflow", input: params });
         if (guard?.block && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
           throw Object.assign(new Error(guard.reason), { code: guard.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED" });
@@ -598,9 +611,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         try { bound = workflowBinding.bind(_toolCallId, params, ctx); }
         catch (error) {
           if (!(error instanceof Error) || !("code" in error) || error.code !== "WORKFLOW_RUN_BINDING_MISSING") throw error;
-          return await workflowActions.runTaskWorkflowAction(params, signal, ctx);
+          return finish(await workflowActions.runTaskWorkflowAction(params, signal, ctx));
         }
-        return await workflowActions.runTaskWorkflowAction(bound, signal, ctx);
+        return finish(await workflowActions.runTaskWorkflowAction(bound, signal, ctx));
       } catch (error) {
         const value = error as { code?: unknown; message?: unknown };
         const code = typeof value?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(value.code) ? value.code : "WORKFLOW_ACTION_REJECTED";
@@ -664,5 +677,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       };
     },
   });
+  const pausedStatusGuard = createPausedStatusGuard(pi, runtimeState);
   createHandoffDiagnostics(pi, runtimeState);
 }

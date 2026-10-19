@@ -76,6 +76,14 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 
 重新加载扩展后生效，不需要新增配置或修改 pi-graph。真实 Provider 收益仍需新会话对照。
 
+## 暂停轮询的运行时终止保护
+
+暂停的历史 handoff 可能曾被旧版本重复投递。同身份历史窗口现在选择最后一次匹配观察；这不是新的执行授权，活动 handoff 和结果提交仍要求原来的唯一身份。SDK 投影携带的宿主 system 消息原样保留，不再作为暂停工具配对错误处理；损坏或外部状态仍不获执行权限。
+
+`workflow.status_polling_stopped` / `WORKFLOW_STATUS_NO_PROGRESS` 表示：同一 Agent 回合连续两次成功查询相同暂停业务状态、没有新的用户输入或其他工具观察时，运行时返回当前只读状态并通过工具 terminate 结束本回合；UI 明确提示仍暂停，不会取消、完成、恢复、重规划或重试任务，也不产生自动续跑。保护不依赖日志开关，不是限制角色交接次数。
+
+新的业务状态、职责/恢复状态、session/branch 切换、真实用户输入或新回合会重新允许观察；extension 来源的自动提醒不会清空保护。其他工具观察会重置连续状态查询判定。离线报告新增 statusPollingStops，不能把它计作模型网络错误或任务完成。
+
 ## 工具与文件观察
 
 除原有 routing.* 事件外，普通工具也记录 tool.model_proposed、tool.call、tool.result。提议、进入观察器和结果是不同阶段，用 toolCallId 关联，不要把它们统计成三次执行。model_proposed 可保留被前置守卫阻断的提议；tool.call 仅表示调用到达诊断处理器，不代表所有守卫已经授权。
