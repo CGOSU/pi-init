@@ -84,6 +84,14 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 
 新的业务状态、职责/恢复状态、session/branch 切换、真实用户输入或新回合会重新允许观察；extension 来源的自动提醒不会清空保护。其他工具观察会重置连续状态查询判定。离线报告新增 statusPollingStops，不能把它计作模型网络错误或任务完成。
 
+## 根工作流最终报告
+
+根终态 complete 不再 terminate 当前回合；中间任务、重规划和子流程交接仍维持原语义。运行时为本次根完成建立短生命周期交付收据，向模型提供全体已记录任务摘要、取舍、验证（含失败/未执行）及历史取消/未知副作用作为数据；报告阶段不重新调查、轮询或执行 Git。receipt 只绑定当前 session/workflow/plan/recovery/role/context 身份，不改历史或持久化 schema。
+
+正常 assistant stop 且有文本即视为已回复；若取消、错误、未输出正常回复或继续提议工具，运行时会阻断报告阶段工具、通过 SDK abort 结束回合，在 settled 时发送一次可见的完整确定性报告，triggerTurn=false。它不触发新的模型回合，不恢复/重试任务，不自动 commit/push；派发失败仅本地展示并明确未确认，不自动重发。真实用户输入、新回合和 session/实际 branch 切换清除旧收据，reload 不自动补发历史完成报告。
+
+日志 `workflow.delivery.*` 区分 prepared、context_projected/context_preserved、assistant_delivered、tool_aborted、fallback_delivered/fallback_failed，只记元数据，不写报告正文。未记录的 Git 状态或验证不能被推断为成功，也不应为填写报告执行新 Git 检查。工作流默认统一收尾；初始归属基线、必要的局部差异/冲突检查及真实提交前刷新仍须保留。
+
 ## 工具与文件观察
 
 除原有 routing.* 事件外，普通工具也记录 tool.model_proposed、tool.call、tool.result。提议、进入观察器和结果是不同阶段，用 toolCallId 关联，不要把它们统计成三次执行。model_proposed 可保留被前置守卫阻断的提议；tool.call 仅表示调用到达诊断处理器，不代表所有守卫已经授权。

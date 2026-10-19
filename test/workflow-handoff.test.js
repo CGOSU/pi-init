@@ -517,3 +517,19 @@ test("结果未知恢复不接受模型自签确认，用户重试命令仍可�
     assert.ok(retried.recoveryGeneration > workflow.recoveryGeneration);
   });
 });
+
+test("root workflow completion leaves the current run open for its final user report", async () => {
+  await withTempDirectory(async directory => {
+    const harness = await taskHarness(directory);
+    const workflow = harness.tools.find(tool => tool.name === "task_workflow");
+    const result = await workflow.execute("final-complete", completeParams(workflowMessageIdentity(harness)), undefined, undefined, harness.context);
+    assert.equal(result.details.status, "completed");
+    assert.equal(result.terminate, false);
+    await emitExtensionEvent(harness, "agent_settled");
+    const report = harness.sentMessages.find(({ message }) => message.customType === "pi-init-workflow-delivery-report");
+    assert.ok(report);
+    assert.equal(report.options.triggerTurn, false);
+    assert.match(report.message.content, /第一项完成/);
+    await emitExtensionEvent(harness, "session_shutdown");
+  });
+});

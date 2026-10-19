@@ -632,7 +632,7 @@ export function createWorkflowActions(
         return {
           content: [{ type: "text", text: `${completionReport}\n\n${notice}` }],
           details: attachWorkflowPresentation(activeNext, presentation),
-          terminate: true,
+          terminate: completedNested || activeNext.status !== "completed",
         };
       }
       case "block": {

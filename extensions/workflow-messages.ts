@@ -22,11 +22,12 @@ const ARCHITECT_RUNTIME_GUIDANCE =
   `架构师不取证、不执行、不连接 MCP，只负责思考、决策、规划和安排；运行时仅可调用 switch_role，以及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}（后两者是纯协议规划/审阅动作）。需要最新事实时，先通过 request-evidence 交由 docs-commit 查证；architect 不得调用 clarify、complete、block、resume、retry 或 cancel。`;
 
 function taskRoleGuidance(role: string) {
-  if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
-  if (role === "docs-commit") {
-    return "docs-commit 负责取证和文档/Git 收尾；交接事实与风险，不替 architect 做关键决策，也不修改代码。";
-  }
-  return "";
+    if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
+    const gitBoundary = "这是工作流子任务，不默认等同于整流程 Git 收尾；只为当前任务需要的改动归属、冲突、验收或真实提交检查最新 Git 状态，不为 complete 或填报告例行重复全仓 git status/git diff。已有归属和验证结论可交接，但编辑、共享工作区变化或提交前仍须必要刷新，不缓存旧 diff 冒充当前结果。";
+    if (role === "docs-commit") {
+      return "docs-commit 负责取证和文档/Git 收尾；交接事实与风险，不替 architect 做关键决策，也不修改代码。当前任务为取证或普通文档时不自动开展 Git 收尾；只有明确的 Git 验收或统一收尾任务才执行。" + gitBoundary;
+    }
+    return gitBoundary;
 }
 
 function evidenceSummary(state: ExtensionRuntimeState, reference: { findingId: string; sourceId: string; sourceVersion: string }) {

@@ -51,6 +51,7 @@ import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createPausedStatusGuard } from "./workflow-status-polling.ts";
+import { createWorkflowDelivery } from "./workflow-delivery.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -590,6 +591,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       function finish(result: Awaited<ReturnType<typeof workflowActions.runTaskWorkflowAction>>) {
+        if (params.action === "complete" && !result.terminate) workflowDelivery.prepare(_toolCallId);
         if (params.action !== "status" || signal?.aborted) return result;
         const polling = pausedStatusGuard.observe(_toolCallId, ctx);
         if (!polling.stop) return result;
@@ -678,5 +680,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
   });
   const pausedStatusGuard = createPausedStatusGuard(pi, runtimeState);
+  const workflowDelivery = createWorkflowDelivery(pi, runtimeState);
   createHandoffDiagnostics(pi, runtimeState);
 }
