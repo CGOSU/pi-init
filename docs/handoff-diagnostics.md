@@ -28,6 +28,20 @@ pi --no-extensions -e ./extensions/index.ts
 Get-Content .pi/logs/handoff.jsonl -Tail 30 -Wait
 ```
 
+## 离线统计
+
+在 pi-init 仓库运行（已安装 package 时使用其 scripts/handoff-report.js 的实际路径）：
+
+```sh
+node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl
+# 同时分析轮转文件；顺序不限，重复事件按 runtime/session/sequence 去重
+node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/to/project/.pi/logs/handoff.jsonl
+```
+
+不传路径时读取当前目录 `.pi/logs/handoff.jsonl`，输出 JSON 到 stdout，不修改日志，不进入模型上下文。输出包含工具调用/执行/错误数、SDK 耗时合计、回合耗时、同角色切换候选、同版本读取重叠候选和角色派发/协调交接延迟。
+
+回合从 before_start 到 settled，排除下一次用户输入前的空闲；未闭合为 null，多次 agent.start 明确警告，不把 run 误当唯一执行实例。缺失片段不推断失败；无效/截断行、重复和日志丢弃均披露。只分析成功且未标记截断的 read 结果中有明确版本与行范围的记录；重叠是请求范围统计，不证明实际返回行数或操作可省略，版本按 stat 观察隔离。SDK 耗时可能重叠或嵌套，不可相减推算模型推理耗时。同角色切换仅列候选，不自动跳过模型配置或恢复操作。
+
 ## 排查顺序
 
 1. 按 sessionId、runtimeId 和 sequence 还原顺序，run 表示本次扩展实例中的 Agent 回合编号。

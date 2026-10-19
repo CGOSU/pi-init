@@ -60,6 +60,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
       identity,
       content: [
         "[PI-INIT 证据取证交接]",
+        "本消息由运行时派发给 docs-commit；本轮职责与身份由运行时确认和绑定。恢复门已解除且消息仍有效时，直接处理下列问题，不为确认重复 switch_role 或查询 status；若恢复或身份报错，按真实错误处理，不套用新身份。",
         `兼容短引用（本轮身份自动绑定，可省略）：coordinationHandoffId="${handoff.handoffId}"`,
         batchRequests.length > 1
           ? `本次为批量取证，共 ${batchRequests.length} 个问题；请在同一回合集中处理，可合并共享来源的重复核查，但必须分别按各请求的问题、范围和完成条件回答并报告：\n${batchRequests.map((item, index) => `${index + 1}. requestId ${item.requestId} / questionId ${item.questionId}\n   问题：${item.question}\n   理由：${item.rationale}\n   范围：${item.scope.join("；")}${item.exclusions.length ? `\n   排除：${item.exclusions.join("；")}` : ""}\n   完成条件：${item.completionCriteria.join("；")}${item.addressesGaps.length ? `\n   需回应的缺口：${item.addressesGaps.join("；")}` : ""}`).join("\n")}`
@@ -72,6 +73,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
         request.addressesGaps.length ? `需回应的先前缺口：${request.addressesGaps.map((item) => `- ${item}`).join("\n")}` : "",
         priorGaps.length ? `上一轮 architect 指出的缺口：${priorGaps.map((item) => `- ${item}`).join("\n")}` : "",
         priorAcceptedFacts.length ? `本问题先前已接受事实（历史来源版本；仅在来源版本、当前 revision 绑定、适用范围及既有失效规则均仍有效时复用，不一概重新核实。仅在来源/范围实际变化、失效规则触发、明确刷新理由或影响决策的关键缺口时针对性核查；无法确认有效性时如实标为未确认，不得视作当前事实）：${priorAcceptedFacts.map((item) => `\n- ${item}`).join("")}` : "",
+        "先按问题定位相关符号、直接调用方和测试，再精读必要范围。需要项目记忆时定向读取当前状态，历史决策、会话记录和踩坑按关键词定位，不默认整批读取。当前上下文已有且仍有效的事实、来源版本、已读范围和实际验证连续复用，只补关键缺口；版本变化、上下文缺失或必要安全复核可重读，不把已读范围当作当前版本有效性的证明。报告用现有 inspectedScope 与来源 location/version 简要保留实际检查范围，不新增字段，不把未读内容或未执行验证计作已完成。",
         "你是受派发的 docs-commit 取证角色。当前交接包只包含本次请求和相关历史事实，不得推断完整协作账本。围绕各请求的决策关键问题，核查必要的最新实现、直接调用方和相关测试；仅当这些内容影响问题回答或为完成条件所必需时查阅。只复用已能从当前协调状态确认满足来源版本、当前 revision 绑定、适用范围及既有失效规则的已接受事实；仅在来源/范围实际变化、失效规则触发、明确刷新理由或决策关键缺口时针对性核查，不为确认每条历史事实而扩大取证。无法确认有效性的历史事实及非阻塞未知项如实标为 unconfirmed，不得作为当前事实或机械触发补证。报告必须区分 fact/inference/unconfirmed/conflict，并给每条发现附来源 location 与当前版本。测试源码已定位与实际执行验证分开填写；没有运行的测试不得声称通过。不要代替 architect 接受证据、决定业务方案或派发开发。",
         batchRequests.length > 1
           ? '每个问题核对完成后分别调用 task_workflow(action="report-evidence", report={requestId: 对应 requestId, ...})；身份由运行时绑定，全部报告完成后停止。'
@@ -92,6 +94,7 @@ export function compileCoordinationMessage(current: CoordinationRuntimeState) {
     identity,
     content: [
       "[PI-INIT 证据审阅交接]",
+      "本消息由运行时派发给 architect；恢复门已解除且消息仍有效时，直接审阅下列报告，不为确认重复 switch_role 或查询 status。遇到真实身份或恢复错误仍按原门控处理。",
       `兼容短引用（本轮身份自动绑定，可省略）：coordinationHandoffId="${handoff.handoffId}"`,
       `问题 ${request.questionId}：${request.question}`,
       `取证范围：${request.scope.join("；")}`,

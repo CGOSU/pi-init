@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-19：收窄取证范围并增加只读编排日志报告
+
+- 完成：公共职责 Skill 增加先定位再精读、历史记忆按关键词读取及可见有效事实/来源版本/范围/验证复用规则；协调交接明确已派发职责与下一步，避免为确认重复 switch_role/status。身份、恢复、证据、安全门及完整读取要求不变；不修改 pi-graph、调度器、推理强度或压缩策略。
+- 工具：新增 `scripts/handoff-report.js`，支持多个 JSONL/轮转文件、去重与坏行披露，统计工具错误、SDK 耗时、settled 截止的回合耗时、读取范围重叠及交接延迟。缺失结果、stat 版本局限、多次 agent.start 和日志丢弃均保留真实口径，不自动判定冗余或失败。用法见 [诊断日志文档](handoff-diagnostics.md#离线统计)。
+- 验证：新增分析脚本测试先因模块不存在失败，完成实现后 `node --test test/handoff-log-report.test.js test/handoff-diagnostics.test.js test/role-context-view.test.js test/coordination-runtime.test.js` 39 项通过；`npm run typecheck` 通过；两个新增 JS 文件 `node --check` 通过。project check 的 typecheck 封装错误附加 npm 不支持的 --listFiles，已改用项目原始 typecheck 命令验证，未改工具链。
+- 样本：对用户提供的既有日志只读运行报告，复现 326 事件、51 次调用/执行、1 次工具错误、SDK 合计 576ms、1 次同角色切换候选及 core.rs 请求范围重叠 378/1153 行。该样本只是基线，不是优化后收益对照。
+- 未验证：未运行全量测试、真实 Pi/Provider 回归或收益基准；新提示需 reload/重启后观察后续真实日志。未创建 commit 或 push。
+
 ### 2026-10-19：为工作流面板增加背景区分
 
 - 完成：响应用户反馈为面板增加 Pi 主题 `toolPendingBg` 底色与 `borderAccent` 边界；窄终端改用短标题和压缩进度、在任务行内保留标题。鼠标点击边框/留白不触发任务选择；工作流状态、操作、安全确认和分层详情语义不变。
