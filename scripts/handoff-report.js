@@ -54,6 +54,7 @@ export function analyzeHandoffLog(input) {
   const runs = new Map();
   const reads = new Map();
   const pendingHandoffs = new Map();
+  const pendingRequests = new Map();
   const handoffs = [];
   const sameRoleSwitches = [];
   const warnings = [];
@@ -64,6 +65,11 @@ export function analyzeHandoffLog(input) {
     const identity = { runtimeId: row.runtimeId, sessionId: row.sessionId };
     const time = Date.parse(row.timestamp);
     dropped += row.dropped ?? 0;
+    if (Number.isSafeInteger(data.requestNumber) && data.requestNumber > 0) {
+      const requestKey = JSON.stringify([scope(row), data.requestNumber]);
+      if (event === "provider.request") pendingRequests.set(requestKey, { ...identity, run: row.run, sequence: row.sequence, requestNumber: data.requestNumber });
+      if (event === "assistant.result" || event === "provider.unfinished") pendingRequests.delete(requestKey);
+    }
     const runKey = JSON.stringify([scope(row), row.run]);
     if (event === "agent.before_start" || event === "agent.start" || event === "agent.settled") {
       const run = runs.get(runKey) ?? { ...identity, run: row.run, role: snapshot.role, starts: 0, startedAt: null, settledAt: null };
@@ -136,15 +142,44 @@ export function analyzeHandoffLog(input) {
   });
   if (dropped) warnings.push("日志报告丢弃 " + dropped + " 条，统计不完整");
   const tools = [...calls.values()];
+  const requests = rows.filter(row => row.event === "provider.request");
+  const responses = rows.filter(row => row.event === "provider.response");
+  const assistants = rows.filter(row => row.event === "assistant.result");
+  const contexts = rows.filter(row => row.event === "context.reused");
+  const safeNumber = value => Number.isFinite(value) && value >= 0 ? value : 0;
+  const provider = {
+    available: requests.length > 0 || responses.length > 0 || assistants.length > 0,
+    requests: requests.length, responses: responses.length, unclosedRequests: [...pendingRequests.values()],
+    httpErrors: responses.filter(row => row.data.status >= 400).length,
+    assistantErrors: assistants.filter(row => row.data.stopReason === "error").length,
+    assistantAborts: assistants.filter(row => row.data.stopReason === "aborted").length,
+    abortedRuns: rows.filter(row => row.event === "agent.settled" && row.data.aborted === true).length,
+    unfinished: rows.filter(row => row.event === "provider.unfinished").length,
+    sdkAssistantDurationMs: assistants.reduce((sum, row) => sum + safeNumber(row.data.durationMs), 0),
+    tokens: Object.fromEntries(["input", "output", "cacheRead", "cacheWrite", "totalTokens"].map(key => [key,
+      assistants.reduce((sum, row) => sum + safeNumber(row.data.tokens?.[key]), 0)])),
+    errors: rows.filter(row => (row.event === "provider.response" && row.data.status >= 400)
+      || (row.event === "assistant.result" && ["error", "aborted"].includes(row.data.stopReason)))
+      .map(row => ({ runtimeId: row.runtimeId, sessionId: row.sessionId, run: row.run, sequence: row.sequence,
+        event: row.event, requestNumber: row.data.requestNumber, status: row.data.status,
+        stopReason: row.data.stopReason, errorHash: row.data.errorHash, errorCodeHint: row.data.errorCodeHint })),
+  };
+  const reuse = {
+    roleNoops: rows.filter(row => row.event === "role.reused").length,
+    contextViews: contexts.length,
+    retainedGroupAppearances: contexts.reduce((sum, row) => sum + safeNumber(row.data.retainedGroups), 0),
+    omittedGroupAppearances: contexts.reduce((sum, row) => sum + safeNumber(row.data.omittedGroups), 0),
+  };
   return {
-    events: rows.length, duplicateEvents, dropped,
+    events: rows.length, duplicateEvents, dropped, provider, reuse,
     tools: { calls: tools.filter(call => call.called).length, executions: tools.filter(call => call.executed).length,
       errors: tools.filter(call => call.error).length, missingResults: tools.filter(call => !call.result).length,
       sdkDurationMs: tools.reduce((total, call) => total + (call.durationMs ?? 0), 0) },
     runs: runSummaries, sameRoleSwitches, handoffs,
     repeatedReads: [...reads.values()].filter(read => read.overlapLines > 0).map(({ ranges, ...read }) => read),
     warnings,
-    caveats: ["读取重叠按成功结果中显式请求范围计算；不证明实际返回行数或读取冗余。stat 版本不是内容哈希。",
+    caveats: ["Provider 事件仅反映公开 hook 观察；旧日志 available=false 不代表没有网络错误。HTTP 状态与 assistant 错误可属于同一请求，不能相加当失败请求数；不推断重试或网络根因。复用组次数为各次模型视图累计，不是节省的读取次数。",
+      "读取重叠按成功结果中显式请求范围计算；不证明实际返回行数或读取冗余。stat 版本不是内容哈希。",
       "同角色切换仅为候选；可能用于模型配置或职责恢复。缺少结果不等于被拒绝或执行失败。",
       "SDK 耗时可包含嵌套或并行工具，不能从回合耗时相减推算模型推理时间。未闭合回合 durationMs 为 null。"],
   };

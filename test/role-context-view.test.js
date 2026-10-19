@@ -573,3 +573,53 @@ test("coordination role context uses its active request/review handoff identity 
   assert.ok(acceptedResult);
   assert.deepEqual(acceptedResult.messages.map((message) => message.content), ["latest planning instruction", "accepted report for planning"]);
 });
+
+test("first verified handoff retains successful investigation and validation as complete pairs", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  const call = { role: "assistant", content: [
+    { type: "toolCall", id: "read-success", name: "read", arguments: { path: "src/input.ts" } },
+    { type: "toolCall", id: "test-success", name: "bash", arguments: { command: "node --test" } },
+  ], timestamp: 2 };
+  const results = [
+    { role: "toolResult", toolCallId: "read-success", toolName: "read", content: [{ type: "text", text: "verified source" }], isError: false, timestamp: 3 },
+    { role: "toolResult", toolCallId: "test-success", toolName: "bash", content: [{ type: "text", text: "tests passed" }], isError: false, timestamp: 4 },
+  ];
+  const messages = [{ role: "user", content: "current goal", timestamp: 1 }, call, ...results, handoffMessage];
+  const result = callContextHandler(state, harness, messages);
+  for (const message of [call, ...results]) assert.ok(result.messages.includes(message));
+  assert.equal(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE), false);
+});
+
+test("reuse keeps newest complete groups within count/size budgets and excludes old routing identities", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  const messages = [{ role: "user", content: "current goal", timestamp: 1 }];
+  for (let index = 0; index < 11; index++) {
+    const id = "read-" + index;
+    messages.push({ role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: { path: "source.ts" } }], timestamp: 2 });
+    messages.push({ role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: index === 10 ? "x".repeat(40000) : "source" }], isError: false, timestamp: 3 });
+  }
+  messages.push({ role: "assistant", content: [{ type: "toolCall", id: "old-status", name: "task_workflow", arguments: { action: "status" } }], timestamp: 4 });
+  messages.push({ role: "toolResult", toolCallId: "old-status", toolName: "task_workflow", content: [{ type: "text", text: "old identity" }], isError: false, timestamp: 5 });
+  messages.push(handoffMessage);
+  const trace = [];
+  state.traceHandoff = (_ctx, event, data) => trace.push({ event, data });
+  const result = callContextHandler(state, harness, messages);
+  const kept = result.messages.filter(message => message.role === "toolResult");
+  assert.deepEqual(kept.map(message => message.toolCallId), Array.from({ length: 8 }, (_, i) => "read-" + (i + 2)));
+  assert.equal(trace[0].data.retainedGroups, 8);
+  assert.equal(trace[0].data.omittedGroups, 3);
+  assert.ok(result.messages.some(message => message.customType === "pi-init-prior-tool-observations"));
+});
+
+test("reuse does not cross prior branch boundary and never crops a partially paired parallel group", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  const call = { role: "assistant", content: [{ type: "toolCall", id: "a", name: "read", arguments: {} },
+    { type: "toolCall", id: "b", name: "read", arguments: {} }], timestamp: 1 };
+  const partial = { role: "toolResult", toolCallId: "a", toolName: "read", content: [], isError: false, timestamp: 2 };
+  const result = callContextHandler(state, harness, [{ role: "user", content: "goal", timestamp: 0 }, call, partial, handoffMessage]);
+  assert.ok(result.messages.includes(call));
+  assert.ok(result.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
+  const foreign = { role: "custom", customType: "pi-init-workflow-task", details: { sessionId: "foreign" }, content: "foreign", timestamp: 0 };
+  const mismatch = callContextHandler(state, harness, [foreign, call, partial, handoffMessage]);
+  assert.ok(mismatch.messages.some(message => message.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
+});

@@ -53,6 +53,18 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 
 真实轮内切角新增 role.handoff_prepared、role.handoff_dispatched 事件；同一 handoffId 应从旧 run 交接到新的 run。role.handoff_dispatch_unknown 表示结果未知且不自动重放，role.handoff_discarded 表示身份已过期或中止，role.handoff_blocked_by_recovery 表示恢复门仍未确认。交接元数据还追加到 session 的 pi-init-role-handoff-state 记录；reload 不自动重放该记录。
 
+## 运行时复用与 Provider 诊断
+
+- `role.reused`：本次已重新读取/解析配置，确认角色、实际模型和推理强度一致且恢复门已解除；不重复 setModel/setThinkingLevel、确认持久化或递增角色代次。配置变化、不可用的显式模型、恢复/持久化待确认仍走原校验；不跨调用缓存配置。
+- `context.reused`：只在当前 branch 上身份可靠的相邻交接窗口复用完整普通工具组，最多 8 组/32000 字符，优先较新组；首个 handoff 仅取最近用户请求后的观察。不复制旧 switch_role/task_workflow 身份，不修改历史。retainedGroups/retainedChars/omittedGroups 是当前视图统计，不能累计当作节省调用数。超预算可按需重读；旧失败、当前窗口和用户新指令不受复用预算裁减。历史工具结果不证明当前文件未变或测试仍有效，也不构成执行授权。
+- `provider.request`、`provider.headers`、`provider.response`：分别观察请求 payload 钩子、headers 钩子、HTTP 响应，完全不记录 payload/headers/stream 正文。status 为宿主报告的 HTTP 状态；observedElapsedMs 用单调时钟从请求钩子计时，包含中间处理，不能称为纯网络耗时或首 token 时间。requestNumber 只是在本运行实例顺序观察到的关联号，不是 SDK 原生请求 ID；缺失、换 branch/session、跨回合或新请求覆盖时不保证完整关联。
+- `assistant.result`：记录宿主的 stopReason、可用的 durationMs、token usage 和 errorHash。errorCodeHint 只提取错误文本中的少量白名单连接/超时代码（如 ECONNRESET、ETIMEDOUT），只是线索，不证明根因；未知错误仍仅保留指纹，不写错误正文或模型回复。
+- `provider.unfinished`：请求被新观察覆盖，或 settled 时尚未观察到 assistant 结果；reason 区分 superseded、aborted、settled-without-assistant。缺少收敛不等于网络错误，压缩请求/日志缺失等也可能没有普通 assistant 完成事件。`agent.settled` 保留 aborted。
+
+离线报告新增 provider 与 reuse 区块；provider.unclosedRequests 列出有起点但未观察到可关联的 assistant 结果或 unfinished 终止记录的请求，含轮转缺失或切换 branch/session 后丢失关联的情形，不计作失败。HTTP 错误与 assistant 错误可能属于同一请求，不能相加当失败请求数；SDK assistant 耗时不等于网络耗时。公开 ExtensionAPI 不暴露 AgentSession 的自动重试事件，因此不统计/推断真实重试次数，也不增加自动重试或修改连接/超时策略。旧日志 `provider.available=false` 表示缺少这些观测，绝不等于没有网络错误。
+
+修改后需 reload 或重启 Pi，且仍需 `PI_INIT_HANDOFF_LOG=1` 才收集诊断；角色幂等与上下文复用本身不依赖日志开关。收益需后续真实会话对照，不能从测试 harness 或历史日志推算。
+
 ## 工具与文件观察
 
 除原有 routing.* 事件外，普通工具也记录 tool.model_proposed、tool.call、tool.result。提议、进入观察器和结果是不同阶段，用 toolCallId 关联，不要把它们统计成三次执行。model_proposed 可保留被前置守卫阻断的提议；tool.call 仅表示调用到达诊断处理器，不代表所有守卫已经授权。

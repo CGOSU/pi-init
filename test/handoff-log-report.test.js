@@ -100,3 +100,29 @@ test("workflow handoffs, dropped records and incomplete tool observations stay e
   assert.ok(result.warnings.some(text => text.includes("丢弃")));
 });
 
+test("provider failures and runtime reuse have independent counters without retry or network inference", () => {
+  const result = analyzeHandoffLog([row(1, "provider.request", { requestNumber: 1 }),
+    row(2, "provider.response", { requestNumber: 1, status: 503, observedElapsedMs: 10 }),
+    row(3, "assistant.result", { requestNumber: 1, stopReason: "error", errorHash: "opaque", durationMs: 20, tokens: { input: 5, output: 1 } }),
+    row(4, "role.reused"), row(5, "context.reused", { retainedGroups: 2, omittedGroups: 1 }),
+    row(6, "provider.request", { requestNumber: 2 }), row(7, "provider.unfinished", { requestNumber: 2 })]);
+  assert.equal(result.provider.available, true);
+  assert.equal(result.provider.requests, 2);
+  assert.equal(result.provider.httpErrors, 1);
+  assert.equal(result.provider.assistantErrors, 1);
+  assert.equal(result.provider.sdkAssistantDurationMs, 20);
+  assert.equal(result.provider.tokens.input, 5);
+  assert.equal(result.provider.unfinished, 1);
+  assert.equal(result.reuse.roleNoops, 1);
+  assert.equal(result.reuse.retainedGroupAppearances, 2);
+  assert.equal(analyzeHandoffLog([row(1, "input")]).provider.available, false);
+});
+
+test("requests without a correlated final observation stay explicitly unclosed", () => {
+  const result = analyzeHandoffLog([row(1, "provider.request", { requestNumber: 1 }),
+    row(2, "session.tree"), row(3, "provider.response", { status: 200 }),
+    row(4, "assistant.result", { stopReason: "stop" })]);
+  assert.equal(result.provider.unclosedRequests.length, 1);
+  assert.equal(result.provider.unclosedRequests[0].requestNumber, 1);
+  assert.equal(result.provider.unfinished, 0);
+});

@@ -14,6 +14,7 @@ import {
   coordinationHandoffIdentity,
 } from "./coordination-runtime-protocol.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { reusableToolContext } from "./role-context-reuse.ts";
 
 export const ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE = "pi-init-role-context-view-diagnostic";
 const WORKFLOW_TASK_MESSAGE_TYPE = "pi-init-workflow-task";
@@ -534,12 +535,14 @@ export function createRoleContextView(state: ExtensionRuntimeState) {
       if (lastUser !== undefined) userIndices.add(lastUser);
     }
 
-    const failureStart = previousIndex >= 0 ? previousIndex + 1 : anchorIndex;
+    const failureStart = previousIndex >= 0 ? previousIndex + 1 : ([...userIndices].at(-1) ?? anchorIndex);
     const failures = failureContextIndices(event.messages, failureStart, anchorIndex);
     if (!failures) {
       return failOpen(event.messages, "ROLE_CONTEXT_VIEW_FAILURE_BOUNDARY_UNAVAILABLE", "先前失败记录或其工具调用配对不完整");
     }
-    const prefixIndices = [...new Set([...userIndices, ...failures])].sort((left, right) => left - right);
+    const reused = reusableToolContext(event.messages, failureStart, anchorIndex);
+    if (!reused) return failOpen(event.messages, "ROLE_CONTEXT_VIEW_REUSE_PAIR_UNSAFE", "上一窗口工具观察配对不完整，未尝试复用裁剪");
+    const prefixIndices = [...new Set([...userIndices, ...failures, ...reused.indices])].sort((left, right) => left - right);
     const messages = [...prefixIndices.map((index) => event.messages[index]), ...suffix];
     if (!hasCompleteToolPairs(messages)) {
       return failOpen(event.messages, "ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "裁剪后检测到不完整或重复的工具调用/结果配对");
@@ -547,6 +550,11 @@ export function createRoleContextView(state: ExtensionRuntimeState) {
     if (state.activeRole?.role !== anchor.role) {
       return failOpen(event.messages, "ROLE_CONTEXT_VIEW_ROLE_MISMATCH", "当前 active role 与 handoff 目标不一致");
     }
+    if (reused.retainedGroups > 0) {
+      messages.splice(prefixIndices.length, 0, { role: "custom", customType: "pi-init-prior-tool-observations", display: false,
+        content: "以上为当前 branch 相邻交接窗口内的历史工具观察，供复用调查和验证；并非当前文件版本、测试结果或执行授权。来源变化、关键缺口或必要安全复核时定向补查，不复用旧角色/attempt/handoff 身份。", timestamp: Date.now() } as ContextMessage);
+    }
+    state.traceHandoff?.(ctx, "context.reused", { retainedGroups: reused.retainedGroups, retainedChars: reused.retainedChars, omittedGroups: reused.omittedGroups });
     return { messages };
   }
 

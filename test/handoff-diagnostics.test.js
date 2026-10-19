@@ -132,7 +132,7 @@ test("模型提出的路由调用独立于执行守卫可观测，正文不进�
   await withMonitor(async ({ ctx, handlers, monitor, read }) => {
     await handlers.get("message_end")({ message: { role: "assistant", content: [{ type: "text", text: "private-response" }, { type: "toolCall", id: "blocked-1", name: "task_workflow", arguments: { action: "plan", direction: "private-direction" } }, { type: "toolCall", id: "other-1", name: "bash", arguments: { command: "private-command" } }] } }, ctx);
     await monitor.flush();
-    const rows = await read();
+    const rows = (await read()).filter(row => row.event !== "assistant.result");
     assert.deepEqual(rows.map(row => row.event), ["routing.model_proposed", "tool.model_proposed"]);
     assert.equal(rows[0].event, "routing.model_proposed");
     assert.equal(rows[0].data.toolCallId, "blocked-1");
@@ -190,7 +190,7 @@ test("普通工具模型提议即使未进入执行入口也有指纹记录", as
   await withMonitor(async ({ ctx, handlers, monitor, read }) => {
     await handlers.get("message_end")({ message: { role: "assistant", content: [{ type: "toolCall", id: "blocked-edit", name: "edit", arguments: { path: "sample.ts", edits: [{ oldText: "private-old", newText: "private-new" }] } }] } }, ctx);
     await monitor.flush();
-    const [row] = await read();
+    const row = (await read()).find(row => row.event === "tool.model_proposed");
     assert.equal(row.event, "tool.model_proposed");
     assert.equal(row.data.toolCallId, "blocked-edit");
     assert.ok(row.data.inputHash);
@@ -219,4 +219,42 @@ test("工具摘要限制批量文件和范围，项目外路径及结构化失�
   });
 });
 
+test("provider response and assistant errors remain observable without payloads, headers or error text", async () => {
+  await withMonitor(async ({ ctx, handlers, monitor, read }) => {
+    handlers.get("before_provider_request")({ payload: { secret: "private-payload" } }, ctx);
+    handlers.get("after_provider_response")({ status: 503, headers: { authorization: "private-header" } }, ctx);
+    await handlers.get("message_end")({ message: { role: "assistant", provider: "test", model: "model", api: "test-api",
+      content: [], stopReason: "error", errorMessage: "private-error ECONNRESET", durationMs: 18,
+      usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12 } } }, ctx);
+    handlers.get("agent_settled")({ aborted: true }, ctx);
+    await monitor.flush();
+    const rows = await read();
+    assert.equal(rows.find(row => row.event === "provider.response")?.data.status, 503);
+    const assistant = rows.find(row => row.event === "assistant.result");
+    assert.equal(assistant.data.stopReason, "error");
+    assert.equal(assistant.data.durationMs, 18);
+    assert.equal(assistant.data.errorCodeHint, "ECONNRESET");
+    assert.ok(assistant.data.errorHash);
+    assert.equal(rows.find(row => row.event === "agent.settled").data.aborted, true);
+    assert.equal(JSON.stringify(rows).includes("private-"), false);
+  });
+});
 
+test("provider observations reset on branch changes and disclose incomplete or aborted requests", async () => {
+  await withMonitor(async ({ ctx, handlers, monitor, read }) => {
+    handlers.get("before_provider_request")({}, ctx);
+    handlers.get("before_provider_headers")({ headers: { authorization: "private-header" } }, ctx);
+    handlers.get("before_provider_request")({}, ctx);
+    handlers.get("session_tree")({}, ctx);
+    handlers.get("after_provider_response")({ status: 200, headers: {} }, ctx);
+    handlers.get("before_provider_request")({}, ctx);
+    handlers.get("agent_settled")({ aborted: true }, ctx);
+    await monitor.flush();
+    const rows = await read();
+    assert.equal(rows.find(row => row.event === "provider.headers").data.requestNumber, 1);
+    assert.ok(rows.find(row => row.event === "provider.headers").data.observedElapsedMs >= 0);
+    assert.equal(rows.find(row => row.event === "provider.response").data.requestNumber, undefined);
+    assert.deepEqual(rows.filter(row => row.event === "provider.unfinished").map(row => row.data.reason), ["superseded", "aborted"]);
+    assert.equal(JSON.stringify(rows).includes("private-"), false);
+  });
+});

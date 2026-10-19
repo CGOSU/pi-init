@@ -332,21 +332,30 @@ export function createRoleRuntime(
 
   function startPendingRoleCompaction(ctx: ExtensionContext) { workflowCompaction.start(ctx); }
 
-  async function applyRole(role: string, ctx: ExtensionContext) {
+  async function applyRole(role: string, ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig) {
     const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
-    const config = await readSessionRoleConfig(ctx);
+    const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;
     const target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
     const hasExplicitModel = Object.prototype.hasOwnProperty.call(config.roleModels, normalizedRole);
-    if (hasExplicitModel) {
-      const model = ctx.modelRegistry.find(target.provider, target.model);
-      if (!model) {
-        const error = new Error(
-          `角色 ${roleLabel(normalizedRole)} 显式配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
-        );
-        Object.assign(error, { code: "ROLE_MODEL_NOT_AVAILABLE" });
-        throw error;
-      }
+    const model = hasExplicitModel ? ctx.modelRegistry.find(target.provider, target.model) : undefined;
+    if (hasExplicitModel && !model) {
+      const error = new Error(
+        `角色 ${roleLabel(normalizedRole)} 显式配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
+      );
+      Object.assign(error, { code: "ROLE_MODEL_NOT_AVAILABLE" });
+      throw error;
+    }
+    const current = activeRoleFor(ctx);
+    if (current?.role === normalizedRole && current.provider === target.provider && current.model === target.model
+      && current.thinkingLevel === target.thinkingLevel && !state.roleRecoveryPending
+      && !state.roleRecoveryPersistenceFailed && !state.pendingWorkflowRecovery) {
+      const mode = state.sessionModeOverride ?? config.mode;
+      if (state.roleModeStatus !== mode) setRoleStatus(ctx, mode);
+      state.traceHandoff?.(ctx, "role.reused", { role: normalizedRole });
+      return current;
+    }
+    if (model) {
       internalModelSelectionDepth += 1;
       try {
         if (!(await pi.setModel(model))) {
@@ -402,7 +411,7 @@ export function createRoleRuntime(
     unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
     const mode = state.sessionModeOverride ?? config.mode;
     if (mode === "auto") {
-      const result = await applyRole(normalizedRole, ctx);
+      const result = await applyRole(normalizedRole, ctx, config);
       return { mode, requestedRole: normalizedRole, result };
     }
     if (mode === "manual") {
@@ -431,7 +440,7 @@ export function createRoleRuntime(
       { value: "cancel", label: "取消" },
     ]);
     if (decision === "accept") {
-      return { mode, requestedRole: normalizedRole, result: await applyRole(normalizedRole, ctx) };
+      return { mode, requestedRole: normalizedRole, result: await applyRole(normalizedRole, ctx, config) };
     }
     if (decision === "manual") {
       state.sessionModeOverride = "manual";
@@ -445,7 +454,7 @@ export function createRoleRuntime(
       return {
         mode: "manual",
         requestedRole: normalizedRole,
-        result: await applyRole(selected, ctx),
+        result: await applyRole(selected, ctx, config),
       };
     }
     throw new Error("已取消角色切换");

@@ -70,6 +70,8 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   const runtimeId = randomUUID();
   let sequence = 0;
   let run = 0;
+  let requestNumber = 0;
+  let providerRequest: { requestNumber: number; startedAt: number; sessionId: string; run: number } | undefined;
   let pending = 0;
   let dropped = 0;
   let writeFailed = false;
@@ -114,7 +116,31 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   pi.on("before_agent_start", (_event, ctx) => { run++; trace(ctx, "agent.before_start"); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
-  pi.on("agent_settled", (_event, ctx) => { trace(ctx, "agent.settled"); });
+  function providerFields(ctx: ExtensionContext) {
+    if (providerRequest?.sessionId !== ctx.sessionManager.getSessionId() || providerRequest?.run !== run) providerRequest = undefined;
+    return providerRequest ? { requestNumber: providerRequest.requestNumber, observedElapsedMs: Math.max(0, performance.now() - providerRequest.startedAt) } : {};
+  }
+  pi.on("before_provider_request", (_event, ctx) => {
+    try {
+      if (writeFailed || !ctx.isProjectTrusted()) return;
+      if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" });
+      providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), sessionId: ctx.sessionManager.getSessionId(), run };
+      trace(ctx, "provider.request", { requestNumber });
+    } catch {}
+  });
+  pi.on("before_provider_headers", (_event, ctx) => {
+    try { trace(ctx, "provider.headers", providerFields(ctx)); } catch {}
+  });
+  pi.on("after_provider_response", (event, ctx) => {
+    try { trace(ctx, "provider.response", { ...providerFields(ctx), status: event.status }); } catch {}
+  });
+  pi.on("agent_settled", (event, ctx) => {
+    try {
+      if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: event.aborted ? "aborted" : "settled-without-assistant" });
+      providerRequest = undefined;
+      trace(ctx, "agent.settled", { aborted: event.aborted });
+    } catch {}
+  });
   async function observeTool(ctx: ExtensionContext, event: string, toolName: string, toolCallId: string, input: unknown, extra: Record<string, unknown> = {}, inspectFiles = false) {
     try {
       if (writeFailed || !ctx.isProjectTrusted()) return;
@@ -151,7 +177,22 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   pi.on("message_end", async (event, ctx) => {
     const message = event.message as unknown as Record<string, unknown>;
-    if (message.role !== "assistant" || !Array.isArray(message.content)) return;
+    if (message.role !== "assistant") return;
+    try {
+      const usage = message.usage && typeof message.usage === "object" ? message.usage as Record<string, unknown> : {};
+      const tokens: Record<string, number> = {};
+      for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
+        if (typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0) tokens[key] = usage[key];
+      }
+      trace(ctx, "assistant.result", { ...providerFields(ctx),
+        stopReason: ["stop", "length", "toolUse", "error", "aborted"].includes(String(message.stopReason)) ? message.stopReason : undefined,
+        errorHash: fingerprint(message.errorMessage),
+        errorCodeHint: providerErrorHint(message.errorMessage),
+        durationMs: typeof message.durationMs === "number" && Number.isFinite(message.durationMs) && message.durationMs >= 0 ? message.durationMs : undefined,
+        tokens });
+      providerRequest = undefined;
+    } catch {}
+    if (!Array.isArray(message.content)) return;
     for (const item of message.content) {
       if (item.type === "toolCall") {
         await observeTool(ctx, routingTools.has(item.name) ? "routing.model_proposed" : "tool.model_proposed", item.name, item.id, item.arguments,
@@ -161,9 +202,15 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   pi.on("session_before_compact", (_event, ctx) => { trace(ctx, "compaction.before"); });
   pi.on("session_compact", (_event, ctx) => { trace(ctx, "compaction.event"); });
-  pi.on("session_start", (event, ctx) => { trace(ctx, "session.start", { reason: event.reason }); });
-  pi.on("session_tree", (_event, ctx) => { trace(ctx, "session.tree"); });
+  pi.on("session_start", (event, ctx) => { providerRequest = undefined; trace(ctx, "session.start", { reason: event.reason }); });
+  pi.on("session_tree", (_event, ctx) => { providerRequest = undefined; trace(ctx, "session.tree"); });
   pi.on("model_select", (_event, ctx) => { trace(ctx, "role.model_selected"); });
   pi.on("session_shutdown", async (_event, ctx) => { trace(ctx, "session.shutdown"); await tail; });
   return { trace, flush: () => tail };
+}
+function providerErrorHint(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const words = new Set(value.toUpperCase().split(/[^A-Z0-9_]+/));
+  return ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]
+    .find(code => words.has(code));
 }
