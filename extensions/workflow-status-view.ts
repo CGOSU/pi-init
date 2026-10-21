@@ -16,6 +16,7 @@ import type {
   WorkflowTask,
   WorkflowTaskStatus,
 } from "../src/workflow-types.ts";
+import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { createWorkflowPauseView, type WorkflowPauseView } from "./workflow-pause-view.ts";
 import { workflowGoalProgress } from "../src/workflow-goals.ts";
@@ -89,6 +90,7 @@ export type WorkflowStatusView =
       pauseCode?: string;
       taskPauseReason?: string;
       pendingRevision?: { revisionId: string; direction: string };
+      progressDiagnosis?: WorkflowProgressObservation;
       tasks: WorkflowStatusTaskView[];
     };
 
@@ -98,6 +100,7 @@ export type WorkflowStatusRuntime = Pick<
 > & Partial<Pick<
   ExtensionRuntimeState,
   "roleCompactionOperationId" | "roleContextGeneration" | "roleTransitionGeneration" | "activeRoleCompaction"
+  | "workflowProgressObservation"
 >>;
 
 function currentTask(state: WorkflowState): { task: WorkflowTask; index: number } | undefined {
@@ -300,6 +303,7 @@ export function createWorkflowStatusView(
         direction: workflowState.pendingRevision.direction,
       },
     } : {}),
+    ...(runtime.workflowProgressObservation ? { progressDiagnosis: runtime.workflowProgressObservation } : {}),
     tasks: workflowState.tasks.map((task) => {
       const duration = task.status === "completed" ? getWorkflowTaskDuration(task) : undefined;
       return {
@@ -328,6 +332,7 @@ export function workflowStatusRuntimeFromState(state: ExtensionRuntimeState): Wo
     roleContextGeneration: state.roleContextGeneration,
     roleTransitionGeneration: state.roleTransitionGeneration,
     workflowDispatchInFlight: state.workflowDispatchInFlight,
+    workflowProgressObservation: state.workflowProgressObservation,
   };
 }
 

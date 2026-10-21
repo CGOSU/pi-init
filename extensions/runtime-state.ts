@@ -5,6 +5,7 @@ import type {
   CoordinationRestoreError,
   CoordinationRuntimeState,
 } from "../src/coordination-runtime-types.ts";
+import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
 import type {
   WorkflowActionIdentity,
   WorkflowHandoffIdentity,
@@ -74,6 +75,7 @@ export type ExtensionRuntimeState = {
   roleCompactionStartedAt?: number;
   roleCompactionInFlight: boolean;
   workflowState?: WorkflowState;
+  workflowProgressObservation?: WorkflowProgressObservation;
   workflowDispatchInFlight: boolean;
   internalContinuationPending: boolean;
   currentContext?: ExtensionContext;

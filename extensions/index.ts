@@ -50,7 +50,7 @@ import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
-import { createPausedStatusGuard } from "./workflow-status-polling.ts";
+import { createPausedStatusGuard, createWorkflowProgressObserver } from "./workflow-status-polling.ts";
 import { createWorkflowDelivery } from "./workflow-delivery.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
@@ -60,6 +60,7 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
+  const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState);
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
   const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context);
@@ -122,7 +123,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   workflowReport = createWorkflowReport(runtimeState, {
     pi, roleRuntime, activityStatus,
-    onWorkflowPersisted: (workflow, ctx) => { coordinationRuntime.synchronizeWorkflowLink(workflow, ctx); },
+    onWorkflowPersisted: (workflow, ctx) => {
+      workflowProgressObserver.observe(workflow);
+      coordinationRuntime.synchronizeWorkflowLink(workflow, ctx);
+    },
   });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
@@ -354,6 +358,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.currentContext = ctx;
       coordinationRuntime.restore(ctx);
       workflowDispatch.restoreWorkflowState(ctx);
+      workflowProgressObserver.observe();
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       runtimeState.currentContext = ctx;
       runtimeState.workflowModeStatus = config.workflowMode;
@@ -390,6 +395,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     workflowTaskConsumptionRunActive = false;
     coordinationRuntime.restore(ctx);
     workflowDispatch.restoreWorkflowState(ctx);
+    workflowProgressObserver.observe();
     if (event.oldLeafId !== event.newLeafId) {
       runtimeState.roleContextGeneration += 1;
       runtimeState.roleTransitionGeneration += 1;

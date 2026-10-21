@@ -1,7 +1,42 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
+import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
+
+export function createWorkflowProgressObserver(pi: ExtensionAPI, state: ExtensionRuntimeState) {
+  const tracker = createWorkflowProgressTracker();
+  const pendingStatusCalls = new Set<string>();
+  function observe(workflow: WorkflowState | undefined = state.workflowState, kind: "state" | "status-query" | "automatic-turn" = "state") {
+    state.workflowProgressObservation = workflow ? tracker.observe(workflow, kind) : undefined;
+  }
+  function reset(workflow: WorkflowState | undefined = state.workflowState) {
+    tracker.reset();
+    pendingStatusCalls.clear();
+    state.workflowProgressObservation = undefined;
+    observe(workflow);
+  }
+  pi.on("tool_call", event => {
+    if (event.toolName !== "task_workflow" || event.input?.action !== "status" || !event.toolCallId) return;
+    pendingStatusCalls.add(event.toolCallId);
+    while (pendingStatusCalls.size > 32) pendingStatusCalls.delete(pendingStatusCalls.values().next().value!);
+  });
+  pi.on("tool_result", event => {
+    if (!pendingStatusCalls.delete(event.toolCallId) || event.isError) return;
+    observe(undefined, "status-query");
+  });
+  pi.on("agent_settled", () => observe(undefined, "automatic-turn"));
+  pi.on("session_start", () => reset(undefined));
+  pi.on("session_tree", event => {
+    if (event.oldLeafId !== event.newLeafId) reset(undefined);
+    else observe();
+  });
+  pi.on("session_shutdown", () => reset(undefined));
+  pi.on("input", event => {
+    if (isExternalRunSource(event.source)) reset();
+  });
+  return { observe, reset };
+}
 
 export function createPausedStatusGuard(pi: ExtensionAPI, state: ExtensionRuntimeState) {
   let previousKey: string | undefined;

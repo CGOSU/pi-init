@@ -78,6 +78,11 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
     `总任务开始时间：${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
     `总任务已运行时间：${elapsedText(view)}`,
     `规划：${view.planSummary}`,
+    ...(view.progressDiagnosis ? [
+      `进展诊断：${view.progressDiagnosis.status === "suspected-loop" ? "疑似无进展循环" : "观察中"} · ${view.progressDiagnosis.summary}`,
+      ...(view.progressDiagnosis.suspicion?.evidence.map(item => `  依据：${item}`) ?? []),
+      `观察窗口：${view.progressDiagnosis.windowSize}/${view.progressDiagnosis.historyLimit}`,
+    ] : []),
     ...(view.lineage.length > 1
       ? [
           "工作流层级（由外向内）：",
@@ -123,6 +128,9 @@ export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
   const lines = [
     `${workflowStatusActivityLabel(view.activity)} · 已完成 ${view.progress.completed}/${view.progress.total}`,
     `目标：${view.planSummary}`,
+    ...(view.progressDiagnosis?.status === "suspected-loop"
+      ? [`进展诊断：疑似无进展循环 · ${view.progressDiagnosis.summary}`]
+      : []),
   ];
   if (view.progress.currentTaskId) {
     const currentTask = view.tasks.find((task) => task.id === view.progress.currentTaskId);
