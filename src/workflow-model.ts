@@ -25,7 +25,7 @@ export const WORKFLOW_HANDOFF_PHASES = [
   "uncertain",
 ] as const satisfies readonly WorkflowHandoffPhase[];
 export const WORKFLOW_CONTINUATION_KINDS = ["schedule", "replan", "review"] as const;
-export const WORKFLOW_MAX_NUDGES = 2;
+export const WORKFLOW_MAX_NUDGES = 3;
 export const WORKFLOW_EXECUTORS = ["local"] as const satisfies readonly WorkflowExecutor[];
 export const WORKFLOW_DELEGATION_STATUSES = [
   "spawning",

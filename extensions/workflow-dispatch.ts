@@ -5,6 +5,7 @@ import { COORDINATION_ENTRY_TYPE, isRecord } from "./coordination-runtime-protoc
 import {
   blockWorkflowTask,
   cloneState,
+  WORKFLOW_MAX_NUDGES,
   ensureWorkflowReplanHandoff,
   getNextWorkflowTask,
   getWorkflowTask,
@@ -495,12 +496,11 @@ export function createWorkflowDispatch(
       }
       const identity = workflowHandoffIdentity(nudged);
       if (identity) {
-        deps.messages.sendWorkflowTaskMessage(
-          ctx,
-          identity.taskId,
-          "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow，使用本消息中的当前执行身份。",
-          identity,
-        );
+        const corrective = nudged.nudgeCount === WORKFLOW_MAX_NUDGES - 1;
+        const note = corrective
+          ? "无进展纠偏（仅此一次）：上一回合仍未提交完成或阻塞结果。停止重复查询相同 status、反复读取已检查内容或重复重规划；复用当前上下文中已核实的事实和已完成成果，直接执行当前任务下一项具体工作。不得重放结果未知或副作用不明的操作；若无法安全继续，立即 block 并如实说明阻塞和可能副作用。完成实际工作与验证后，用本消息当前身份调用 task_workflow(action=complete)。"
+          : "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow，使用本消息中的当前执行身份。";
+        deps.messages.sendWorkflowTaskMessage(ctx, identity.taskId, note, identity);
       }
       deps.report.updateWorkflowStatus(ctx);
       return;

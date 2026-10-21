@@ -99,7 +99,10 @@ test("架构工作流未提交完成时有限次提醒后暂停", () => {
   const nudged = recordWorkflowNudge(state);
   assert.equal(nudged.status, "running");
   assert.equal(nudged.nudgeCount, 1);
-  const paused = recordWorkflowNudge(nudged);
+  const corrective = recordWorkflowNudge(nudged);
+  assert.equal(corrective.status, "running");
+  assert.equal(corrective.nudgeCount, 2);
+  const paused = recordWorkflowNudge(corrective);
   assert.equal(paused.status, "paused");
   assert.equal(paused.tasks[0].status, "blocked");
   assert.equal(paused.pauseReason, "handoff-outcome-unknown");
@@ -109,7 +112,7 @@ test("架构工作流未提交完成时有限次提醒后暂停", () => {
     { code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" },
   );
   assert.equal(retryWorkflowTask(paused, "task", undefined, { confirmUnknownOutcome: true }).status, "running");
-  assert.equal(WORKFLOW_MAX_NUDGES, 2);
+  assert.equal(WORKFLOW_MAX_NUDGES, 3);
 });
 
 test("架构角色不能作为工作流执行角色，错误包含结构化诊断", () => {

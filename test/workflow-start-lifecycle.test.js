@@ -248,6 +248,40 @@ test("派发中的同步任务消息消费不会被后续 queued 写入覆盖", 
   });
 });
 
+test("无进展时先发一次纠偏续跑，仍无结果则暂停且不再自动派发", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = await createTaskHarness(directory, { deferSendMessagePersistence: true });
+    const runUnfinishedTurn = async () => {
+      const message = latestTaskMessage(harness);
+      await emitExtensionEvent(harness, "agent_start");
+      await emitExtensionEvent(harness, "message_start", taskMessageEvent(message));
+      await emitExtensionEvent(harness, "message_end", { type: "message_end", message: taskMessageEvent(message).message });
+      harness.persistSentMessage(message);
+      await emitExtensionEvent(harness, "agent_end");
+      await emitExtensionEvent(harness, "agent_settled");
+    };
+
+    await runUnfinishedTurn();
+    assert.equal(latestWorkflow(harness).nudgeCount, 1);
+    await runUnfinishedTurn();
+    assert.equal(latestWorkflow(harness).status, "running");
+    assert.equal(latestWorkflow(harness).nudgeCount, 2);
+    const correction = latestTaskMessage(harness);
+    assert.match(correction.content, /停止重复查询|反复读取/);
+    assert.match(correction.content, /未知.*操作|副作用/);
+
+    const messageCountAfterCorrection = harness.sentMessages.length;
+    await runUnfinishedTurn();
+    const paused = latestWorkflow(harness);
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.pauseReason, "handoff-outcome-unknown");
+    assert.equal(paused.nudgeCount, 3);
+    assert.equal(paused.tasks[0].outcomeUnknown, true);
+    assert.equal(harness.sentMessages.length, messageCountAfterCorrection, "纠偏后仍无结果时不再自动续跑");
+    await emitExtensionEvent(harness, "session_shutdown");
+  });
+});
+
 test("已退休 runtime 忽略延迟到达的旧任务消息事件", async () => {
   await withTempDirectory(async (directory) => {
     const harness = await createTaskHarness(directory, { deferSendMessagePersistence: true });
