@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createRequire } from "node:module";
+import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, type RuntimeProfile } from "./runtime-diagnostics-report.ts";
+
 const extensionVersion = readExtensionVersion();
 
 
@@ -15,7 +17,7 @@ const RETENTION_MS = 7 * 86400000;
 const MAX_RING_BYTES = 32 * 1024;
 const MAX_ISSUES = 24;
 const MAX_PENDING = 32;
-const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration"]);
+const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms"]);
 function metadata(data: Data): Data {
   const result: Data = {};
   for (const key of fields) {
@@ -32,6 +34,8 @@ function classify(event: string, data: Data) {
   if (event === "provider.response" && typeof data.status === "number" && data.status >= 400) return { category: "provider-http", code: "HTTP_" + data.status };
   if (event === "assistant.result" && data.stopReason === "error") return { category: "assistant-failure", code: typeof data.errorCodeHint === "string" ? data.errorCodeHint : "UNKNOWN" };
   if (event === "compaction.settled" && data.failed === true) return { category: "compaction-failure", code };
+  if (event === "workflow.suspected_loop") return { category: "suspected-loop", code };
+  if (event === "runtime.slow_round") return { category: "suspected-slow", code };
   if (event === "runtime.failure") return { category: "runtime-failure", code };
   if (event === "role.handoff_dispatch_unknown") return { category: "outcome-unknown", code: "HANDOFF_DISPATCH_UNKNOWN" };
   if (event === "workflow.delivery.fallback_failed") return { category: "delivery-failure", code: "FALLBACK_FAILED" };
@@ -39,9 +43,16 @@ function classify(event: string, data: Data) {
   return undefined;
 }
 
-export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number } = {}) {
+export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number } = {}) {
   const maxBytes = Math.max(128 * 1024, Math.min(options.maxBytes ?? 2 * 1024 * 1024, 2 * 1024 * 1024));
   const runtimeId = randomUUID();
+  const nowMs = options.now ?? (() => performance.now());
+  let profile: RuntimeProfile | undefined;
+  let profileChanged = false;
+  let degraded = false;
+  let stopReason: unknown;
+  let baselineCwd = "";
+  const baselines = new Map<string, number[]>();
   let scope = "";
   let captureId = randomUUID();
   let sequence = 0;
@@ -101,10 +112,11 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   function observe(ctx: ExtensionContext, event: string, raw: Data = {}) {
     try {
       if (failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); scope = ""; return; }
+      if (baselineCwd !== ctx.cwd) { baselines.clear(); baselineCwd = ctx.cwd; }
       const nextScope = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]);
       if (scope !== nextScope || event === "session.tree" || event === "session.start") {
         ring = []; ringBytes = 0; issues = new Map(); seen.clear(); startedAt = undefined; tokens = {}; toolCalls = 0; providerRequests = 0; issueOccurrences = 0; overflow = 0;
-        scope = nextScope; captureId = randomUUID();
+        scope = nextScope; captureId = randomUUID(); profile = undefined; profileChanged = false; stopReason = undefined;
       }
       const now = new Date().toISOString();
       const row = { sequence: ++sequence, timestamp: now, event, data: metadata(raw) };
@@ -116,8 +128,12 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         else if (!issue.incomplete) { issue.incomplete = true; issue.dirty = true; }
       }
       if (event === "agent.before_start") {
-        run++; startedAt = performance.now(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear();
+        run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear();
+        profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
       }
+      const currentProfile = normalizeProfile(raw.profile);
+      if (profile && (currentProfile && JSON.stringify(profile) !== JSON.stringify(currentProfile) || !ctx.model || profile.provider !== ctx.model.provider || profile.model !== ctx.model.id)) profileChanged = true;
+      if (event === "assistant.result") stopReason = raw.stopReason;
       if (event === "tool.call" || event === "routing.tool_call") toolCalls++;
       if (event === "provider.request") providerRequests++;
       if (event === "assistant.result" && raw.tokens && typeof raw.tokens === "object") {
@@ -149,11 +165,28 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         }
       }
       if (event === "agent.settled" || event === "session.shutdown") {
-        for (const issue of issues.values()) save(ctx, issue);
+        let summary: Data | undefined;
         if (startedAt !== undefined) {
-          write(ctx, { kind: "summary", timestamp: now, durationMs: Math.max(0, performance.now() - startedAt), toolCalls, providerRequests, tokens, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled" });
+          const durationMs = Math.max(0, nowMs() - startedAt);
+          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped };
+          if (profile && profile.thinkingLevel !== "unknown" && isHealthySample(summary)) {
+            const key = JSON.stringify(profile);
+            const history = baselines.get(key) ?? [];
+            const baseline = durationStats(history);
+            if (baseline.count >= 8 && durationMs > Math.max(1000, baseline.p95! * 2)) {
+              observe(ctx, "runtime.slow_round", { code: "ROUND_DURATION_OUTLIER", durationMs, baselineP95Ms: baseline.p95, baselineSamples: baseline.count });
+              summary.issueOccurrences = issueOccurrences;
+            } else {
+              history.push(durationMs);
+              if (history.length > 64) history.shift();
+              baselines.set(key, history);
+              if (baselines.size > 8) baselines.delete(baselines.keys().next().value!);
+            }
+          }
           startedAt = undefined;
         }
+        for (const issue of issues.values()) save(ctx, issue);
+        if (summary) { delete summary.dropped; write(ctx, summary); }
       }
     } catch {
       // Observation must never affect task execution.
@@ -163,6 +196,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
     if (!ctx.isProjectTrusted()) return "运行黑匣子：未信任项目，不读取诊断。";
     await tail;
     const latest = new Map<string, Data>();
+    const summaries: Data[] = [];
     let incomplete = false;
     for (const suffix of [".1", ""]) {
       const path = join(ctx.cwd, ".pi", "diagnostics", "runtime.jsonl" + suffix);
@@ -174,6 +208,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
           if (!line) continue;
           try {
             const row = JSON.parse(line);
+            if (row && row.kind === "summary") summaries.push(row);
             if (row.dropped > 0 || row.overflow > 0 || row.incomplete === true) incomplete = true;
             if (row.version === 1 && row.kind === "issue" && typeof row.id === "string" && typeof row.runtimeId === "string" && Number.isSafeInteger(row.count) && row.count > 0) latest.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.id]), row);
           } catch { incomplete = true; }
@@ -187,7 +222,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatRuntimeSamples(summaries), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃。" : ""].filter(Boolean).join("\n");
   }
   return { observe, report, flush: () => tail };
 }

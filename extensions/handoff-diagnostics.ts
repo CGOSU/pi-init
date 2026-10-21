@@ -81,17 +81,35 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   let dropped = 0;
   let writeFailed = false;
   let lastRuntimeFailure: string | undefined;
+  let lastLoop: string | undefined;
   let tail = Promise.resolve();
+
+  function observeSignals(ctx: ExtensionContext) {
+    const code = state.workflowRestoreError?.code ?? state.coordinationRestoreError?.code ?? (state.roleRecoveryPersistenceFailed ? "ROLE_RECOVERY_PERSISTENCE_FAILED" : undefined);
+    const failure = code ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), code]) : undefined;
+    if (failure && failure !== lastRuntimeFailure) blackbox.observe(ctx, "runtime.failure", { code });
+    lastRuntimeFailure = failure;
+    const progress = state.workflowProgressObservation;
+    const suspicion = progress?.status === "suspected-loop" ? progress.suspicion : undefined;
+    const workflow = suspicion ? state.workflowState : undefined;
+    const loop = suspicion && workflow && ["running", "replanning"].includes(workflow.status) ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), workflow.workflowId, suspicion.kind, progress?.lastVerifiedProgress?.taskId]) : undefined;
+    if (loop && loop !== lastLoop) {
+      const codes = { "repeated-state": "WORKFLOW_REPEATED_STATE", "repeated-revision": "WORKFLOW_REPEATED_REVISION", "state-cycle": "WORKFLOW_STATE_CYCLE" };
+      blackbox.observe(ctx, "workflow.suspected_loop", { code: codes[suspicion!.kind], workflowId: workflow!.workflowId, suspicionKind: suspicion!.kind, windowSize: progress?.windowSize, historyLimit: progress?.historyLimit });
+    }
+    lastLoop = loop;
+  }
 
   function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
     try {
       if (mode === "off" || writeFailed || !ctx.isProjectTrusted()) return;
       if (!enabled) {
-        blackbox.observe(ctx, event, data);
-        const code = state.workflowRestoreError?.code ?? state.coordinationRestoreError?.code ?? (state.roleRecoveryPersistenceFailed ? "ROLE_RECOVERY_PERSISTENCE_FAILED" : undefined);
-        const failure = code ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), code]) : undefined;
-        if (failure && failure !== lastRuntimeFailure) blackbox.observe(ctx, "runtime.failure", { code });
-        lastRuntimeFailure = failure;
+        if (event === "session.start" || event === "session.tree") { lastLoop = undefined; lastRuntimeFailure = undefined; }
+        const closing = event === "agent.settled" || event === "session.shutdown";
+        if (closing) observeSignals(ctx);
+        const profile = { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" };
+        blackbox.observe(ctx, event, { ...data, profile });
+        if (!closing) observeSignals(ctx);
         return;
       }
       if (pending >= MAX_PENDING) { dropped++; return; }
@@ -127,7 +145,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   if (mode === "off") return { trace, flush, report };
   state.traceHandoff = trace;
   pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
-  pi.on("before_agent_start", (_event, ctx) => { run++; trace(ctx, "agent.before_start"); });
+  pi.on("before_agent_start", (_event, ctx) => { run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.coordinationRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
   function providerFields(ctx: ExtensionContext) {

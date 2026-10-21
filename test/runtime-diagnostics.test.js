@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./helpers.js";
+import { createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
+import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
+import { createWorkflowState } from "../src/workflow.ts";
 
 async function withBox(fn, options = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "pi-blackbox-"));
@@ -197,4 +200,100 @@ test("错误风暴限制类别与写入队列，披露溢出且工具调用不�
   });
 });
 
+test("第二版复用语义循环判断，只保存结构化线索且不重复计算循环", async () => {
+  await withBox(async ({ ctx, state, monitor, emit, rows }) => {
+    const workflow = createWorkflowState({ sessionId: "s1", workflowId: "w1", summary: "private-plan", tasks: [{ id: "t1", task: "private-task", files: ["src"], acceptanceCriteria: ["done"] }] }, 1);
+    workflow.status = "running";
+    const tracker = createWorkflowProgressTracker();
+    state.workflowState = workflow;
+    for (let i = 0; i < 4; i++) state.workflowProgressObservation = tracker.observe(workflow, "status-query");
+    assert.equal(state.workflowProgressObservation.status, "suspected-loop");
+    await emit("before_agent_start");
+    monitor.trace(ctx, "workflow.schedule");
+    await emit("agent_settled");
+    const data = await rows();
+    const issues = data.filter(row => row.kind === "issue" && row.category === "suspected-loop");
+    assert.equal(issues.at(-1).code, "WORKFLOW_REPEATED_STATE");
+    assert.equal(issues.at(-1).count, 1);
+    assert.equal(data.find(row => row.kind === "summary").issueOccurrences, 1);
+    assert.equal(JSON.stringify(data).includes("private-"), false);
+    assert.equal(workflow.status, "running");
+  });
+});
+test("第二版耗时基线先积累健康同配置样本，再对异常慢回合留证", async () => {
+  await withBox(async ({ ctx, rows }) => {
+    let now = 0;
+    ctx.model = { provider: "test", id: "model-a" };
+    const box = createRuntimeDiagnostics(() => ({}), { now: () => now });
+    const round = async (ms, aborted = false) => {
+      box.observe(ctx, "agent.before_start", { profile: { provider: "test", model: "model-a", role: "session", thinkingLevel: "high" } });
+      now += ms;
+      box.observe(ctx, "assistant.result", { stopReason: "stop" });
+      box.observe(ctx, "agent.settled", { aborted });
+      await box.flush();
+    };
+    await round(10000, true);
+    for (let i = 0; i < 8; i++) await round(100);
+    await round(3000);
+    const data = await rows();
+    const issue = data.find(row => row.kind === "issue" && row.category === "suspected-slow");
+    assert.ok(issue);
+    assert.ok(issue.events.some(row => row.data.baselineSamples === 8));
+    assert.match(await box.report(ctx), /p50|P50/);
+  });
+});
 
+test("持续的疑似循环不重复告警，但每个回合仍标记为非健康样本", async () => {
+  await withBox(async ({ ctx, state, emit, rows }) => {
+    ctx.model = { provider: "test", id: "model" };
+    state.activeRole = { role: "developer-test", provider: "test", model: "model", thinkingLevel: "high" };
+    state.workflowState = { workflowId: "w", status: "running", tasks: [], revisions: [] };
+    state.workflowProgressObservation = { status: "suspected-loop", windowSize: 4, historyLimit: 12, suspicion: { kind: "state-cycle", summary: "private-summary", evidence: ["private-evidence"] } };
+    for (let i = 0; i < 2; i++) {
+      await emit("before_agent_start");
+      await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+      await emit("agent_settled");
+    }
+    const summaries = (await rows()).filter(row => row.kind === "summary");
+    assert.equal(summaries.length, 2);
+    assert.ok(summaries.every(row => row.degraded === true));
+    assert.equal(summaries[1].issueOccurrences, 0);
+  });
+});
+
+test("耗时基线不跨模型配置，回合内换模型或推理强度不进入基线", async () => {
+  await withBox(async ({ ctx, rows }) => {
+    let now = 0;
+    const box = createRuntimeDiagnostics(() => ({}), { now: () => now });
+    const profile = { provider: "test", model: "a", role: "session", thinkingLevel: "high" };
+    async function round(config, ms, change) {
+      ctx.model = { provider: config.provider, id: config.model };
+      box.observe(ctx, "agent.before_start", { profile: config });
+      now += ms;
+      box.observe(ctx, "assistant.result", { stopReason: "stop", profile: change ?? config });
+      box.observe(ctx, "agent.settled");
+      await box.flush();
+    }
+    for (let i = 0; i < 8; i++) await round(profile, 100);
+    await round({ ...profile, model: "b" }, 5000);
+    await round(profile, 5000, { ...profile, thinkingLevel: "low" });
+    const data = await rows();
+    assert.equal(data.some(row => row.category === "suspected-slow"), false);
+    assert.equal(data.filter(row => row.kind === "summary").at(-1).profileChanged, true);
+  });
+});
+test("疑似循环首次在 settled 出现时也计入当前摘要；正常暂停不被判定为循环", async () => {
+  await withBox(async ({ ctx, state, monitor, emit, rows }) => {
+    await emit("before_agent_start");
+    state.workflowState = { workflowId: "w", status: "running", tasks: [], revisions: [] };
+    state.workflowProgressObservation = { status: "suspected-loop", windowSize: 3, historyLimit: 12, suspicion: { kind: "repeated-revision", summary: "private-direction", evidence: [] } };
+    await emit("agent_settled");
+    assert.equal((await rows()).find(row => row.kind === "summary").issueOccurrences, 1);
+    state.workflowState.status = "paused";
+    monitor.trace(ctx, "workflow.persisted");
+    await emit("before_agent_start"); await emit("agent_settled");
+    const data = await rows();
+    assert.equal(data.filter(row => row.kind === "issue").at(-1).count, 1);
+    assert.equal(JSON.stringify(data).includes("private-direction"), false);
+  });
+});
