@@ -145,6 +145,15 @@ test("same-state status polling is reported, but intervening progress starts a n
   assert.equal(result.statusLoops[0].elapsedMs, 3000);
 });
 
+test("ordinary tool calls do not hide repeated status results in the offline report", () => {
+  const status = sequence => row(sequence, "routing.tool_result", { action: "status", outputHash: "same" },
+    { snapshot: { workflow: { workflowId: "w", recoveryGeneration: 1, status: "paused" } } });
+  const result = analyzeHandoffLog([status(1), row(2, "routing.tool_call", { toolCallId: "read-1", toolName: "read" }),
+    row(3, "routing.tool_result", { toolCallId: "read-1", toolName: "read" }), status(4), status(5)]);
+  assert.equal(result.statusLoops.length, 1);
+  assert.equal(result.statusLoops[0].count, 3);
+});
+
 test("paused polling termination is explicit and not counted as task completion or provider failure", () => {
   const result = analyzeHandoffLog([row(1, "workflow.status_polling_stopped", { toolCallId: "status-2", code: "WORKFLOW_STATUS_NO_PROGRESS" })]);
   assert.equal(result.statusPollingStops.length, 1);

@@ -81,6 +81,10 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
     ...(view.progressDiagnosis ? [
       `进展诊断：${view.progressDiagnosis.status === "suspected-loop" ? "疑似无进展循环" : "观察中"} · ${view.progressDiagnosis.summary}`,
       ...(view.progressDiagnosis.suspicion?.evidence.map(item => `  依据：${item}`) ?? []),
+      ...(view.progressDiagnosis.noProgressActivity.count > 0 ? [
+        `普通工具活动（未计为已核实进展）：${view.progressDiagnosis.noProgressActivity.count}${view.progressDiagnosis.noProgressActivity.recent.length
+          ? ` · ${view.progressDiagnosis.noProgressActivity.recent.join(" → ")}` : ""}`,
+      ] : []),
       `观察窗口：${view.progressDiagnosis.windowSize}/${view.progressDiagnosis.historyLimit}`,
     ] : []),
     ...(view.lineage.length > 1

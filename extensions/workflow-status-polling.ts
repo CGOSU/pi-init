@@ -22,8 +22,13 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
     while (pendingStatusCalls.size > 32) pendingStatusCalls.delete(pendingStatusCalls.values().next().value!);
   });
   pi.on("tool_result", event => {
-    if (!pendingStatusCalls.delete(event.toolCallId) || event.isError) return;
-    observe(undefined, "status-query");
+    if (pendingStatusCalls.delete(event.toolCallId)) {
+      if (!event.isError) observe(undefined, "status-query");
+      return;
+    }
+    if (event.toolName === "task_workflow" || !event.toolName) return;
+    state.workflowProgressObservation = tracker.observeActivity(state.workflowState,
+      `${event.toolName}${event.isError ? "（失败）" : ""}`);
   });
   pi.on("agent_settled", () => observe(undefined, "automatic-turn"));
   pi.on("session_start", () => reset(undefined));
@@ -64,6 +69,5 @@ export function createPausedStatusGuard(pi: ExtensionAPI, state: ExtensionRuntim
   pi.on("session_shutdown", reset);
   pi.on("model_select", reset);
   pi.on("input", event => { if (isExternalRunSource(event.source)) reset(); });
-  pi.on("tool_result", event => { if (event.toolName !== "task_workflow" && event.toolName !== "switch_role") reset(); });
   return { observe };
 }

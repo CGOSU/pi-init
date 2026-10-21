@@ -41,6 +41,7 @@ test("public status tool terminates polling but never resumes, replans or comple
   const tool = harness.tools.find(tool => tool.name === "task_workflow");
   const before = structuredClone(harness.entries);
   const first = await tool.execute("status-1", { action: "status" }, undefined, undefined, harness.context);
+  await emitExtensionEvent(harness, "tool_result", { toolName: "bash", toolCallId: "shell-1", isError: false });
   const second = await tool.execute("status-2", { action: "status" }, undefined, undefined, harness.context);
   assert.notEqual(first.terminate, true);
   assert.equal(second.terminate, true);

@@ -12,7 +12,7 @@ export type WorkflowProgressObservation = {
   windowSize: number;
   historyLimit: number;
   noProgressActivity: { count: number; recent: string[] };
-  lastVerifiedProgress?: { kind: "task-completion" | "plan-convergence"; taskId?: string; summary: string };
+  lastVerifiedProgress?: { kind: "task-completion"; taskId: string; summary: string };
   suspicion?: WorkflowProgressSuspicion;
 };
 
@@ -95,37 +95,6 @@ function verifiedCompletion(previous: WorkflowState, next: WorkflowState) {
   return next.tasks.find(task => taskHasVerifiedCompletion(task) && !taskHasVerifiedCompletion(previousTasks.get(task.id)));
 }
 
-function taskPlanContent(task: WorkflowTask) {
-  return {
-    id: task.id,
-    task: task.task,
-    role: task.role,
-    files: task.files,
-    acceptanceCriteria: task.acceptanceCriteria,
-    dependsOn: task.dependsOn,
-    ...(task.goalId ? { goalId: task.goalId } : {}),
-    ...(task.priority !== undefined ? { priority: task.priority } : {}),
-    ...(task.contract ? { contract: task.contract } : {}),
-  };
-}
-
-function planContent(plan: WorkflowState["plan"], tasks: WorkflowTask[]) {
-  return JSON.stringify({ plan: { summary: plan.summary, constraints: plan.constraints }, tasks: tasks.map(taskPlanContent) });
-}
-
-function verifiedPlanConvergence(previous: WorkflowState, next: WorkflowState) {
-  const previouslyApplied = new Set(previous.revisions.filter(item => item.status === "applied").map(item => item.revisionId));
-  const applied = next.revisions.find(item => item.status === "applied" && item.appliedAt !== undefined
-    && item.newPlan && !previouslyApplied.has(item.revisionId));
-  if (!applied?.newPlan) return undefined;
-
-  const before = planContent(previous.plan, previous.tasks);
-  const after = planContent(next.plan, next.tasks);
-  const declared = planContent(applied.newPlan, applied.newPlan.tasks);
-  if (before === after || after !== declared) return undefined;
-  return { revisionId: applied.revisionId, summary: `已应用重规划 ${applied.revisionId}，计划与任务内容已实际改变。` };
-}
-
 function revisionObservation(workflow: WorkflowState): RevisionObservation | undefined {
   const revision = workflow.pendingRevision;
   if (!revision?.revisionId || !revision.direction.trim()) return undefined;
@@ -182,7 +151,7 @@ export function createWorkflowProgressTracker(historyLimit = DEFAULT_HISTORY_LIM
     return {
       status: "observing",
       summary: lastVerifiedProgress
-        ? `已核实${lastVerifiedProgress.kind === "task-completion" ? `任务进展：${lastVerifiedProgress.taskId}` : "计划收敛"}；之后的观察窗口尚未发现疑似循环。`
+        ? `已核实任务进展：${lastVerifiedProgress.taskId}；之后的观察窗口尚未发现疑似循环。`
         : "尚无可核实的任务进展；当前观察不足以判定循环。",
       windowSize: snapshots.length,
       historyLimit: limit,
@@ -206,12 +175,9 @@ export function createWorkflowProgressTracker(historyLimit = DEFAULT_HISTORY_LIM
     }
 
     const completed = previousWorkflow ? verifiedCompletion(previousWorkflow, workflow) : undefined;
-    const convergence = previousWorkflow && !completed ? verifiedPlanConvergence(previousWorkflow, workflow) : undefined;
     const progress = completed
       ? { kind: "task-completion" as const, taskId: completed.id, summary: completed.completionSummary!.trim() }
-      : convergence
-        ? { kind: "plan-convergence" as const, summary: convergence.summary }
-        : undefined;
+      : undefined;
     if (progress) {
       lastVerifiedProgress = progress;
       snapshots = [];

@@ -54,6 +54,21 @@ test("repeated status observations detect an unchanged semantic state without tr
   assert.match(state.workflowProgressObservation.suspicion.evidence.join(" "), /显式状态查询/);
 });
 
+test("ordinary tool results are recorded as activity, not verified workflow progress", () => {
+  const state = createExtensionRuntimeState();
+  state.workflowState = workflow();
+  const handlers = new Map();
+  createWorkflowProgressObserver({ on(name, handler) { handlers.set(name, handler); } }, state);
+  handlers.get("session_start")();
+  state.workflowState = workflow();
+  handlers.get("session_tree")({ oldLeafId: "leaf", newLeafId: "leaf" });
+  handlers.get("tool_result")({ toolCallId: "read-1", toolName: "read", isError: false });
+
+  assert.equal(state.workflowProgressObservation.status, "observing");
+  assert.deepEqual(state.workflowProgressObservation.noProgressActivity, { count: 1, recent: ["read"] });
+  assert.equal(state.workflowProgressObservation.lastVerifiedProgress, undefined);
+});
+
 test("repeated automatic turns detect unchanged workflow state without requiring status polling", () => {
   const state = createExtensionRuntimeState();
   state.workflowState = workflow();
@@ -121,18 +136,27 @@ test("verified task completion resets the suspicion window and records real prog
   assert.equal(tracker.observe(state).lastVerifiedProgress.summary, "Feature implemented");
 });
 
-test("only an applied revision with changed declared plan content is verified convergence", () => {
+test("applied plan changes are not verified progress and A-to-B-to-A revisions remain visible", () => {
   const tracker = createWorkflowProgressTracker();
   const state = workflow();
   tracker.observe(state);
-  state.pendingRevision = { revisionId: "revision-1", direction: "Improve plan", requestedAt: 2 };
-  tracker.observe(state);
-  state.pendingRevision = undefined;
+
   state.revisions.push({ revisionId: "revision-1", direction: "Improve plan", requestedAt: 2,
     status: "applied", appliedAt: 3, newPlan: { summary: "Implement improved feature", constraints: [], tasks: state.tasks } });
   state.plan = { summary: "Implement improved feature", constraints: [] };
-  const applied = tracker.observe(state);
-  assert.equal(applied.lastVerifiedProgress.kind, "plan-convergence");
+  const changed = tracker.observe(state);
+  assert.equal(changed.status, "observing");
+  assert.equal(changed.lastVerifiedProgress, undefined);
+  assert.equal(changed.windowSize, 2);
+
+  state.revisions.push({ revisionId: "revision-2", direction: "Restore original plan", requestedAt: 4,
+    status: "applied", appliedAt: 5, newPlan: { summary: "Implement feature", constraints: [], tasks: state.tasks } });
+  state.plan = { summary: "Implement feature", constraints: [] };
+  const cycle = tracker.observe(state);
+  assert.equal(cycle.status, "suspected-loop");
+  assert.equal(cycle.suspicion.kind, "state-cycle");
+  assert.equal(cycle.lastVerifiedProgress, undefined);
+  assert.equal(cycle.windowSize, 3);
 
   const repeatedRequest = workflow();
   const repeatedTracker = createWorkflowProgressTracker();

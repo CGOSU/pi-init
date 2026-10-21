@@ -224,10 +224,7 @@ function findStatusLoops(rows) {
   for (const row of rows) {
     const scope = JSON.stringify([row.runtimeId, row.sessionId, row.run]);
     const data = row.data;
-    if (["input", "workflow.persisted", "session.tree"].includes(row.event)
-      || (["tool.call", "routing.tool_call"].includes(row.event) && !(data.toolName === "task_workflow" && data.action === "status"))) {
-      streaks.delete(scope);
-    }
+    if (["input", "workflow.persisted", "session.tree"].includes(row.event)) streaks.delete(scope);
     if (row.event !== "routing.tool_result" || data.action !== "status" || data.isError || data.businessOk === false || typeof data.outputHash !== "string") continue;
     const workflow = row.snapshot?.workflow ?? {};
     const key = JSON.stringify([data.outputHash, workflow.workflowId, workflow.planVersion, workflow.recoveryGeneration, workflow.status, workflow.currentTaskId]);
