@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
+import { createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING = 128;
@@ -64,8 +65,12 @@ function handoffSnapshot(state: ExtensionRuntimeState) {
   };
 }
 
-export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRuntimeState, options: { enabled?: boolean; maxBytes?: number } = {}) {
-  const enabled = options.enabled ?? process.env.PI_INIT_HANDOFF_LOG === "1";
+export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRuntimeState, options: { enabled?: boolean; mode?: "automatic" | "verbose" | "off"; maxBytes?: number } = {}) {
+  const mode = options.mode ?? (options.enabled !== undefined ? options.enabled ? "verbose" : "off" : process.env.PI_INIT_HANDOFF_LOG === "0" ? "off" : process.env.PI_INIT_HANDOFF_LOG === "1" ? "verbose" : "automatic");
+  const enabled = mode === "verbose";
+  const blackbox = createRuntimeDiagnostics(() => handoffSnapshot(state), { maxBytes: options.maxBytes });
+  const flush = async () => { await tail; await blackbox.flush(); };
+  const report = (ctx: ExtensionContext) => mode === "off" ? Promise.resolve("运行黑匣子已关闭。") : blackbox.report(ctx);
   const maxBytes = options.maxBytes ?? MAX_LOG_BYTES;
   const runtimeId = randomUUID();
   let sequence = 0;
@@ -75,11 +80,20 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   let pending = 0;
   let dropped = 0;
   let writeFailed = false;
+  let lastRuntimeFailure: string | undefined;
   let tail = Promise.resolve();
 
   function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
     try {
-      if (!enabled || writeFailed || !ctx.isProjectTrusted()) return;
+      if (mode === "off" || writeFailed || !ctx.isProjectTrusted()) return;
+      if (!enabled) {
+        blackbox.observe(ctx, event, data);
+        const code = state.workflowRestoreError?.code ?? state.coordinationRestoreError?.code ?? (state.roleRecoveryPersistenceFailed ? "ROLE_RECOVERY_PERSISTENCE_FAILED" : undefined);
+        const failure = code ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), code]) : undefined;
+        if (failure && failure !== lastRuntimeFailure) blackbox.observe(ctx, "runtime.failure", { code });
+        lastRuntimeFailure = failure;
+        return;
+      }
       if (pending >= MAX_PENDING) { dropped++; return; }
       const path = join(ctx.cwd, ".pi", "logs", "handoff.jsonl");
       const line = JSON.stringify({ version: 1, timestamp: new Date().toISOString(), runtimeId, sequence: ++sequence,
@@ -110,9 +124,9 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
     }
   }
 
-  if (!enabled) return { trace, flush: () => tail };
+  if (mode === "off") return { trace, flush, report };
   state.traceHandoff = trace;
-  pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: fingerprint(event.text) }); });
+  pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
   pi.on("before_agent_start", (_event, ctx) => { run++; trace(ctx, "agent.before_start"); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
@@ -144,7 +158,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   async function observeTool(ctx: ExtensionContext, event: string, toolName: string, toolCallId: string, input: unknown, extra: Record<string, unknown> = {}, inspectFiles = false) {
     try {
       if (writeFailed || !ctx.isProjectTrusted()) return;
-      const summary = await summarizeToolInput(ctx.cwd, input, inspectFiles);
+      const summary = enabled ? await summarizeToolInput(ctx.cwd, input, inspectFiles) : {};
       trace(ctx, event, { toolName, toolCallId, ...summary, ...extra });
     } catch {
       // A malformed diagnostic payload must not interrupt a tool.
@@ -156,7 +170,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   pi.on("tool_result", async (event, ctx) => {
     await observeTool(ctx, routingTools.has(event.toolName) ? "routing.tool_result" : "tool.result", event.toolName, event.toolCallId, event.input,
-      { parentToolCallId: event.parentToolCallId, isError: event.isError, ...summarizeToolResult(event), ...(routingTools.has(event.toolName) ? routingFields(event.details) : {}) }, true);
+      { parentToolCallId: event.parentToolCallId, isError: event.isError, ...summarizeToolResult(event, enabled), ...(routingTools.has(event.toolName) ? routingFields(event.details) : {}) }, true);
   });
   pi.on("tool_execution_start", async (event, ctx) => {
     await observeTool(ctx, "tool.execution_start", event.toolName, event.toolCallId, event.args, { parentToolCallId: event.parentToolCallId });
@@ -164,7 +178,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   pi.on("tool_execution_end", (event, ctx) => {
     try {
       trace(ctx, "tool.execution_end", { toolName: event.toolName, toolCallId: event.toolCallId, parentToolCallId: event.parentToolCallId,
-        durationMs: event.durationMs, isError: event.isError, ...summarizeToolResult(event.result) });
+        durationMs: event.durationMs, isError: event.isError, ...summarizeToolResult(event.result, enabled) });
     } catch {
       // Diagnostics must never change execution results.
     }
@@ -186,7 +200,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
       }
       trace(ctx, "assistant.result", { ...providerFields(ctx),
         stopReason: ["stop", "length", "toolUse", "error", "aborted"].includes(String(message.stopReason)) ? message.stopReason : undefined,
-        errorHash: fingerprint(message.errorMessage),
+        errorHash: enabled ? fingerprint(message.errorMessage) : undefined,
         errorCodeHint: providerErrorHint(message.errorMessage),
         durationMs: typeof message.durationMs === "number" && Number.isFinite(message.durationMs) && message.durationMs >= 0 ? message.durationMs : undefined,
         tokens });
@@ -205,8 +219,8 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   pi.on("session_start", (event, ctx) => { providerRequest = undefined; trace(ctx, "session.start", { reason: event.reason }); });
   pi.on("session_tree", (_event, ctx) => { providerRequest = undefined; trace(ctx, "session.tree"); });
   pi.on("model_select", (_event, ctx) => { trace(ctx, "role.model_selected"); });
-  pi.on("session_shutdown", async (_event, ctx) => { trace(ctx, "session.shutdown"); await tail; });
-  return { trace, flush: () => tail };
+  pi.on("session_shutdown", async (_event, ctx) => { trace(ctx, "session.shutdown"); await flush(); });
+  return { trace, flush, report };
 }
 function providerErrorHint(value: unknown) {
   if (typeof value !== "string") return undefined;

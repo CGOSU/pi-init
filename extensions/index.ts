@@ -687,5 +687,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   const pausedStatusGuard = createPausedStatusGuard(pi, runtimeState);
   const workflowDelivery = createWorkflowDelivery(pi, runtimeState);
-  createHandoffDiagnostics(pi, runtimeState);
+  const diagnostics = createHandoffDiagnostics(pi, runtimeState);
+  pi.registerCommand("blackbox", {
+    description: "查看运行黑匣子的本地问题汇总（不触发模型回合）",
+    handler: async (_args, ctx) => { ctx.ui.notify(await diagnostics.report(ctx), "info"); },
+  });
 }

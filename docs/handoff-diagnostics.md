@@ -4,7 +4,7 @@
 
 ## 开启与查看
 
-默认关闭。在启动 Pi 前设置环境变量，且项目必须已被用户信任。
+详细日志默认关闭；可信项目默认使用[运行黑匣子](runtime-diagnostics.md)，异常自动留证。要记录下面的逐事件详细日志，在启动 Pi 前设置环境变量，且项目必须已被用户信任。
 
 Windows cmd：
 
@@ -20,7 +20,7 @@ $env:PI_INIT_HANDOFF_LOG = "1"
 pi --no-extensions -e ./extensions/index.ts
 ```
 
-已安装为 Pi package 时，设置变量后使用原有 Pi 启动命令即可。扩展加载时读取开关；关闭时取消变量或设为 0，再重新加载扩展。
+已安装为 Pi package 时，设置变量后使用原有 Pi 启动命令即可。扩展加载时读取开关；取消变量恢复自动黑匣子；设为 0 则完全关闭采集，再重新加载扩展。
 
 日志写入当前项目的 .pi/logs/handoff.jsonl，每行一个 JSON。约 2 MiB 轮转，保留一个 handoff.jsonl.1 备份。正在发生的问题可用 PowerShell 实时查看：
 

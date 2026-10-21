@@ -66,10 +66,10 @@ export async function summarizeToolInput(cwd: string, value: unknown, inspectFil
   return summary;
 }
 
-export function summarizeToolResult(value: unknown) {
+export function summarizeToolResult(value: unknown, includeHashes = true) {
   const result = record(value);
   const details = result.details === undefined ? record(result.structuredContent) : record(result.details);
-  const summary: Record<string, unknown> = { outputHash: fingerprint(result.content) };
+  const summary: Record<string, unknown> = { outputHash: includeHashes ? fingerprint(result.content) : undefined };
   if (result.isError === true) summary.errorHash = summary.outputHash;
   if (Array.isArray(result.content)) {
     summary.contentParts = result.content.length;
