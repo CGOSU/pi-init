@@ -35,6 +35,7 @@ import {
   type PendingRoleCompaction,
 } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
+import { createContextBudgetChecker } from "./context-budget-monitor.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
 import type { ActivityStatusReporter } from "./activity-status.ts";
 
@@ -44,7 +45,7 @@ export type RoleRuntimeDependencies = {
   setWorkflowDispatchInFlight: (value: boolean) => void;
   requireRoleRecovery: (ctx: ExtensionContext, reason: string) => void;
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: WorkflowHandoffIdentity) => void;
-  scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity) => Promise<void>;
+  scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity, reason?: "context-budget") => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
   sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
@@ -68,6 +69,11 @@ export function createRoleRuntime(
   const workflowCompaction = createWorkflowCompaction(pi, state, {
     ...deps,
     getActiveRole: activeRoleFor,
+  });
+  const checkContextBudget = createContextBudgetChecker(pi, state, {
+    mode: async (ctx) => effectiveRoleMode(await readSessionRoleConfig(ctx)),
+    activeRole: activeRoleFor,
+    start: workflowCompaction.start,
   });
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return { ok: true as const, value: undefined };
@@ -461,6 +467,7 @@ export function createRoleRuntime(
   }
   return {
     activeRoleFor,
+    checkContextBudget,
     shouldCompactForRole,
     readSessionRoleConfig,
     hasPendingRoleConfigChanges,

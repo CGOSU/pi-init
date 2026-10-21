@@ -45,6 +45,7 @@ export type PendingRoleCompaction = {
   roleTransitionGeneration: number;
   targetRole: ActiveRole;
   continuation?: RoleCompactionContinuation;
+  budget?: { branchEntryIds: string[]; identity?: WorkflowHandoffIdentity; inactiveWorkflowKey?: string; explicitRole: boolean; snapshot: string };
 };
 
 export type RoleCompactionPhase = "idle" | "compacting";
@@ -52,6 +53,7 @@ export type RoleCompactionPhase = "idle" | "compacting";
 export type ExtensionRuntimeState = {
   traceHandoff?: (ctx: ExtensionContext, event: string, data?: Record<string, unknown>) => void;
   agentRunActive: boolean;
+  userStopRequested: boolean;
   activeRole?: ActiveRole;
   sessionModeOverride?: RoleMode;
   sessionRoleConfigOverrides: Record<string, unknown>;
@@ -85,6 +87,7 @@ export type ExtensionRuntimeState = {
 export function createExtensionRuntimeState(): ExtensionRuntimeState {
   return {
     agentRunActive: false,
+    userStopRequested: false,
     sessionRoleConfigOverrides: {},
     configuredRoleNames: [],
     controlCenterGuideShown: false,

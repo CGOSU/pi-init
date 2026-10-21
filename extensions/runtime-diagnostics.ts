@@ -4,20 +4,20 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createRequire } from "node:module";
-import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, type RuntimeProfile } from "./runtime-diagnostics-report.ts";
+import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile } from "./runtime-diagnostics-report.ts";
 
 const extensionVersion = readExtensionVersion();
 
 
 type Data = Record<string, unknown>;
 type Observation = { sequence: number; timestamp: string; event: string; data: Data };
-type Issue = { id: string; category: string; code: string; stage: string; toolName?: string; count: number; firstSeen: string; lastSeen: string; events: Observation[]; snapshot: unknown; incomplete: boolean; dirty: boolean };
+type Issue = { id: string; category: string; code: string; stage: string; toolName?: string; count: number; firstSeen: string; lastSeen: string; events: Observation[]; snapshot: unknown; latestSnapshot: unknown; latestTrigger: Observation; evidenceTruncated: boolean; incomplete: boolean; dirty: boolean };
 const queues = new Map<string, Promise<void>>();
 const RETENTION_MS = 7 * 86400000;
 const MAX_RING_BYTES = 32 * 1024;
 const MAX_ISSUES = 24;
 const MAX_PENDING = 32;
-const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms"]);
+const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome"]);
 function metadata(data: Data): Data {
   const result: Data = {};
   for (const key of fields) {
@@ -36,6 +36,7 @@ function classify(event: string, data: Data) {
   if (event === "compaction.settled" && data.failed === true) return { category: "compaction-failure", code };
   if (event === "workflow.suspected_loop") return { category: "suspected-loop", code };
   if (event === "runtime.slow_round") return { category: "suspected-slow", code };
+  if (event === "context.budget_checked" && ["failed", "error"].includes(String(data.decision))) return { category: "context-budget", code: "BUDGET_DECISION" };
   if (event === "runtime.failure") return { category: "runtime-failure", code };
   if (event === "role.handoff_dispatch_unknown") return { category: "outcome-unknown", code: "HANDOFF_DISPATCH_UNKNOWN" };
   if (event === "workflow.delivery.fallback_failed") return { category: "delivery-failure", code: "FALLBACK_FAILED" };
@@ -70,6 +71,8 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   let tokens: Record<string, number> = {};
   let issueOccurrences = 0;
   let overflow = 0;
+  let budget: { checks: number; decisions: Record<string, number>; last?: Data } = { checks: 0, decisions: {} };
+  let providerObservations = { requests: 0, missing: 0 };
   const seen = new Set<string>();
   function write(ctx: ExtensionContext, record: Data) {
     if (failed || !ctx.isProjectTrusted()) return;
@@ -109,6 +112,12 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
     write(ctx, { kind: "issue", ...issue, dirty: undefined });
     issue.dirty = false;
   }
+  function captureSnapshot() {
+    let state: unknown;
+    try { state = snapshot(); } catch { state = { omitted: true, reason: "snapshot-unavailable" }; }
+    if (Buffer.byteLength(JSON.stringify(state) ?? "") > 8192) state = { omitted: true, reason: "snapshot-budget" };
+    return state;
+  }
   function observe(ctx: ExtensionContext, event: string, raw: Data = {}) {
     try {
       if (failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); scope = ""; return; }
@@ -116,6 +125,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       const nextScope = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]);
       if (scope !== nextScope || event === "session.tree" || event === "session.start") {
         ring = []; ringBytes = 0; issues = new Map(); seen.clear(); startedAt = undefined; tokens = {}; toolCalls = 0; providerRequests = 0; issueOccurrences = 0; overflow = 0;
+        budget = { checks: 0, decisions: {} }; providerObservations = { requests: 0, missing: 0 };
         scope = nextScope; captureId = randomUUID(); profile = undefined; profileChanged = false; stopReason = undefined;
       }
       const now = new Date().toISOString();
@@ -125,11 +135,12 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       while (ring.length > 64 || ringBytes > MAX_RING_BYTES) ringBytes -= Buffer.byteLength(JSON.stringify(ring.shift()));
       for (const issue of issues.values()) {
         if (issue.events.length < 32) { issue.events.push(row); issue.dirty = true; }
-        else if (!issue.incomplete) { issue.incomplete = true; issue.dirty = true; }
+        else { issue.events.splice(16, 1); issue.events.push(row); issue.incomplete = true; issue.evidenceTruncated = true; issue.dirty = true; }
       }
       if (event === "agent.before_start") {
         run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear();
         profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
+        budget = { checks: 0, decisions: {} }; providerObservations = { requests: 0, missing: 0 };
       }
       const currentProfile = normalizeProfile(raw.profile);
       if (profile && (currentProfile && JSON.stringify(profile) !== JSON.stringify(currentProfile) || !ctx.model || profile.provider !== ctx.model.provider || profile.model !== ctx.model.id)) profileChanged = true;
@@ -142,25 +153,38 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
           if (typeof value === "number" && Number.isFinite(value) && value >= 0) tokens[key] = (tokens[key] ?? 0) + value;
         }
       }
+      if (event === "context.budget_checked") {
+        budget.checks++; budget.last = row.data;
+        const decision = typeof raw.decision === "string" && /^(?:guard|inflight|unavailable|mode|cooldown|threshold|started|failed|error)$/.test(raw.decision) ? raw.decision : "other";
+        budget.decisions[decision] = (budget.decisions[decision] ?? 0) + 1;
+      }
+      if (event === "provider.request_summary") {
+        const missingObservations = ["headers", "response", "assistant"].filter(name => raw[name + "Observed"] !== true);
+        providerObservations.requests++;
+        if (missingObservations.length) providerObservations.missing++;
+        if (raw.outcome !== "assistant" || stopReason === "error" || stopReason === "aborted" || typeof raw.errorCodeHint === "string" || typeof raw.status === "number" && raw.status >= 400) {
+          write(ctx, { kind: "provider-request", timestamp: now, ...row.data, missingObservations });
+        }
+      }
       const problem = classify(event, raw);
       if (problem) {
-        const stage = problem.category === "business-rejection" ? "business" : event;
-        const toolName = typeof row.data.toolName === "string" ? row.data.toolName : undefined;
+        const stage = problem.category === "business-rejection" ? "business" : problem.category === "tool-failure" ? "tool" : event;
+        const toolName = typeof row.data.toolName === "string" ? row.data.toolName : raw.action === "switch_role" ? "switch_role" : event === "workflow.action_rejected" ? "task_workflow" : undefined;
         const id = fingerprint([problem.category, problem.code, stage, toolName])!;
-        const occurrence = raw.toolCallId ? id + ":" + raw.toolCallId : undefined;
+        const occurrence = raw.toolCallId ? JSON.stringify([raw.toolCallId, problem.category, problem.code]) : undefined;
+        const existing = issues.get(id);
+        if (existing && toolName && !existing.toolName) { existing.toolName = toolName; existing.dirty = true; }
         if (!occurrence || !seen.has(occurrence)) {
-          if (occurrence && seen.size < 128) seen.add(occurrence);
+          if (occurrence) { seen.add(occurrence); if (seen.size > 128) seen.delete(seen.values().next().value!); }
           issueOccurrences++;
           let issue = issues.get(id);
           if (!issue && issues.size < MAX_ISSUES) {
-            let state: unknown;
-            try { state = snapshot(); } catch { state = { omitted: true, reason: "snapshot-unavailable" }; }
-            if (Buffer.byteLength(JSON.stringify(state) ?? "") > 8192) state = { omitted: true, reason: "snapshot-budget" };
-            issue = { id, ...problem, stage, toolName, count: 0, firstSeen: now, lastSeen: now, events: ring.slice(-16), snapshot: state, incomplete: ring.length > 16, dirty: true };
+            const state = captureSnapshot();
+            issue = { id, ...problem, stage, toolName, count: 0, firstSeen: now, lastSeen: now, events: ring.slice(-16), snapshot: state, latestSnapshot: state, latestTrigger: row, evidenceTruncated: ring.length > 16, incomplete: ring.length > 16, dirty: true };
             issues.set(id, issue);
             try { ctx.ui.notify("运行黑匣子已发现新问题：" + problem.category + "/" + problem.code + "。使用 /blackbox 查看。", "info"); } catch {}
           }
-          if (issue) { issue.count++; issue.lastSeen = now; issue.dirty = true; if (issue.count === 1) save(ctx, issue); }
+          if (issue) { issue.count++; issue.lastSeen = now; issue.latestTrigger = row; issue.latestSnapshot = issue.count === 1 ? issue.snapshot : captureSnapshot(); issue.dirty = true; if (issue.count === 1) save(ctx, issue); }
           else overflow++;
         }
       }
@@ -168,7 +192,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         let summary: Data | undefined;
         if (startedAt !== undefined) {
           const durationMs = Math.max(0, nowMs() - startedAt);
-          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped };
+          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, budget, providerObservations, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped };
           if (profile && profile.thinkingLevel !== "unknown" && isHealthySample(summary)) {
             const key = JSON.stringify(profile);
             const history = baselines.get(key) ?? [];
@@ -197,6 +221,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
     await tail;
     const latest = new Map<string, Data>();
     const summaries: Data[] = [];
+      const requests: Data[] = [];
     let incomplete = false;
     for (const suffix of [".1", ""]) {
       const path = join(ctx.cwd, ".pi", "diagnostics", "runtime.jsonl" + suffix);
@@ -209,6 +234,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
           try {
             const row = JSON.parse(line);
             if (row && row.kind === "summary") summaries.push(row);
+              if (row && row.kind === "provider-request") requests.push(row);
             if (row.dropped > 0 || row.overflow > 0 || row.incomplete === true) incomplete = true;
             if (row.version === 1 && row.kind === "issue" && typeof row.id === "string" && typeof row.runtimeId === "string" && Number.isSafeInteger(row.count) && row.count > 0) latest.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.id]), row);
           } catch { incomplete = true; }
@@ -222,7 +248,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatRuntimeSamples(summaries), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatRuntimeSamples(summaries), formatProviderObservations([...requests, ...summaries]), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
   }
   return { observe, report, flush: () => tail };
 }

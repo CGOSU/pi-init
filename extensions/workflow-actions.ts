@@ -182,6 +182,23 @@ export function createWorkflowActions(
     return requireIdentity(validateWorkflowHandoffIdentity(state.workflowState, params, ctx));
   }
 
+  function requireTaskRole(task: WorkflowTask, ctx: ExtensionContext) {
+    const activeRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
+    if (activeRole === task.role) return;
+    const details = {
+      ok: false,
+      code: "WORKFLOW_TASK_ROLE_MISMATCH",
+      taskId: task.id,
+      requiredRole: task.role,
+      activeRole,
+      nextAction: `保持当前任务未完成；使用任务要求的 ${task.role} 职责继续执行，不能以其他角色提交 complete/block。`,
+    };
+    throw Object.assign(new Error(`[PI-INIT_WORKFLOW_ERROR] ${JSON.stringify(details)}`), {
+      code: details.code,
+      details,
+    });
+  }
+
   function guardQueuedTaskStart(action: "complete" | "block" | "clarify", ctx: ExtensionContext) {
     const current = state.workflowState;
     const phase = current?.handoff?.phase;
@@ -590,13 +607,11 @@ export function createWorkflowActions(
         if (!state.workflowState) throw missingWorkflowError();
         guardQueuedTaskStart("complete", ctx);
         const identity = requireTaskHandoffIdentity(params, ctx);
-        markCurrentTaskStarted(ctx);
         const { taskId } = identity;
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
-        if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
-          throw new Error(`任务 ${task.id} 要求角色 ${task.role}，当前角色不匹配；请先调用 switch_role`);
-        }
+        requireTaskRole(task, ctx);
+        markCurrentTaskStarted(ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, {
           type: "task-completed", identity,
           completionSummary: params.completionSummary,
@@ -639,6 +654,9 @@ export function createWorkflowActions(
         if (!state.workflowState) throw missingWorkflowError();
         guardQueuedTaskStart("block", ctx);
         const identity = requireTaskHandoffIdentity(params, ctx);
+        const task = state.workflowState.tasks.find((item) => item.id === identity.taskId);
+        if (!task) throw new Error(`工作流任务不存在：${identity.taskId}`);
+        requireTaskRole(task, ctx);
         markCurrentTaskStarted(ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, { type: "task-blocked", identity, reason: params.reason }, Date.now());
         commitLifecycleTransition(transition, ctx);

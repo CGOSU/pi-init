@@ -43,7 +43,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
 
   function sameScope(ctx: ExtensionContext, scope: Scope) {
     const current = capture(ctx);
-    return !state.runtimeDisposed && current.sessionId === scope.sessionId
+    return !state.runtimeDisposed && !state.userStopRequested && current.sessionId === scope.sessionId
       && current.contextGeneration === scope.contextGeneration && current.workKey === scope.workKey;
   }
   function current(ctx: ExtensionContext, handoff: Handoff) {

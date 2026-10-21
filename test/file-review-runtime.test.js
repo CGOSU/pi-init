@@ -50,6 +50,40 @@ async function completeReview(harness, candidate, rationale = "职责内聚，�
   }, undefined, undefined, harness.context);
 }
 
+test("list path is ignored for project inventory pagination and Markdown is never reviewed", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, "docs"));
+    await writeFile(path.join(directory, "docs", "session-log.md"), makeFile("markdown"));
+    await writeFile(path.join(directory, "src", "other.ts"), makeFile("other"));
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    await harness.tools.find((item) => item.name === "switch_role")
+      .execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const list = (params) => tool.execute("scope-list", { action: "list", ...params }, undefined, undefined, harness.context);
+    const inventory = await list({});
+    assert.equal(inventory.details.scope, "project");
+    assert.equal("ignoredPath" in inventory.details, false);
+    assert.deepEqual(inventory.details.candidates.map((item) => item.path), ["src/large.ts", "src/other.ts"]);
+    const page = await list({ offset: 1, limit: 1 });
+    for (const ignoredPath of ["docs/session-log.md", "src/large.ts", "missing.ts"]) {
+      const result = await list({ path: ignoredPath, offset: 1, limit: 1 });
+      assert.equal(result.details.scope, "project");
+      assert.equal(result.details.ignoredPath, ignoredPath);
+      const { ignoredPath: ignored, ...details } = result.details;
+      assert.deepEqual(details, page.details);
+      assert.equal(details.total, 2);
+      assert.equal(details.offset, 1);
+    }
+    assert.equal(await emitToolResult(harness, readEvent("docs/session-log.md")), undefined);
+    const completed = await completeReview(harness, {
+      path: "docs/session-log.md", fingerprint: inventory.details.candidates[0].fingerprint,
+    });
+    assert.equal(completed.details.code, "UNSUPPORTED_FILE");
+    assert.deepEqual((await list({})).details, inventory.details);
+  });
+});
+
 test("启动库存不进入日常提示，但完整 file_review 列表仍可读取", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory });

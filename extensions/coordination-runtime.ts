@@ -176,6 +176,7 @@ export function createCoordinationRuntime(
   }
 
   async function sendCoordinationMessage(ctx: ExtensionContext, expectedIdentity?: CoordinationHandoffIdentity) {
+    if (state.userStopRequested) return false;
     const current = state.coordinationRuntimeState;
     const identity = current ? handoffIdentity(current) : undefined;
     if (!current || !identity || current.handoff?.phase !== "dispatching") return false;
@@ -214,6 +215,7 @@ export function createCoordinationRuntime(
   }
 
   async function continueCoordinationBoundary(ctx: ExtensionContext, identity: CoordinationHandoffIdentity, failed = false) {
+    if (state.userStopRequested) return;
     const current = state.coordinationRuntimeState;
     if (!current || !sameIdentity(handoffIdentity(current), identity) || current.handoff?.phase !== "dispatching") return;
     if (failed) {
@@ -247,6 +249,7 @@ export function createCoordinationRuntime(
 
   async function schedule(ctx: ExtensionContext) {
     state.traceHandoff?.(ctx, "coordination.schedule");
+    if (state.userStopRequested) return;
     try {
       if (state.workflowState) synchronizeWorkflowLink(state.workflowState, ctx);
     } catch (error) {
@@ -271,7 +274,7 @@ export function createCoordinationRuntime(
       const fromRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
       const compact = fromRole && await deps.roleRuntime.shouldCompactForRole(ctx, identity.role);
       const latest = state.coordinationRuntimeState;
-      if (state.runtimeDisposed || !latest || !sameIdentity(handoffIdentity(latest), identity)) return;
+      if (state.runtimeDisposed || state.userStopRequested || !latest || !sameIdentity(handoffIdentity(latest), identity)) return;
       if (compact && fromRole) {
         state.pendingRoleCompaction = deps.roleRuntime.createPendingRoleCompaction(ctx, fromRole, identity.role);
         state.pendingRoleCompaction.continuation = { kind: "coordination-boundary", identity };

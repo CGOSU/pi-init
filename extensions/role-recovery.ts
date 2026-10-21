@@ -20,7 +20,7 @@ function isPendingEntry(entry: unknown) {
 export function createRoleRecovery(
   pi: ExtensionAPI,
   state: ExtensionRuntimeState,
-  contextView?: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | undefined,
+  contextView?: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | undefined, onRejected?: RecoveryRejectionHandler
 ) {
   function enterPending(reason: string) {
     state.roleRecoveryPending = true;
@@ -167,7 +167,16 @@ export function createRoleRecovery(
 
   pi.on("session_compact", (event, ctx) => afterCompact(event, ctx));
   pi.on("context", (event, ctx) => context(event, ctx));
-  pi.on("tool_call", (event) => guardToolCall(event));
+  pi.on("tool_call", (event, ctx) => {
+    const result = guardToolCall(event);
+    if (result?.block) {
+      const code = result.reason.startsWith("[pi-init-role-recovery]") ? "ROLE_RECOVERY_REQUIRED"
+        : result.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED";
+      state.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: event.toolCallId, toolName: event.toolName, action: event.input && "action" in event.input ? event.input.action : undefined, code });
+      onRejected?.(event, ctx, code);
+    }
+    return result;
+  });
 
   return {
     restore,
@@ -181,3 +190,4 @@ export function createRoleRecovery(
 }
 
 export type RoleRecovery = ReturnType<typeof createRoleRecovery>;
+type RecoveryRejectionHandler = (event: { toolName: string; toolCallId: string; input?: Record<string, unknown> }, ctx: ExtensionContext, code: string) => void;

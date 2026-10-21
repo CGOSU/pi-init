@@ -32,6 +32,12 @@ export type FileScanResult =
   | { ok: false; error: FileScanError }
   | { ok: true; projectRoot: string; files: FileSnapshot[]; errors: FileScanError[] };
 
+// List pages always cover the project inventory, never a requested path.
+export type FileReviewListScope = {
+  scope: "project";
+  ignoredPath?: string;
+};
+
 export type FileReviewConclusion = "keep" | "recommend-split";
 
 export type FileReviewDecision = {

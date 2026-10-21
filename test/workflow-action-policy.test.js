@@ -117,6 +117,47 @@ test('switch_role refuses premature role handoff before model, recovery or dispa
   });
 });
 
+test('complete and block require the assigned role before changing lifecycle state', async () => {
+  const { createWorkflowActions } = await import('../extensions/workflow-actions.ts');
+  const { workflowHandoffIdentity } = await import('../src/workflow-handoff.ts');
+  const harness = createExtensionHarness([], { trusted: true });
+  const workflow = running();
+  const identity = workflowHandoffIdentity(workflow);
+  harness.persistSentMessage({ role: 'assistant', customType: 'pi-init-workflow-task', details: identity });
+  const state = { ...createExtensionRuntimeState(), workflowState: workflow };
+  let persisted = 0;
+  let markedStarted = 0;
+  const actions = createWorkflowActions(state, {
+    report: { persistWorkflowState() { persisted++; } },
+    coordination: {},
+    dispatch: { markCurrentTaskStarted() { markedStarted++; } },
+    roleRuntime: {
+      activeRoleFor: () => ({ role: 'architect' }),
+      retireWorkflowContinuation() {},
+    },
+  });
+  const before = JSON.stringify(workflow);
+  for (const action of ['complete', 'block']) {
+    await assert.rejects(actions.runTaskWorkflowAction({
+      action,
+      ...identity,
+      reason: 'cannot block from another role',
+      completionSummary: 'cannot complete from another role',
+      implementationRationale: 'role guard regression',
+      verification: ['not run'],
+    }, undefined, harness.context), (error) => {
+      assert.equal(error.code, 'WORKFLOW_TASK_ROLE_MISMATCH');
+      assert.equal(error.details.requiredRole, 'developer-test');
+      assert.equal(error.details.activeRole, 'architect');
+      return true;
+    });
+  }
+  assert.equal(JSON.stringify(workflow), before);
+  assert.equal(persisted, 0);
+  assert.equal(markedStarted, 0);
+  assert.equal(state.workflowState, workflow);
+});
+
 test('blocked task reaches requested replan without becoming completed or replaying unknown outcomes', () => {
   const workflow = requestWorkflowReplan(running(), { direction: 'change safely' });
   const next = blockWorkflowTask(workflow, { taskId: 'rust-crossfile', reason: 'Need revised plan' });

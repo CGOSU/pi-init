@@ -116,8 +116,7 @@ test("开启监控后不抢占职责守卫，shutdown 刷新真实扩展的交�
   try {
     await emitExtensionEvent(harness, "session_start", { reason: "new" });
     await emitExtensionEvent(harness, "session_compact", { reason: "manual" });
-    const guard = harness.handlers.get("tool_call")[0];
-    assert.equal(guard({ toolName: "edit", input: {} }, harness.context).block, true);
+    assert.equal((await emitExtensionEvent(harness, "tool_call", { toolName: "edit", input: {} })).block, true);
     await emitExtensionEvent(harness, "agent_settled");
     await emitExtensionEvent(harness, "session_shutdown");
     const rows = (await readFile(join(cwd, ".pi", "logs", "handoff.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
@@ -125,7 +124,10 @@ test("开启监控后不抢占职责守卫，shutdown 刷新真实扩展的交�
     assert.ok(rows.some((row) => row.event === "coordination.schedule"));
     assert.equal(rows.at(-1).event, "session.shutdown");
     assert.equal(harness.sentMessages.length, 0);
-  } finally { await rm(cwd, { recursive: true, force: true }); }
+  } finally {
+    try { await emitExtensionEvent(harness, "session_shutdown"); }
+    finally { await rm(cwd, { recursive: true, force: true }); }
+  }
 });
 
 test("模型提出的路由调用独立于执行守卫可观测，正文不进入日志", async () => {

@@ -27,7 +27,7 @@ type WorkflowCompactionDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   requireRoleRecovery: (ctx: ExtensionContext, reason: string) => void;
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: import("./runtime-state.ts").WorkflowHandoffIdentity) => void;
-  scheduleWorkflow: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowActionIdentity) => Promise<void>;
+  scheduleWorkflow: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowActionIdentity, reason?: "context-budget") => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowReplanIdentity) => void;
   sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
@@ -145,6 +145,21 @@ export function createWorkflowCompaction(
   }
 
   function continuationIsCurrent(transition: PendingRoleCompaction) {
+    if (transition.budget) {
+      const workflow = state.workflowState;
+      const expected = transition.budget.identity;
+      if (!expected) return transition.budget.inactiveWorkflowKey
+        ? Boolean(workflow && ["completed", "cancelled"].includes(workflow.status)
+          && JSON.stringify([workflowActionIdentity(workflow), workflow.status]) === transition.budget.inactiveWorkflowKey)
+        : !workflow;
+      const current = workflow && workflowHandoffIdentity(workflow);
+      const task = workflow?.tasks.find(item => item.id === expected.taskId);
+      return Boolean(current && workflow?.status === "running" && !workflow.pendingRevision && !workflow.continuation
+        && workflow.handoff?.phase === "executing" && workflow.currentTaskId === expected.taskId
+        && task?.status === "in_progress" && !task.outcomeUnknown && !task.delegation
+        && task.role === transition.targetRole.role
+        && Object.keys(expected).every(key => current[key as keyof typeof current] === expected[key as keyof typeof expected]));
+    }
     const continuation = transition.continuation;
     if (!continuation) return true;
     if ((continuation.kind === "coordination-evidence" || continuation.kind === "coordination-boundary")) {
@@ -213,9 +228,21 @@ export function createWorkflowCompaction(
 
   function operationIsCurrent(operation: ActiveCompaction) {
     const { transition, ctx } = operation;
-    if (!contextIsCurrent(operation)
+    const budget = transition.budget;
+    const currentRole = deps.getActiveRole(ctx);
+    const roleMatches = budget && !budget.explicitRole
+      ? !state.activeRole && !currentRole && ctx.model?.provider === transition.targetRole.provider
+        && ctx.model.id === transition.targetRole.model && pi.getThinkingLevel() === transition.targetRole.thinkingLevel
+      : sameRole(currentRole, transition.targetRole);
+    const branch = budget ? ctx.sessionManager.getBranch() : [];
+    const branchMatches = !budget || (branch.length >= budget.branchEntryIds.length
+      && budget.branchEntryIds.every((id, index) => branch[index]?.id === id)
+      && branch.slice(budget.branchEntryIds.length).every(entry => entry.type === "custom" || entry.type === "compaction"));
+    if (!contextIsCurrent(operation) || state.userStopRequested || !branchMatches
+      || (budget && (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError
+        || state.coordinationRestoreError || state.pendingWorkflowRecovery || state.coordinationRuntimeState))
       || state.roleTransitionGeneration !== transition.roleTransitionGeneration
-      || !sameRole(deps.getActiveRole(ctx), transition.targetRole)
+      || !roleMatches
       || !continuationIsCurrent(transition)) return false;
     return !state.pendingRoleCompaction
       || state.pendingRoleCompaction.roleTransitionGeneration === transition.roleTransitionGeneration;
@@ -275,6 +302,15 @@ export function createWorkflowCompaction(
       sendFailureDiagnostic(operation);
       return;
     }
+    if (transition.budget) {
+      if (transition.budget.identity && !state.agentRunActive && ctx.isIdle()) {
+        void deps.scheduleWorkflow(ctx, workflowActionIdentity(state.workflowState!), "context-budget")
+          .catch(error => ctx.ui.notify(`预算压缩后的可信续做未完成：${textOf(error)}`, "warning"));
+      } else if (!transition.budget.identity) {
+        ctx.ui.notify("上下文预算压缩已完成；普通任务未重新派发。若宿主已结束当前回合，可明确继续未完成部分，不重放已完成操作。", "info");
+      }
+      return;
+    }
     deps.acknowledgeRoleRecovery(transition.targetRole.role);
 
     switch (transition.continuation?.kind) {
@@ -332,7 +368,7 @@ export function createWorkflowCompaction(
   }
 
   function start(ctx: ExtensionContext) {
-    if (state.runtimeDisposed || state.roleCompactionInFlight || active || !state.pendingRoleCompaction) return false;
+    if (state.runtimeDisposed || state.userStopRequested || state.roleCompactionInFlight || active || !state.pendingRoleCompaction) return false;
 
     const transition = state.pendingRoleCompaction;
     const operation: ActiveCompaction = {
@@ -364,15 +400,23 @@ export function createWorkflowCompaction(
     state.traceHandoff?.(ctx, "compaction.started", { operationId: operation.operationId, fromRole: transition.fromRole, toRole: transition.toRole, continuationKind: transition.continuation?.kind });
     armWatchdog(operation);
 
-    if (branchHasOnlyCustomEntriesAfterCompaction(ctx)) {
+    if (!transition.budget && branchHasOnlyCustomEntriesAfterCompaction(ctx)) {
       settle(operation.operationId);
       return true;
     }
 
     try {
       ctx.compact({
-        customInstructions: ROLE_SWITCH_COMPACTION_INSTRUCTIONS,
-        onComplete: () => settle(operation.operationId),
+        customInstructions: transition.budget
+          ? `System-derived current task snapshot (not a handoff):\n${transition.budget.snapshot}`
+          : ROLE_SWITCH_COMPACTION_INSTRUCTIONS,
+        onComplete: (result) => {
+          const verified = !transition.budget || (result && typeof result.summary === "string" && result.summary.trim()
+            && typeof result.firstKeptEntryId === "string" && Number.isFinite(result.tokensBefore)
+            && ctx.sessionManager.getBranch().slice(transition.budget.branchEntryIds.length)
+              .some(entry => entry.type === "compaction" && entry.summary === result.summary));
+          settle(operation.operationId, verified ? undefined : "上下文压缩结果未知；未自动继续任务。");
+        },
         onError: (error) => settle(operation.operationId, errorMessage(error, "上下文压缩失败或被中止")),
       });
     } catch (error) {

@@ -11,7 +11,7 @@ import {
   WORKFLOW_RECOMMENDED_TASKS,
   isWorkflowActive,
   appendWorkflowReplanDirection,
-  requestWorkflowReplan, requestWorkflowGoal } from "../src/workflow.ts";
+  requestWorkflowReplan, requestWorkflowGoal, markWorkflowTaskOutcomeUnknown } from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput, isExplicitWorkflowChildInput } from "../src/workflow-input-intent.ts";
@@ -50,8 +50,10 @@ import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
-import { createPausedStatusGuard, createWorkflowProgressObserver } from "./workflow-status-polling.ts";
+import { createPausedStatusGuard, createWorkflowProgressObserver, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
 import { createWorkflowDelivery } from "./workflow-delivery.ts";
+import { createWorkflowUserControl } from "./workflow-user-control.ts";
+import { registerContextBudgetMonitor } from "./context-budget-monitor.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -63,7 +65,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState);
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
-  const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context);
+  const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context, (event, ctx, code) => {
+    if (runtimeState.userStopRequested) { ctx.abort(); return; }
+    const rejection = rejectionGuard.observe({ ...event, action: event.input?.action, role: event.input?.role, code }, ctx);
+    if (rejection.stop) userControl.suspend(ctx, "repeated-guard-rejection");
+  });
   const runTimingDiagnostics = createRunTimingDiagnostics(
     pi,
     () => Boolean(runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)),
@@ -86,7 +92,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
     requireRoleRecovery: roleRecovery.requireConfirmation,
     sendWorkflowTaskMessage: (ctx, taskId, note, identity) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note, identity),
-    scheduleWorkflow: (ctx, identity) => workflowDispatch.scheduleWorkflow(ctx, identity),
+    scheduleWorkflow: (ctx, identity, reason) => workflowDispatch.scheduleWorkflow(ctx, identity, reason),
     sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
     sendCoordinationMessage: (ctx, identity) => coordinationRuntime.sendCoordinationMessage(ctx, identity),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
@@ -94,6 +100,22 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     continueCoordinationBoundary: (ctx, identity, failed) => coordinationRuntime.continueCoordinationBoundary(ctx, identity, failed),
   });
   const roleHandoff = createRoleHandoff(pi, runtimeState, { getActiveRole: roleRuntime.activeRoleFor, requireRecovery: roleRecovery.requireConfirmation });
+  const userControl = createWorkflowUserControl(pi, runtimeState, {
+    retire: () => { roleHandoff.reset(); roleRuntime.disposeWorkflowCompaction(); },
+    interrupt: (ctx) => {
+      const current = runtimeState.workflowState;
+      if (!current || current.status !== "running" || !current.currentTaskId || !["executing", "queued", "dispatching"].includes(current.handoff?.phase ?? "")) return;
+      const next = markWorkflowTaskOutcomeUnknown(current, { taskId: current.currentTaskId, reason: "用户停止或重复拒绝保护中断了活动回合；已发生的副作用需核对，不自动重放。" });
+      try { workflowReport.persistWorkflowState(next, ctx); }
+      catch (error) { runtimeState.pendingWorkflowRecovery ??= next; throw error; }
+    },
+  });
+  pi.on("tool_call", (event, ctx) => {
+    const result = userControl.guardToolCall(event);
+    if (result?.block) ctx.abort();
+    return result;
+  });
+  registerContextBudgetMonitor(pi, runtimeState, roleRuntime);
   createFileReviewRuntime(pi, {
     getActiveRole: roleRuntime.activeRoleFor,
     canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
@@ -278,6 +300,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (typeof event.text === "string" && event.text.trim().startsWith("/")) {
       return { action: "continue" };
     }
+    const control = await userControl.input(event, ctx);
+    if (control) return control;
     if (await captureWorkflowRevisionInput(event, ctx)) return { action: "handled" };
     if (!runTimingDiagnostics.captureInput(event.source)) return { action: "continue" };
     return { action: "continue" };
@@ -290,8 +314,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    if (runtimeState.userStopRequested && !userControl.allowsExternalTurn()) { ctx.abort(); return; }
     runtimeState.agentRunActive = true;
-    workflowTaskConsumptionRunActive = true;
+    workflowTaskConsumptionRunActive = !runtimeState.userStopRequested;
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     runtimeState.internalContinuationPending = false;
@@ -314,6 +339,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     workflowTaskConsumptionRunActive = false;
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
+    if (runtimeState.userStopRequested) { settleExternalRunTiming(); userControl.settled(); return; }
     if (await roleHandoff.schedule(ctx)) {
       if (runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed) settleExternalRunTiming();
       return;
@@ -358,6 +384,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.currentContext = ctx;
       coordinationRuntime.restore(ctx);
       workflowDispatch.restoreWorkflowState(ctx);
+      userControl.restore(ctx);
       workflowProgressObserver.observe();
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       runtimeState.currentContext = ctx;
@@ -382,8 +409,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           "info",
         );
       }
-      await coordinationRuntime.schedule(ctx);
-      await workflowDispatch.scheduleWorkflow(ctx);
+      if (!runtimeState.userStopRequested) {
+        await coordinationRuntime.schedule(ctx);
+        await workflowDispatch.scheduleWorkflow(ctx);
+      }
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
     }
@@ -395,6 +424,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     workflowTaskConsumptionRunActive = false;
     coordinationRuntime.restore(ctx);
     workflowDispatch.restoreWorkflowState(ctx);
+    userControl.restore(ctx);
     workflowProgressObserver.observe();
     if (event.oldLeafId !== event.newLeafId) {
       runtimeState.roleContextGeneration += 1;
@@ -406,7 +436,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       roleRecovery.restore(ctx);
     }
     workflowReport.updateWorkflowStatus(ctx);
-    await coordinationRuntime.schedule(ctx);
+    if (!runtimeState.userStopRequested) await coordinationRuntime.schedule(ctx);
   });
 
   pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: async (args, ctx) => {
@@ -464,6 +494,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (action === "coordination") {
           const coordinationAction = tokens.shift();
           if (coordinationAction === "resume" && tokens.length === 0) {
+            if (!userControl.resume(ctx)) return;
             await coordinationRuntime.resumeBoundary(ctx);
             return;
           }
@@ -476,7 +507,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           throw new Error("用法：/pi-init coordination resume | /pi-init coordination reopen <reportId> <原因>");
         }
         if (action === "workflow") {
-          await workflowActions.workflowCommand(tokens.shift(), tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));
+          const workflowAction = tokens.shift();
+          if (workflowAction === "stop") { userControl.suspend(ctx, "user-command"); ctx.ui.notify("自动续跑已停止；未完成、取消或重试任务。", "info"); return; }
+          if ((workflowAction === "resume" || workflowAction === "retry") && !userControl.resume(ctx)) return;
+          await workflowActions.workflowCommand(workflowAction, tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));
+          if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;
         }
         ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|coordination] [参数]", "error");
@@ -610,6 +645,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           details: { ...(result.details as Record<string, unknown>), statusPolling: { code: polling.code, stopped: true } }, terminate: true };
       }
       try {
+        const stopped = userControl.guardToolCall({ toolName: "task_workflow", input: params });
+        if (stopped) return { content: [{ type: "text", text: stopped.reason }], details: { ok: false, code: "WORKFLOW_USER_STOPPED" }, terminate: true };
         if (signal?.aborted || runtimeState.workflowRestoreError) return finish(await workflowActions.runTaskWorkflowAction(params, signal, ctx));
         const guard = roleRecovery.guardToolCall({ toolName: "task_workflow", input: params });
         if (guard?.block && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
@@ -626,6 +663,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         const value = error as { code?: unknown; message?: unknown };
         const code = typeof value?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(value.code) ? value.code : "WORKFLOW_ACTION_REJECTED";
         runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: params.action, code, errorHash: fingerprint(value?.message) });
+        const rejection = rejectionGuard.observe({ toolName: "task_workflow", toolCallId: _toolCallId, action: params.action, code }, ctx);
+        if (rejection.stop) {
+          userControl.suspend(ctx, "repeated-rejection");
+          runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: _toolCallId, code: rejection.code });
+          return { content: [{ type: "text", text: "同一身份的工作流动作已连续被拒绝，自动续跑已停止；未恢复、完成或重试任务。原错误码：" + code }], details: { ok: false, code, rejectionStopped: true }, terminate: true };
+        }
         throw error;
       }
     },
@@ -663,10 +706,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (signal?.aborted) {
         return { content: [{ type: "text", text: "角色切换已取消。" }], details: {} };
       }
+      if (runtimeState.userStopRequested) return { content: [{ type: "text", text: "自动执行已停止；切换职责不会恢复任务。请由用户明确继续。" }], details: { ok: false, code: "WORKFLOW_USER_STOPPED" }, terminate: true };
       const boundary = roleHandoff.checkSwitchRole(params.role);
       if (!boundary.allowed) {
         runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: "switch_role", code: boundary.code, requiredRole: boundary.requiredRole });
-        return { content: [{ type: "text", text: boundary.message + "\n" + boundary.nextAction }], details: { ok: false, ...boundary } };
+        const rejection = rejectionGuard.observe({ toolName: "switch_role", toolCallId: _toolCallId, role: params.role, code: boundary.code }, ctx);
+        if (rejection.stop) {
+          userControl.suspend(ctx, "repeated-rejection");
+          runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: _toolCallId, code: rejection.code });
+        }
+        return { content: [{ type: "text", text: boundary.message + "\n" + (rejection.stop ? "同一身份的角色切换已连续被拒绝；当前回合结束，自动续跑已停止，等待用户明确处理。工作流未被完成、取消或重试。" : boundary.nextAction) }], details: { ok: false, ...boundary, rejectionStopped: rejection.stop }, ...(rejection.stop ? { terminate: true } : {}) };
       }
       const source = roleHandoff.capture(ctx);
       const selection = await roleRuntime.automaticRole(params.role, ctx);
@@ -686,6 +735,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
   });
   const pausedStatusGuard = createPausedStatusGuard(pi, runtimeState);
+  const rejectionGuard = createRepeatedRejectionGuard(pi, runtimeState);
   const workflowDelivery = createWorkflowDelivery(pi, runtimeState);
   const diagnostics = createHandoffDiagnostics(pi, runtimeState);
   pi.registerCommand("blackbox", {

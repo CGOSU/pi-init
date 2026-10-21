@@ -137,6 +137,7 @@ export function createWorkflowMessages(
     note?: string,
     expectedIdentity?: WorkflowHandoffIdentity,
   ) {
+    if (state.userStopRequested) return false;
     lastContext = ctx;
     const current = state.workflowState;
     const identity = current ? workflowHandoffIdentity(current) : undefined;
@@ -296,6 +297,7 @@ export function createWorkflowMessages(
   }
 
   function sendWorkflowReplanMessage(ctx: ExtensionContext, expectedIdentity?: WorkflowReplanIdentity) {
+    if (state.userStopRequested) return false;
     const current = state.workflowState;
     const continuation = current?.continuation;
     const revision = current?.pendingRevision;

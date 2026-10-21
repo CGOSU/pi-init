@@ -58,7 +58,7 @@ test("before_agent_start 为无活动工作流的恢复门提供简单问答快�
   await beforeAgentStart(harness);
   assert.equal(harness.branch.at(-1).data.status, "pending");
   assert.equal(
-    harness.handlers.get("tool_call")[0]({ toolName: "edit", input: {} }, harness.context).block,
+    (await emitExtensionEvent(harness, "tool_call", { toolName: "edit", input: {} })).block,
     true,
   );
 });
@@ -143,17 +143,17 @@ test("上下文压缩后必须恢复职责才能执行写入工具", async () =>
     1,
   );
 
-  const toolCall = getHandler(harness, "tool_call");
-  const blocked = toolCall({ toolName: "edit", input: { path: "src/feature.js" } }, harness.context);
+  const toolCall = (event) => emitExtensionEvent(harness, "tool_call", event);
+  const blocked = await toolCall({ toolName: "edit", input: { path: "src/feature.js" } });
   assert.equal(blocked.block, true);
   assert.equal(blocked.terminate, undefined);
-  assert.equal(toolCall({ toolName: "read", input: { path: "src/feature.js" } }, harness.context), undefined);
-  assert.equal(toolCall({ toolName: "task_workflow", input: { action: "status" } }, harness.context), undefined);
-  assert.equal(toolCall({ toolName: "task_workflow", input: { action: "complete" } }, harness.context).block, true);
+  assert.equal(await toolCall({ toolName: "read", input: { path: "src/feature.js" } }), undefined);
+  assert.equal(await toolCall({ toolName: "task_workflow", input: { action: "status" } }), undefined);
+  assert.equal((await toolCall({ toolName: "task_workflow", input: { action: "complete" } })).block, true);
 
   const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
   await switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
-  assert.equal(toolCall({ toolName: "edit", input: { path: "src/feature.js" } }, harness.context), undefined);
+  assert.equal(await toolCall({ toolName: "edit", input: { path: "src/feature.js" } }), undefined);
   assert.equal(harness.entries.at(-1).data.status, "acknowledged");
 });
 
@@ -165,12 +165,12 @@ test("职责恢复门在会话恢复后继续生效，并允许显式角色切�
   }];
   const harness = createExtensionHarness(pending);
   await emitExtensionEvent(harness, "session_start");
-  const toolCall = getHandler(harness, "tool_call");
-  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
+  const toolCall = (event) => emitExtensionEvent(harness, "tool_call", event);
+  assert.equal((await toolCall({ toolName: "write", input: { path: "README.md" } })).block, true);
 
   const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
   await switchRole.execute("developer-test", { role: "developer-test" }, undefined, undefined, harness.context);
-  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context), undefined);
+  assert.equal(await toolCall({ toolName: "write", input: { path: "README.md" } }), undefined);
 });
 
 test("session_start 按恢复原因和 branch 内容重新锁定职责", async () => {
@@ -186,10 +186,10 @@ test("session_start 按恢复原因和 branch 内容重新锁定职责", async (
   for (const [reason, branch, expectedPending] of cases) {
     const harness = createExtensionHarness(branch);
     await emitExtensionEvent(harness, "session_start", { reason });
-    const result = getHandler(harness, "tool_call")({
+    const result = await emitExtensionEvent(harness, "tool_call", {
       toolName: "write",
       input: { path: "README.md" },
-    }, harness.context);
+    });
     assert.equal(result?.block ?? false, expectedPending, reason);
     assert.equal(harness.entries.length, expectedPending ? 1 : 0, reason);
   }
@@ -204,17 +204,17 @@ test("session_tree 切换分支后必须重新确认职责，不能复用历史 
   const branch = recoveryBranch();
   const harness = createExtensionHarness(branch);
   await emitExtensionEvent(harness, "session_start", { reason: "new" });
-  const toolCall = getHandler(harness, "tool_call");
-  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
+  const toolCall = (event) => emitExtensionEvent(harness, "tool_call", event);
+  assert.equal((await toolCall({ toolName: "write", input: { path: "README.md" } })).block, true);
 
   branch.splice(0, branch.length, ...recoveryBranch("acknowledged"));
   await emitExtensionEvent(harness, "session_tree", { oldLeafId: "pending-leaf", newLeafId: "acknowledged-leaf" });
-  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
+  assert.equal((await toolCall({ toolName: "write", input: { path: "README.md" } })).block, true);
   assert.equal(harness.branch.at(-1).data.status, "pending");
 
   branch.splice(0, branch.length, ...recoveryBranch());
   await emitExtensionEvent(harness, "session_tree", { oldLeafId: "acknowledged-leaf", newLeafId: "pending-leaf" });
-  assert.equal(toolCall({ toolName: "write", input: { path: "README.md" } }, harness.context).block, true);
+  assert.equal((await toolCall({ toolName: "write", input: { path: "README.md" } })).block, true);
 });
 
 test("manual 模式的 branch 恢复指引使用 /pi-init role，避免重复调用 switch_role", async () => {
@@ -238,7 +238,7 @@ test("manual 模式的 branch 恢复指引使用 /pi-init role，避免重复调
 
     await harness.commands.get("pi-init").handler("role developer-test", harness.context);
     assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-    assert.equal(getHandler(harness, "tool_call")({ toolName: "write", input: {} }, harness.context), undefined);
+    assert.equal(await emitExtensionEvent(harness, "tool_call", { toolName: "write", input: {} }), undefined);
   });
 });
 
@@ -251,17 +251,17 @@ test("职责恢复门持久化失败后仍 fail-closed，必须重新成功确�
   }, async (harness) => {
     await emitExtensionEvent(harness, "session_start", { reason: "new" });
     await harness.completeCompaction({ reason: "manual" });
-    const toolCall = getHandler(harness, "tool_call");
-    assert.equal(toolCall({ toolName: "write", input: {} }, harness.context).block, true);
+    const toolCall = (event) => emitExtensionEvent(harness, "tool_call", event);
+    assert.equal((await toolCall({ toolName: "write", input: {} })).block, true);
 
     await emitExtensionEvent(harness, "session_tree", { oldLeafId: "same", newLeafId: "same" });
-    assert.equal(toolCall({ toolName: "write", input: {} }, harness.context).block, true);
+    assert.equal((await toolCall({ toolName: "write", input: {} })).block, true);
     failPersistence = false;
     await harness.tools.find((tool) => tool.name === "switch_role").execute(
       "restore-after-persist-failure", { role: "developer-test" }, undefined, undefined, harness.context,
     );
     assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-    assert.equal(toolCall({ toolName: "write", input: {} }, harness.context), undefined);
+    assert.equal(await toolCall({ toolName: "write", input: {} }), undefined);
   });
 });
 
@@ -469,7 +469,7 @@ test("第三方扩展提供的压缩仍进入职责恢复门", async () => {
   harness.handlers.set("session_before_compact", beforeHandlers);
   await harness.completeCompaction({ reason: "threshold" });
 
-  const toolCall = getHandler(harness, "tool_call");
-  assert.equal(toolCall({ toolName: "edit", input: { path: "src/feature.js" } }, harness.context).block, true);
+  const toolCall = (event) => emitExtensionEvent(harness, "tool_call", event);
+  assert.equal((await toolCall({ toolName: "edit", input: { path: "src/feature.js" } })).block, true);
   assert.equal(harness.entries.at(-1).data.status, "pending");
 });

@@ -21,6 +21,7 @@ import {
   readFileReviewState,
   recordFileReview,
   scanProjectFiles,
+  type FileReviewListScope,
   type FileScanError,
   type FileScanResult,
   type FileSnapshot,
@@ -80,10 +81,10 @@ type ReviewDependencies = {
 };
 
 const reviewToolParameters = Type.Object({
-  action: Type.Union([Type.Literal("list"), Type.Literal("complete")]),
+  action: Type.Union([Type.Literal("list"), Type.Literal("complete")], { description: "list paginates the project inventory; complete records a review for path." }),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIST_FILES })),
-  path: Type.Optional(Type.String()),
+  path: Type.Optional(Type.String({ description: "Used only by complete. Ignored by list, which always returns project-wide candidates." })),
   fingerprint: Type.Optional(Type.String()),
   conclusion: Type.Optional(Type.Union([
     Type.Literal("keep"),
@@ -521,7 +522,15 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
         : items.length > 0
           ? `结构待审 ${offset + 1}-${offset + items.length}/${candidates.length}`
           : `没有该页已发现的结构候选；总数 ${candidates.length}`;
-      return success(`${scanStatus}${summary}`, {
+      const scope: FileReviewListScope = {
+        scope: "project",
+        ...(typeof input.path === "string" ? { ignoredPath: input.path } : {}),
+      };
+      const scopeNotice = scope.ignoredPath !== undefined
+        ? `path=${JSON.stringify(scope.ignoredPath)} ignored: list returns project-wide inventory, not path-specific results. `
+        : "Project-wide inventory. ";
+      return success(`${scopeNotice}${scanStatus}${summary}`, {
+        ...scope,
         candidates: items,
         total: candidates.length,
         structuralComplete: queue.structuralConfirmed,
@@ -569,10 +578,12 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   pi.registerTool({
     name: "file_review",
     label: "Review Files",
-    description: "List pending structural candidates in files over the review threshold; record a reasoned keep/split conclusion for the exact current file version after reading it.",
+    description: "List paginates the project-wide inventory of pending structural candidates in supported code files over the review threshold, not a path-specific review. Path is used only by complete and ignored by list. Complete records a reasoned keep/split conclusion for the exact current file version after reading it. Markdown is not supported.",
     promptSnippet: "Review large files without treating line count as a hard limit",
     promptGuidelines: [
       `${FILE_REVIEW_THRESHOLD} lines triggers structural review; it is not a rule to split or reject edits.`,
+      "list is project inventory pagination via offset/limit, not a review of the supplied path. path is used only by complete; list discloses any ignored path and still returns global candidates.",
+      "Only supported code files are reviewed; Markdown is excluded. A list result is not evidence that a supplied path was reviewed.",
       "Read the full current file using read before submitting a review; use offset/limit chunks when needed.",
       "Omit reviewKind or use reviewKind=\"structure\"; conclusions are keep/recommend-split.",
       "A review applies to the current content fingerprint only. Do not claim a recommendation has been implemented.",

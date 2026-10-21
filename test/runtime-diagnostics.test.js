@@ -297,3 +297,100 @@ test("疑似循环首次在 settled 出现时也计入当前摘要；正常暂�
     assert.equal(JSON.stringify(data).includes("private-direction"), false);
   });
 });
+
+test("routing rejection stages count eight calls once and retain both observations", async () => {
+  await withBox(async ({ ctx, monitor, emit, rows }) => {
+    await emit("before_agent_start");
+    for (let i = 0; i < 8; i++) {
+      const toolCallId = "route-" + i;
+      monitor.trace(ctx, "workflow.action_rejected", { toolCallId, action: "switch_role", code: "WORKFLOW_TASK_BOUNDARY_REQUIRED" });
+      await emit("tool_result", { toolName: "switch_role", toolCallId, details: { ok: false, code: "WORKFLOW_TASK_BOUNDARY_REQUIRED" } });
+    }
+    await emit("agent_settled");
+    const data = await rows();
+    const issues = data.filter(row => row.kind === "issue");
+    assert.equal(new Set(issues.map(row => row.id)).size, 1);
+    assert.equal(issues.at(-1).count, 8);
+    assert.equal(issues.at(-1).toolName, "switch_role");
+    assert.equal(data.find(row => row.kind === "summary").issueOccurrences, 8);
+    for (const stage of ["workflow.action_rejected", "routing.tool_result"]) assert.ok(issues.at(-1).events.some(row => row.event === stage));
+  });
+});
+test("bounded evidence preserves first and refreshes latest trigger snapshot", async () => {
+  await withBox(async ({ ctx, rows }) => {
+    let generation = 1;
+    const box = createRuntimeDiagnostics(() => ({ generation }));
+    box.observe(ctx, "tool.result", { toolName: "bash", toolCallId: "first", isError: true });
+    for (let i = 0; i < 90; i++) box.observe(ctx, "input");
+    generation = 2;
+    box.observe(ctx, "tool.result", { toolName: "bash", toolCallId: "last", isError: true });
+    box.observe(ctx, "session.shutdown");
+    await box.flush();
+    const issue = (await rows()).filter(row => row.kind === "issue").at(-1);
+    assert.deepEqual(issue.snapshot, { generation: 1 });
+    assert.deepEqual(issue.latestSnapshot, { generation: 2 });
+    assert.ok(issue.events.some(row => row.data.toolCallId === "first"));
+    assert.ok(issue.events.some(row => row.data.toolCallId === "last"));
+    assert.ok(issue.events.length <= 32);
+    assert.equal(issue.evidenceTruncated, true);
+    assert.equal(issue.incomplete, true);
+  });
+});
+test("budget decisions retain safe numeric context without collection hooks", async () => {
+  await withBox(async ({ ctx, monitor, emit, rows }) => {
+    monitor.trace(ctx, "context.budget_checked", { tokens: 900, contextWindow: 1000, percent: 90, reason: "threshold", decision: "failed", body: "private-budget" });
+    await emit("agent_settled");
+    const issue = (await rows()).filter(row => row.kind === "issue").at(-1);
+    assert.equal(issue.category, "context-budget");
+    assert.deepEqual(issue.events.at(-2).data, { tokens: 900, contextWindow: 1000, percent: 90, reason: "threshold", decision: "failed" });
+    assert.equal(JSON.stringify(issue).includes("private-budget"), false);
+  });
+});
+test("provider request summaries disclose missing observations and safe structured errors", async () => {
+  await withBox(async ({ emit, rows, monitor, ctx }) => {
+    await emit("before_agent_start");
+    await emit("before_provider_request");
+    await emit("after_provider_response", { status: 503 });
+    await emit("message_end", { message: { role: "assistant", stopReason: "error", errorMessage: { code: "ECONNRESET", status: 503, message: "private-provider" }, content: [] } });
+    await emit("before_provider_request");
+    await emit("agent_settled", { aborted: true });
+    const data = await rows();
+    const requests = data.filter(row => row.kind === "provider-request");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].status, 503);
+    assert.equal(requests[0].errorCodeHint, "ECONNRESET");
+    assert.deepEqual(requests[1].missingObservations, ["headers", "response", "assistant"]);
+    assert.equal(requests[1].outcome, "aborted");
+    assert.equal(JSON.stringify(data).includes("private-provider"), false);
+    assert.match(await monitor.report(ctx), /Provider 请求摘要：2；观察缺失：2/);
+  });
+});
+
+test("正常预算判断不当作问题，健康Provider请求不逐条落盘", async () => {
+  await withBox(async ({ ctx, monitor, emit, rows, notices }) => {
+    await emit("before_agent_start");
+    monitor.trace(ctx, "context.budget_checked", { tokens: 100, contextWindow: 1000, percent: 10, decision: "threshold", reason: "below-threshold" });
+    await emit("before_provider_request");
+    await emit("before_provider_headers");
+    await emit("after_provider_response", { status: 200 });
+    await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+    await emit("agent_settled");
+    const data = await rows();
+    assert.deepEqual(data.map(row => row.kind), ["summary"]);
+    assert.equal(data[0].issueOccurrences, 0);
+    assert.equal(data[0].budget.last.decision, "threshold");
+    assert.equal(data[0].providerObservations.requests, 1);
+    assert.match(await monitor.report(ctx), /Provider 请求摘要：1；观察缺失：0/);
+    assert.equal(notices.length, 0);
+  });
+});
+
+test("相同错误码来自不同工具仍保留独立问题归属", async () => {
+  await withBox(async ({ emit, rows }) => {
+    await emit("before_agent_start");
+    for (const toolName of ["custom-a", "custom-b"]) await emit("tool_result", { toolName, toolCallId: toolName, details: { ok: false, code: "NOT_ALLOWED" } });
+    await emit("agent_settled");
+    const issues = (await rows()).filter(row => row.kind === "issue");
+    assert.equal(new Set(issues.map(row => row.id)).size, 2);
+  });
+});

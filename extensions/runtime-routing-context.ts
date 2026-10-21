@@ -47,6 +47,12 @@ function buildRuntimeSection(
   const role = activeRole ? roleLabel(activeRole.role) : "未确认";
   const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "未选择";
   const thinkingLevel = deps.getThinkingLevel();
+  if (state.userStopRequested) return [
+    "用户已停止自动执行，本轮只允许回答新的只读问题。",
+    `当前职责：${role}；当前模型：${model}，推理强度：${thinkingLevel}`,
+    workflowSummary(state),
+    "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。",
+  ].join("\n");
   return [
     "当前运行状态（仅用于本轮职责路由，不改变持久状态）：",
     `当前职责：${role}`,

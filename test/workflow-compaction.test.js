@@ -470,3 +470,79 @@ test("预算不可用时沿用 50% 兜底，不增加恢复门槛", () => {
   assert.equal(shouldCompactAfterWorkflowTask({ mode: "confirm", contextUsage: { percent: 90 } }), false);
   assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 49, tokens: null }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), false);
 });
+
+test('budget operation without explicit role verifies actual result and never dispatches or acknowledges recovery', async () => {
+  const { createContextBudgetChecker } = await import('../extensions/context-budget-monitor.ts');
+  for (const outcome of ['success', 'unknown', 'error', 'stop', 'branch', 'generation', 'role', 'session', 'dispose']) {
+    const state = createExtensionRuntimeState();
+    let callbacks, acknowledgements = 0, sessionId = 'budget-session';
+    const messages = [], notifications = [], traces = [];
+    const branch = [{ id: 'a', type: 'message' }];
+    const ctx = {
+      model: { provider: 'test', id: 'model', contextWindow: 100000, maxTokens: 1000 },
+      sessionManager: { getSessionId: () => sessionId, getBranch: () => branch },
+      getContextUsage: () => ({ tokens: 90000, contextWindow: 100000, percent: 90 }),
+      hasPendingMessages: () => false,
+      ui: { notify: text => notifications.push(text) },
+      compact: options => { callbacks = options; },
+    };
+    state.traceHandoff = (_ctx, event, data) => traces.push({ event, ...data });
+    const pi = { getThinkingLevel: () => 'off', sendMessage: (...args) => messages.push(args) };
+    const controller = createWorkflowCompaction(pi, state, {
+      getActiveRole: () => state.activeRole,
+      setWorkflowDispatchInFlight: value => { state.workflowDispatchInFlight = value; },
+      requireRoleRecovery() {},
+      acknowledgeRoleRecovery: () => { acknowledgements++; },
+      sendWorkflowTaskMessage: () => assert.fail('task replay'),
+      scheduleWorkflow: () => assert.fail('workflow restart'),
+      sendWorkflowReplanMessage: () => assert.fail('replan replay'),
+      sendCoordinationMessage: () => assert.fail('handoff replay'),
+    });
+    const check = createContextBudgetChecker(pi, state,
+      { mode: async () => 'auto', activeRole: () => state.activeRole, start: controller.start });
+    assert.equal(await check(ctx), true, outcome);
+    assert.equal(state.roleCompactionInFlight, true);
+    assert.match(callbacks.customInstructions, /System-derived current task snapshot/);
+    const result = { summary: 'verified summary', firstKeptEntryId: 'a', tokensBefore: 90000 };
+    branch.push({ id: 'c', type: 'compaction', summary: result.summary });
+    if (outcome === 'stop') state.userStopRequested = true;
+    if (outcome === 'branch') branch[0] = { id: 'other-branch', type: 'message' };
+    if (outcome === 'generation') state.roleContextGeneration++;
+    if (outcome === 'role') state.activeRole = { role: 'other', provider: 'test', model: 'model', thinkingLevel: 'off' };
+    if (outcome === 'session') sessionId = 'other-session';
+    if (outcome === 'dispose') controller.dispose();
+    if (outcome === 'error') callbacks.onError(new Error('cancelled'));
+    else callbacks.onComplete(outcome === 'unknown' ? {} : result);
+    assert.equal(state.roleCompactionInFlight, false, outcome);
+    assert.equal(acknowledgements, 0, outcome);
+    assert.equal(messages.length, ['unknown', 'error'].includes(outcome) ? 1 : 0, outcome);
+    const count = messages.length;
+    callbacks.onComplete(result);
+    assert.equal(messages.length, count, 'duplicate callbacks ignored');
+    controller.dispose();
+  }
+});
+
+test("budget compaction resumes a verified unfinished workflow once through existing dispatcher, never replays task dispatch", async () => {
+  const { createContextBudgetChecker } = await import("../extensions/context-budget-monitor.ts");
+  const state = createExtensionRuntimeState();
+  state.activeRole = { role: "developer-test", provider: "test", model: "model", thinkingLevel: "off" };
+  state.workflowState = startWorkflowTask(createWorkflowState({ sessionId: "budget-live", summary: "long task", tasks: [{ id: "t", role: "developer-test", task: "long task", files: ["src"], acceptanceCriteria: ["done"] }] }), "t");
+  state.workflowState.handoff.phase = "executing";
+  state.agentRunActive = true;
+  const branch = [{ id: "a", type: "message" }];
+  let callbacks, scheduled = 0;
+  const ctx = { model: { provider: "test", id: "model", contextWindow: 100000, maxTokens: 1000 }, sessionManager: { getSessionId: () => "budget-live", getBranch: () => branch }, getContextUsage: () => ({ tokens: 90000, contextWindow: 100000, percent: 90 }), hasPendingMessages: () => false, isIdle: () => !state.agentRunActive, ui: { notify() {} }, compact: options => { callbacks = options; } };
+  const pi = { getThinkingLevel: () => "off" };
+  const controller = createWorkflowCompaction(pi, state, { getActiveRole: () => state.activeRole, setWorkflowDispatchInFlight: value => { state.workflowDispatchInFlight = value; }, requireRoleRecovery() {}, acknowledgeRoleRecovery() {}, sendWorkflowTaskMessage: () => assert.fail("task replay"), scheduleWorkflow: async (_ctx, identity) => { assert.equal(identity.workflowId, state.workflowState.workflowId); scheduled++; }, sendWorkflowReplanMessage: () => assert.fail("replan replay"), sendCoordinationMessage: () => assert.fail("evidence replay") });
+  const check = createContextBudgetChecker(pi, state, { mode: async () => "auto", activeRole: () => state.activeRole, start: controller.start });
+  assert.equal(await check(ctx), true);
+  state.agentRunActive = false;
+  const result = { summary: "compressed", firstKeptEntryId: "a", tokensBefore: 90000 };
+  branch.push({ id: "c", type: "compaction", summary: result.summary });
+  callbacks.onComplete(result); callbacks.onComplete(result);
+  assert.equal(scheduled, 1);
+  assert.equal(state.workflowState.tasks[0].status, "in_progress");
+  assert.equal(state.workflowState.tasks[0].outcomeUnknown, undefined);
+  controller.dispose();
+});

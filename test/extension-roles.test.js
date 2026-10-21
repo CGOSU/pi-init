@@ -157,9 +157,8 @@ test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async (
   assert.deepEqual(switched.context.model, other);
   assert.equal(switched.aborts.length, 0);
 
-  const inputHandler = (switched.handlers.get("input") ?? [])[0];
   assert.deepEqual(
-    await inputHandler({ source: "interactive", text: "继续工作" }, switched.context),
+    await emitExtensionEvent(switched, "input", { source: "interactive", text: "继续工作" }),
     { action: "continue" },
   );
 
@@ -202,9 +201,8 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
     assert.equal(harness.notifications.length, notificationsBefore);
     assert.equal(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"), fileBefore);
 
-    const inputHandler = (harness.handlers.get("input") ?? [])[0];
     assert.deepEqual(
-      await inputHandler({ source: "interactive", text: "继续" }, harness.context),
+      await emitExtensionEvent(harness, "input", { source: "interactive", text: "继续" }),
       { action: "continue" },
     );
 

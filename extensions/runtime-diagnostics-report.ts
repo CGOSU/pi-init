@@ -75,3 +75,23 @@ export function formatRuntimeSamples(records: Data[]) {
   lines.push("不同任务复杂度未控制；以上仅为同配置观察，不证明版本提速或节省费用。缺失用量不补零。");
   return lines.join("\n");
 }
+
+export function formatProviderObservations(records: Data[]) {
+  const key = (row: Data) => JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.run]);
+  const summaries = new Map<string, { requests: number; missing: number }>();
+  const requests = new Map<string, Data>();
+  for (const row of records) {
+    if (row.kind === "summary" && row.providerObservations && typeof row.providerObservations === "object") {
+      const counts = row.providerObservations as Data;
+      if (Number.isSafeInteger(counts.requests) && Number.isSafeInteger(counts.missing) && Number(counts.requests) >= 0 && Number(counts.missing) >= 0 && Number(counts.missing) <= Number(counts.requests)) summaries.set(key(row), { requests: Number(counts.requests), missing: Number(counts.missing) });
+    } else if (row.kind === "provider-request") requests.set(JSON.stringify([key(row), row.requestNumber]), row);
+  }
+  let total = 0, missing = 0;
+  for (const counts of summaries.values()) { total += counts.requests; missing += counts.missing; }
+  for (const row of requests.values()) {
+    if (summaries.has(key(row))) continue;
+    total++;
+    if (Array.isArray(row.missingObservations) && row.missingObservations.length) missing++;
+  }
+  return "Provider 请求摘要：" + total + "；观察缺失：" + missing + "（仅统计启用记录后已观察到的请求；缺失不等于请求失败，不推断启用前的请求）。";
+}

@@ -217,8 +217,7 @@ test("工作流允许未映射的标准角色并拒绝未启用的自定义角�
     const planned = await workflow.execute("plan", planParams, undefined, undefined, harness.context);
     assert.equal(planned.details.tasks[0].role, "developer-test");
 
-    const inputHandler = harness.handlers.get("input")[0];
-    await inputHandler({ source: "interactive", text: "重规划：改为 reviewer 角色" }, harness.context);
+    await emitExtensionEvent(harness, "input", { source: "interactive", text: "重规划：改为 reviewer 角色" });
     await emitExtensionEvent(harness, "agent_settled"); const replanIdentity = workflowMessageIdentity(harness, "pi-init-workflow-replan");
     await assert.rejects(
       workflow.execute("replan", {

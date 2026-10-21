@@ -231,6 +231,8 @@ flowchart LR
 /pi-init config workflow
 /pi-init save
 /pi-init mode <auto|confirm|manual>
+/pi-init workflow stop
+/blackbox
 /pi-init coordination resume
 /pi-init coordination reopen <reportId> <原因>
 ```
@@ -238,6 +240,15 @@ flowchart LR
 `/fast <任务描述>` 是用户为本次任务显式选择 Fast Path，不设置持久开关、不修改项目配置或模型；Agent 忙碌、存在未结束工作流（running/paused/replanning）或有无法恢复的已保存工作流时仍会拒绝派发。它会跳过自动 Fast Path 的任务类型、规模和修改范围资格复核，直接按精简流程定向读取最少必要上下文、完成所需修改和风险匹配的最小验证；不会仅因自动资格不符而退回普通流程。安全、权限、需求/契约确认、职责边界、上下文恢复门、工作流保护和必要验证始终优先；任务独立要求架构规划或工作流时仍须遵循。
 
 `/pi-init coordination resume` 只恢复已确认尚未派发的协作压缩失败；它不会解除证据审阅的 `block`。用户可用 `/pi-init coordination reopen <reportId> <原因>` 显式重开指定问题最新且明确阻塞的报告。重开保留原取证、来源版本和阻塞审阅记录，只创建新的 architect 复审轮次，不自动接受证据或派发开发；Agent 忙碌、项目不可信、状态恢复异常或存在未完成/结果未知的 handoff 时拒绝执行。
+
+### 停止、保存待办与长任务预算
+
+- `/pi-init workflow stop` 或明确的“停止工作”由运行时停止自动续跑，不靠切角或伪造 complete 退出任务。要求“写进 TODO 之后停止”或仅将当前任务进度输出到 TODO 时，系统从可信工作流派生轻量快照，追加到项目 `TODO.md`，保留已有内容；不要求模型填写交接表，不进入新的任务流，也不跟随 TODO 符号链接。讨论、否定、引用和完成后的条件指令不作为立即停止命令。
+- 停止记录绑定当前 session/branch 的工作流，恢复会话时重新读取。活动执行被中断会保存为结果未知；停止不等于取消或副作用确认。明确“继续”或用户执行 resume/retry 只解除停止锁，仍须通过原有恢复/未知结果确认，模型不能用布尔参数代替用户授权。新只读问题可以回答，但不会顺带恢复旧任务；停止后的写入试探会结束当前回合。
+- 同一真实身份下连续 3 个不同调用被同类业务/恢复门拒绝时，运行时停止当前重复回合及自动续跑；穿插普通读取不清空计数。它不限制合法交接次数，不自动重试或切角。
+- auto 模式新增 SDK `turn_end` 的完整工具组预算检查，覆盖普通任务、单个长任务和同角色执行。只用当前窗口 usage，复用既有压缩操作/回调，不把累计账单 token 当窗口。manual/confirm、缺失 usage、恢复门、待派发消息、操作进行中和未知执行身份仍阻止自动压缩，并留下原因；失败或无收益反复尝试受冷却及新 usage 增长限制。
+- 已验证的活动任务压缩后，只有相同 session/branch/角色/任务/attempt/handoff 且宿主已结束旧回合时，才通过现有唯一 dispatcher 续做一次；不创建新 attempt、不重派初始任务，也不把这次宿主中断计作模型未提交结果的纠偏。普通无工作流任务不额外启动模型回合；如果宿主结束了当前回合，界面提示用户明确继续未完成部分。取消、未知结果、失败或过期回调均不获得重放授权。
+- `file_review(action="list")` 是全项目受支持代码文件的候选库存分页，不按 path 筛选；传入 path 时返回 `scope: "project"` 和 `ignoredPath`。path 用于 complete。Markdown 已被代码扩展名集合排除，不例行审阅文档结构。
 
 ### 控制中心与次级菜单
 

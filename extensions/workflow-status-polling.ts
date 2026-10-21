@@ -71,3 +71,26 @@ export function createPausedStatusGuard(pi: ExtensionAPI, state: ExtensionRuntim
   pi.on("input", event => { if (isExternalRunSource(event.source)) reset(); });
   return { observe };
 }
+export function createRepeatedRejectionGuard(pi: ExtensionAPI, state: ExtensionRuntimeState) {
+  const counts = new Map<string, { count: number; calls: Set<string> }>();
+  let scope: string | undefined;
+  function reset() { counts.clear(); scope = undefined; }
+  function observe(event: { toolName: string; toolCallId: string; action?: unknown; role?: unknown; code: string }, ctx: ExtensionContext) {
+    const workflow = state.workflowState;
+    const task = workflow?.tasks.find(item => item.id === workflow.currentTaskId);
+    const identity = fingerprint({ sessionId: ctx.sessionManager.getSessionId(), workflowId: workflow?.workflowId, taskId: task?.id, status: workflow?.status, taskStatus: task?.status, outcomeUnknown: task?.outcomeUnknown, handoff: workflow?.handoff, recoveryGeneration: workflow?.recoveryGeneration, role: state.activeRole, contextGeneration: state.roleContextGeneration });
+    if (scope !== identity) { reset(); scope = identity; }
+    if (!workflow || !task || !["running", "replanning", "paused"].includes(workflow.status)) return { stop: false as const };
+    const key = fingerprint([event.toolName, event.action, event.role, event.code])!;
+    const entry = counts.get(key) ?? { count: 0, calls: new Set<string>() };
+    if (!entry.calls.has(event.toolCallId)) { entry.count++; if (entry.calls.size < 32) entry.calls.add(event.toolCallId); }
+    counts.set(key, entry);
+    if (counts.size > 32) counts.delete(counts.keys().next().value!);
+    return { stop: entry.count >= 3, firstStop: entry.count === 3, code: "WORKFLOW_REJECTION_NO_PROGRESS" as const };
+  }
+  pi.on("input", event => { if (isExternalRunSource(event.source)) reset(); });
+  pi.on("session_start", reset);
+  pi.on("session_tree", reset);
+  pi.on("session_shutdown", reset);
+  return { observe, reset };
+}

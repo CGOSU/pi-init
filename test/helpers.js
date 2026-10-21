@@ -357,9 +357,31 @@ async function emitToolResult(harness, event) {
 
 async function emitExtensionEvent(harness, name, event = {}) {
   const emit = async (eventName, payload) => {
-    for (const handler of harness.handlers.get(eventName) ?? []) {
-      await handler(payload, harness.context);
+    // Match SDK dispatch: observers do not hide later guards or transforms.
+    let result;
+    let currentText = payload.text;
+    let currentImages = payload.images;
+    for (const handler of [...(harness.handlers.get(eventName) ?? [])]) {
+      const current = await handler(eventName === "input"
+        ? { ...payload, type: "input", text: currentText, images: currentImages }
+        : payload, harness.context);
+      if (eventName === "tool_call" && current) {
+        result = current;
+        if (result.block) return result;
+      } else if (eventName === "input") {
+        if (current?.action === "handled") return current;
+        if (current?.action === "transform") {
+          currentText = current.text;
+          currentImages = current.images ?? currentImages;
+        }
+      }
     }
+    if (eventName === "input") {
+      return currentText !== payload.text || currentImages !== payload.images
+        ? { action: "transform", text: currentText, images: currentImages }
+        : { action: "continue" };
+    }
+    return result;
   };
   if (name === "session_start" || name === "session_shutdown" || name === "session_tree" || name === "model_select") {
     harness.testProviderRequestActive = false;
@@ -388,11 +410,12 @@ async function emitExtensionEvent(harness, name, event = {}) {
     await emit("message_start", { type: "message_start", message });
     event = { ...event, message };
   }
-  await emit(name, event);
+  const result = await emit(name, event);
   if (name === "message_end" && event.message?.role === "assistant") {
     harness.testProviderRequestActive = false;
     harness.testAssistantMessageStarted = false;
   }
+  return result;
 }
 
 const workflowMessageIdentity = (harness, customType = "pi-init-workflow-task") => harness.sentMessages.findLast(({ message }) => message.customType === customType)?.message.details;

@@ -222,7 +222,12 @@ test("queued handoff 身份错误或当前 branch 缺少交接消息时不补记
         taskId: "first",
         reason: "不应在错误角色下补记开始",
       }, undefined, undefined, harness.context),
-      /queued handoff 要求角色 developer-test/,
+      (error) => {
+        assert.equal(error.code, "WORKFLOW_TASK_ROLE_MISMATCH");
+        assert.equal(error.details.requiredRole, "developer-test");
+        assert.notEqual(error.details.activeRole, "developer-test");
+        return true;
+      },
     );
     current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
     assert.equal(current.handoff.phase, "queued");

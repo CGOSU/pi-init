@@ -145,7 +145,7 @@ export function createWorkflowDispatch(
   deps: WorkflowDispatchDependencies,
 ) {
   let localScheduleInFlight = false;
-  let pendingBoundaryResume: { ctx: ExtensionContext; identity: WorkflowActionIdentity } | undefined;
+  let pendingBoundaryResume: { ctx: ExtensionContext; identity: WorkflowActionIdentity; reason?: "context-budget" } | undefined;
 
 
   async function startTaskBoundaryCompaction(ctx: ExtensionContext, current: WorkflowState) {
@@ -391,7 +391,7 @@ export function createWorkflowDispatch(
         deps.report.persistWorkflowState(setWorkflowHandoffPhase(before, "waiting-role"), ctx);
       }
       const selection = await deps.roleRuntime.automaticRole(task.role, ctx);
-      if (!currentHandoff(identity)) return;
+      if (state.userStopRequested || !currentHandoff(identity)) return;
       if (selection.result.role !== task.role) {
         const paused = blockWorkflowTask(state.workflowState!, {
           taskId,
@@ -416,8 +416,9 @@ export function createWorkflowDispatch(
     }
   }
 
-  async function scheduleWorkflow(ctx: ExtensionContext, expectedIdentity?: WorkflowActionIdentity) {
+  async function scheduleWorkflow(ctx: ExtensionContext, expectedIdentity?: WorkflowActionIdentity, reason?: "context-budget") {
     state.traceHandoff?.(ctx, "workflow.schedule", { localScheduleInFlight });
+    if (state.userStopRequested) return;
     if (state.pendingWorkflowRecovery) {
       try {
         deps.report.persistWorkflowState(state.pendingWorkflowRecovery, ctx);
@@ -429,7 +430,7 @@ export function createWorkflowDispatch(
     }
     if (state.workflowRestoreError) return;
     if (localScheduleInFlight && expectedIdentity) {
-      pendingBoundaryResume = { ctx, identity: expectedIdentity };
+      pendingBoundaryResume = { ctx, identity: expectedIdentity, reason };
       return;
     }
     if (
@@ -442,16 +443,17 @@ export function createWorkflowDispatch(
     if (expectedIdentity && !sameIdentity(workflowIdentity(state.workflowState), expectedIdentity)) return;
     localScheduleInFlight = true;
     try {
-      await scheduleWorkflowInternal(ctx);
+      await scheduleWorkflowInternal(ctx, reason === "context-budget" && expectedIdentity !== undefined);
     } finally {
       localScheduleInFlight = false;
       const pending = pendingBoundaryResume;
       pendingBoundaryResume = undefined;
-      if (pending) await scheduleWorkflow(pending.ctx, pending.identity);
+      if (pending) await scheduleWorkflow(pending.ctx, pending.identity, pending.reason);
     }
   }
 
-  async function scheduleWorkflowInternal(ctx: ExtensionContext) {
+  async function scheduleWorkflowInternal(ctx: ExtensionContext, budgetResume = false) {
+    if (state.userStopRequested) return;
     const current = state.workflowState;
     if (!current) return;
     const roleValidation = validateWorkflowExecutionRoles(current.tasks, { unfinishedOnly: true });
@@ -467,7 +469,7 @@ export function createWorkflowDispatch(
       ctx.ui.notify(`证据绑定同步尚未持久化，已保存任务结果不会重放，暂不派发：${textOf(error)}`, "warning");
       return;
     }
-    if (await startTaskBoundaryCompaction(ctx, current)) return;
+    if (await startTaskBoundaryCompaction(ctx, current) || state.userStopRequested) return;
     const effect = selectWorkflowScheduleEffect(current);
     if (!effect) return;
     if (effect.kind === "replan") {
@@ -486,10 +488,10 @@ export function createWorkflowDispatch(
       return;
     }
     if (effect.kind === "nudge-task") {
-      state.traceHandoff?.(ctx, "workflow.nudge_requested");
-      const nudged = recordWorkflowNudge(current);
-      if (nudged === current) return;
-      deps.report.persistWorkflowState(nudged, ctx);
+      state.traceHandoff?.(ctx, budgetResume ? "workflow.budget_continued" : "workflow.nudge_requested");
+      const nudged = budgetResume ? current : recordWorkflowNudge(current);
+      if (nudged === current && !budgetResume) return;
+      if (nudged !== current) deps.report.persistWorkflowState(nudged, ctx);
       if (nudged.status === "paused") {
         ctx.ui.notify(deps.report.formatWorkflowPauseSummary(nudged), "warning");
         return;
@@ -497,7 +499,9 @@ export function createWorkflowDispatch(
       const identity = workflowHandoffIdentity(nudged);
       if (identity) {
         const corrective = nudged.nudgeCount === WORKFLOW_MAX_NUDGES - 1;
-        const note = corrective
+        const note = budgetResume
+          ? "已验证的上下文预算压缩结束。当前任务及真实执行身份未变，完整工具结果已经保存；只继续尚未完成部分或提交已有成果，不重放已完成操作，不把压缩算作任务失败或重复派发。"
+          : corrective
           ? "无进展纠偏（仅此一次）：上一回合仍未提交完成或阻塞结果。停止重复查询相同 status、反复读取已检查内容或重复重规划；复用当前上下文中已核实的事实和已完成成果，直接执行当前任务下一项具体工作。不得重放结果未知或副作用不明的操作；若无法安全继续，立即 block 并如实说明阻塞和可能副作用。完成实际工作与验证后，用本消息当前身份调用 task_workflow(action=complete)。"
           : "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow，使用本消息中的当前执行身份。";
         deps.messages.sendWorkflowTaskMessage(ctx, identity.taskId, note, identity);

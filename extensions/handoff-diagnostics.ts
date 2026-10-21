@@ -76,7 +76,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   let sequence = 0;
   let run = 0;
   let requestNumber = 0;
-  let providerRequest: { requestNumber: number; startedAt: number; sessionId: string; run: number } | undefined;
+  let providerRequest: { requestNumber: number; startedAt: number; sessionId: string; run: number; headersObserved?: boolean; responseObserved?: boolean; status?: number } | undefined;
   let pending = 0;
   let dropped = 0;
   let writeFailed = false;
@@ -152,24 +152,32 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
     if (providerRequest?.sessionId !== ctx.sessionManager.getSessionId() || providerRequest?.run !== run) providerRequest = undefined;
     return providerRequest ? { requestNumber: providerRequest.requestNumber, observedElapsedMs: Math.max(0, performance.now() - providerRequest.startedAt) } : {};
   }
+  function finishProvider(ctx: ExtensionContext, outcome: string, errorCodeHint?: string) {
+    const fields = providerFields(ctx);
+    if (!providerRequest) return;
+    if (!enabled) trace(ctx, "provider.request_summary", { ...fields, status: providerRequest.status,
+      headersObserved: providerRequest.headersObserved === true, responseObserved: providerRequest.responseObserved === true,
+      assistantObserved: outcome === "assistant", outcome, errorCodeHint });
+    providerRequest = undefined;
+  }
   pi.on("before_provider_request", (_event, ctx) => {
     try {
       if (writeFailed || !ctx.isProjectTrusted()) return;
-      if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" });
+      if (providerRequest) { trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" }); finishProvider(ctx, "superseded"); }
       providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), sessionId: ctx.sessionManager.getSessionId(), run };
       trace(ctx, "provider.request", { requestNumber });
     } catch {}
   });
   pi.on("before_provider_headers", (_event, ctx) => {
-    try { trace(ctx, "provider.headers", providerFields(ctx)); } catch {}
+    try { const fields = providerFields(ctx); if (providerRequest) providerRequest.headersObserved = true; trace(ctx, "provider.headers", fields); } catch {}
   });
   pi.on("after_provider_response", (event, ctx) => {
-    try { trace(ctx, "provider.response", { ...providerFields(ctx), status: event.status }); } catch {}
+    try { const fields = providerFields(ctx); if (providerRequest) { providerRequest.responseObserved = true; providerRequest.status = event.status; } trace(ctx, "provider.response", { ...fields, status: event.status }); } catch {}
   });
   pi.on("agent_settled", (event, ctx) => {
     try {
       if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: event.aborted ? "aborted" : "settled-without-assistant" });
-      providerRequest = undefined;
+      finishProvider(ctx, event.aborted ? "aborted" : "settled-without-assistant");
       trace(ctx, "agent.settled", { aborted: event.aborted });
     } catch {}
   });
@@ -222,7 +230,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
         errorCodeHint: providerErrorHint(message.errorMessage),
         durationMs: typeof message.durationMs === "number" && Number.isFinite(message.durationMs) && message.durationMs >= 0 ? message.durationMs : undefined,
         tokens });
-      providerRequest = undefined;
+      finishProvider(ctx, "assistant", providerErrorHint(message.errorMessage));
     } catch {}
     if (!Array.isArray(message.content)) return;
     for (const item of message.content) {
@@ -241,6 +249,10 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   return { trace, flush, report };
 }
 function providerErrorHint(value: unknown) {
+  if (value && typeof value === "object") {
+    const error = value as Record<string, unknown>;
+    return providerErrorHint(error.code);
+  }
   if (typeof value !== "string") return undefined;
   const words = new Set(value.toUpperCase().split(/[^A-Z0-9_]+/));
   return ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]
