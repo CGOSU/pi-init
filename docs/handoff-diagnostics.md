@@ -60,6 +60,7 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 - `provider.request`、`provider.headers`、`provider.response`：分别观察请求 payload 钩子、headers 钩子、HTTP 响应，完全不记录 payload/headers/stream 正文。status 为宿主报告的 HTTP 状态；observedElapsedMs 用单调时钟从请求钩子计时，包含中间处理，不能称为纯网络耗时或首 token 时间。requestNumber 只是在本运行实例顺序观察到的关联号，不是 SDK 原生请求 ID；缺失、换 branch/session、跨回合或新请求覆盖时不保证完整关联。
 - `assistant.result`：记录宿主的 stopReason、可用的 durationMs、token usage 和 errorHash。errorCodeHint 只提取错误文本中的少量白名单连接/超时代码（如 ECONNRESET、ETIMEDOUT），只是线索，不证明根因；未知错误仍仅保留指纹，不写错误正文或模型回复。
 - `provider.unfinished`：请求被新观察覆盖，或 settled 时尚未观察到 assistant 结果；reason 区分 superseded、aborted、settled-without-assistant。缺少收敛不等于网络错误，压缩请求/日志缺失等也可能没有普通 assistant 完成事件。`agent.settled` 保留 aborted。
+- headers 钩子先于 request 时，headers 事件本身暂不带 requestNumber；同项目/session/回合内仅暂存一次观察供下一请求消费，回合及 branch/session 边界、settled 清除，不保存头正文，也不补算请求前的耗时。自动黑匣子的 missingByHook 分开披露三类钩子缺失；它仍只是有界关联，不证明宿主请求身份或重试次数。
 
 离线报告新增 provider 与 reuse 区块；provider.unclosedRequests 列出有起点但未观察到可关联的 assistant 结果或 unfinished 终止记录的请求，含轮转缺失或切换 branch/session 后丢失关联的情形，不计作失败。HTTP 错误与 assistant 错误可能属于同一请求，不能相加当失败请求数；SDK assistant 耗时不等于网络耗时。公开 ExtensionAPI 不暴露 AgentSession 的自动重试事件，因此不统计/推断真实重试次数，也不增加自动重试或修改连接/超时策略。旧日志 `provider.available=false` 表示缺少这些观测，绝不等于没有网络错误。
 

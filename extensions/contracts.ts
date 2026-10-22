@@ -202,9 +202,19 @@ const evidenceReviewSchema = Type.Object({
 });
 
 export const taskWorkflowParameters = Type.Object({
-  action: StringEnum(["plan", "status", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "request-goal", "review-child", "request-evidence", "report-evidence", "review-evidence"] as const, {
+  action: StringEnum(["plan", "status", "checkpoint", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "request-goal", "review-child", "request-evidence", "report-evidence", "review-evidence"] as const, {
     description: "工作流或架构协作动作",
   }),
+  checkpoint: Type.Optional(Type.Object({
+    step: Type.String({ minLength: 1, maxLength: 200 }),
+    accomplished: Type.Array(Type.Object({ summary: Type.String({ minLength: 1, maxLength: 512 }), evidenceIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 8 }) }), { maxItems: 16 }),
+    remaining: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 32 }),
+    blockers: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
+    nextStep: Type.String({ minLength: 1, maxLength: 512 }),
+  }, { description: "当前真实执行任务的工作记忆；成果必须引用已有工具结果来源ID，不代表任务验收" })),
+  expectedMemoryRevision: Type.Optional(Type.Integer({ minimum: 0, description: "checkpoint必填，使用任务记忆中的revision防止覆盖较新进展" })),
+  memoryFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16, description: "checkpoint声明的项目相对文件；仅记录登记时内容hash，不证明测试完整依赖或执行时版本" })),
+  evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status按当前任务记忆中的来源ID读取原工具结果，不执行命令" })),
   coordinationIdentity: Type.Optional(coordinationIdentitySchema),
   coordinationHandoffId: Type.Optional(Type.String({
     description: "当前运行时签发的协作 handoff 短引用；需要身份的协调动作（report-evidence、review-evidence、后续 request-evidence）可用它替代完整 coordinationIdentity。缺失引用不会套用当前状态；两种输入同时提供时必须指向同一 handoff。",

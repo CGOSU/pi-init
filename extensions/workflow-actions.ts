@@ -39,12 +39,15 @@ import type { WorkflowLifecycleTransition } from "../src/workflow-orchestrator.t
 import { assertSubworkflowTaskScope } from "../src/workflow-subworkflow.ts";
 import { runWorkflowPanelRequest } from "./workflow-panel-actions.ts";
 import { nextWorkflowAction } from "./workflow-action-policy.ts";
+import { taskMemoryText } from "./task-memory-runtime.ts";
+import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
   dispatch: WorkflowDispatch;
   report: WorkflowReport;
   coordination: CoordinationRuntime;
+  taskMemory?: TaskMemoryRuntime;
 };
 
 type WorkflowActionResult = {
@@ -347,6 +350,12 @@ export function createWorkflowActions(
     }
 
     switch (params.action) {
+      case "checkpoint": {
+        const identity = requireTaskHandoffIdentity(params, ctx);
+        if (!deps.taskMemory) throw Object.assign(new Error("任务记忆运行时不可用"), { code: "TASK_MEMORY_UNAVAILABLE" });
+        const memory = deps.taskMemory.checkpoint(ctx, identity, params.checkpoint, params.expectedMemoryRevision ?? -1, params.memoryFiles);
+        return { content: [{ type: "text", text: "任务记忆已保存；任务未被完成或重新派发。\n" + taskMemoryText(memory) }], details: { taskMemory: memory } };
+      }
       case "request-replan":
       case "request-child":
       case "request-goal": {
@@ -527,9 +536,11 @@ export function createWorkflowActions(
           ? `\n\n${recoveryActions.diagnostic()}；不会改写原记录或派发任务。`
           : "";
         const coordinationStatus = deps.coordination.status();
+        const memory = deps.taskMemory?.read(ctx, params.evidenceIds);
+        const memoryText = memory ? taskMemoryText(memory) : "";
         const coordinationText = coordinationStatus ? `\n\n${deps.coordination.summary()}` : "";
         return {
-          content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}${coordinationText}` }],
+          content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}${coordinationText}${memoryText ? "\n\n" + memoryText : ""}` }],
           details: {
             ...(state.workflowRestoreError
               ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError, recovery: recoveryActions.status() }
@@ -537,6 +548,7 @@ export function createWorkflowActions(
                 ? statusDetails(state.workflowState)
                 : statusDetails({})),
             ...(coordinationStatus ? { coordination: coordinationStatus } : {}),
+            ...(memory ? { taskMemory: memory } : {}),
           },
         };
       }

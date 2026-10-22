@@ -3,6 +3,7 @@ import test from "node:test";
 import { boundContextWindow } from "../extensions/role-context-budget.ts";
 import { createRoleRecovery } from "../extensions/role-recovery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
+import { createTaskMemory, recordTaskObservations, checkpointTaskMemory } from "../src/task-memory.ts";
 
 function pair(index, text = "x".repeat(2000), isError = false) {
   return [{ role: "assistant", content: [{ type: "toolCall", id: "call-" + index, name: "bash", arguments: { command: "verify-" + index } }], timestamp: index },
@@ -60,4 +61,71 @@ test("public recovery context applies budget and records degradation metadata, n
   assert.ok(trace[0].data.inputBytes > trace[0].data.outputBytes);
   assert.equal(JSON.stringify(trace).includes("private-goal"), false);
   assert.equal(state.roleRecoveryPending, original.roleRecoveryPending);
+});
+
+test("oversized protected failures never starve successful work from a live task", () => {
+  const user = { role: "user", content: "Generate patch after native tests", timestamp: 0 };
+  const failed = pair(0, "old failure ".repeat(3000), true);
+  const verified = pair(1, "Test Files 8 passed; Tests 91 passed; exit 0");
+  const latest = pair(2, "Current checkout remains at the verified baseline");
+  const messages = [user, ...failed, ...verified, ...latest];
+  const result = boundContextWindow(messages, 18000);
+  assert.equal(result.overBudget, true);
+  assert.equal(result.reason, "protected-content-over-budget");
+  for (const message of verified) assert.ok(result.messages.includes(message), "successful verification must not disappear behind oversized failure evidence");
+  assert.equal(result.messages, messages);
+  assert.equal(result.checkpointed, false);
+});
+
+test("public live-task context keeps successful results when protected evidence exceeds the soft budget", () => {
+  const state = createExtensionRuntimeState();
+  const observations = [];
+  state.traceHandoff = (_ctx, event, data) => observations.push({ event, data });
+  const verified = pair(1, "Tests 91 passed; exit 0");
+  const messages = [{ role: "user", content: "finish patch", timestamp: 0 }, ...pair(0, "old error".repeat(30000), true), ...verified, ...pair(2, "latest read")];
+  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }));
+  const result = recovery.context({ type: "context", messages }, { model: { contextWindow: 500000 } });
+  assert.equal(result.messages, messages);
+  for (const message of verified) assert.ok(result.messages.includes(message));
+  assert.equal(observations[0].data.overBudget, true);
+  assert.equal(observations[0].data.checkpointed, false);
+  assert.equal(observations[0].data.omittedMessages, 0);
+  assert.equal(state.roleRecoveryPending, false);
+});
+
+function memoryFixture() {
+  const identity = { workflowId: "workflow", planVersion: 0, sessionId: "session", recoveryGeneration: 0, taskId: "task", attemptId: "attempt", handoffId: "handoff" };
+  let memory = recordTaskObservations(createTaskMemory(identity), [
+    { id: "source-0", messageEntryId: "msg-0", toolCallId: "call-0", toolName: "bash", inputHash: "input-0", outputHash: "out-0", outcome: "tool-error", summary: "old failure", truncated: true },
+    { id: "source-1", messageEntryId: "msg-1", toolCallId: "call-1", toolName: "bash", inputHash: "input-1", outputHash: "out-1", outcome: "tool-ok", summary: "Tests 91 passed", truncated: false },
+  ], "source-1");
+  memory = checkpointTaskMemory(memory, { step: "package", accomplished: [{ summary: "Historical verification: Tests 91 passed", evidenceIds: ["source-1"] }], remaining: ["generate patch"], blockers: [], nextStep: "generate patch" });
+  return { read: () => ({ status: "available", memory, applicability: "historical" }), suspend() { assert.fail("bounded memory should not pause"); } };
+}
+test("one hundred projections keep task progress while archiving oversized failure bodies", () => {
+  const state = createExtensionRuntimeState();
+  const memory = memoryFixture();
+  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+  let messages = [{ role: "user", content: "finish the patch", timestamp: 0 }, ...pair(0, "old failure".repeat(6000), true), ...pair(1, "Tests 91 passed"), ...pair(2, "latest read")];
+  for (let i = 0; i < 100; i++) {
+    messages = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } }).messages;
+    assert.equal(messages.filter(message => message.customType === "pi-init-task-memory-view").length, 1);
+    assert.match(JSON.stringify(messages), /Tests 91 passed/);
+    assert.match(JSON.stringify(messages), /generate patch/);
+    assert.ok(Buffer.byteLength(JSON.stringify(messages)) <= 24000);
+    const calls = messages.flatMap(message => message.role === "assistant" ? message.content.filter(part => part.type === "toolCall").map(part => part.id) : []);
+    assert.deepEqual(calls.sort(), messages.filter(message => message.role === "toolResult").map(message => message.toolCallId).sort());
+  }
+});
+test("unavailable or oversized required memory pauses through the existing boundary without dropping instructions", () => {
+  for (const unavailable of [true, false]) {
+    const state = createExtensionRuntimeState(); let pauses = 0;
+    const source = memoryFixture();
+    const memory = { read: unavailable ? () => ({ status: "unavailable", reason: "TASK_MEMORY_SOURCE_MISSING" }) : source.read, suspend() { pauses++; } };
+    const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+    const user = { role: "user", content: "user constraints".repeat(4000), timestamp: 0 };
+    const result = recovery.context({ type: "context", messages: [user, ...pair(2)] }, { model: { contextWindow: 16000 } });
+    assert.equal(pauses, 1);
+    assert.ok(result.messages.includes(user));
+  }
 });

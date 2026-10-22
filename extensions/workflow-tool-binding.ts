@@ -18,13 +18,15 @@ type RunBinding = {
 };
 const MAX_CALLS = 256;
 const IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "attemptId", "handoffId", "coordinationIdentity", "coordinationHandoffId"];
-const TASK_ACTIONS = new Set(["complete", "block", "clarify"]);
+const TASK_ACTIONS = new Set(["complete", "block", "clarify", "checkpoint"]);
 const REPLAN_ACTIONS = new Set(["replan", "review-child"]);
 const MUTATION_ACTIONS = new Set(["resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "request-goal"]);
 
 export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRuntimeState) {
   let request: RunBinding | undefined;
   const calls = new Map<string, RunBinding>();
+  let sources = new WeakMap<object, RunBinding>();
+  const sourceKeys = new Map<string, RunBinding>();
   let messages = new WeakMap<object, RunBinding>();
   const messageKeys = new Map<string, RunBinding>();
   function messageKey(message: { timestamp?: unknown; provider?: unknown; model?: unknown }) {
@@ -76,7 +78,7 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     if (action === "status") return params;
     if (!binding) {
       // Explicit legacy identities still go through the existing domain validators.
-      if (IDENTITY_FIELDS.some(field => params[field] !== undefined)) return params;
+      if (action !== "checkpoint" && IDENTITY_FIELDS.some(field => params[field] !== undefined)) return params;
       if (!TASK_ACTIONS.has(action) && !REPLAN_ACTIONS.has(action) && !MUTATION_ACTIONS.has(action)
         && action !== "report-evidence" && action !== "review-evidence") return params;
       return bindingError("WORKFLOW_RUN_BINDING_MISSING", "缺少本次工具调用的真实派发身份；不能以当前状态补齐旧结果。请等待当前任务回合或查询状态。");
@@ -113,6 +115,11 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     messages.delete(event.message);
     if (key) messageKeys.delete(key);
     if (!binding) return;
+    sources.set(event.message, binding);
+    if (key) {
+      if (sourceKeys.size >= MAX_CALLS) sourceKeys.delete(sourceKeys.keys().next().value!);
+      sourceKeys.set(key, binding);
+    }
     for (const item of event.message.content) {
       if (item.type === "toolCall") remember(item.id, binding);
     }
@@ -124,10 +131,15 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     }
   });
   pi.on("tool_result", event => { calls.delete(event.toolCallId); });
-  function reset() { request = undefined; calls.clear(); messages = new WeakMap(); messageKeys.clear(); }
+  function source(message: object, ctx: ExtensionContext) {
+    const key = messageKey(message);
+    const binding = sources.get(message) ?? (key ? sourceKeys.get(key) : undefined);
+    return binding && !stale(binding, ctx) ? binding.task : undefined;
+  }
+  function reset() { request = undefined; calls.clear(); messages = new WeakMap(); sources = new WeakMap(); messageKeys.clear(); sourceKeys.clear(); }
   pi.on("session_start", reset);
   pi.on("session_tree", reset);
   pi.on("session_shutdown", reset);
   pi.on("session_compact", reset);
-  return { bind };
+  return { bind, source };
 }

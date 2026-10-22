@@ -6,14 +6,14 @@ type Message = ContextEvent["messages"][number];
 type Call = { id: string; name: string; arguments: unknown };
 type Unit = { indices: number[]; calls: Call[]; failed: boolean };
 const ANCHORS = new Set(["pi-init-workflow-task", "pi-init-workflow-replan", "pi-init-coordination-evidence", "pi-init-coordination-review",
-  "pi-init-role-handoff", "pi-init-workflow-paused-context", "pi-init-role-recovery", "pi-init-role-context-view-diagnostic"]);
+  "pi-init-task-memory-view", "pi-init-role-handoff", "pi-init-workflow-paused-context", "pi-init-role-recovery", "pi-init-role-context-view-diagnostic"]);
 
 export function contextByteBudget(contextWindow?: number) {
   return Number.isFinite(contextWindow) && contextWindow! > 0
     ? Math.max(8_000, Math.min(192_000, Math.floor(contextWindow! * 1.5))) : 192_000;
 }
 
-export function boundContextWindow(messages: Message[], budgetBytes = 192_000) {
+export function boundContextWindow(messages: Message[], budgetBytes = 192_000, summarizedToolCallIds: ReadonlySet<string> = new Set()) {
   let sizes: number[];
   try { sizes = messages.map(message => Buffer.byteLength(JSON.stringify(message))); }
   catch { return { messages, inputBytes: 0, outputBytes: 0, budgetBytes, checkpointed: false, overBudget: true, omittedMessages: 0, reason: "unserializable-context" }; }
@@ -52,10 +52,15 @@ export function boundContextWindow(messages: Message[], budgetBytes = 192_000) {
   }
   if ([...owners.keys()].some(id => !completed.has(id))) return unchanged("unsafe-tool-pairs");
   for (const unit of anchors.values()) pinned.add(unit);
-  for (const unit of units) if (unit.failed || unit.indices.includes(messages.length - 1)) pinned.add(unit);
+  for (const unit of units) {
+    const summarized = unit.calls.length > 0 && unit.calls.every(call => summarizedToolCallIds.has(call.id));
+    if (unit.failed && !summarized || unit.indices.includes(messages.length - 1)) pinned.add(unit);
+  }
   const archiveLimit = Math.max(1_600, Math.min(12_000, Math.floor(budgetBytes / 3)));
   const unitBytes = (unit: Unit) => unit.indices.reduce((sum, index) => sum + sizes[index] + 1, 0);
   let used = [...pinned].reduce((sum, unit) => sum + unitBytes(unit), 2);
+  // Pruning only successes when protected evidence fills the budget erases task progress.
+  if (used + archiveLimit > budgetBytes) return unchanged("protected-content-over-budget");
   const selected = new Set(pinned);
   for (const unit of [...units].sort((a, b) => b.indices.at(-1)! - a.indices.at(-1)!)) {
     if (selected.has(unit)) continue;

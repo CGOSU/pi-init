@@ -78,20 +78,82 @@ export function formatRuntimeSamples(records: Data[]) {
 
 export function formatProviderObservations(records: Data[]) {
   const key = (row: Data) => JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.run]);
-  const summaries = new Map<string, { requests: number; missing: number }>();
+  const summaries = new Map<string, { requests: number; missing: number; missingByHook?: Data }>();
   const requests = new Map<string, Data>();
   for (const row of records) {
     if (row.kind === "summary" && row.providerObservations && typeof row.providerObservations === "object") {
       const counts = row.providerObservations as Data;
-      if (Number.isSafeInteger(counts.requests) && Number.isSafeInteger(counts.missing) && Number(counts.requests) >= 0 && Number(counts.missing) >= 0 && Number(counts.missing) <= Number(counts.requests)) summaries.set(key(row), { requests: Number(counts.requests), missing: Number(counts.missing) });
+      if (Number.isSafeInteger(counts.requests) && Number.isSafeInteger(counts.missing) && Number(counts.requests) >= 0 && Number(counts.missing) >= 0 && Number(counts.missing) <= Number(counts.requests)) summaries.set(key(row), { requests: Number(counts.requests), missing: Number(counts.missing), missingByHook: counts.missingByHook && typeof counts.missingByHook === "object" ? counts.missingByHook as Data : undefined });
     } else if (row.kind === "provider-request") requests.set(JSON.stringify([key(row), row.requestNumber]), row);
   }
-  let total = 0, missing = 0;
-  for (const counts of summaries.values()) { total += counts.requests; missing += counts.missing; }
+  let total = 0, missing = 0, detailed = 0;
+  const hooks = { headers: 0, response: 0, assistant: 0 };
+  const addHooks = (counts: Data | undefined, count: number) => {
+    if (!counts || !Object.keys(hooks).every(key => Number.isSafeInteger(counts[key]) && Number(counts[key]) >= 0 && Number(counts[key]) <= count)) return;
+    detailed += count;
+    for (const key of ["headers", "response", "assistant"] as const) hooks[key] += Number(counts[key]);
+  };
+  for (const counts of summaries.values()) { total += counts.requests; missing += counts.missing; addHooks(counts.missingByHook, counts.requests); }
   for (const row of requests.values()) {
     if (summaries.has(key(row))) continue;
     total++;
-    if (Array.isArray(row.missingObservations) && row.missingObservations.length) missing++;
+    if (Array.isArray(row.missingObservations)) {
+      const missingObservations = row.missingObservations;
+      if (missingObservations.length) missing++;
+      addHooks(Object.fromEntries(Object.keys(hooks).map(hook => [hook, missingObservations.includes(hook) ? 1 : 0])), 1);
+    }
   }
-  return "Provider 请求摘要：" + total + "；观察缺失：" + missing + "（仅统计启用记录后已观察到的请求；缺失不等于请求失败，不推断启用前的请求）。";
+  const detail = detailed ? "；钩子缺失（有细项的 " + detailed + " 个请求）：headers=" + hooks.headers + "，response=" + hooks.response + "，assistant=" + hooks.assistant : "";
+  return "Provider 请求摘要：" + total + "；观察缺失：" + missing + detail + "（仅统计启用记录后已观察到的请求；缺失不等于请求失败，不推断启用前的请求）。";
+}
+export function formatContextProjections(records: Data[]) {
+  const rounds = new Map<string, Data>();
+  for (const row of records) if (row.kind === "summary" && row.contextProjection && typeof row.contextProjection === "object") {
+    rounds.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.run]), row.contextProjection as Data);
+  }
+  let checks = 0, overBudget = 0, checkpointed = 0;
+  for (const row of rounds.values()) {
+    if (Number.isSafeInteger(row.checks) && Number(row.checks) >= 0) checks += Number(row.checks);
+    if (Number.isSafeInteger(row.overBudget) && Number(row.overBudget) >= 0) overBudget += Number(row.overBudget);
+    if (Number.isSafeInteger(row.checkpointed) && Number(row.checkpointed) >= 0) checkpointed += Number(row.checkpointed);
+  }
+  return rounds.size ? "上下文投影检查：" + checks + "；检查点：" + checkpointed + "；投影预算超额：" + overBudget + "（字节预算，不等于模型窗口耗尽；旧日志无细项）" : "";
+}
+export function formatToolFailureChains(records: Data[]) {
+  const calls = new Map<string, { parent?: string }>();
+  for (const row of records) {
+    if (row.kind !== "issue") continue;
+    const scope = JSON.stringify([row.runtimeId, row.captureId, row.sessionId]);
+    const observations = [...(Array.isArray(row.events) ? row.events : []), row.latestTrigger];
+    for (const observation of observations) {
+      if (!observation || !["tool.result", "routing.tool_result"].includes(observation.event)) continue;
+      const data = observation.data as Data | undefined;
+      if (!data || typeof data.toolCallId !== "string" || data.businessOk === false || !(data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0)) continue;
+      const key = JSON.stringify([scope, data.toolCallId]);
+      const parent = typeof data.parentToolCallId === "string" ? JSON.stringify([scope, data.parentToolCallId]) : calls.get(key)?.parent;
+      calls.set(key, { parent });
+    }
+  }
+  const links = new Map<string, Set<string>>();
+  for (const [key, call] of calls) {
+    if (!call.parent || key === call.parent || !calls.has(call.parent)) continue;
+    for (const [a, b] of [[key, call.parent], [call.parent, key]]) {
+      const neighbors = links.get(a) ?? new Set<string>();
+      neighbors.add(b); links.set(a, neighbors);
+    }
+  }
+  const seen = new Set<string>();
+  let chains = 0;
+  for (const key of links.keys()) {
+    if (seen.has(key)) continue;
+    chains++;
+    const pending = [key];
+    while (pending.length) {
+      const next = pending.pop()!;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      for (const neighbor of links.get(next) ?? []) if (!seen.has(neighbor)) pending.push(neighbor);
+    }
+  }
+  return chains ? "已关联嵌套工具失败链：" + chains + "（仅关联已观察到的失败调用；保留各工具次数，不推断独立根因数）" : "";
 }

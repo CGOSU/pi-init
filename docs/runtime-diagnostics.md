@@ -51,4 +51,17 @@
 - `provider.request_summary` 关联本实例的请求观察号、HTTP 状态、头/响应/assistant 钩子是否观察到及白名单连接错误码。健康请求只聚合到回合摘要 providerObservations；异常/中断请求可以另留有限诊断记录，报告按回合去重，不与聚合摘要相加。缺少观察不等于网络失败，不推断启用前请求或宿主真实重试次数。不会保存错误正文、payload、headers，也不新增自动网络重试。
 - 重复业务拒绝终止和用户停止属于独立执行保护，不受日志开关控制；它们并非黑匣子根据统计自行恢复或修改任务。停止保留成果，不伪造任务完成；活动执行中断仍走未知结果保护。
 
+## 执行记忆与日志边界
+
+当前 session 的 `pi-init-task-memory` 快照是任务工作记忆，不是黑匣子，也不随诊断开关关闭。它索引已有 SDK 工具结果，保存有界成功/失败摘要、checkpoint、剩余项和真实来源；原结果可通过 `task_workflow(status, evidenceIds=[来源ID])` 读取。摘要可能保留原结果敏感内容，按私有 session 处理，不应混入黑匣子分享包。它不接受需求、不授予执行权、不派发或重跑任务。设计、边界与验收见 [执行记忆架构](execution-memory-architecture.md)。
+
+## 真实会话观测修正
+
+- 支持 headers 钩子先于 request 钩子出现：只在同项目、session 和回合内暂存一次无请求归属的 headers 观察，下一请求消费；新回合、branch/session 生命周期和 settled 清除暂存，不记录 headers 正文。该关联仍不是宿主请求 ID，不推断并发请求或真实重试。
+- `providerObservations.missingByHook` 分别统计 headers、response、assistant 观察缺失；报告保留有细项的请求样本数，旧日志不补零。缺失不能区分宿主不提供钩子与事件遗漏，也不等于网络故障。
+- 自动黑匣子保留 `context.projected` 的 inputBytes/outputBytes/budgetBytes、checkpointed、omittedMessages、overBudget 与原因；正常回合只保存有界 contextProjection 计数和最后一次观测，不增加逐事件落盘。报告将投影字节预算与模型 token 窗口区分，超额本身不触发故障通知、自动压缩或重试。
+- `/blackbox` 按同一 runtime/capture/session 内已观察到的 toolCallId/parentToolCallId 关联嵌套工具失败链。父子调用都确实有失败结果才关联；重复现场去重，不跨窗口连接，保留各工具原始次数。有限现场可能漏掉关系，链数不代表独立根因数，不改变原问题指纹或业务结果。
+- 当用户指令、失败配对等受保护内容已占满投影软预算及检查点预留空间时，保留当前完整视图并明确 overBudget，不再只留下旧失败、删除成功调查和验证。否则已通过的测试会从模型视图消失，诱发重新查历史、查 Git 和重跑测试。历史与身份授权不变；真正 token 窗口压力仍交给现有预算监视器/压缩流程，不新增自动重试或调度。
+- 未提供稳定错误码的工具仍显示 `UNKNOWN`，不从任意错误正文猜测根因；正常交接的 `toolUse` 结束仍不冒充任务成功。
+
 本版不提供自动复现或独立 UI。已接通的保护、长任务预算和使用边界见 README；真实 Provider 速度、费用收益和用户报告的 800% 场景仍需新会话验证。

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzeRuntimeSamples, durationStats, normalizeProfile } from "../extensions/runtime-diagnostics-report.ts";
+import { analyzeRuntimeSamples, durationStats, normalizeProfile, formatProviderObservations, formatContextProjections, formatToolFailureChains } from "../extensions/runtime-diagnostics-report.ts";
 const profile = { provider: "test", model: "model", role: "session", thinkingLevel: "high" };
 function samples(version, ms, options = {}) {
   return Array.from({ length: 8 }, (_, index) => ({ version: 1, kind: "summary", extensionVersion: version, runtimeId: "runtime", captureId: version, sessionId: "session", run: index + 1, timestamp: version === "old" ? "2026-01-01T00:00:00Z" : "2026-01-02T00:00:00Z", profile, durationMs: ms, tokens: { totalTokens: ms }, outcome: "normal-stop", issueOccurrences: 0, dropped: 0, overflow: 0, aborted: false, incomplete: false, ...options }));
@@ -34,4 +34,30 @@ test("缺失或部分 token 不补零；缺失模型维度不冒充可比样本"
   const result = analyzeRuntimeSamples([...samples("old", 100, { tokens: {} }), ...samples("new", 50, { tokens: { input: 2 } })]);
   assert.equal(result.comparisons[0].tokenRatio, undefined);
   assert.equal(analyzeRuntimeSamples(samples("old", 100, { profile: undefined })).comparisons.length, 0);
+});
+
+test("provider hook breakdown deduplicates rounds and leaves legacy details unknown", () => {
+  const round = { kind: "summary", runtimeId: "r", captureId: "c", sessionId: "s", run: 1, providerObservations: { requests: 2, missing: 1, missingByHook: { headers: 0, response: 1, assistant: 0 } } };
+  const request = { ...round, kind: "provider-request", requestNumber: 1, missingObservations: ["headers", "response"] };
+  const legacy = { ...round, run: 2, providerObservations: { requests: 3, missing: 3 } };
+  const report = formatProviderObservations([round, round, request, legacy]);
+  assert.match(report, /请求摘要：5；观察缺失：4/);
+  assert.match(report, /有细项的 2 个请求/);
+  assert.match(report, /headers=0，response=1，assistant=0/);
+  assert.doesNotMatch(formatProviderObservations([legacy]), /钩子缺失/);
+  assert.match(formatProviderObservations([{ ...request, run: 3 }]), /headers=1，response=1，assistant=0/);
+});
+test("projection summaries deduplicate rounds without backfilling legacy fields", () => {
+  const row = { kind: "summary", runtimeId: "r", captureId: "c", sessionId: "s", run: 1, contextProjection: { checks: 2, overBudget: 1, checkpointed: 1 } };
+  assert.match(formatContextProjections([row, row]), /投影检查：2；检查点：1；投影预算超额：1/);
+  assert.equal(formatContextProjections([{ kind: "summary" }]), "");
+});
+test("failure chains deduplicate snapshots, isolate windows and tolerate incomplete or cyclic evidence", () => {
+  const observation = (id, parent) => ({ event: "tool.result", data: { toolCallId: id, parentToolCallId: parent, isError: true } });
+  const row = { kind: "issue", runtimeId: "r", captureId: "c", sessionId: "s", events: [observation("child", "parent"), observation("parent", "root"), observation("root")] };
+  assert.match(formatToolFailureChains([row, row]), /失败链：1/);
+  assert.match(formatToolFailureChains([row, { ...row, captureId: "other" }]), /失败链：2/);
+  assert.equal(formatToolFailureChains([{ ...row, events: [observation("child", "parent")] }]), "");
+  assert.equal(formatToolFailureChains([{ ...row, events: [observation("child", "parent")] }, { ...row, captureId: "other", events: [observation("parent")] }]), "");
+  assert.match(formatToolFailureChains([{ ...row, events: [observation("child", "parent"), observation("parent", "child")] }]), /失败链：1/);
 });

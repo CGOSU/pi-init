@@ -76,7 +76,8 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   let sequence = 0;
   let run = 0;
   let requestNumber = 0;
-  let providerRequest: { requestNumber: number; startedAt: number; sessionId: string; run: number; headersObserved?: boolean; responseObserved?: boolean; status?: number } | undefined;
+  let pendingProviderHeaders: string | undefined;
+  let providerRequest: { requestNumber: number; startedAt: number; cwd: string; sessionId: string; run: number; headersObserved?: boolean; responseObserved?: boolean; status?: number } | undefined;
   let pending = 0;
   let dropped = 0;
   let writeFailed = false;
@@ -145,11 +146,11 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   if (mode === "off") return { trace, flush, report };
   state.traceHandoff = trace;
   pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
-  pi.on("before_agent_start", (_event, ctx) => { run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.coordinationRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
+  pi.on("before_agent_start", (_event, ctx) => { pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.coordinationRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
   function providerFields(ctx: ExtensionContext) {
-    if (providerRequest?.sessionId !== ctx.sessionManager.getSessionId() || providerRequest?.run !== run) providerRequest = undefined;
+    if (providerRequest?.cwd !== ctx.cwd || providerRequest?.sessionId !== ctx.sessionManager.getSessionId() || providerRequest?.run !== run) providerRequest = undefined;
     return providerRequest ? { requestNumber: providerRequest.requestNumber, observedElapsedMs: Math.max(0, performance.now() - providerRequest.startedAt) } : {};
   }
   function finishProvider(ctx: ExtensionContext, outcome: string, errorCodeHint?: string) {
@@ -162,14 +163,23 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   }
   pi.on("before_provider_request", (_event, ctx) => {
     try {
-      if (writeFailed || !ctx.isProjectTrusted()) return;
+      if (writeFailed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      providerFields(ctx);
       if (providerRequest) { trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" }); finishProvider(ctx, "superseded"); }
-      providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), sessionId: ctx.sessionManager.getSessionId(), run };
+      providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), run,
+        headersObserved: pendingProviderHeaders === JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]) };
+      pendingProviderHeaders = undefined;
       trace(ctx, "provider.request", { requestNumber });
     } catch {}
   });
   pi.on("before_provider_headers", (_event, ctx) => {
-    try { const fields = providerFields(ctx); if (providerRequest) providerRequest.headersObserved = true; trace(ctx, "provider.headers", fields); } catch {}
+    try {
+      if (writeFailed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      const fields = providerFields(ctx);
+      if (providerRequest) providerRequest.headersObserved = true;
+      else pendingProviderHeaders = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]);
+      trace(ctx, "provider.headers", fields);
+    } catch {}
   });
   pi.on("after_provider_response", (event, ctx) => {
     try { const fields = providerFields(ctx); if (providerRequest) { providerRequest.responseObserved = true; providerRequest.status = event.status; } trace(ctx, "provider.response", { ...fields, status: event.status }); } catch {}
@@ -178,6 +188,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
     try {
       if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: event.aborted ? "aborted" : "settled-without-assistant" });
       finishProvider(ctx, event.aborted ? "aborted" : "settled-without-assistant");
+      pendingProviderHeaders = undefined;
       trace(ctx, "agent.settled", { aborted: event.aborted });
     } catch {}
   });
@@ -242,10 +253,10 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   pi.on("session_before_compact", (_event, ctx) => { trace(ctx, "compaction.before"); });
   pi.on("session_compact", (_event, ctx) => { trace(ctx, "compaction.event"); });
-  pi.on("session_start", (event, ctx) => { providerRequest = undefined; trace(ctx, "session.start", { reason: event.reason }); });
-  pi.on("session_tree", (_event, ctx) => { providerRequest = undefined; trace(ctx, "session.tree"); });
+  pi.on("session_start", (event, ctx) => { providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.start", { reason: event.reason }); });
+  pi.on("session_tree", (_event, ctx) => { providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.tree"); });
   pi.on("model_select", (_event, ctx) => { trace(ctx, "role.model_selected"); });
-  pi.on("session_shutdown", async (_event, ctx) => { trace(ctx, "session.shutdown"); await flush(); });
+  pi.on("session_shutdown", async (_event, ctx) => { pendingProviderHeaders = undefined; trace(ctx, "session.shutdown"); await flush(); });
   return { trace, flush, report };
 }
 function providerErrorHint(value: unknown) {

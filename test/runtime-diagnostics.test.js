@@ -394,3 +394,98 @@ test("相同错误码来自不同工具仍保留独立问题归属", async () =>
     assert.equal(new Set(issues.map(row => row.id)).size, 2);
   });
 });
+
+test("headers before request remain associated without leaking across rounds or branches", async () => {
+  await withBox(async ({ ctx, emit, rows }) => {
+    await emit("before_agent_start");
+    await emit("before_provider_headers", { headers: { authorization: "private-header" } });
+    await emit("before_provider_request");
+    await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+    await emit("agent_settled", { aborted: false });
+    let data = await rows();
+    assert.deepEqual(data.at(-1).providerObservations.missingByHook, { headers: 0, response: 1, assistant: 0 });
+    await emit("before_provider_headers");
+    await emit("session_tree");
+    await emit("before_agent_start");
+    await emit("before_provider_request");
+    await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+    await emit("agent_settled", { aborted: false });
+    data = await rows();
+    assert.equal(data.at(-1).providerObservations.missingByHook.headers, 1);
+    assert.equal(JSON.stringify(data).includes("private-header"), false);
+  });
+});
+test("projection budget dimensions survive metadata filtering and healthy round aggregation", async () => {
+  await withBox(async ({ ctx, emit, monitor, rows }) => {
+    await emit("before_agent_start");
+    const projection = { reason: "protected-content-over-budget", inputBytes: 250000, outputBytes: 200000, budgetBytes: 192000, checkpointed: true, overBudget: true, omittedMessages: 10, messages: ["private-source"] };
+    monitor.trace(ctx, "context.projected", projection);
+    await emit("tool_result", { toolName: "edit", toolCallId: "edit-1", isError: true });
+    await emit("agent_settled", { aborted: false });
+    const data = await rows();
+    const event = data.find(row => row.kind === "issue").events.find(row => row.event === "context.projected");
+    assert.equal(event.data.inputBytes, 250000);
+    assert.equal(event.data.overBudget, true);
+    const summary = data.find(row => row.kind === "summary");
+    assert.equal(summary.contextProjection.overBudget, 1);
+    assert.equal(summary.contextProjection.last.budgetBytes, 192000);
+    assert.equal(JSON.stringify(data).includes("private-source"), false);
+    assert.match(await monitor.report(ctx), /投影预算超额：1/);
+  });
+});
+test("nested failures are displayed as observed chains without erasing per-tool counts", async () => {
+  await withBox(async ({ ctx, emit, monitor }) => {
+    await emit("before_agent_start");
+    await emit("tool_result", { toolName: "ctx_execute_file", toolCallId: "parent/1", parentToolCallId: "parent", isError: true });
+    await emit("tool_result", { toolName: "codemode", toolCallId: "parent", isError: true });
+    await emit("agent_settled", { aborted: false });
+    const report = await monitor.report(ctx);
+    assert.match(report, /已关联嵌套工具失败链：1/);
+    assert.match(report, /ctx_execute_file：1 次观察/);
+    assert.match(report, /codemode：1 次观察/);
+  });
+});
+
+test("pre-request headers are consumed once and reset at every identity boundary", async () => {
+  for (const boundary of ["round", "session", "cwd", "branch", "settled", "untrusted"]) {
+    await withBox(async ({ ctx, emit, rows }) => {
+      await emit("before_agent_start");
+      await emit("before_provider_headers");
+      if (boundary === "round") await emit("before_agent_start");
+      if (boundary === "session") ctx.sessionManager.getSessionId = () => "s2";
+      if (boundary === "cwd") { const previous = ctx.cwd; ctx.cwd += "/other"; await emit("before_provider_request"); ctx.cwd = previous; }
+      if (boundary === "branch") await emit("session_tree");
+      if (boundary === "settled") await emit("agent_settled", { aborted: false });
+      if (boundary === "untrusted") { ctx.isProjectTrusted = () => false; await emit("before_provider_request"); ctx.isProjectTrusted = () => true; }
+      if (["session", "cwd", "branch", "settled"].includes(boundary)) await emit("before_agent_start");
+      await emit("before_provider_request");
+      await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+      await emit("agent_settled", { aborted: false });
+      assert.equal((await rows()).at(-1).providerObservations.missingByHook.headers, 1, boundary);
+    });
+  }
+  await withBox(async ({ emit, rows }) => {
+    await emit("before_agent_start");
+    await emit("before_provider_headers");
+    for (let i = 0; i < 2; i++) {
+      await emit("before_provider_request");
+      await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+    }
+    await emit("agent_settled", { aborted: false });
+    assert.deepEqual((await rows()).at(-1).providerObservations.missingByHook, { headers: 1, response: 2, assistant: 0 });
+  });
+});
+test("healthy rounds retain only bounded projection summaries without creating issues", async () => {
+  await withBox(async ({ ctx, emit, monitor, rows }) => {
+    await emit("before_agent_start");
+    monitor.trace(ctx, "context.projected", { inputBytes: 250000, outputBytes: 200000, budgetBytes: 192000, checkpointed: true, overBudget: true });
+    await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
+    await emit("agent_settled", { aborted: false });
+    const data = await rows();
+    assert.deepEqual(data.map(row => row.kind), ["summary"]);
+    assert.equal(data[0].contextProjection.overBudget, 1);
+    await emit("before_agent_start");
+    await emit("agent_settled", { aborted: false });
+    assert.equal((await rows()).at(-1).contextProjection.checks, 0);
+  });
+});

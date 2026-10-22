@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createRequire } from "node:module";
-import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile } from "./runtime-diagnostics-report.ts";
+import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains } from "./runtime-diagnostics-report.ts";
 
 const extensionVersion = readExtensionVersion();
 
@@ -17,7 +17,7 @@ const RETENTION_MS = 7 * 86400000;
 const MAX_RING_BYTES = 32 * 1024;
 const MAX_ISSUES = 24;
 const MAX_PENDING = 32;
-const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome"]);
+const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome", "mode", "reasonCode", "inputBytes", "outputBytes", "budgetBytes", "checkpointed", "omittedMessages", "overBudget"]);
 function metadata(data: Data): Data {
   const result: Data = {};
   for (const key of fields) {
@@ -72,7 +72,10 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   let issueOccurrences = 0;
   let overflow = 0;
   let budget: { checks: number; decisions: Record<string, number>; last?: Data } = { checks: 0, decisions: {} };
-  let providerObservations = { requests: 0, missing: 0 };
+  const emptyProviderObservations = () => ({ requests: 0, missing: 0, missingByHook: { headers: 0, response: 0, assistant: 0 } });
+  let providerObservations = emptyProviderObservations();
+  const emptyProjection = () => ({ checks: 0, checkpointed: 0, overBudget: 0, last: undefined as Data | undefined });
+  let contextProjection = emptyProjection();
   const seen = new Set<string>();
   function write(ctx: ExtensionContext, record: Data) {
     if (failed || !ctx.isProjectTrusted()) return;
@@ -125,7 +128,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       const nextScope = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]);
       if (scope !== nextScope || event === "session.tree" || event === "session.start") {
         ring = []; ringBytes = 0; issues = new Map(); seen.clear(); startedAt = undefined; tokens = {}; toolCalls = 0; providerRequests = 0; issueOccurrences = 0; overflow = 0;
-        budget = { checks: 0, decisions: {} }; providerObservations = { requests: 0, missing: 0 };
+        budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
         scope = nextScope; captureId = randomUUID(); profile = undefined; profileChanged = false; stopReason = undefined;
       }
       const now = new Date().toISOString();
@@ -140,7 +143,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       if (event === "agent.before_start") {
         run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear();
         profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
-        budget = { checks: 0, decisions: {} }; providerObservations = { requests: 0, missing: 0 };
+        budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
       }
       const currentProfile = normalizeProfile(raw.profile);
       if (profile && (currentProfile && JSON.stringify(profile) !== JSON.stringify(currentProfile) || !ctx.model || profile.provider !== ctx.model.provider || profile.model !== ctx.model.id)) profileChanged = true;
@@ -158,9 +161,16 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         const decision = typeof raw.decision === "string" && /^(?:guard|inflight|unavailable|mode|cooldown|threshold|started|failed|error)$/.test(raw.decision) ? raw.decision : "other";
         budget.decisions[decision] = (budget.decisions[decision] ?? 0) + 1;
       }
+      if (event === "context.projected") {
+        contextProjection.checks++;
+        if (raw.checkpointed === true) contextProjection.checkpointed++;
+        if (raw.overBudget === true) contextProjection.overBudget++;
+        contextProjection.last = row.data;
+      }
       if (event === "provider.request_summary") {
         const missingObservations = ["headers", "response", "assistant"].filter(name => raw[name + "Observed"] !== true);
         providerObservations.requests++;
+        for (const hook of ["headers", "response", "assistant"] as const) if (raw[hook + "Observed"] !== true) providerObservations.missingByHook[hook]++;
         if (missingObservations.length) providerObservations.missing++;
         if (raw.outcome !== "assistant" || stopReason === "error" || stopReason === "aborted" || typeof raw.errorCodeHint === "string" || typeof raw.status === "number" && raw.status >= 400) {
           write(ctx, { kind: "provider-request", timestamp: now, ...row.data, missingObservations });
@@ -192,7 +202,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         let summary: Data | undefined;
         if (startedAt !== undefined) {
           const durationMs = Math.max(0, nowMs() - startedAt);
-          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, budget, providerObservations, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped };
+          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, budget, contextProjection, providerObservations, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped };
           if (profile && profile.thinkingLevel !== "unknown" && isHealthySample(summary)) {
             const key = JSON.stringify(profile);
             const history = baselines.get(key) ?? [];
@@ -248,7 +258,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatRuntimeSamples(summaries), formatProviderObservations([...requests, ...summaries]), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
   }
   return { observe, report, flush: () => tail };
 }

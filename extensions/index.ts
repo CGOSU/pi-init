@@ -54,6 +54,7 @@ import { createPausedStatusGuard, createWorkflowProgressObserver, createRepeated
 import { createWorkflowDelivery } from "./workflow-delivery.ts";
 import { createWorkflowUserControl } from "./workflow-user-control.ts";
 import { registerContextBudgetMonitor } from "./context-budget-monitor.ts";
+import { createTaskMemoryRuntime } from "./task-memory-runtime.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -62,6 +63,8 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
+  const workflowBinding = createWorkflowToolBinding(pi, runtimeState);
+  const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"));
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState);
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
@@ -69,7 +72,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (runtimeState.userStopRequested) { ctx.abort(); return; }
     const rejection = rejectionGuard.observe({ ...event, action: event.input?.action, role: event.input?.role, code }, ctx);
     if (rejection.stop) userControl.suspend(ctx, "repeated-guard-rejection");
-  });
+  }, taskMemory);
   const runTimingDiagnostics = createRunTimingDiagnostics(
     pi,
     () => Boolean(runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)),
@@ -166,8 +169,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     dispatch: workflowDispatch,
     report: workflowReport,
     coordination: coordinationRuntime,
+    taskMemory,
   });
-  const workflowBinding = createWorkflowToolBinding(pi, runtimeState);
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;
   function loadScaffoldRuntime() {

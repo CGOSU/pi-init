@@ -3,6 +3,8 @@ import { } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
+import { taskMemoryText, TASK_MEMORY_MESSAGE } from "./task-memory-runtime.ts";
+import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
 
 export const ROLE_RECOVERY_ENTRY_TYPE = "pi-init-role-recovery";
 export const ROLE_RECOVERY_MESSAGE_TYPE = "pi-init-role-recovery";
@@ -20,7 +22,7 @@ function isPendingEntry(entry: unknown) {
 export function createRoleRecovery(
   pi: ExtensionAPI,
   state: ExtensionRuntimeState,
-  contextView?: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | undefined, onRejected?: RecoveryRejectionHandler
+  contextView?: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | undefined, onRejected?: RecoveryRejectionHandler, taskMemory?: Pick<TaskMemoryRuntime, "read" | "suspend">
 ) {
   function enterPending(reason: string) {
     state.roleRecoveryPending = true;
@@ -87,14 +89,26 @@ export function createRoleRecovery(
   function context(event: ContextEvent, ctx: ExtensionContext) {
     const view = state.roleRecoveryPending && state.workflowState?.status !== "paused" ? undefined : contextView?.(event, ctx);
     function finalize(result: ContextEventResult | undefined) {
-      if (!result?.messages) return result;
-      const bounded = boundContextWindow(result.messages, contextByteBudget(ctx.model?.contextWindow));
+      const memory = taskMemory?.read(ctx);
+      const memoryText = memory ? taskMemoryText(memory) : "";
+      if (!result?.messages && !memoryText) return result;
+      const original = result?.messages ?? event.messages;
+      const hasMemory = original.some(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE);
+      const messages = memoryText || hasMemory ? original.filter(message => message.role !== "custom" || message.customType !== TASK_MEMORY_MESSAGE) : original;
+      if (memoryText) {
+        const lastUser = messages.findLastIndex(message => message.role === "user");
+        messages.splice(lastUser + 1, 0, { role: "custom", customType: TASK_MEMORY_MESSAGE, content: memoryText, display: false, timestamp: 0 } as ContextEvent["messages"][number]);
+      }
+      const summarized = new Set(memory?.status === "available" ? memory.memory?.observations.map(item => item.toolCallId) ?? [] : []);
+      const bounded = boundContextWindow(messages, contextByteBudget(ctx.model?.contextWindow), summarized);
+      const covered = !memoryText || bounded.messages.some(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE && message.content === memoryText);
+      if (memoryText && (!covered || bounded.overBudget || memory?.status === "unavailable")) taskMemory?.suspend(ctx);
       const projected = bounded.checkpointed ? bounded.messages.map(message => {
         if (message.role !== "custom" || message.customType !== "pi-init-role-context-view-diagnostic" || typeof message.content !== "string") return message;
         return { ...message, content: message.content.replaceAll("完整模型消息已保留", "交接边界投影未执行，随后已应用有界预算检查点")
           .replaceAll("现有完整上下文", "现有有界观察").replaceAll("不要把本次视图描述为已隔离或已缩减。", "预算检查点不代表交接边界已可靠隔离。") };
       }) : bounded.messages;
-      const diagnostic = result.messages.find(message => message.role === "custom" && message.customType === "pi-init-role-context-view-diagnostic");
+      const diagnostic = messages.find(message => message.role === "custom" && message.customType === "pi-init-role-context-view-diagnostic");
       const code = diagnostic?.role === "custom" ? (diagnostic.details as { code?: string } | undefined)?.code : undefined;
       state.traceHandoff?.(ctx, "context.projected", { mode: state.workflowState?.status ?? "recovery", reasonCode: code,
         ...Object.fromEntries(Object.entries(bounded).filter(([key]) => key !== "messages")),

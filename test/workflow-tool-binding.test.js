@@ -78,3 +78,21 @@ test("嵌套调用只继承已知父工具的派发身份", () => {
   assert.equal(f.binding.bind("parent/1", { action: "complete" }, f.ctx).attemptId, "attempt");
   assert.throws(() => f.binding.bind("unknown/1", { action: "complete" }, f.ctx), error => error.code === "WORKFLOW_RUN_BINDING_MISSING");
 });
+
+test("checkpoint requires a real binding even when explicit current identity is supplied", () => {
+  const f = fixture();
+  assert.throws(() => f.binding.bind("invented", { action: "checkpoint", ...f.identity }, f.ctx), error => error.code === "WORKFLOW_RUN_BINDING_MISSING");
+  f.issue("checkpoint", { action: "checkpoint" });
+  assert.equal(f.binding.bind("checkpoint", { action: "checkpoint" }, f.ctx).attemptId, f.identity.attemptId);
+});
+test("source lookup is non-consuming and refuses a message after its task or branch changes", () => {
+  const f = fixture();
+  f.handlers.get("before_provider_request")({}, f.ctx);
+  const message = { role: "assistant", timestamp: 1, content: [{ type: "toolCall", id: "read", name: "read", arguments: {} }] };
+  f.handlers.get("message_start")({ message }, f.ctx);
+  f.handlers.get("message_end")({ message }, f.ctx);
+  assert.equal(f.binding.source(message, f.ctx).taskId, "task");
+  assert.equal(f.binding.source(message, f.ctx).taskId, "task");
+  f.setBranch([{ id: "other" }]);
+  assert.equal(f.binding.source(message, f.ctx), undefined);
+});
