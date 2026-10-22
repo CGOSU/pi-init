@@ -1,11 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  COORDINATION_EVIDENCE_MESSAGE_TYPE,
-  COORDINATION_REVIEW_MESSAGE_TYPE,
-  coordinationHandoffIdentity,
-} from "../extensions/coordination-runtime-protocol.ts";
-import { compileCoordinationMessage } from "../extensions/coordination-messages.ts";
 import { createRoleContextView, ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE } from "../extensions/role-context-view.ts";
 import { createRoleRecovery } from "../extensions/role-recovery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
@@ -21,6 +15,7 @@ import {
 } from "../src/workflow.ts";
 import { createExtensionHarness } from "./helpers.js";
 import { blockWorkflowTask } from "../src/workflow.ts";
+import { groupToolMessages, hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 
 test("paused recovery keeps the trusted task window and user goal without reviving the old authorization", () => {
   const { state, harness, handoffMessage } = makeWorkflowContextFixture();
@@ -98,24 +93,6 @@ test("a first architecture-review pause can recover from its persisted snapshot 
 const sessionId = "role-context-session";
 const provider = "test-provider";
 const model = "developer-model";
-const evidenceReference = { findingId: "accepted-finding", sourceId: "src/input.ts", sourceVersion: "sha-v4" };
-
-function taskContract(evidence = [evidenceReference]) {
-  return {
-    version: 1,
-    outcome: "Implement the confirmed behavior.",
-    requirementSources: ["User requirement"],
-    expectedBehavior: ["Keep caller-visible failure semantics."],
-    evidence,
-    clarificationResolutions: [],
-    fixedDecisions: ["Do not change the public error shape."],
-    invariants: ["Preserve successful callers."],
-    nonGoals: ["Do not broaden parsing."],
-    blockingQuestions: [],
-    engineeringDiscretion: ["Choose a local helper boundary."],
-    verification: ["Run the focused input test."],
-  };
-}
 
 function makeWorkflow() {
   let workflow = createWorkflowState({
@@ -133,7 +110,6 @@ function makeWorkflow() {
         role: "developer-test",
         files: ["src/input.ts", "test/input.test.js"],
         acceptanceCriteria: ["Keep the confirmed error semantics."],
-        contract: taskContract(),
       },
       {
         id: "followup",
@@ -141,7 +117,6 @@ function makeWorkflow() {
         dependsOn: ["current"],
         files: ["src/next.ts"],
         acceptanceCriteria: ["Keep the result traceable."],
-        contract: taskContract(),
       },
     ],
   }, 10);
@@ -163,62 +138,6 @@ function makeWorkflowContextFixture() {
   const state = createExtensionRuntimeState();
   state.activeRole = { role: "developer-test", provider, model, thinkingLevel: "max" };
   state.workflowState = makeWorkflow();
-  state.coordinationRuntimeState = {
-    runtimeVersion: 1,
-    sessionId,
-    recoveryGeneration: state.workflowState.recoveryGeneration,
-    coordination: {
-      version: 2,
-      coordinationId: "coordination-context",
-      sessionId,
-      phase: "ready",
-      workflowLink: {
-        workflowId: state.workflowState.workflowId,
-        planVersion: state.workflowState.planVersion,
-        recoveryGeneration: state.workflowState.recoveryGeneration,
-      },
-      requests: [{
-        requestId: "request-accepted",
-        questionId: "input-contract",
-        question: "What do direct callers do on parse failure?",
-        rationale: "The task contract depends on the caller behavior.",
-        scope: ["src/input.ts"],
-        exclusions: [],
-        completionCriteria: ["Report the caller behavior."],
-        addressesGaps: [],
-        round: 1,
-        status: "accepted",
-        createdAt: 1,
-      }],
-      reports: [{
-        reportId: "report-accepted",
-        requestId: "request-accepted",
-        findings: [{
-          findingId: evidenceReference.findingId,
-          questionId: "input-contract",
-          classification: "fact",
-          statement: "The direct caller renders parse failures as validation errors and preserves the input.",
-          sources: [{ id: evidenceReference.sourceId, location: "src/input.ts::parseInput", version: evidenceReference.sourceVersion }],
-        }],
-        inspectedScope: ["src/input.ts"],
-        testsLocated: ["test/input.test.js"],
-        testsRun: [],
-        unresolved: [],
-        createdAt: 1,
-      }],
-      reviews: [{
-        reviewId: "review-accepted",
-        reportId: "report-accepted",
-        decision: "accept",
-        acceptedEvidence: [evidenceReference],
-        gaps: [],
-        reviewedAt: 2,
-      }],
-      reviewReopenings: [],
-      createdAt: 1,
-      updatedAt: 2,
-    },
-  };
   const harness = createExtensionHarness([], { sessionId });
   const identity = workflowHandoffIdentity(state.workflowState);
   harness.branch.push({ type: "custom_message", customType: "pi-init-workflow-task", details: identity });
@@ -238,132 +157,6 @@ function callContextHandler(state, harness, messages) {
   const roleContextView = createRoleContextView(state);
   createRoleRecovery(pi, state, roleContextView.context);
   return handlers.get("context")({ type: "context", messages }, harness.context);
-}
-
-function coordinationRuntimeState({ role, kind, requestId = "request-current", reportId = "report-current" }) {
-  const currentRequest = {
-    requestId,
-    questionId: "same-question",
-    question: "What is the current caller-visible behavior?",
-    rationale: "The handoff needs current implementation evidence.",
-    scope: ["src/input.ts", "direct callers"],
-    exclusions: [],
-    completionCriteria: ["Report current caller behavior and source version."],
-    addressesGaps: ["include caller error handling"],
-    followUpOfRequestId: "request-gap",
-    round: 3,
-    status: kind === "evidence" ? "pending" : "reported",
-    createdAt: 3,
-  };
-  const previousRequest = {
-    requestId: "request-prior",
-    questionId: "same-question",
-    question: "Previous round",
-    rationale: "Previous round rationale",
-    scope: ["src/input.ts"],
-    exclusions: [],
-    completionCriteria: ["Old fact"],
-    addressesGaps: [],
-    round: 1,
-    status: "accepted",
-    createdAt: 1,
-  };
-  const gapRequest = {
-    ...previousRequest,
-    requestId: "request-gap",
-    question: "Second-round investigation",
-    round: 2,
-    status: "follow-up-needed",
-    createdAt: 2,
-  };
-  const unrelatedRequest = { ...previousRequest, requestId: "request-unrelated", questionId: "unrelated-question" };
-  const previousReport = {
-    reportId: "report-prior",
-    requestId: previousRequest.requestId,
-    findings: [{
-      findingId: "prior-fact",
-      questionId: previousRequest.questionId,
-      classification: "fact",
-      statement: "Prior accepted caller behavior; recheck it in the new source version.",
-      sources: [{ id: "src-callers", location: "src/input.ts::caller", version: "sha-v1" }],
-    }],
-    inspectedScope: ["src/input.ts"],
-    testsLocated: [],
-    testsRun: [],
-    unresolved: [],
-    createdAt: 1,
-  };
-  const gapReport = {
-    ...previousReport,
-    reportId: "report-gap",
-    requestId: gapRequest.requestId,
-    findings: [{ ...previousReport.findings[0], findingId: "gap-inference", classification: "inference", statement: "Second-round unconfirmed inference." }],
-    createdAt: 2,
-  };
-  const unrelatedReport = {
-    ...previousReport,
-    reportId: "report-unrelated",
-    requestId: unrelatedRequest.requestId,
-    findings: [{ ...previousReport.findings[0], findingId: "unrelated-fact", questionId: unrelatedRequest.questionId, statement: "UNRELATED FACT MUST NOT LEAK" }],
-  };
-  const currentReport = {
-    reportId,
-    requestId,
-    findings: [{
-      findingId: "current-fact",
-      questionId: currentRequest.questionId,
-      classification: "fact",
-      statement: "Current implementation preserves the input on parse failure.",
-      sources: [{ id: "src-callers", location: "src/input.ts::parseInput", version: "sha-v2" }],
-    }],
-    inspectedScope: ["src/input.ts"],
-    testsLocated: ["test/input.test.js"],
-    testsRun: [],
-    unresolved: [],
-    createdAt: 3,
-  };
-  const current = {
-    runtimeVersion: 1,
-    sessionId,
-    recoveryGeneration: 0,
-    coordination: {
-      version: 2,
-      coordinationId: "coordination-context",
-      sessionId,
-      phase: kind === "evidence" ? "evidence-gathering" : "evidence-review",
-      requests: [previousRequest, gapRequest, unrelatedRequest, currentRequest],
-      reports: [previousReport, gapReport, unrelatedReport, currentReport],
-      reviews: [{
-        reviewId: "review-prior",
-        reportId: previousReport.reportId,
-        decision: "accept",
-        acceptedEvidence: [{ findingId: "prior-fact", sourceId: "src-callers", sourceVersion: "sha-v1" }],
-        gaps: [],
-        reviewedAt: 1,
-      }, {
-        reviewId: "review-gap",
-        reportId: gapReport.reportId,
-        decision: "more",
-        acceptedEvidence: [],
-        gaps: ["include caller error handling"],
-        reviewedAt: 2,
-      }],
-      reviewReopenings: [],
-      createdAt: 1,
-      updatedAt: 3,
-    },
-    handoff: {
-      role,
-      kind,
-      requestId,
-      ...(kind === "review" ? { reportId } : {}),
-      attemptId: "attempt-current",
-      handoffId: "handoff-current",
-      phase: "queued",
-      createdAt: 3,
-    },
-  };
-  return { current, currentRequest, currentReport, previousReport, unrelatedReport };
 }
 
 test("public context callback isolates the current role window while retaining new instructions, failures, and tool pairs", () => {
@@ -479,7 +272,7 @@ test("ordinary conversations and role-recovery requests keep their existing full
   assert.equal(createRoleContextView(activeState).context({ type: "context", messages: [handoffMessage] }, harness.context), undefined);
 });
 
-test("task and evidence handoff packages contain only relevant facts and direct dependency results", () => {
+test("task handoff packages retain only direct dependency results", () => {
   const { state } = makeWorkflowContextFixture();
   const messages = createWorkflowMessages(state, {
     pi: { sendMessage() {} },
@@ -491,8 +284,6 @@ test("task and evidence handoff packages contain only relevant facts and direct 
   assert.match(prompt, /dependency completed result/);
   assert.doesNotMatch(prompt, /Unrelated completed work A/);
   assert.doesNotMatch(prompt, /Unrelated completed work B/);
-  assert.match(prompt, /The direct caller renders parse failures as validation errors and preserves the input/);
-  assert.match(prompt, /src\/input.ts@sha-v4/);
 
   let replanState = requestWorkflowReplan(state.workflowState, { direction: "continue only with traceable evidence" }, 14);
   replanState = completeWorkflowTask(replanState, {
@@ -507,73 +298,15 @@ test("task and evidence handoff packages contain only relevant facts and direct 
   assert.match(replanPrompt, /current completed result/);
   assert.doesNotMatch(replanPrompt, /Unrelated completed work A/);
   assert.doesNotMatch(replanPrompt, /Unrelated completed work B/);
-  assert.match(replanPrompt, /The direct caller renders parse failures as validation errors and preserves the input/);
 
-  const { current: docsState } = coordinationRuntimeState({ role: "docs-commit", kind: "evidence" });
-  const docsMessage = compileCoordinationMessage(docsState);
-  assert.match(docsMessage.content, /What is the current caller-visible behavior/);
-  assert.match(docsMessage.content, /Prior accepted caller behavior/);
-  assert.match(docsMessage.content, /include caller error handling/);
-  assert.doesNotMatch(docsMessage.content, /UNRELATED FACT MUST NOT LEAK/);
-  assert.match(docsMessage.content, /当前交接包只包含(?:本问题|本次请求)和相关历史事实/);
-
-  const { current: architectState } = coordinationRuntimeState({ role: "architect", kind: "review" });
-  const architectMessage = compileCoordinationMessage(architectState);
-  assert.match(architectMessage.content, /Current implementation preserves the input/);
-  assert.match(architectMessage.content, /Prior accepted caller behavior/);
-  assert.doesNotMatch(architectMessage.content, /UNRELATED FACT MUST NOT LEAK/);
 });
-
-test("coordination role context uses its active request/review handoff identity and keeps the accepted-review planning window", () => {
-  for (const role of ["docs-commit", "architect"]) {
-    const kind = role === "docs-commit" ? "evidence" : "review";
-    const { current } = coordinationRuntimeState({ role, kind });
-    const state = createExtensionRuntimeState();
-    state.activeRole = { role, provider, model, thinkingLevel: "max" };
-    state.coordinationRuntimeState = current;
-    const harness = createExtensionHarness([], { sessionId });
-    const identity = coordinationHandoffIdentity(current);
-    const customType = kind === "evidence" ? COORDINATION_EVIDENCE_MESSAGE_TYPE : COORDINATION_REVIEW_MESSAGE_TYPE;
-    harness.branch.push({ type: "custom_message", customType, details: identity });
-    const marker = { role: "custom", customType, details: identity, content: "current coordination package", timestamp: 4 };
-    const result = createRoleContextView(state).context({
-      type: "context",
-      messages: [
-        { role: "user", content: "old history", timestamp: 1 },
-        { role: "user", content: "new instruction before the evidence handoff", timestamp: 2 },
-        marker,
-      ],
-    }, harness.context);
-    assert.ok(result, role);
-    assert.deepEqual(result.messages.map((message) => message.content), ["new instruction before the evidence handoff", "current coordination package"], role);
-  }
-
-  const { current } = coordinationRuntimeState({ role: "architect", kind: "review" });
-  const acceptedIdentity = coordinationHandoffIdentity(current);
-  current.handoff = undefined;
-  current.coordination.phase = "ready";
-  current.coordination.reviews.push({
-    reviewId: "review-current",
-    reportId: "report-current",
-    decision: "accept",
-    acceptedEvidence: [{ findingId: "current-fact", sourceId: "src-callers", sourceVersion: "sha-v2" }],
-    gaps: [],
-    reviewedAt: 4,
-  });
-  const state = createExtensionRuntimeState();
-  state.activeRole = { role: "architect", provider, model, thinkingLevel: "max" };
-  state.coordinationRuntimeState = current;
-  const harness = createExtensionHarness([], { sessionId });
-  harness.branch.push({ type: "custom_message", customType: COORDINATION_REVIEW_MESSAGE_TYPE, details: acceptedIdentity });
-  const marker = { role: "custom", customType: COORDINATION_REVIEW_MESSAGE_TYPE, details: acceptedIdentity, content: "accepted report for planning", timestamp: 5 };
-  const acceptedResult = createRoleContextView(state).context({
-    type: "context",
-    messages: [{ role: "user", content: "latest planning instruction", timestamp: 4 }, marker],
-  }, harness.context);
-  assert.ok(acceptedResult);
-  assert.deepEqual(acceptedResult.messages.map((message) => message.content), ["latest planning instruction", "accepted report for planning"]);
+test("retired evidence actions are absent while task memory remains available", () => {
+  const tool = createExtensionHarness().tools.find(tool => tool.name === "task_workflow");
+  const schema = JSON.stringify(tool.parameters.properties.action);
+  for (const action of ["request-evidence", "report-evidence", "review-evidence", "clarify", "review-child"]) assert.equal(schema.includes(action), false);
+  assert.ok(tool.parameters.properties.checkpoint);
+  assert.equal(tool.parameters.properties.coordinationIdentity, undefined);
 });
-
 test("first verified handoff retains successful investigation and validation as complete pairs", () => {
   const { state, harness, handoffMessage } = makeWorkflowContextFixture();
   const call = { role: "assistant", content: [
@@ -738,4 +471,20 @@ test("host system messages survive paused projection without being mistaken for 
   const failed = createRoleContextView(state).context({ type: "context", messages }, harness.context);
   assert.ok(failed.messages.includes(system));
   assert.equal(state.workflowState.status, "paused");
+});
+
+test("shared tool grouping preserves interleaved parallel results and absolute window indices", () => {
+  const call = (id) => ({ type: "toolCall", id, name: "read", arguments: {} });
+  const result = (id, isError = false) => ({ role: "toolResult", toolCallId: id, toolName: "read", isError, content: [] });
+  const messages = [{ role: "user", content: "goal" }, { role: "assistant", content: [call("a"), call("b")] }, result("b", true), { role: "assistant", content: [call("c")] }, result("a"), result("c")];
+  const groups = groupToolMessages(messages);
+  assert.deepEqual(groups.map(group => group.indices), [[0], [1, 2, 4], [3, 5]]);
+  assert.equal(groups[1].failed, true);
+  assert.deepEqual(groupToolMessages(messages, 1, messages.length).map(group => group.indices), [[1, 2, 4], [3, 5]]);
+  assert.equal(groupToolMessages(messages, 1, 3), undefined);
+  assert.equal(hasCompleteToolPairs(messages), true);
+  for (const broken of [messages.slice(0, -1), [result("orphan")], [{ role: "assistant", content: [call("a"), call("a")] }, result("a")], [{ role: "assistant", content: [call("")] }, result("")], [...messages, result("a")], [{ role: "system", content: "host" }]]) {
+    assert.equal(groupToolMessages(broken), undefined);
+    assert.equal(hasCompleteToolPairs(broken), false);
+  }
 });

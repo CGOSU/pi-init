@@ -87,18 +87,6 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
       ] : []),
       `观察窗口：${view.progressDiagnosis.windowSize}/${view.progressDiagnosis.historyLimit}`,
     ] : []),
-    ...(view.lineage.length > 1
-      ? [
-          "工作流层级（由外向内）：",
-          ...view.lineage.map((item, index) => `  ${index + 1}. ${item.workflowId} · ${item.planSummary}${item.parentTaskId ? `（子目标由父任务 ${item.parentTaskId} 触发）` : ""}${index < view.lineage.length - 1 ? " · 等待子工作流返回" : " · 当前层"}`),
-        ]
-      : []),
-    ...(view.subworkflows.length > 0
-      ? [
-          "已返回的子工作流历史（保留真实终态）：",
-          ...view.subworkflows.map((item) => `  - [${item.status}] ${item.workflowId} · ${item.summary} · completed ${item.completed}/${item.total} · 父工作流 ${item.parentWorkflowId}${item.parentTaskId ? ` · 父任务 ${item.parentTaskId}` : ""}`),
-        ]
-      : []),
     ...workflowIdentityLines(view),
   ];
   if (view.goals?.length) lines.push("目标归属 JSON（仅分组，共享队列）：" + JSON.stringify(view.goals));
@@ -142,14 +130,6 @@ export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
     const goal = view.goals?.find(goal => goal.id === currentTask?.goalId);
     if (goal) lines.push("当前目标归属：" + goal.summary);
   }
-  if (view.lineage.length > 1) {
-    lines.push("正在处理子目标；父工作流暂停等待返回。");
-  }
-  if (view.subworkflows.length > 0) {
-    const completed = view.subworkflows.filter((item) => item.status === "completed").length;
-    const cancelled = view.subworkflows.filter((item) => item.status === "cancelled").length;
-    lines.push(`已返回子目标：${completed} 完成，${cancelled} 取消。`);
-  }
   if (view.activity === "paused") {
     lines.push(...formatWorkflowPauseSummary(view.pause).split("\n").slice(1));
   }
@@ -169,50 +149,8 @@ type WorkflowGoalTreeNode = {
   children: WorkflowGoalTreeNode[];
 };
 
-function workflowGoalTreeRoot(view: Extract<WorkflowStatusView, { kind: "workflow" }>): WorkflowGoalTreeNode | undefined {
-  const activeNodes: WorkflowGoalTreeNode[] = view.lineage.map((item, index) => ({
-    workflowId: item.workflowId,
-    planSummary: item.planSummary,
-    status: item.status,
-    completed: item.completed,
-    total: item.total,
-    ...(item.parentTaskId ? { parentTaskId: item.parentTaskId } : {}),
-    activePath: true,
-    current: index === view.lineage.length - 1,
-    children: [],
-  }));
-  const nodesById = new Map(activeNodes.map((node) => [node.workflowId, node]));
-  const historyById = new Map<string, (typeof view.subworkflows)[number]>();
-  for (const child of [...view.lineage.flatMap((item) => item.subworkflows), ...view.subworkflows]) {
-    if (!historyById.has(child.workflowId)) historyById.set(child.workflowId, child);
-  }
-  for (const child of historyById.values()) {
-    if (nodesById.has(child.workflowId)) continue;
-    nodesById.set(child.workflowId, {
-      workflowId: child.workflowId,
-      planSummary: child.summary,
-      status: child.status,
-      completed: child.completed,
-      total: child.total,
-      ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
-      activePath: false,
-      current: false,
-      children: [],
-    });
-  }
-  for (const child of historyById.values()) {
-    const parent = nodesById.get(child.parentWorkflowId);
-    const node = nodesById.get(child.workflowId);
-    if (parent && node && !parent.children.some((candidate) => candidate.workflowId === node.workflowId)) {
-      parent.children.push(node);
-    }
-  }
-  for (let index = 1; index < activeNodes.length; index += 1) {
-    const parent = activeNodes[index - 1];
-    const child = activeNodes[index];
-    if (!parent.children.some((candidate) => candidate.workflowId === child.workflowId)) parent.children.push(child);
-  }
-  return activeNodes[0];
+function workflowGoalTreeRoot(view: Extract<WorkflowStatusView, { kind: "workflow" }>): WorkflowGoalTreeNode {
+  return { workflowId: view.identity.action.workflowId, planSummary: view.planSummary, status: view.status, completed: view.progress.completed, total: view.progress.total, activePath: true, current: true, children: [] };
 }
 
 /** Compact visible tree of active goals plus completed/cancelled child goals. */

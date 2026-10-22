@@ -196,7 +196,7 @@ export function blockWorkflowTask(state: WorkflowState, { taskId, reason }: Task
   result.status = "paused";
   result.pauseReason = task.outcomeUnknown ? "handoff-outcome-unknown" : "task-blocked";
   result.nudgeCount = 0;
-  if (result.pendingRevision && !result.tasks.some(item => item.outcomeUnknown || item.clarification?.sideEffects.status === "unknown")) {
+  if (result.pendingRevision && !result.tasks.some(item => item.outcomeUnknown)) {
     result.status = "replanning";
     result.pauseReason = "workflow-replan";
     result.continuation = { kind: "replan", revisionId: result.pendingRevision.revisionId, phase: "pending", reason: "replan-requested" };

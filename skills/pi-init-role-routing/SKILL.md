@@ -1,8 +1,7 @@
 ---
 name: pi-init-role-routing
 description: >
-  处理使用 pi-init 初始化项目、执行代码和测试、维护项目文档或完成交付收尾时使用；
-  根据标准职责和项目自定义角色配置执行职责路由；有显式 roleModels 映射时按映射选模，否则标准职责沿用当前 Pi 会话模型。
+  使用 pi-init 初始化项目、开发测试、维护项目文档或交付收尾时使用；按职责路由，显式 roleModels 优先，否则标准职责沿用当前会话模型。
 metadata:
   primary-category: workflow
   related-categories: coding, documentation, project-management
@@ -10,79 +9,47 @@ metadata:
 
 # pi-init 公共职责路由
 
-这是随 `pi-init` package 发布的公共 Skill，集中维护角色路由、职责边界和工作流硬约束；项目不应复制或生成该 Skill 的副本。
+本 Skill 随 package 发布；项目只引用它，不复制通用规则或生成项目级副本。角色说明按需读取：[architect](roles/architect.md)、[developer-test](roles/developer-test.md)、[docs-commit](roles/docs-commit.md)。
 
-## 路由
+## 角色与模型
 
-1. 明确对应实现/测试的指令直接交给 `developer-test`；明确对应文档、版本或 Git 收尾的指令直接交给 `docs-commit`。
-2. 简单只读咨询可直接交给当前适合的非 `architect` 角色完成，不创建工作流，也不要求正式证据交接；目标明确的日常开发由 `developer-test` 一次完成调查、修改和验证。若 `before_agent_start` 注入的运行状态已确认当前职责且没有活动工作流，不调用 `task_workflow(status)`，也不重复 `switch_role`；若 `roleRecoveryPending` 且没有活动工作流、请求无需工具或新证据，可以直接回答，但不能因此解除恢复门；需要任何工具或执行时仍先 `switch_role`。
-3. 不明确、含糊、需要需求判断或跨职责的指令从 `architect` 开始，由架构师负责澄清目标、边界、非目标，并安排后续职责。
-4. 架构决策不等于正式取证：优先复用已有调查，缺少决策关键事实时再交给 `docs-commit` 集中补查。普通读取、实现和测试结果直接交接，不默认创建 request/report/review/accept/contract 链。只有确实需要正式证据审阅或用户明确要求时启用该协议；已进入的关键未决、契约与未知副作用保护不得绕过。
-5. 非编排任务完成并通过适用检查后，由 `docs-commit` 按项目授权核对 diff 和提交；活动工作流默认统一安排一次必要的文档/Git 收尾，不在每个子任务完成后额外创建收尾任务。只有验收明确要求独立 Git 交付时才按阶段执行。只提交明确归属于本次目标的改动；归属无法安全区分则暂停提交并说明。push 仍须用户明确授权。
+- 明确实现/测试交给 developer-test；项目 Markdown、版本及 Git 收尾交给 docs-commit；需求或架构判断交给 architect。普通只读咨询和局部低风险开发直接由合适的非 architect 角色连续调查、实现、验证，不为流程形式往返。
+- architect 只分析、决策、规划和安排；仅允许 switch_role 与 task_workflow 的 plan/replan/status/request-replan/request-goal。不得读取仓库、运行 shell/测试、编辑、连接 MCP，也不得作为执行任务角色或提交 complete/block。需要新事实时安排普通 docs-commit 调查任务。
+- roleModels 是显式模型来源，每项必须含 provider/model/thinkingLevel。标准角色未映射时沿用当前真实会话模型与推理强度，不生成 fallback 配置；未知自定义角色须有显式映射及职责说明。损坏配置、模型不可用或缺少凭据如实失败，不静默换模型。
+- auto 自动换角，confirm 先询问，manual 阻止自动换角。只有跨职责边界或恢复门要求确认时调用 switch_role；当前职责已确认时不重复切换。manual 无法验证职责时请用户执行 /pi-init role <role>，不循环调用必然失败的工具。
+- 菜单配置只暂存当前会话；只有用户明确保存才写项目配置。旧角色字段和 workflowEnabled 只在统一配置边界解释，不自动改写生产配置。
 
-角色说明按需读取：
-- [`roles/architect.md`](roles/architect.md)
-- [`roles/developer-test.md`](roles/developer-test.md)
-- [`roles/docs-commit.md`](roles/docs-commit.md)
+## 任务执行
 
-## `/fast` 手动 Fast Path
+- 普通、可逆的实现选择、命名、局部组织及排查顺序由 AI 自主决定；恢复既定行为的 bug 不重复请求需求确认。业务目标冲突、权限/凭据缺失、不可逆操作、公共契约不明或无法安全合并时才暂停并说明最少必要问题。
+- 明确要求简单任务只做实现时采用最小验证，不默认创建工作流、全量测试、类型检查或构建；安全、数据保护、必要验证与高风险边界仍须满足。未执行检查不能描述为通过。
+- 先定位相关符号、调用方和测试，再精读必要内容。项目历史记忆按关键词读取，不整批读历史文件前若干百行；已有且仍有效的调查和验证连续复用，来源变化或关键缺口才定向补查。
+- edit 只使用 path/edits；每个 oldText 必须精确唯一匹配，区域不得重叠。零匹配只定向重读并最多重试一次，不模糊替换、不缓存旧 diff 冒充当前结果。保留精确编辑运行时守卫。
+- file_review 只提供超过500行代码的结构建议 keep/recommend-split，不是文件上限。登记前须完整读取当前内容版本；版本改变失效。/large 只在扫描与状态可靠、Agent空闲且安全门允许时派发结构审阅，不伪造已审或自动拆文件。
+- 增量补测按行为变化和必要直接影响选择，优先复用已有测试。纯展示默认不补，不机械限定修改行数，也不按年龄、通过时间或覆盖率删除有价值回归。
 
-- 用户显式调用 `/fast <任务描述>` 表示只为本次任务手动选择 Fast Path；不要再次以自动资格为门槛，也不要因任务类型、规模、文件数、代码行数或修改范围不符而退回普通流程。该命令不切换模型、不改变持久配置。
-- 此选择不覆盖安全、权限、需求/契约确认、角色职责、上下文恢复门、活动工作流保护或必要验证；任务本身独立要求架构规划/工作流时仍按对应规则处理。不要只因自动 Fast Path 资格不满足而额外创建工作流或例行留痕。
+## 扁平工作流
 
-## 角色和模型来源
+- task_workflow 是唯一规划、依赖、验收、阻塞和重规划状态机，只有当前主会话 local 顺序执行。workflowMode off/on/auto 分别拒绝新规划、始终编排、两项以内直接顺序执行；12项只是规划软建议。
+- plan/replan 只由 architect 提交。每项明确 task/files/acceptanceCriteria/dependsOn 与实际执行角色；仅用户明确要求先审阅时设 reviewRequired。
+- 执行者在真实 executing 身份下可用 request-replan 登记方向，仍须完成当前任务或 block 后再重规划，不提前离开任务角色。讨论不自动改变计划。新目标用 request-goal，goals/goalId 仅分组；依赖先于 priority，同级稳定，不抢占运行工具，不创建子流程运行栈。
+- 插入目标须通过 retainTaskIds 保留仍有效的 pending 任务。原任务失效可转普通重规划，保留已完成成果与未知副作用；目标分组结束不等于整个工作流验收。
+- 当前执行角色真实完成并验证后提交 complete，提供 completionSummary/implementationRationale/verification；真实阻塞用 block；执行或副作用结果不确定时填写 outcomeUnknown=true，保持暂停并要求用户核对，不能用普通重规划绕过。进程退出、Agent回复或工具成功都不自动等于需求验收。
+- 活动工作流通常统一安排一次文档/Git收尾，不在每个子任务后重复全仓检查或提交。首次修改确认归属；归属/冲突/共享工作区变化和真实提交前再必要刷新。只提交本任务明确所属改动，push须用户明确授权。
 
-- `.pi/role-models.json` 的 `roleModels` 保存项目显式角色模型映射；其中的自定义角色用于启用对应角色模型。标准角色 ID `architect`、`developer-test`、`docs-commit` 不依赖映射文件即可使用。
-- 显式映射值必须包含 `provider`、`model` 和 `thinkingLevel`，并优先于 fallback。标准角色未显式映射时沿用当前 Pi 会话真实模型与推理强度；仅改变职责，不另选模型、不生成或持久化隐式映射。若当前模型不存在则报告错误。未知自定义角色仍需显式配置并具有对应职责说明；显式配置错误、模型不可用或凭据缺失不得静默 fallback。
-- `schemaVersion: 2` 的 `roleModels` 可缺失或为空；没有其他显式映射时按无映射处理。旧版顶层角色字段仍按兼容规则读取并优先作为显式映射。损坏 JSON、未知版本、`roleModels` 类型/字段无效、显式模型不可用或凭据缺失必须保留真实错误，不能 fallback 掩盖。只有用户明确执行 `/pi-init save` 才持久化迁移；会话默认不会自动写入配置。Skill 不写入具体 provider、model 或 thinkingLevel。
+## 工作记忆与上下文
 
-## 共享硬约束
+- 每次上下文携带当前任务成果、真实工具来源、checkpoint、剩余项与下一步。阶段切换、验证结束或产物生成后用 task_workflow(checkpoint, expectedMemoryRevision=当前revision, checkpoint={step,accomplished:[{summary,evidenceIds}],remaining,blockers,nextStep}) 登记，不要求每个工具后额外登记。
+- 原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不因正文已归档就重复查Git、搜索聊天历史或重跑。checkpoint不完成、恢复或派发任务；工具成功不等于测试通过，历史通过不证明当前版本仍有效。
+- memoryFiles 最多16个项目相对文件，只记录登记时内容hash，不证明完整验证依赖或测试执行时版本。revision拒绝陈旧覆盖；progressRevision不因改写措辞增加。
+- 只有当前真实 executing 任务可写checkpoint；queued、暂停、恢复或旧回合不授权提交。来源缺失、超限或保存失败如实报告，不靠重跑未知副作用补齐，不声称已持久化。
+- 上下文裁剪只改变模型视图，不改原session；工具调用/结果须完整配对，宿主system原样保留。成功/失败语义及必要记忆不可静默消失；无法安全满足时走现有压缩或停止边界，不新增自动回合。
 
-- 只有真正进入职责或跨越职责边界时调用 `switch_role`；在允许取证和执行的非 `architect` 职责内，调查、实现和验证不重复切换。活动回合内真实切角会结束旧回合，由运行时在 settled 后以新职责系统提示续跑；不要在旧角色回合里继续执行。切角本身不完成工作流任务，也不授权使用旧业务身份提交结果。普通压缩、reload、resume、fork 或已有上下文恢复后，先核对运行时恢复门；如果状态已确认或自动角色交接已确认，不要重复切换。恢复门仍优先于低风险快捷路径。`manual` 模式下若当前角色不能从真实模型/推理强度验证，只请用户执行 `/pi-init role <role>`，不要反复调用必然失败的 `switch_role`；`confirm` 按确认流程执行。
-- `architect` 只负责思考、分析、决策、规划和安排；除 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status"/"request-replan"/"request-child"/"request-goal"/"review-child"/"request-evidence"/"review-evidence")` 外不得调用任何工具，不得连接或调用 MCP。`request-evidence`/`review-evidence` 是纯协议规划与审阅，不提供仓库取证或代码执行权限；两条动作与后续 `request-evidence` 可按当前交接消息给出的 `coordinationHandoffId` 短引用提交，完整 `coordinationIdentity` 仍兼容，两者同时提供时必须指向同一 handoff。`report-evidence`、`clarify`、`complete`、`block`、`resume`、`retry`、`cancel` 和未知工具仍被运行时 fail-closed 拒绝。工作流执行任务不得分配 `architect`：plan/replan 校验会拒绝，旧活动计划若含 architect 执行任务则不派发、不自动换角，并保留原记录报告错误；由用户检查后显式取消，再另建计划。
-- 低风险、局部、可逆且不改变既定契约的实现选择由 AI 自主决定：helper、内部命名、函数拆分、测试组织、排查顺序和已有模式内的方案不询问用户，也不因这些选择创建工作流。修复既定行为的 bug 不重新确认需求；新增行为、契约、权限或数据结构先写入用户已确认的需求/决策载体。
-- 补测按本次行为变化及其必要直接影响划分，不按修改行数机械限定：优先复用或调整已有测试，只为该范围中真实存在的风险缺口新增，保留仍然有效的长期回归；纯文案、样式和展示细节默认不补测试，也不为无关存量逻辑补覆盖。该规则不引入自动测试生成、自动选测或临时测试清理，也不按年龄、通过时间或覆盖率自动删除测试。
-- 用户明确要求简单任务只做实现时，采用最小验证策略：不创建 `task_workflow`，不默认运行全量测试、类型检查或构建；纯文档、文案、注释和样式修改只做必要的差异/静态核对。不得因此跳过安全措施、输入校验、数据不丢失处理、无障碍基础或用户明确要求的验证；涉及公共接口、权限、数据、并发、迁移或删除等高风险边界时恢复针对性验证，并明确列出未执行项。
-- `before_agent_start` 只能依据运行时真实状态注入简短的结构化职责/工作流 section；不得根据用户文本启发式分类、自动切换模型或自动确认 `roleRecoveryPending`，不得替代 `tool_call` 的执行类硬守卫。
-- 只有业务目标冲突、公共契约/数据/权限/架构含义无法从证据确定、不可逆或外部状态操作、无法安全合并已有改动、缺少必要权限/凭据或真实验证阻塞时才暂停；询问时说明事实、推荐方案、影响和最少必要问题。
-- `docs-commit` 仅在复杂/高风险判断或明确证据交接时建立正式证据报告；报告按问题需要区分事实、推断、来源及版本、相关关系、检查范围、风险与未确认项，测试和工作区状态在影响判断时如实说明，不为完整度机械扩展取证范围。一次请求可集中列出当前需要回答的问题并批量报告；已接受且来源版本、当前 revision 绑定、适用范围和既有失效规则均有效的证据可复用。只为来源/适用范围实际变化、明确刷新理由或影响方案/正确性/安全的关键缺口补查。所有未知均如实披露；非阻塞未知不自动升级为阻塞或触发补证，但不得绕过关键未决、来源 stale、readiness 或 handoff 身份门控。充分证据不重复读取；高风险改动（安全、认证、公共 API、迁移、并发、删除或共享工作区）仍须核对决策所需的最新实现、直接调用方和测试。
-- 调查先使用已有代码定位/搜索能力缩小到相关符号、调用方和测试，再精读必要内容，不依赖某个特定搜索插件。需要项目记忆时先定位当前状态的相关段落，历史 decisions/session-log/pitfalls 按问题关键词读取，不默认整批读取各文件前若干百行。交接优先保留已有事实摘要、来源版本、已读文件范围、实际验证和剩余缺口；当前上下文可见且仍有效时连续复用，仅补缺失范围。版本/范围变化、上下文缺失或安全判断确需复核时允许重读；版本无法确认就如实说明，不推断已读或已验证。执行进展仅通过当前 session 的任务记忆保存，不建立文件读取缓存，不跳过 file_review 完整读取门或放宽身份门。
-- `read` 只接收 `path`、`offset`、`limit`；`edit` 只接收 `path`、`edits`。每个 `oldText` 调用前必须精确匹配一次，区域不得重叠；零匹配只允许定向重读并最多重试一次，禁止模糊/正则替换和持久缓存。运行时守卫对无效或歧义写入 fail-closed。
-- `file_review` 仅提供大文件结构审阅：默认或 `reviewKind="structure"` 只处理超过 500 个物理行的文件，结论为 `keep`/`recommend-split`，阈值不是文件上限。必须由 Pi `read` 完整读取当前内容版本后才能登记有理由的结论；指纹变化会使旧结论失效。`/large` 重扫并报告结构候选，只有扫描完整、状态可确认且候选未审时才按现有安全门派发，不因扫描、状态或持久化失败而伪报无候选或已完成。测试价值审阅产品功能已退役；项目通用 Test Value Gate、增量补测原则和有价值的业务回归继续适用，但不自动发现、关联、评分或维护测试价值候选。
-- 不伪造成功、验证、权限或真实依赖；不泄露或写入密钥、凭据和敏感数据。行为变化前先更新用户确认的需求/决策载体。
-- 上下文恢复门对一般角色只放行读取、`task_workflow(action="status")` 和 `switch_role`，直到角色或任务交接成功；若当前角色是 `architect`，仅放行 `task_workflow(action="status")` 和 `switch_role`。`session_tree` 真正切换 branch 时，目标 branch 的历史 acknowledged 不能确认当前角色，运行时会使内存角色确认失效并重新建立 pending；恢复引导必须与实际 mode 一致。
+## 恢复与交付安全
 
-## 工作流
-
-- 只有明确规划请求、跨模块/高风险工作或无法安全归并为小局部任务时才使用 `task_workflow(action="plan")`；`architect` 是唯一可执行 `plan` 和 `replan` 的角色。
-- `workflowMode: off` 拒绝新规划，`on` 始终编排，`auto` 对不超过两个低风险任务走直接角色顺序；`reviewRequired` 只有用户一开始明确要求架构审阅时才为 `true`。
-- 当前真实执行角色可在有效 executing handoff 内用 `request-replan` 登记确需改变的方向；这不是 `plan`/`replan`，不授予架构规划或插入目标权限，也不结束当前任务。仍须真实 `complete`，或在确有阻塞时 `block`；已有重规划请求且无未知副作用时，安全边界后由现有调度器交给 architect。执行中不要提前 `switch_role` 离开任务角色；queued 或恢复阶段不等于已执行，原恢复与证据检查继续适用。
-- 当前任务必须由实际执行角色完成；若任务属于需要工作流的范围，完成时仍须由实际执行角色提供真实验证并调用 `complete`。简单任务采用最小验证策略时，不把未执行的检查描述为通过；缺少需求、权限、凭据、破坏性操作确认或无法恢复时调用 `block`，不得用默认值或空结果掩盖失败。
-- 根工作流完成后仍须交付整体报告。根终态保留当前回合供模型直接总结全部已登记成果、验证、提交情况和未处理事项；中间任务/子流程仍按原边界交接，不分别做整流程收尾。最终报告不重新调查、查询状态或执行 Git；缺少的提交/推送事实如实说明未知，不补称成功。若模型取消、失败、未输出正常报告或继续提议工具，运行时只显示一次明确标注的确定性完整报告，不创建新模型回合或重放任务；单条工具状态/简单完成摘要不能代替整体交付。
-- 讨论与纠正不自动写入编排。明确修正/追加工作用 request-replan；显式新目标用 request-goal（request-child/“子流程：…”兼容为同队列目标）。父子归属仅展示，不建立运行栈或独立执行器；默认 priority=0，依赖先于优先级，同级稳定顺序，不抢占当前工具。插入目标须保留仍有效的全部原 pending 任务；失效则转普通重规划。只保留/撤销可提交 tasks=[]，但最终队列须非空。分组结束不等于根目标验收，未知副作用不得自动重试；旧栈按兼容协议收尾。
-- pi-init 工作流仅支持当前主会话内 local 顺序执行；缺省及旧 `workflowExecutor: "local"` 配置可用。旧 `runtime` 配置和 Runtime executor/authority 状态返回结构化退役错误，不会回退、自动恢复或改写 session entry。
-- `task_workflow` 是唯一的规划、依赖、验收、阻塞和重规划状态机；Agent 完成、进程退出或返回文本都不自动等于任务验收完成。证据请求/报告/审阅和澄清是同一工具内的协调记录，不是新的执行队列，不产生第二个 executor，也不占用开发任务的规划额度（开发任务数量没有硬上限，12 仅为规划规模软建议）。architect 不得作为执行任务角色，也不得调用 `complete`/`block` 验收。
-- 工作流通过 Pi Extension API 的 `appendEntry` 保存到当前 session/branch，不承诺事务、fsync 或外部副作用 exactly-once。模型通常只提交业务参数与真实结果；运行时在真实 Provider 请求/消息与工具调用之间绑定派发时的 workflow、session、revision、attempt 和 handoff 身份，不在提交时套用最新状态。旧 branch/attempt/revision 或角色回合必须拒绝；兼容显式身份仍严格校验，不覆盖调用者的过期字段。
-- 恢复时仅未派发的准备阶段可安全续接；已派发/启动但无业务结果的任务按结果未知暂停，禁止自动重放。核对可能的外部副作用后，显式 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 才能创建新 attempt；legacy `in_progress` 缺少身份时同样转为需核对状态，旧 session entry 不原地改写，已退役 Runtime 状态继续 fail-closed。 模型自行填写 `confirmUnknownOutcome=true` 不构成用户授权；暂停时确认角色不会放行修改、普通 shell 或任务重放，须用户命令/面板确认。
-- `task_workflow(action="status")` 的模型可见 content 提供基础动作身份，以及当前 task/replan handoff 的完整 JSON 身份；task/replan 提示复用相同身份结构。status 只读。身份失败会在模型可见错误消息中提供稳定错误码、差异字段、白名单 expected/received 值与下一步；只读查询一次后，只有确认仍是同一活动 attempt/handoff 的参数抄录错误才可修正重提。不得把旧结果改贴到新身份；结果未知仍必须核对潜在副作用并显式授权 retry。若结果调用面对 queued handoff，只有当前身份、角色和活动 branch 中精确消息全部匹配，系统才会先记录真实开始再执行原严格校验；其他阶段不因该路径放宽。压缩由任务交接边界统一管理，不由普通 switch_role 触发；先保存结果与交接身份，按需压缩成功后才切换角色并派发。压缩交接须绑定 operation、仍活动的源角色、session/branch 上下文代次及当前 workflow/coordination 身份；只有该操作自己的完成/失败回调能收敛，任意 `session_compact` 事件不能冒认完成。身份过期的回调不续跑；压缩失败以不触发新 turn 的诊断报告，任务只能在检查当前状态后显式恢复：工作流使用 `/pi-init workflow resume`；已确认尚未派发的协作压缩失败由用户使用 `/pi-init coordination resume`，未知结果不得用该命令重放。架构审阅不得被自动 resume 绕过。
-
-## 当前任务工作记忆
-
-- 活动任务的上下文会携带已观察工具结果、来源 ID、最新 checkpoint 和剩余工作；先复用这些事实，不因原正文已归档就重新查 Git、搜索聊天历史或重跑测试。需要原结果时使用 `task_workflow(action="status", evidenceIds=[来源ID])`，只读查询不执行命令，不解除恢复门。
-- 在阶段切换、验证结束、产物生成或压缩前，用 `task_workflow(action="checkpoint", expectedMemoryRevision=当前revision, checkpoint={step, accomplished:[{summary,evidenceIds}], remaining, blockers, nextStep})` 登记进展；不要求每次工具调用后额外登记。只有当前真实 executing 任务可写；queued、暂停、恢复或旧回合不能提交，显式旧身份也不能绕过绑定。
-- `memoryFiles` 可列出最多16个项目相对文件，记录登记时的内容指纹（包括新增文件）；它只证明声明文件是否改变，不证明测试完整依赖或执行时版本。历史通过不等于当前仍有效，工具成功不等于测试通过或需求验收。
-- checkpoint 的 revision 用于拒绝陈旧覆盖；progressRevision 只表示新增支持事实或声明文件版本变化，改写措辞、重复观察不算新进展。引用失效、来源缺失或保存失败如实报告，不能靠重跑未知副作用补齐，也不能声称已经持久化。最终任务仍须真实 complete/block/clarify，checkpoint 不派发、切角、完成或恢复任务。
-
-## 证据协作、任务契约与模型上下文
-
-- `request-evidence` 与 `review-evidence` 仅允许 `architect` 规划问题和审阅报告；`report-evidence` 仅由当前受派发的 `docs-commit` 提交；`clarify` 仅由当前 `developer-test` 任务提交。报告必须区分事实、推断和未知，记录来源及版本、检查范围、测试位置与实际执行的验证。docs 取证不自动接受证据、不决定方案，也不例行产生 docs/Git commit。
-- 正式协调动作同样由运行时绑定本轮实际派发身份，通常省略 coordinationIdentity/coordinationHandoffId；兼容显式短引用或完整身份，仍按原协议校验。未观察到真实派发消息的隐式提交会拒绝，不从当前状态补齐旧结果。
-- 报告输入校验失败（如来源版本/位置冲突、acceptedEvidence 重复或未解决缺口）发生在持久化之前时，可在同一有效 handoff 内用同一身份修正后重提，不需要新建 attempt 或重新取证；权限失败、身份过期、状态恢复失败、持久化结果未知或已提交成功的动作不属于可直接重提。
-- 单条 finding 内 `id`/`location`/`version` 规范化后完全一致的来源会无损合并并保留首次出现顺序，同一 `id` 但版本或位置不同仍明确拒绝；`acceptedEvidence` 只合并完全一致的 `findingId`/`sourceId`/`sourceVersion` 引用，不因去重自动接受任何 fact、推断、未确认项或冲突项，事实类别、版本匹配和任务契约就绪门不变。
-- 普通计划不因旁边存在已 ready 的证据账本而强制升级为正式契约流程。主动携带任务 contract 或已有正式工作流绑定时，继续验证需求来源、已接受且有效的证据、当前 revision、关键未决及副作用处置；不得删除契约降级或绕过正在进行/blocked 的显式取证。普通任务不伪造正式证据，关键需求/权限/业务冲突通过 block 或已有正式任务的 clarify 如实上报。
-- 协作状态通过 Pi session append/当前 branch 恢复，消息只携带交接需要的信息；不宣称 append/sendMessage 提供事务、fsync 或外部副作用 exactly-once。
-- 公开 `context` hook 可为当前角色/request/task 返回实际模型输入视图，但不会删除或改写 session/branch 历史。Pi 管理的 system prompt 与 tool state 不由扩展接管或裁剪；不使用 `context_with_system`。可确认交接边界时保留当前角色执行窗口、关联的工具调用/结果配对和新用户指令；边界、branch 或压缩映射不可靠时保留完整输入并报告未裁剪。扩展 harness 测试不等于真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益验证。 暂停恢复使用当前 branch 快照与完整工具配对生成有界、非执行授权的恢复视图；失败不回退到全部历史。
-
-## 交付
-
-架构交付包含决定、原因、约束、风险和验收标准；代码交付包含修改文件、实现摘要和真实验证；文档收尾只记录新事实并说明 diff、遗留问题及经授权的 Git 结果。遇到需求边界、架构方案或不可恢复问题时交回 `architect`；不要因可选偏好暂停流程。
+- session/branch/role/attempt/handoff/recovery身份由运行时绑定；不手填猜测或把旧结果贴到新身份。恢复门未确认时只允许原规则下的只读查询及职责确认，不授权修改、执行或完成。
+- 结果未知的活动执行先暂停核对副作用；模型填写 confirmUnknownOutcome=true 不构成授权。必须用户命令/面板显式确认新attempt，不自动重放。状态、持久化或权限失败不能用默认值掩盖。
+- 普通换角不触发压缩；真实任务边界和预算压缩沿同一管理器，绑定操作与身份。失败、迟到回调或未知派发不得自动继续；用户停止保留成果。
+- 根完成仍须回复整体成果、验证及未处理项。正常回复与一次性确定性兜底共用完成视图；报告阶段不重新调查、轮询或执行Git，不补称未记录的提交/推送成功，不额外触发模型回合。
+- 正式证据协议、结构任务契约/clarify、旧嵌套执行和/fast已退役。旧持久记录不得静默当作普通任务恢复；检查副作用后用受保护的 discard-recovery 隔离或开启新会话，原记录保留。
+- 不伪造成功、权限、验证或依赖，不泄露密钥与敏感信息。行为变化先记录用户已确认的需求与决定。

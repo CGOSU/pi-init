@@ -18,6 +18,10 @@ export type WorkflowCompletionTaskView = {
   task: string;
   completionSummary?: string;
   implementationRationale?: string;
+  status: WorkflowTask["status"];
+  blockReason?: string;
+  outcomeUnknown?: boolean;
+  verification: string[];
   verificationFailures: string[];
 };
 
@@ -31,7 +35,9 @@ export type WorkflowCompletionView = {
   kind: "workflow-completion";
   summary: string;
   progress: { completed: number; total: number };
-  subworkflows: { workflowId: string; parentWorkflowId: string; summary: string; status: "completed" | "cancelled"; parentTaskId?: string; completed: number; total: number }[];
+  status: WorkflowState["status"];
+  constraints: string[];
+  tasks: WorkflowCompletionTaskView[];
   finalTask: WorkflowCompletionTaskView | undefined;
   startedAt: number | undefined;
   completedAt: number | undefined;
@@ -48,6 +54,10 @@ function completionTaskView(task: WorkflowTask): WorkflowCompletionTaskView {
     task: task.task,
     ...(task.completionSummary !== undefined ? { completionSummary: task.completionSummary } : {}),
     ...(task.implementationRationale !== undefined ? { implementationRationale: task.implementationRationale } : {}),
+    status: task.status,
+    blockReason: task.blockReason,
+    outcomeUnknown: task.outcomeUnknown,
+    verification: task.verification ?? [],
     verificationFailures: task.verification?.filter(isVerificationFailure) ?? [],
   };
 }
@@ -78,15 +88,9 @@ export function createWorkflowCompletionView(
     kind: "workflow-completion",
     summary: workflowState.plan.summary,
     progress: { completed: progress.completed, total: progress.total },
-    subworkflows: (workflowState.subworkflowHistory ?? []).map((child) => ({
-      workflowId: child.workflowId,
-      parentWorkflowId: child.parentWorkflowId,
-      summary: child.summary,
-      status: child.status,
-      ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
-      completed: child.tasks.filter((task) => task.status === "completed").length,
-      total: child.tasks.length,
-    })),
+    status: workflowState.status,
+    constraints: workflowState.plan.constraints,
+    tasks: workflowState.tasks.map(completionTaskView),
     finalTask: completedTask ? completionTaskView(completedTask) : undefined,
     startedAt: bounds.startedAt,
     completedAt: bounds.completedAt,

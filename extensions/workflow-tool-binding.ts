@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow-handoff.ts";
-import { coordinationHandoffIdentity } from "./coordination-runtime-protocol.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
 type RunBinding = {
@@ -12,15 +11,14 @@ type RunBinding = {
   workflow: ReturnType<typeof workflowActionIdentity>;
   task: ReturnType<typeof workflowHandoffIdentity>;
   replan: ReturnType<typeof workflowReplanIdentity>;
-  coordination: ReturnType<typeof coordinationHandoffIdentity>;
   workflowStatus?: string;
   currentTaskId?: string;
 };
 const MAX_CALLS = 256;
-const IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "attemptId", "handoffId", "coordinationIdentity", "coordinationHandoffId"];
-const TASK_ACTIONS = new Set(["complete", "block", "clarify", "checkpoint"]);
-const REPLAN_ACTIONS = new Set(["replan", "review-child"]);
-const MUTATION_ACTIONS = new Set(["resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "request-goal"]);
+const IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "attemptId", "handoffId"];
+const TASK_ACTIONS = new Set(["complete", "block", "checkpoint"]);
+const REPLAN_ACTIONS = new Set(["replan"]);
+const MUTATION_ACTIONS = new Set(["resume", "retry", "cancel", "cancel-all", "request-replan", "request-goal"]);
 
 export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRuntimeState) {
   let request: RunBinding | undefined;
@@ -35,7 +33,6 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
 
   function capture(ctx: ExtensionContext): RunBinding {
     const branch = ctx.sessionManager.getBranch();
-    const coordination = state.coordinationRuntimeState;
     return {
       sessionId: ctx.sessionManager.getSessionId(),
       contextGeneration: state.roleContextGeneration,
@@ -45,7 +42,6 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
       workflow: workflowActionIdentity(state.workflowState),
       task: workflowHandoffIdentity(state.workflowState),
       replan: workflowReplanIdentity(state.workflowState),
-      coordination: coordination ? coordinationHandoffIdentity(coordination) : undefined,
       workflowStatus: state.workflowState?.status,
       currentTaskId: state.workflowState?.currentTaskId,
     };
@@ -79,8 +75,7 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     if (!binding) {
       // Explicit legacy identities still go through the existing domain validators.
       if (action !== "checkpoint" && IDENTITY_FIELDS.some(field => params[field] !== undefined)) return params;
-      if (!TASK_ACTIONS.has(action) && !REPLAN_ACTIONS.has(action) && !MUTATION_ACTIONS.has(action)
-        && action !== "report-evidence" && action !== "review-evidence") return params;
+      if (!TASK_ACTIONS.has(action) && !REPLAN_ACTIONS.has(action) && !MUTATION_ACTIONS.has(action)) return params;
       return bindingError("WORKFLOW_RUN_BINDING_MISSING", "缺少本次工具调用的真实派发身份；不能以当前状态补齐旧结果。请等待当前任务回合或查询状态。");
     }
     if (stale(binding, ctx)) {
@@ -89,10 +84,6 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     if (TASK_ACTIONS.has(action)) return { ...binding.task, ...params };
     if (REPLAN_ACTIONS.has(action)) return { ...binding.replan, ...params };
     if (MUTATION_ACTIONS.has(action)) return { ...binding.workflow, ...params };
-    if (action === "report-evidence" || action === "review-evidence" || (action === "request-evidence" && binding.coordination)) {
-      if (params.coordinationIdentity !== undefined || params.coordinationHandoffId !== undefined) return params;
-      return { ...params, coordinationIdentity: binding.coordination };
-    }
     return params;
   }
 

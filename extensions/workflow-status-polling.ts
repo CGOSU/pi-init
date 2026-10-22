@@ -51,10 +51,10 @@ export function createPausedStatusGuard(pi: ExtensionAPI, state: ExtensionRuntim
   function observe(toolCallId: string, ctx: ExtensionContext) {
     if (state.runtimeDisposed || state.workflowState?.status !== "paused") { reset(); return { stop: false as const }; }
     const key = fingerprint({ sessionId: ctx.sessionManager.getSessionId(), workflow: state.workflowState,
-      coordination: state.coordinationRuntimeState, role: state.activeRole, contextGeneration: state.roleContextGeneration,
+ role: state.activeRole, contextGeneration: state.roleContextGeneration,
       roleTransitionGeneration: state.roleTransitionGeneration, roleRecoveryPending: state.roleRecoveryPending,
       roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: state.pendingWorkflowRecovery,
-      workflowRestoreError: state.workflowRestoreError, coordinationRestoreError: state.coordinationRestoreError });
+      workflowRestoreError: state.workflowRestoreError });
     if (!key) { reset(); return { stop: false as const }; }
     if (key !== previousKey) { previousKey = key; previousCallId = toolCallId; stopped = false; return { stop: false as const }; }
     if (previousCallId === toolCallId && !stopped) return { stop: false as const };

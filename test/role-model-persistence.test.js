@@ -9,6 +9,7 @@ import {
   withTempDirectory,
   writeFile,
 } from "./helpers.js";
+import { mergeRoleConfigData, resolveRoleConfig } from "../src/roles.ts";
 
 test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", async () => {
   await withTempDirectory(async (directory) => {
@@ -123,4 +124,20 @@ test("手动模式内部角色切换不会把目标模型写回旧角色", async
       thinkingLevel: "max",
     });
   });
+});
+
+test("legacy role updates share one merge boundary and cannot reappear after clearing a staged model", () => {
+  const model = { provider: "test", model: "old", thinkingLevel: "high" };
+  const base = { mode: "manual", workflowEnabled: false, architect: model };
+  const update = { architect: { ...model, model: "new" } };
+  const before = structuredClone(base);
+  const merged = mergeRoleConfigData(base, update);
+  assert.equal(merged.architect, undefined);
+  assert.equal(merged.roleModels.architect.model, "new");
+  assert.deepEqual(base, before);
+  const resolved = resolveRoleConfig(merged);
+  assert.equal(resolved.value.workflowMode, "off");
+  const cleared = { ...merged, roleModels: {} };
+  assert.deepEqual(resolveRoleConfig(cleared).value.roleModels, {});
+  assert.equal(resolveRoleConfig({ ...base, runtime: {} }).code, "RUNTIME_CONFIG_RETIRED");
 });

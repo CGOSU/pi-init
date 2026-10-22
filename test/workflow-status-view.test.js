@@ -410,8 +410,8 @@ test("最终报告使用本次明确验收任务而不从 currentTaskId 选择�
   assert.match(text, /最终结果：已完成/);
   assert.doesNotMatch(text, /task-final|task-later|总耗时/);
   const details = formatWorkflowCompletionDetailsText(view);
-  assert.match(details, /最终任务[\s\S]*ID：task-final/);
-  assert.doesNotMatch(details, /task-later/);
+  assert.match(details, /任务结果[\s\S]*ID：task-final/);
+  assert.match(details, /ID：task-later[\s\S]*状态：pending/);
   assert.match(details, /总耗时：60 毫秒/);
   const collapsed = renderWorkflowCompletion(view, theme, false).render(200).join("\n");
   const expanded = renderWorkflowCompletion(view, theme, true).render(200).join("\n");
@@ -433,7 +433,7 @@ test("缺失整体时间保留不可用原因且没有完成任务时不捏造�
   assert.match(text, /工作流完成报告/);
   assert.doesNotMatch(text, /开始时间|结束时间|总耗时/);
   const details = formatWorkflowCompletionDetailsText(view);
-  assert.match(details, /内容：无/);
+  assert.match(details, /内容：待执行/);
   assert.match(details, /开始时间：不可用（工作流未记录有效的开始时间）/);
   assert.match(details, /结束时间：不可用（工作流未记录有效的结束时间）/);
   assert.match(details, /总耗时：不可用（工作流缺少有效的整体开始或结束时间）/);

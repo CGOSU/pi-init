@@ -168,7 +168,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       : workflow.handoff?.phase !== "executing" ? "handoff-not-executing"
       : task?.status !== "in_progress" ? "task-not-executing"
       : workflow.workflowId !== current.workflowId || workflow.planVersion !== current.planVersion || workflow.recoveryGeneration !== current.recoveryGeneration ? "stale-workflow"
-      : state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError || state.coordinationRestoreError ? "recovery-pending"
+      : state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError ? "recovery-pending"
       : state.userStopRequested || state.runtimeDisposed || task.outcomeUnknown ? "execution-stopped"
       : state.activeRole?.role !== task.role ? "role-mismatch" : undefined;
     if (blocked) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆只能由当前真实执行者登记，不能沿用旧身份或解除恢复门：" + blocked);

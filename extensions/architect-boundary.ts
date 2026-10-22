@@ -2,11 +2,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const ARCHITECT_ROLE = "architect";
 /** architect 允许的 task_workflow 动作由这一份定义同时驱动运行时边界与工具/交接指导。 */
-export const ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS = ["plan", "replan", "status", "request-replan", "request-child", "request-goal", "review-child", "request-evidence", "review-evidence"] as const;
+export const ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS = ["plan", "replan", "status", "request-replan", "request-goal"] as const;
 export const ARCHITECT_ALLOWED_ACTIONS_TEXT = ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS.join("、");
 const ALLOWED_TASK_WORKFLOW_ACTIONS = new Set<string>(ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS);
 const ARCHITECT_BOUNDARY_REASON =
-  `[pi-init-architect-boundary] 架构师不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；运行时仅允许调用 switch_role，以及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}。report-evidence 与 clarify 等其他动作均不允许 architect 调用。read/grep/find/ffgrep/fffind/browser、shell、edit/write、subagent/agent_message、MCP/mcpScript、直连 MCP 和未知工具均被阻断；需要其他职责时请先调用 switch_role。`;
+  `[pi-init-architect-boundary] 架构师不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；运行时仅允许调用 switch_role，以及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}。执行、验收及已退役协议动作不允许 architect 调用。read/grep/find/ffgrep/fffind/browser、shell、edit/write、subagent/agent_message、MCP/mcpScript、直连 MCP 和未知工具均被阻断；需要其他职责时请先调用 switch_role。`;
 const TASK_WORKFLOW_BOUNDARY_REASON =
   `${ARCHITECT_BOUNDARY_REASON} task_workflow 的其他动作（包括 complete、block、resume、retry、cancel）均被阻断。`;
 const NON_ARCHITECT_WORKFLOW_PLAN_REASON =

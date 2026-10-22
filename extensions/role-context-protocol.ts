@@ -1,6 +1,4 @@
 import type { ContextEvent, ContextEventResult } from "@earendil-works/pi-coding-agent";
-import { COORDINATION_EVIDENCE_MESSAGE_TYPE, COORDINATION_REVIEW_MESSAGE_TYPE } from "./coordination-runtime-protocol.ts";
-
 export type ContextMessage = ContextEvent["messages"][number];
 
 type ContextMessageRecord = Record<string, unknown>;
@@ -11,12 +9,7 @@ export const WORKFLOW_TASK_MESSAGE_TYPE = "pi-init-workflow-task";
 
 export const WORKFLOW_REPLAN_MESSAGE_TYPE = "pi-init-workflow-replan";
 
-const MANAGED_HANDOFF_TYPES = new Set([
-  WORKFLOW_TASK_MESSAGE_TYPE,
-  WORKFLOW_REPLAN_MESSAGE_TYPE,
-  COORDINATION_EVIDENCE_MESSAGE_TYPE,
-  COORDINATION_REVIEW_MESSAGE_TYPE,
-]);
+const MANAGED_HANDOFF_TYPES = new Set([WORKFLOW_TASK_MESSAGE_TYPE, WORKFLOW_REPLAN_MESSAGE_TYPE]);
 
 export function isRecord(value: unknown): value is ContextMessageRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -62,28 +55,7 @@ export function toolCallIds(message: ContextMessageRecord): string[] | undefined
 }
 
 export function hasCompleteToolPairs(messages: readonly ContextMessage[]) {
-  const pending = new Set<string>();
-  const completed = new Set<string>();
-  for (const message of messages) {
-    const record = messageRecord(message);
-    if (!record || typeof record.role !== "string") return false;
-    if (record.role === "system") return false;
-    if (!["assistant", "user", "toolResult", "custom"].includes(record.role)) return false;
-    if (record.role === "assistant") {
-      const ids = toolCallIds(record);
-      if (!ids) return false;
-      for (const id of ids) {
-        if (pending.has(id) || completed.has(id)) return false;
-        pending.add(id);
-      }
-    } else if (record.role === "toolResult") {
-      const id = record.toolCallId;
-      if (typeof id !== "string" || !pending.has(id) || completed.has(id)) return false;
-      pending.delete(id);
-      completed.add(id);
-    }
-  }
-  return pending.size === 0;
+  return groupToolMessages(messages) !== undefined;
 }
 
 export function diagnosticMessage(code: string, reason: string): ContextMessage {
@@ -105,4 +77,33 @@ export function diagnosticMessage(code: string, reason: string): ContextMessage 
 export function failOpen(messages: ContextMessage[], code: string, reason: string): ContextEventResult {
   const clean = messages.filter((message) => messageRecord(message)?.customType !== ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE);
   return { messages: [...clean, diagnosticMessage(code, reason)] };
+}
+export type ContextGroup = { indices: number[]; calls: { id: string; name: string; arguments: unknown }[]; failed: boolean };
+export function groupToolMessages(messages: readonly ContextMessage[], start = 0, end = messages.length): ContextGroup[] | undefined {
+  const groups: ContextGroup[] = [];
+  const owners = new Map<string, ContextGroup>();
+  const completed = new Set<string>();
+  for (let index = start; index < end; index++) {
+    const message = messages[index];
+    const record = messageRecord(message);
+    if (!record || typeof record.role !== "string" || !["assistant", "user", "toolResult", "custom"].includes(record.role)) return undefined;
+    if (record.role === "toolResult") {
+      const id = record.toolCallId;
+      const group = typeof id === "string" ? owners.get(id) : undefined;
+      if (!group || typeof id !== "string" || completed.has(id)) return undefined;
+      group.indices.push(index);
+      group.failed ||= record.isError === true;
+      completed.add(id);
+      continue;
+    }
+    if (!toolCallIds(record)) return undefined;
+    const group: ContextGroup = { indices: [index], calls: message.role === "assistant" ? message.content.filter(part => part?.type === "toolCall") : [],
+      failed: record.role === "assistant" && (record.stopReason === "error" || record.stopReason === "aborted") };
+    for (const call of group.calls) {
+      if (owners.has(call.id)) return undefined;
+      owners.set(call.id, group);
+    }
+    groups.push(group);
+  }
+  return owners.size === completed.size ? groups : undefined;
 }

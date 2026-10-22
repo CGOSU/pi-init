@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isValidRoleId, normalizeRoleId, unwrapRoleResult } from "./roles.ts";
-import { cloneWorkflowTaskContract, validateWorkflowTaskContract } from "./workflow-task-contract.ts";
-import { cloneWorkflowTaskClarification } from "./workflow-clarification.ts";
 import type {
   WorkflowContinuation, WorkflowContinuationPhase, WorkflowContinuationReason, WorkflowExecutionBounds,
   WorkflowExecutor, WorkflowHandoff, WorkflowHandoffPhase, WorkflowModelError,
   WorkflowPendingRevision, WorkflowPlan, WorkflowPlanSnapshot, WorkflowPlanSummary, WorkflowRevision,
-  WorkflowRevisionStatus, WorkflowRoleValidationOptions, WorkflowRoleValidationResult, WorkflowParentFrame,
-  WorkflowState, WorkflowStateCore, WorkflowSubworkflowSummary, WorkflowStatus, WorkflowTask,
+  WorkflowRevisionStatus, WorkflowRoleValidationOptions, WorkflowRoleValidationResult,
+  WorkflowState, WorkflowStateCore, WorkflowStatus, WorkflowTask,
   WorkflowTaskDelegation, WorkflowTaskStatus, WorkflowTaskTimestampField,
   WorkflowTaskTimestampReducer, WorkflowTextListOptions, WorkflowGoal } from "./workflow-types.ts";
 
@@ -168,7 +166,7 @@ export function normalizeWorkflowContinuation(value: unknown): WorkflowContinuat
     throw new Error("已保存的工作流 continuation 格式无效");
   }
   if (value.kind === "review") return { kind: "review" };
-  const reasons = ["plan-created", "task-completed", "replan-applied", "retry", "resume", "replan-requested", "child-completed", "child-cancelled"] as const satisfies readonly WorkflowContinuationReason[];
+  const reasons = ["plan-created", "task-completed", "replan-applied", "retry", "resume", "replan-requested"] as const satisfies readonly WorkflowContinuationReason[];
   const reason = value.reason;
   if (reason !== undefined && !isOneOf(reasons, reason)) {
     throw new Error(`已保存的工作流 continuation reason 无效：${reason}`);
@@ -207,8 +205,6 @@ export function cloneTask(task: WorkflowTask): WorkflowTask {
     acceptanceCriteria: [...task.acceptanceCriteria],
     dependsOn: [...task.dependsOn],
     ...(task.verification ? { verification: [...task.verification] } : {}),
-    ...(task.contract ? { contract: cloneWorkflowTaskContract(task.contract) } : {}),
-    ...(task.clarification ? { clarification: cloneWorkflowTaskClarification(task.clarification) } : {}),
     ...(task.delegation ? { delegation: { ...task.delegation } } : {}),
   };
 }
@@ -281,11 +277,7 @@ export function normalizeTask(task: unknown, index = 0): WorkflowTask {
     { required: true },
   );
   const dependsOn = normalizeTextList(source.dependsOn, `工作流任务 ${id} 的 dependsOn`);
-  const contract = source.contract === undefined ? undefined : validateWorkflowTaskContract(source.contract);
-  if (contract && !contract.ok) throw workflowError(contract.code, contract.message);
-  if (source.clarification !== undefined) {
-    throw workflowError("WORKFLOW_CLARIFICATION_INPUT_FORBIDDEN", "新任务不能伪造或复制历史澄清记录");
-  }
+  assertSupportedWorkflowFeatures(source);
 
   return {
     id,
@@ -296,7 +288,6 @@ export function normalizeTask(task: unknown, index = 0): WorkflowTask {
     dependsOn,
     ...(source.goalId !== undefined ? { goalId: normalizeIdentityToken(source.goalId, "任务归属 goalId") } : {}),
     ...(source.priority !== undefined ? { priority: normalizeWorkflowPriority(source.priority) } : {}),
-    ...(contract?.ok ? { contract: contract.value } : {}),
     status: "pending",
   };
 }
@@ -332,6 +323,7 @@ export function assertAcyclic(tasks: WorkflowTask[]): void {
 }
 
 export function validateWorkflowPlan(input: unknown): WorkflowPlan {
+    assertSupportedWorkflowFeatures(input);
   const source = requireRecord(input, "工作流规划格式无效");
   const rawTasks = source.tasks;
   if (!isUnknownArray(rawTasks) || rawTasks.length === 0) {
@@ -351,6 +343,7 @@ export function validateWorkflowPlan(input: unknown): WorkflowPlan {
     tasks,
     reviewRequired: source.reviewRequired === true,
   };
+
 }
 
 export function clonePlan(plan: WorkflowPlanSummary | WorkflowPlanSnapshot): WorkflowPlanSummary {
@@ -402,7 +395,7 @@ export function normalizePendingRevision(revision: unknown): WorkflowPendingRevi
     ).toLowerCase();
   }
   if (source.kind !== undefined) {
-    if (source.kind !== "replan" && source.kind !== "nested" && source.kind !== "goal") {
+    if (source.kind !== "replan" && source.kind !== "goal") {
       throw new Error(`已保存的工作流 pendingRevision 的 kind 无效：${source.kind}`);
     }
     result.kind = source.kind;
@@ -411,11 +404,11 @@ export function normalizePendingRevision(revision: unknown): WorkflowPendingRevi
     result.childGoal = requireText(source.childGoal, "已保存的工作流 pendingRevision 的 childGoal");
   }
   if (source.goalParentId !== undefined) result.goalParentId = normalizeIdentityToken(source.goalParentId, "目标父归属");
-  if ((result.kind === "nested" || result.kind === "goal") && !result.childGoal) {
-    throw new Error("已保存的嵌套工作流请求缺少 childGoal");
+  if (result.kind === "goal" && !result.childGoal) {
+    throw new Error("已保存的目标插入请求缺少 childGoal");
   }
-  if (result.kind !== "nested" && result.kind !== "goal" && result.childGoal !== undefined) {
-    throw new Error("非嵌套工作流请求不能包含 childGoal");
+  if (result.kind !== "goal" && result.childGoal !== undefined) {
+    throw new Error("非目标插入请求不能包含 childGoal");
   }
   return result;
 }
@@ -446,7 +439,6 @@ export function createWorkflowState(input: unknown, now = Date.now()): WorkflowS
     currentTaskId: undefined,
     nudgeCount: 0,
     revisions: [],
-    subworkflowHistory: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -496,15 +488,6 @@ export function getWorkflowExecutionDuration(state: WorkflowState | null | undef
   return completedAt - startedAt;
 }
 
-function cloneSubworkflowSummary(summary: WorkflowSubworkflowSummary): WorkflowSubworkflowSummary {
-  return {
-    ...summary,
-    tasks: summary.tasks.map((task) => ({ ...task, ...(task.verification ? { verification: [...task.verification] } : {}) })),
-    ...(summary.contract ? { contract: structuredClone(summary.contract) } : {}),
-    ...(summary.reviews ? { reviews: structuredClone(summary.reviews) } : {}),
-  };
-}
-
 export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.updatedAt ?? Date.now()): WorkflowStateCore {
   return {
     ...state,
@@ -513,7 +496,6 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
     recoveryGeneration: state.recoveryGeneration ?? 0,
     executor: normalizeExecutor(state.executor),
     ...(state.authority !== undefined ? { authority: normalizeExecutor(state.authority) } : {}),
-    ...(state.subworkflowContract ? { subworkflowContract: structuredClone(state.subworkflowContract) } : {}),
     plan: clonePlan(state.plan),
     tasks: state.tasks.map(cloneTask),
     ...(state.goals ? { goals: state.goals.map((goal) => ({ ...goal, constraints: [...goal.constraints] })) } : {}),
@@ -521,15 +503,7 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
     ...(state.pendingRevision ? { pendingRevision: { ...state.pendingRevision } } : {}),
     ...(state.handoff ? { handoff: { ...state.handoff } } : {}),
     ...(state.continuation ? { continuation: { ...state.continuation } } : {}),
-    subworkflowHistory: (state.subworkflowHistory ?? []).map(cloneSubworkflowSummary),
     updatedAt: now,
-  };
-}
-
-export function cloneWorkflowParentFrame(frame: WorkflowParentFrame, now = frame.state.updatedAt ?? Date.now()): WorkflowParentFrame {
-  return {
-    ...(frame.parentTaskId ? { parentTaskId: frame.parentTaskId } : {}),
-    state: cloneWorkflowStateCore(frame.state, now),
   };
 }
 
@@ -546,6 +520,7 @@ export function assertWorkflowGoalReferences(goals: WorkflowGoal[] | undefined, 
 
 
 export function cloneState(state: WorkflowState, now = Date.now()): WorkflowState {
+    assertSupportedWorkflowFeatures(state);
   if (Object.prototype.hasOwnProperty.call(state, "runtimeAuthority")) {
     throw workflowError("WORKFLOW_STATE_RUNTIME_RETIRED", "旧 Runtime 工作流 authority 已退役；不能克隆或本地执行");
   }
@@ -558,6 +533,22 @@ export function cloneState(state: WorkflowState, now = Date.now()): WorkflowStat
     ...cloneWorkflowStateCore(state, now),
     executor,
     authority,
-    ...(state.parentStack ? { parentStack: state.parentStack.map((frame) => cloneWorkflowParentFrame(frame, now)) } : {}),
   };
+
+}
+export function assertSupportedWorkflowFeatures(value: unknown): void {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const item = pending.pop();
+    if (!isRecord(item) || seen.has(item)) continue;
+    seen.add(item);
+    if (item.contract !== undefined || item.clarification !== undefined || item.coordination !== undefined || item.subworkflowContract !== undefined
+      || item.parentStack !== undefined && (!Array.isArray(item.parentStack) || item.parentStack.length > 0)
+      || item.subworkflowHistory !== undefined && (!Array.isArray(item.subworkflowHistory) || item.subworkflowHistory.length > 0)
+      || item.kind === "nested" || ["waiting-child-workflow", "child-result-review"].includes(String(item.pauseReason))
+      || ["request-evidence", "report-evidence", "review-evidence", "clarify", "request-child", "review-child"].includes(String(item.action))) throw workflowError("WORKFLOW_FEATURE_RETIRED", "正式证据、结构契约/澄清和旧嵌套工作流已退役；原记录保留，不会当作普通任务恢复或重放。请核对副作用后隔离旧记录或开启新会话。");
+    for (const key of ["tasks", "revisions", "previousTasks", "replacedTasks"]) if (Array.isArray(item[key])) pending.push(...item[key]);
+    pending.push(item.pendingRevision, item.newPlan);
+  }
 }

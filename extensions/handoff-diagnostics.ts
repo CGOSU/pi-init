@@ -1,21 +1,18 @@
-import { appendFile, mkdir, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
-import { createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
+import { createDiagnosticWriter, createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING = 128;
 const routingTools = new Set(["switch_role", "task_workflow"]);
-const fileQueues = new Map<string, Promise<void>>();
 
 function routingFields(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") return {};
   const source = value as Record<string, unknown>;
   const result: Record<string, unknown> = {};
-  for (const key of ["action", "role", "workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "taskId", "attemptId", "handoffId", "coordinationId", "coordinationVersion", "requestId", "questionId", "reportId", "reviewId", "decision", "code"]) {
+  for (const key of ["action", "role", "workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "taskId", "attemptId", "handoffId", "requestId", "questionId", "reportId", "reviewId", "decision", "code"]) {
     const item = source[key];
     if (typeof item === "string") result[key] = item.slice(0, 256);
     else if (typeof item === "number" || typeof item === "boolean") result[key] = item;
@@ -31,10 +28,6 @@ function routingFields(value: unknown): Record<string, unknown> {
 
 function handoffSnapshot(state: ExtensionRuntimeState) {
   const workflow = state.workflowState;
-  const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
-  const coordination = state.coordinationRuntimeState;
-  const request = coordination?.coordination.requests.at(-1);
-  const review = coordination?.coordination.reviews.at(-1);
   return {
     role: state.activeRole?.role,
     model: state.activeRole ? { provider: state.activeRole.provider, id: state.activeRole.model, thinkingLevel: state.activeRole.thinkingLevel } : undefined,
@@ -46,22 +39,13 @@ function handoffSnapshot(state: ExtensionRuntimeState) {
       currentTaskId: workflow.currentTaskId, nudgeCount: workflow.nudgeCount,
       tasks: workflow.tasks.slice(0, 64).map((item) => ({ id: item.id, role: item.role, status: item.status, outcomeUnknown: item.outcomeUnknown, executionStartedAt: item.executionStartedAt })),
       taskCount: workflow.tasks.length,
-      clarification: task?.clarification ? { issueId: task.clarification.issueId, category: task.clarification.category, questionHash: fingerprint(task.clarification.question) } : undefined,
       handoff: workflow.handoff, continuation: workflow.continuation,
       revisionId: workflow.pendingRevision?.revisionId, directionHash: fingerprint(workflow.pendingRevision?.direction), revisionCount: workflow.revisions.length,
-    } : undefined,
-    coordination: coordination ? {
-      coordinationId: coordination.coordination.coordinationId, version: coordination.coordination.version,
-      recoveryGeneration: coordination.recoveryGeneration, phase: coordination.coordination.phase,
-      workflowLink: coordination.coordination.workflowLink,
-      handoff: coordination.handoff ? { ...routingFields(coordination.handoff), phase: coordination.handoff.phase, kind: coordination.handoff.kind, failureCode: coordination.handoff.failure?.code } : undefined,
-      request: request ? { requestId: request.requestId, questionId: request.questionId, round: request.round, status: request.status, followUpOfRequestId: request.followUpOfRequestId, questionHash: fingerprint(request.question), scopeHash: fingerprint(request.scope) } : undefined,
-      review: review ? { reportId: review.reportId, decision: review.decision, gapsHash: fingerprint(review.gaps) } : undefined,
     } : undefined,
     compaction: { phase: state.roleCompactionPhase, operationId: state.roleCompactionOperationId, startedAt: state.roleCompactionStartedAt,
       pending: state.pendingRoleCompaction ? { fromRole: state.pendingRoleCompaction.fromRole, toRole: state.pendingRoleCompaction.toRole, continuationKind: state.pendingRoleCompaction.continuation?.kind } : undefined },
     locks: { dispatch: state.workflowDispatchInFlight, compaction: state.roleCompactionInFlight, continuationPending: state.internalContinuationPending, roleRecovery: state.roleRecoveryPending, roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: Boolean(state.pendingWorkflowRecovery) },
-    restoreErrorCode: state.workflowRestoreError?.code ?? state.coordinationRestoreError?.code,
+    restoreErrorCode: state.workflowRestoreError?.code,
   };
 }
 
@@ -69,24 +53,22 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   const mode = options.mode ?? (options.enabled !== undefined ? options.enabled ? "verbose" : "off" : process.env.PI_INIT_HANDOFF_LOG === "0" ? "off" : process.env.PI_INIT_HANDOFF_LOG === "1" ? "verbose" : "automatic");
   const enabled = mode === "verbose";
   const blackbox = createRuntimeDiagnostics(() => handoffSnapshot(state), { maxBytes: options.maxBytes });
-  const flush = async () => { await tail; await blackbox.flush(); };
+  const flush = async () => { await writer.flush(); await blackbox.flush(); };
   const report = (ctx: ExtensionContext) => mode === "off" ? Promise.resolve("运行黑匣子已关闭。") : blackbox.report(ctx);
-  const maxBytes = options.maxBytes ?? MAX_LOG_BYTES;
+
+  const writer = createDiagnosticWriter({ file: "logs/handoff.jsonl", maxBytes: options.maxBytes ?? MAX_LOG_BYTES, maxPending: MAX_PENDING, warning: "角色交接诊断日志写入失败；已停用日志，不影响任务执行。" });
   const runtimeId = randomUUID();
   let sequence = 0;
   let run = 0;
   let requestNumber = 0;
   let pendingProviderHeaders: string | undefined;
   let providerRequest: { requestNumber: number; startedAt: number; cwd: string; sessionId: string; run: number; headersObserved?: boolean; responseObserved?: boolean; status?: number } | undefined;
-  let pending = 0;
-  let dropped = 0;
-  let writeFailed = false;
+
   let lastRuntimeFailure: string | undefined;
   let lastLoop: string | undefined;
-  let tail = Promise.resolve();
 
   function observeSignals(ctx: ExtensionContext) {
-    const code = state.workflowRestoreError?.code ?? state.coordinationRestoreError?.code ?? (state.roleRecoveryPersistenceFailed ? "ROLE_RECOVERY_PERSISTENCE_FAILED" : undefined);
+    const code = state.workflowRestoreError?.code ?? (state.roleRecoveryPersistenceFailed ? "ROLE_RECOVERY_PERSISTENCE_FAILED" : undefined);
     const failure = code ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), code]) : undefined;
     if (failure && failure !== lastRuntimeFailure) blackbox.observe(ctx, "runtime.failure", { code });
     lastRuntimeFailure = failure;
@@ -103,7 +85,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
 
   function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
     try {
-      if (mode === "off" || writeFailed || !ctx.isProjectTrusted()) return;
+      if (mode === "off" || writer.failed || !ctx.isProjectTrusted()) return;
       if (!enabled) {
         if (event === "session.start" || event === "session.tree") { lastLoop = undefined; lastRuntimeFailure = undefined; }
         const closing = event === "agent.settled" || event === "session.shutdown";
@@ -113,31 +95,8 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
         if (!closing) observeSignals(ctx);
         return;
       }
-      if (pending >= MAX_PENDING) { dropped++; return; }
-      const path = join(ctx.cwd, ".pi", "logs", "handoff.jsonl");
-      const line = JSON.stringify({ version: 1, timestamp: new Date().toISOString(), runtimeId, sequence: ++sequence,
-        sessionId: ctx.sessionManager.getSessionId(), run, event, dropped, data, snapshot: handoffSnapshot(state) }) + "\n";
-      dropped = 0;
-      pending++;
-      const previous = fileQueues.get(path) ?? Promise.resolve();
-      const write = previous.then(async () => {
-        await mkdir(join(ctx.cwd, ".pi", "logs"), { recursive: true });
-        let size = 0;
-        try { size = (await stat(path)).size; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        if (size + Buffer.byteLength(line) > maxBytes) {
-          await rm(path + ".1", { force: true });
-          if (size > 0) await rename(path, path + ".1");
-        }
-        await appendFile(path, line, { mode: 0o600 });
-      }).catch(() => {
-        if (!writeFailed) {
-          writeFailed = true;
-          try { ctx.ui.notify("角色交接诊断日志写入失败；已停用日志，不影响任务执行。", "warning"); } catch {}
-        }
-      }).finally(() => { pending--; });
-      fileQueues.set(path, write);
-      void write.then(() => { if (fileQueues.get(path) === write) fileQueues.delete(path); });
-      tail = Promise.all([tail, write]).then(() => {});
+      writer.write(ctx, dropped => ({ version: 1, timestamp: new Date().toISOString(), runtimeId, sequence: ++sequence,
+        sessionId: ctx.sessionManager.getSessionId(), run, event, dropped, data, snapshot: handoffSnapshot(state) }));
     } catch {
       // Diagnostics must never change routing or task execution.
     }
@@ -146,7 +105,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   if (mode === "off") return { trace, flush, report };
   state.traceHandoff = trace;
   pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
-  pi.on("before_agent_start", (_event, ctx) => { pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.coordinationRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
+  pi.on("before_agent_start", (_event, ctx) => { pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
   function providerFields(ctx: ExtensionContext) {
@@ -163,7 +122,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   }
   pi.on("before_provider_request", (_event, ctx) => {
     try {
-      if (writeFailed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      if (writer.failed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
       providerFields(ctx);
       if (providerRequest) { trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" }); finishProvider(ctx, "superseded"); }
       providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), run,
@@ -174,7 +133,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   pi.on("before_provider_headers", (_event, ctx) => {
     try {
-      if (writeFailed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      if (writer.failed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
       const fields = providerFields(ctx);
       if (providerRequest) providerRequest.headersObserved = true;
       else pendingProviderHeaders = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]);
@@ -194,7 +153,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   async function observeTool(ctx: ExtensionContext, event: string, toolName: string, toolCallId: string, input: unknown, extra: Record<string, unknown> = {}, inspectFiles = false) {
     try {
-      if (writeFailed || !ctx.isProjectTrusted()) return;
+      if (writer.failed || !ctx.isProjectTrusted()) return;
       const summary = enabled ? await summarizeToolInput(ctx.cwd, input, inspectFiles) : {};
       trace(ctx, event, { toolName, toolCallId, ...summary, ...extra });
     } catch {

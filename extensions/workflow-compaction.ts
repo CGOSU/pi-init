@@ -3,7 +3,6 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
-import type { CoordinationHandoffIdentity } from "../src/coordination-runtime-types.ts";
 import {
   textOf,
   type ActiveRole,
@@ -29,10 +28,8 @@ type WorkflowCompactionDependencies = {
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: import("./runtime-state.ts").WorkflowHandoffIdentity) => void;
   scheduleWorkflow: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowActionIdentity, reason?: "context-budget") => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: import("./runtime-state.ts").WorkflowReplanIdentity) => void;
-  sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
   finishWorkflowBoundary?: (ctx: ExtensionContext, identity: WorkflowActionIdentity, failed?: boolean) => Promise<void>;
-  continueCoordinationBoundary?: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity, failed?: boolean) => Promise<void>;
 };
 
 type ActiveCompaction = {
@@ -91,19 +88,9 @@ export function createWorkflowCompaction(
 
   function watchdogNextStep(operation: ActiveCompaction) {
     const continuation = operation.transition.continuation;
-    if (!continuation) return "当前压缩没有可执行续跑，不会派发工作流任务；等待 Pi 完成后检查角色恢复状态。";
-    if (!continuationIsCurrent(operation.transition)) {
-      return (continuation.kind === "coordination-evidence" || continuation.kind === "coordination-boundary")
-        ? "关联的取证协作身份已变化，不会继续旧交接；请查看当前协调状态。"
-        : "关联的工作流身份已变化，不会继续旧交接；请查看当前工作流状态。";
-    }
-    if ((continuation.kind === "coordination-evidence" || continuation.kind === "coordination-boundary")) {
-      return "取证交接仍在等待 Pi 完成压缩；不会自动重派发，完成后核对当前协调状态。";
-    }
-    if (continuation.kind === "workflow-review") {
-      return "工作流仍等待用户审阅；压缩完成不会自动恢复，审阅后再显式继续。";
-    }
-    return "请先查看当前工作流状态；只有身份仍匹配时才显式恢复，不要重放旧交接。";
+    if (!continuation) return "当前压缩没有可执行续跑，不会派发工作流任务；等待Pi完成后检查职责恢复状态。";
+    if (!continuationIsCurrent(operation.transition)) return "关联的工作流身份已变化，不继续旧交接。";
+    return continuation.kind === "workflow-review" ? "仍等待用户审阅，压缩完成不自动恢复。" : "检查当前工作流，仅以仍匹配的身份显式恢复。";
   }
 
   function compactionElapsed(startedAt: number | undefined, now = Date.now()) {
@@ -162,21 +149,6 @@ export function createWorkflowCompaction(
     }
     const continuation = transition.continuation;
     if (!continuation) return true;
-    if ((continuation.kind === "coordination-evidence" || continuation.kind === "coordination-boundary")) {
-      const current = state.coordinationRuntimeState;
-      const handoff = current?.handoff;
-      return Boolean(current && handoff
-        && current.coordination.coordinationId === continuation.identity.coordinationId
-        && current.coordination.version === continuation.identity.coordinationVersion
-        && current.sessionId === continuation.identity.sessionId
-        && current.recoveryGeneration === continuation.identity.recoveryGeneration
-        && handoff.requestId === continuation.identity.requestId
-        && handoff.role === continuation.identity.role
-        && handoff.kind === continuation.identity.kind
-        && handoff.attemptId === continuation.identity.attemptId
-        && handoff.handoffId === continuation.identity.handoffId
-        && handoff.reportId === continuation.identity.reportId);
-    }
     const current = state.workflowState;
     if (!current) return false;
     if (continuation.kind === "workflow-task") {
@@ -210,8 +182,7 @@ export function createWorkflowCompaction(
 
   function continuationBelongsTo(transition: PendingRoleCompaction, identity: WorkflowActionIdentity) {
     const continuation = transition.continuation;
-    return continuation?.kind !== "coordination-evidence" && continuation?.kind !== "coordination-boundary"
-      && transition.sessionId === identity.sessionId
+    return transition.sessionId === identity.sessionId
       && transition.contextGeneration === state.roleContextGeneration
       && Boolean(continuation && sameWorkflowIdentity(continuation.identity, identity));
   }
@@ -240,7 +211,7 @@ export function createWorkflowCompaction(
       && branch.slice(budget.branchEntryIds.length).every(entry => entry.type === "custom" || entry.type === "compaction"));
     if (!contextIsCurrent(operation) || state.userStopRequested || !branchMatches
       || (budget && (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError
-        || state.coordinationRestoreError || state.pendingWorkflowRecovery || state.coordinationRuntimeState))
+        || state.pendingWorkflowRecovery))
       || state.roleTransitionGeneration !== transition.roleTransitionGeneration
       || !roleMatches
       || !continuationIsCurrent(transition)) return false;
@@ -255,11 +226,7 @@ export function createWorkflowCompaction(
       operationId: operation.operationId,
       nextAction: operation.transition.continuation?.kind === "workflow-review"
         ? "查看工作流状态并等待用户明确完成架构审阅；不得自动 resume。"
-        : operation.transition.continuation?.kind === "coordination-boundary"
-          ? "本次压缩失败前未派发协作消息；用户检查后执行 /pi-init coordination resume。未知派发结果不得用该命令重放。"
-          : operation.transition.continuation?.kind === "coordination-evidence"
-          ? "检查当前协作状态；结果未知时不得自动重放取证 handoff，只有 architect 核对后可显式请求新 attempt。"
-          : operation.transition.continuation
+        : operation.transition.continuation
             ? "检查当前工作流身份与状态；确认仍是同一交接后，再显式执行 /pi-init workflow resume。"
             : "后续仅在用户继续请求且任务仍未完成时恢复工作；不要重复已经完成的工作。",
     };
@@ -296,8 +263,6 @@ export function createWorkflowCompaction(
       deps.setWorkflowDispatchInFlight(false);
       if (transition.continuation?.kind === "workflow-boundary") {
         void deps.finishWorkflowBoundary?.(ctx, transition.continuation.identity, true).catch((error) => ctx.ui.notify(`无法记录任务边界压缩暂停：${textOf(error)}`, "error"));
-      } else if (transition.continuation?.kind === "coordination-boundary") {
-        void deps.continueCoordinationBoundary?.(ctx, transition.continuation.identity, true).catch((error) => ctx.ui.notify(`无法记录协作边界压缩暂停：${textOf(error)}`, "error"));
       }
       sendFailureDiagnostic(operation);
       return;
@@ -318,9 +283,6 @@ export function createWorkflowCompaction(
         deps.setWorkflowDispatchInFlight(false);
         void deps.finishWorkflowBoundary?.(ctx, transition.continuation.identity).catch((error) => ctx.ui.notify(`任务边界压缩续跑失败：${textOf(error)}`, "error"));
         return;
-      case "coordination-boundary":
-        void deps.continueCoordinationBoundary?.(ctx, transition.continuation.identity).catch((error) => ctx.ui.notify(`协作边界压缩续跑失败：${textOf(error)}`, "error"));
-        return;
       case "workflow-task":
         deps.sendWorkflowTaskMessage(ctx, transition.continuation.taskId, undefined, transition.continuation.identity);
         return;
@@ -334,10 +296,6 @@ export function createWorkflowCompaction(
       case "workflow-replan":
         deps.setWorkflowDispatchInFlight(false);
         deps.sendWorkflowReplanMessage(ctx, transition.continuation.identity);
-        return;
-      case "coordination-evidence":
-        void deps.sendCoordinationMessage(ctx, transition.continuation.identity)
-          .catch((error) => ctx.ui.notify(`协作自动交接失败：${textOf(error)}`, "error"));
         return;
       default:
         ctx.ui.notify("上下文压缩已完成；普通任务不会因此额外自动启动新回合。", "info");

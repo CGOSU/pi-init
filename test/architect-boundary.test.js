@@ -33,7 +33,7 @@ function assertArchitectBlocked(result, toolName) {
   assert.equal(result?.block, true, toolName);
 }
 
-test("architect 仅允许职责切换、规划及纯协调控制", async () => {
+test("architect 仅允许职责切换与扁平队列规划", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
   await harness.tools.find((tool) => tool.name === "switch_role").execute(
@@ -41,11 +41,11 @@ test("architect 仅允许职责切换、规划及纯协调控制", async () => {
   );
 
   assert.equal(await callToolCall(harness, "switch_role", { role: "docs-commit" }), undefined);
-  for (const action of ["plan", "replan", "status", "request-evidence", "review-evidence"]) {
+  for (const action of ["plan", "replan", "status", "request-replan", "request-goal"]) {
     assert.equal(await callToolCall(harness, "task_workflow", { action }), undefined, action);
   }
 
-  for (const action of ["complete", "block", "resume", "retry", "cancel", "report-evidence", "clarify", "unknown", ""]) {
+  for (const action of ["complete", "block", "resume", "retry", "cancel", "request-evidence", "review-evidence", "report-evidence", "clarify", "request-child", "review-child", "unknown", ""]) {
     assertArchitectBlocked(await callToolCall(harness, "task_workflow", { action }), `task_workflow:${action}`);
   }
   assertArchitectBlocked(await callToolCall(harness, "task_workflow"), "task_workflow:missing-action");
@@ -121,7 +121,7 @@ test("architect 允许动作单一定义同时驱动运行时边界与工具/契
     assert.equal(await callToolCall(harness, "task_workflow", { action }), undefined, action);
   }
   assert.deepEqual([...ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS], [
-    "plan", "replan", "status", "request-replan", "request-child", "request-goal", "review-child", "request-evidence", "review-evidence",
+    "plan", "replan", "status", "request-replan", "request-goal",
   ]);
 
   const blocked = await callToolCall(harness, "task_workflow", { action: "report-evidence" });
@@ -133,13 +133,9 @@ test("architect 允许动作单一定义同时驱动运行时边界与工具/契
     assert.ok(guidance.some((line) => line.includes(action)), `工具指导缺少 ${action}`);
   }
   assert.ok(guidance.some((line) => line.includes(ARCHITECT_ALLOWED_ACTIONS_TEXT)), "工具指导必须复用同一份允许动作说明");
-  assert.ok(guidance.some((line) => /task contract 与协调状态是双向门控/.test(line) && /普通计划不要附带 contract/.test(line)), "工具指导必须说明契约与协调状态的前置条件");
-  assert.ok(guidance.some((line) => /Task contracts are optional for ordinary plans/.test(line)), "工具描述必须说明普通任务无契约路径");
-  const contractDescription = workflowTool.parameters.properties.tasks.items.properties.contract.description;
-  assert.match(contractDescription, /普通任务保持无 contract 路径/);
-  assert.match(workflowTool.parameters.properties.coordinationHandoffId.description, /handoff 短引用/);
+  assert.equal(workflowTool.parameters.properties.tasks.items.properties.contract, undefined);
+  assert.equal(workflowTool.parameters.properties.coordinationHandoffId, undefined);
 });
-
 test("非 architect 角色在工具调用入口阻断工作流规划", async () => {
   const harness = createExtensionHarness([], {
     model: developer,

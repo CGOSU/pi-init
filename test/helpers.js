@@ -420,69 +420,6 @@ async function emitExtensionEvent(harness, name, event = {}) {
 
 const workflowMessageIdentity = (harness, customType = "pi-init-workflow-task") => harness.sentMessages.findLast(({ message }) => message.customType === customType)?.message.details;
 
-async function assertFastCommandContract() {
-  await withTempDirectory(async (directory) => {
-    const harness = createExtensionHarness([], { cwd: directory });
-    const task = "调整按钮颜色\\n  保留现有键盘操作";
-    await harness.commands.get("fast").handler(task, harness.context);
-    const message = harness.sentUserMessages[0]?.message ?? "";
-    assert.equal(harness.sentUserMessages.length, 1);
-    assert.ok(message.endsWith(task));
-    assert.match(message, /单次启用 Fast Path/);
-    assert.match(message, /这是对 Fast Path 自动适用条件的手动选择/);
-    assert.match(message, /不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程/);
-    assert.match(message, /直接定向读取最少必要上下文.*风险匹配的最小验证/);
-    assert.match(message, /安全、权限、需求\/契约确认.*必要验证仍优先/);
-    assert.doesNotMatch(message, /不保证该任务符合 Fast Path 资格|若任务不符合 Fast Path 条件/);
-    await assert.rejects(readFile(path.join(directory, ".pi", "role-models.json")), { code: "ENOENT" });
-  });
-
-  for (const options of [{ task: " " }, { task: "不应发送", isIdle: false }]) {
-    await withTempDirectory(async (directory) => {
-      const harness = createExtensionHarness([], { cwd: directory, isIdle: options.isIdle });
-      await harness.commands.get("fast").handler(options.task, harness.context);
-      assert.equal(harness.sentUserMessages.length, 0);
-      assert.equal(harness.notifications.length, 1);
-    });
-  }
-
-  const workflowState = (status) => {
-    let state = createWorkflowState({
-      summary: `Fast Path guard ${status}`,
-      reviewRequired: status === "paused",
-      tasks: [{ id: "task", task: "task", files: ["src"], acceptanceCriteria: ["done"] }],
-    });
-    if (status === "replanning") state = requestWorkflowReplan(state, { revisionId: "revision-fast", direction: "test" });
-    if (status === "completed") {
-      state = startWorkflowTask(state, "task");
-      state = completeWorkflowTask(state, {
-        taskId: "task", completionSummary: "done", implementationRationale: "test", verification: ["passed"],
-      });
-    }
-    if (status === "cancelled") state = cancelWorkflow(state);
-    return state;
-  };
-  for (const status of ["running", "paused", "replanning", "completed", "cancelled"]) {
-    await withTempDirectory(async (directory) => {
-      const state = workflowState(status);
-      const harness = createExtensionHarness([
-        { type: "custom", customType: "pi-init-workflow", data: state },
-      ], { cwd: directory });
-      await emitExtensionEvent(harness, "session_start");
-      const branchSize = harness.branch.length;
-      await harness.commands.get("fast").handler("独立任务", harness.context);
-      const blocked = !["completed", "cancelled"].includes(status);
-      assert.equal(harness.sentUserMessages.length, blocked ? 0 : 1);
-      if (blocked) {
-        assert.equal(harness.branch.length, branchSize);
-        assert.equal(harness.branch.findLast((entry) => entry.customType === "pi-init-workflow").data.status, status);
-      } else {
-        assert.match(harness.sentUserMessages[0].message, /独立任务/);
-      }
-    });
-  }
-}
-
 async function runExternalAgent(harness, source, options = {}) {
   await emitExtensionEvent(harness, "input", { source });
   await emitExtensionEvent(harness, "before_agent_start");
@@ -587,5 +524,4 @@ export {
   emitExtensionEvent,
   emitToolResult,
   runExternalAgent,
-  assertFastCommandContract,
 };

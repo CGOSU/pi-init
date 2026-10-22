@@ -10,13 +10,11 @@ import {
   normalizeTaskIds,
   normalizeTextList,
   requireText, assertWorkflowGoalReferences } from "./workflow-model.ts";
-import type { WorkflowPlanSummary, WorkflowResult, WorkflowState, WorkflowTask } from "./workflow-types.ts";
-import { validateClarificationResolutionCoverage, type WorkflowTaskClarificationDraft } from "./workflow-clarification.ts";
-
+import type { WorkflowPlanSummary, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 type WorkflowReplanRequest = {
   revisionId?: unknown;
   direction?: unknown;
-  kind?: "replan" | "nested" | "goal";
+  kind?: "replan" | "goal";
   goalParentId?: string;
   childGoal?: unknown;
 };
@@ -71,7 +69,6 @@ export function requestWorkflowReplan(
   { revisionId, direction, kind = "replan", childGoal, goalParentId }: WorkflowReplanRequest = {},
   now = Date.now(),
 ): WorkflowState {
-    if (kind === "nested" && state.parentStack?.length) throw Object.assign(new Error("仅允许一层活动子流程；请在当前子流程内拆分任务"), { code: "WORKFLOW_NESTED_DEPTH_LIMIT" });
   const pausedBoundary = state?.status === "paused" && !state.currentTaskId && !state.handoff && ["task-blocked", "task-not-completed", "handoff-outcome-unknown", "legacy-execution-outcome-unknown", "dependency-blocked"].includes(state.pauseReason ?? "");
   const convertGoal = state?.pendingRevision?.kind === "goal" && kind === "replan" && (state.status === "replanning" || state.status === "running" || pausedBoundary);
   if (!state || (state.status !== "running" && !pausedBoundary && !convertGoal)) {
@@ -103,7 +100,7 @@ export function requestWorkflowReplan(
     direction: normalizedDirection,
     requestedAt: now,
     ...(state.currentTaskId ? { requestedFromTaskId: state.currentTaskId } : {}),
-    ...(kind === "nested" || kind === "goal"
+    ...(kind === "goal"
       ? { kind, childGoal: requireText(childGoal ?? normalizedDirection, "插入目标"), ...(goalParentId ? { goalParentId } : {}) }
       : {}),
   };
@@ -118,14 +115,6 @@ export function requestWorkflowReplan(
   }
   return result;
 
-}
-
-export function requestWorkflowNestedGoal(
-  state: WorkflowState,
-  { revisionId, direction }: Omit<WorkflowReplanRequest, "kind" | "childGoal"> = {},
-  now = Date.now(),
-): WorkflowState {
-  return requestWorkflowReplan(state, { revisionId, direction, kind: "nested", childGoal: direction }, now);
 }
 
 function mergeReplanDirections(directions: string[]): string {
@@ -143,7 +132,7 @@ export function appendWorkflowReplanDirection(state: WorkflowState, direction: u
   if (!pendingRevision) throw new Error("工作流没有待处理的重规划请求");
   const merged = mergeReplanDirections([pendingRevision.direction, text]);
   pendingRevision.direction = merged;
-  if (pendingRevision.kind === "nested" || pendingRevision.kind === "goal") {
+  if (pendingRevision.kind === "goal") {
     pendingRevision.childGoal = mergeReplanDirections([pendingRevision.childGoal ?? pendingRevision.direction, text]);
   }
   if (result.status === "replanning") {
@@ -161,83 +150,8 @@ export function appendWorkflowReplanDirection(state: WorkflowState, direction: u
   );
   if (!revision) throw new Error("工作流重规划 revisionId 已应用或不存在");
   revision.direction = merged;
-  if (pendingRevision.kind === "nested" || pendingRevision.kind === "goal") revision.childGoal = pendingRevision.childGoal;
+  if (pendingRevision.kind === "goal") revision.childGoal = pendingRevision.childGoal;
   return result;
-}
-
-export function requestWorkflowTaskClarification(
-  state: WorkflowState,
-  draft: WorkflowTaskClarificationDraft,
-  now = Date.now(),
-): WorkflowResult<WorkflowState> {
-  const taskId = state?.currentTaskId;
-  const task = taskId ? state.tasks.find((item) => item.id === taskId) : undefined;
-  const handoff = state?.handoff;
-  if (!state || state.status !== "running" || !taskId || !task || task.status !== "in_progress"
-    || !handoff || handoff.taskId !== taskId || handoff.phase !== "executing") {
-    return { ok: false, code: "WORKFLOW_CLARIFICATION_HANDOFF_STALE", message: "澄清必须由当前真实启动的任务 handoff 提交" };
-  }
-  if (!task.contract) {
-    return { ok: false, code: "WORKFLOW_CLARIFICATION_CONTRACT_MISSING", message: "只有携带任务契约的协调任务可以提交结构化澄清" };
-  }
-  const issueId = `clarification-${randomUUID()}`;
-  const direction = `开发任务 ${taskId} 退回澄清 ${issueId}（${draft.category}）：${draft.question}`;
-  let requested: WorkflowState;
-  try {
-    requested = state.pendingRevision
-      ? appendWorkflowReplanDirection(state, direction, now)
-      : requestWorkflowReplan(state, { revisionId: issueId, direction }, now);
-  } catch (error) {
-    return {
-      ok: false,
-      code: "WORKFLOW_CLARIFICATION_REVISION_INVALID",
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  const result = cloneState(requested, now);
-  const clarifiedTask = result.tasks.find((item) => item.id === taskId);
-  if (!clarifiedTask || !result.pendingRevision) {
-    return { ok: false, code: "WORKFLOW_CLARIFICATION_STATE_INVALID", message: "澄清状态缺少当前任务或 revision" };
-  }
-  clarifiedTask.status = "blocked";
-  clarifiedTask.blockReason = `等待 architect 处理澄清：${draft.question}`;
-  clarifiedTask.clarification = {
-    ...draft,
-    issueId,
-    handoff: {
-      workflowId: state.workflowId,
-      planVersion: state.planVersion,
-      sessionId: state.sessionId,
-      recoveryGeneration: state.recoveryGeneration,
-      taskId,
-      attemptId: handoff.attemptId,
-      handoffId: handoff.handoffId,
-    },
-    createdAt: now,
-  };
-  result.currentTaskId = undefined;
-  delete result.handoff;
-  result.status = "replanning";
-  result.pauseReason = "workflow-replan";
-  delete result.taskPauseReason;
-  result.recoveryGeneration += 1;
-  result.continuation = {
-    kind: "replan",
-    revisionId: result.pendingRevision.revisionId,
-    handoffId: randomUUID(),
-    phase: "pending",
-    reason: "replan-requested",
-  };
-  result.pendingRevision.requestedFromTaskId ??= taskId;
-  const revision = result.revisions.find((item) =>
-    item.revisionId === result.pendingRevision?.revisionId && item.status === "requested",
-  );
-  if (!revision) {
-    return { ok: false, code: "WORKFLOW_CLARIFICATION_REVISION_MISSING", message: "澄清无法关联到待处理 revision" };
-  }
-  revision.direction = result.pendingRevision.direction;
-  result.nudgeCount = 0;
-  return { ok: true, value: result };
 }
 
 export function applyWorkflowReplan(
@@ -252,18 +166,14 @@ export function applyWorkflowReplan(
 
   const id = normalizeRevisionId(revisionId, "工作流重规划的 revisionId");
   const pendingRevision = state.pendingRevision;
-  if ((pendingRevision?.kind === "nested" || pendingRevision?.kind === "goal")) {
-    throw Object.assign(new Error("嵌套目标必须创建子工作流，不能覆盖父计划"), { code: "WORKFLOW_NESTED_REPLAN_FORBIDDEN" });
+  if ((pendingRevision?.kind === "goal")) {
+    throw Object.assign(new Error("插入目标必须规划同一队列，不能覆盖原有未完成任务"), { code: "WORKFLOW_NESTED_REPLAN_FORBIDDEN" });
   }
   if (!pendingRevision || pendingRevision.revisionId !== id) {
     throw new Error(`工作流重规划 revisionId 已过期或不匹配：${id}`);
   }
   const plan = normalizeReplanPlan({ summary, constraints, tasks });
-  const clarificationReadiness = validateClarificationResolutionCoverage(plan.tasks, state.tasks);
-  if (!clarificationReadiness.ok) {
-    throw Object.assign(new Error(clarificationReadiness.message), { code: clarificationReadiness.code });
-  }
-  const unknownWithoutClarification = state.tasks.some(task => task.outcomeUnknown && !task.clarification);
+  const unknownWithoutClarification = state.tasks.some(task => task.outcomeUnknown);
   let outcomeResolution: string | undefined;
   if (unknownWithoutClarification && plan.tasks.length) {
     if (!confirmUnknownOutcome) throw Object.assign(new Error("旧任务结果未知；新方案可能重放副作用，核对后显式确认并提供 reason 才能替换任务"), { code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" });

@@ -86,31 +86,6 @@ export const workflowTaskRoleSchema = Type.String({
   pattern: ROLE_ID_PATTERN.source,
   description: "任务执行角色 ID；必须是小写字母、数字和单连字符，默认使用 developer-test",
 });
-
-const taskContractSchema = Type.Object({
-  version: Type.Literal(1),
-  outcome: Type.String({ description: "任务预期的业务结果" }),
-  requirementSources: Type.Array(Type.String(), { minItems: 1, description: "需求来源及已接受事实出处；不要把推断写成来源" }),
-  expectedBehavior: Type.Array(Type.String(), { minItems: 1, description: "对用户可观察的预期行为" }),
-  evidence: Type.Array(Type.Object({ findingId: Type.String(), sourceId: Type.String(), sourceVersion: Type.String() }), {
-    description: "必须是当前协调状态中明确接受且来源版本匹配的证据引用",
-  }),
-  fixedDecisions: Type.Array(Type.String(), { description: "已确认决策；没有则显式给空数组" }),
-  invariants: Type.Array(Type.String(), { description: "实现不得破坏的不变量；没有则显式给空数组" }),
-  nonGoals: Type.Array(Type.String(), { description: "明确排除的目标；没有则显式给空数组" }),
-  blockingQuestions: Type.Array(Type.String(), { description: "影响正确性/验收的未决问题；不为空时计划不就绪" }),
-  engineeringDiscretion: Type.Array(Type.String(), { description: "开发者可自主决定的普通、可逆工程细节" }),
-  verification: Type.Array(Type.String(), { description: "本任务实际需要的验证；没有则显式给空数组" }),
-  clarificationResolutions: Type.Array(Type.Object({
-    issueId: Type.String(),
-    resolutionKind: StringEnum(["evidence", "contract", "decision"] as const),
-    resolution: Type.String(),
-    sideEffectDisposition: StringEnum(["none", "reconciled", "no-replay"] as const),
-  }), { description: "重规划时逐项回应此前澄清；无澄清时为空数组" }),
-}, {
-  description: "结构化任务契约。只在存在与当前 workflow revision 绑定、已接受且未过期的协调证据时允许携带，evidence 必须引用该账本中的已接受来源；普通任务保持无 contract 路径，不因协调协议被强制升级。",
-});
-
 export const workflowTaskSchema = Type.Object({
   id: Type.String({ description: "唯一任务 ID，小写字母、数字、点、下划线或连字符" }),
   task: Type.String({ description: "任务目标和实现范围" }),
@@ -124,129 +99,39 @@ export const workflowTaskSchema = Type.Object({
   }),
   role: Type.Optional(workflowTaskRoleSchema),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
-  contract: Type.Optional(taskContractSchema),
   goalId: Type.Optional(Type.String({ description: "已有目标归属，仅影响分组展示，不建立父子执行栈" })),
   priority: Type.Optional(Type.Integer({ minimum: -Number.MAX_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER, description: "同一队列中依赖已满足任务的优先级；越大越优先，相同保持顺序" })),
 });
-
-const coordinationIdentitySchema = Type.Object({
-  coordinationId: Type.String({ description: "持久协作记录 ID" }),
-  coordinationVersion: Type.Integer({ minimum: 1, description: "协作协议版本" }),
-  sessionId: Type.String({ description: "当前 Pi session 身份" }),
-  recoveryGeneration: Type.Integer({ minimum: 0, description: "当前协作恢复代次" }),
-  requestId: Type.String({ description: "当前证据请求 ID" }),
-  role: StringEnum(["docs-commit", "architect"] as const, { description: "派发的协作角色" }),
-  kind: StringEnum(["evidence", "review"] as const, { description: "当前协作 handoff 类型" }),
-  attemptId: Type.String({ description: "当前协作 attempt 身份" }),
-  handoffId: Type.String({ description: "当前协作 handoff 身份" }),
-  reportId: Type.Optional(Type.String({ description: "当前待审阅的报告 ID" })),
-});
-
-const evidenceRequestSchema = Type.Object({
-  requestId: Type.Optional(Type.String()),
-  questionId: Type.String({ description: "稳定的问题 ID" }),
-  question: Type.String({ description: "需要由取证明确回答的问题" }),
-  rationale: Type.String({ description: "为什么此问题影响架构或开发就绪" }),
-  scope: Type.Array(Type.String(), { minItems: 1, description: "必须核对的文件、符号、调用方或测试范围" }),
-  exclusions: Type.Optional(Type.Array(Type.String())),
-  completionCriteria: Type.Array(Type.String(), { minItems: 1, description: "取证完成条件" }),
-  addressesGaps: Type.Optional(Type.Array(Type.String(), { description: "明确回应 more 审阅指出的缺口" })),
-  followUpOfRequestId: Type.Optional(Type.String()),
-  refreshReason: Type.Optional(Type.String({ description: "重新核实已接受证据时的来源变化或理由" })),
-});
-
-const evidenceSourceSchema = Type.Object({
-  id: Type.String(),
-  location: Type.String(),
-  version: Type.String({ description: "来源版本、内容指纹或可复核的当前基线" }),
-});
-
-const evidenceReportSchema = Type.Object({
-  reportId: Type.Optional(Type.String()),
-  requestId: Type.Optional(Type.String({ description: "若省略，运行时仅在当前 evidence handoff 身份验证成功后补入对应请求 ID" })),
-  findings: Type.Array(Type.Object({
-    findingId: Type.String(),
-    questionId: Type.String(),
-    classification: StringEnum(["fact", "inference", "unconfirmed", "conflict"] as const),
-    statement: Type.String(),
-    sources: Type.Array(evidenceSourceSchema),
-  }), { description: "逐问题列出事实、推断、未确认项或冲突；每项注明来源" }),
-  inspectedScope: Type.Array(Type.String(), { minItems: 1 }),
-  testsLocated: Type.Optional(Type.Array(Type.String(), { description: "已定位但未必逐行阅读的测试" })),
-  testsRun: Type.Optional(Type.Array(Type.Object({ command: Type.String(), result: Type.String() }), {
-    description: "实际执行的检查命令及结果；未运行时留空，不得伪称通过",
-  })),
-  unresolved: Type.Optional(Type.Array(Type.String())),
-});
-
-const workflowTaskClarificationSchema = Type.Object({
-  category: StringEnum(["missing-fact", "contract-conflict", "business-decision"] as const),
-  question: Type.String({ description: "具体缺失事实、契约冲突或业务决策问题" }),
-  impact: Type.String({ description: "为何影响当前任务结果或正确性" }),
-  checkedFacts: Type.Array(Type.String(), { description: "开发者已核查的观察；不自动成为 architect 接受的证据" }),
-  completedWork: Type.Array(Type.String(), { description: "已经完成的改动或可保留成果" }),
-  verification: Type.Array(Type.String(), { description: "实际执行过的验证及结果；未运行时为空数组" }),
-  sideEffects: Type.Object({
-    status: StringEnum(["none", "occurred", "unknown"] as const),
-    details: Type.Array(Type.String(), { description: "可能、已发生或已核实无影响的副作用说明" }),
-  }),
-});
-
-const evidenceReviewSchema = Type.Object({
-  reviewId: Type.Optional(Type.String()),
-  reportId: Type.String(),
-  decision: StringEnum(["accept", "more", "block"] as const),
-  acceptedEvidence: Type.Optional(Type.Array(Type.Object({ findingId: Type.String(), sourceId: Type.String(), sourceVersion: Type.String() }))),
-  gaps: Type.Optional(Type.Array(Type.String())),
-  reason: Type.Optional(Type.String()),
-});
-
 export const taskWorkflowParameters = Type.Object({
-  action: StringEnum(["plan", "status", "checkpoint", "complete", "block", "clarify", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-child", "request-goal", "review-child", "request-evidence", "report-evidence", "review-evidence"] as const, {
-    description: "工作流或架构协作动作",
-  }),
+  action: StringEnum(["plan", "status", "checkpoint", "complete", "block", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-goal"] as const, { description: "扁平任务工作流动作；不提供正式取证、契约澄清或嵌套执行协议" }),
   checkpoint: Type.Optional(Type.Object({
     step: Type.String({ minLength: 1, maxLength: 200 }),
     accomplished: Type.Array(Type.Object({ summary: Type.String({ minLength: 1, maxLength: 512 }), evidenceIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 8 }) }), { maxItems: 16 }),
     remaining: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 32 }),
     blockers: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
     nextStep: Type.String({ minLength: 1, maxLength: 512 }),
-  }, { description: "当前真实执行任务的工作记忆；成果必须引用已有工具结果来源ID，不代表任务验收" })),
-  expectedMemoryRevision: Type.Optional(Type.Integer({ minimum: 0, description: "checkpoint必填，使用任务记忆中的revision防止覆盖较新进展" })),
-  memoryFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16, description: "checkpoint声明的项目相对文件；仅记录登记时内容hash，不证明测试完整依赖或执行时版本" })),
-  evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status按当前任务记忆中的来源ID读取原工具结果，不执行命令" })),
-  coordinationIdentity: Type.Optional(coordinationIdentitySchema),
-  coordinationHandoffId: Type.Optional(Type.String({
-    description: "当前运行时签发的协作 handoff 短引用；需要身份的协调动作（report-evidence、review-evidence、后续 request-evidence）可用它替代完整 coordinationIdentity。缺失引用不会套用当前状态；两种输入同时提供时必须指向同一 handoff。",
   })),
-  request: Type.Optional(evidenceRequestSchema),
-  report: Type.Optional(evidenceReportSchema),
-  review: Type.Optional(evidenceReviewSchema),
-  clarification: Type.Optional(workflowTaskClarificationSchema),
-  subworkflowContract: Type.Optional(Type.Object({ inputs: Type.Array(Type.String(), { minItems: 1 }), expectedOutputs: Type.Array(Type.String(), { minItems: 1 }), acceptanceCriteria: Type.Array(Type.String(), { minItems: 1 }), allowedFiles: Type.Array(Type.String(), { minItems: 1 }) })),
-  childReview: Type.Optional(Type.Object({ childWorkflowId: Type.String(), decision: StringEnum(["continue", "replan", "block"] as const), reason: Type.String(), parentPlanValid: Type.Boolean(), acceptedOutputs: Type.Array(Type.String()), verification: Type.Array(Type.String(), { minItems: 1 }) })),
-  parentGoalId: Type.Optional(Type.String({ description: "插入目标的已有父归属 ID，默认当前任务所属目标或根目标" })),
-  summary: Type.Optional(Type.String({ description: "架构规划摘要（plan/replan 必填）" })),
-  constraints: Type.Optional(Type.Array(Type.String(), { description: "架构约束和不可改变的决定" })),
-  revisionId: Type.Optional(Type.String({ description: "兼容显式重规划 revisionId；通常由运行时绑定" })),
-  retainTaskIds: Type.Optional(Type.Array(Type.String(), { description: "重规划时保留的未开始任务 ID" })),
-  tasks: Type.Optional(Type.Array(workflowTaskSchema, {
-    minItems: 0,
-    description: `按顺序拆分的开发测试任务，建议不超过 ${WORKFLOW_RECOMMENDED_TASKS} 个（软建议，不是硬上限）`,
-  })),
-  reviewRequired: Type.Optional(Type.Boolean({
-    description: "只有用户一开始明确要求先审阅架构时才设为 true；默认 false 自动推进",
-  })),
-  taskId: Type.Optional(Type.String({ description: "当前任务或要重试的任务 ID" })),
-  workflowId: Type.Optional(Type.String({ description: "兼容显式身份；本轮模型调用由运行时绑定，通常省略" })),
-  planVersion: Type.Optional(Type.Integer({ minimum: 0, description: "兼容显式计划版本；通常由运行时绑定" })),
-  sessionId: Type.Optional(Type.String({ description: "兼容显式 session 身份；通常由运行时绑定" })),
-  recoveryGeneration: Type.Optional(Type.Integer({ minimum: 0, description: "兼容显式恢复代次；通常由运行时绑定" })),
-  attemptId: Type.Optional(Type.String({ description: "兼容显式 attempt 身份；通常由运行时绑定" })),
-  handoffId: Type.Optional(Type.String({ description: "兼容显式 handoff 身份；通常由运行时绑定" })),
-  confirmUnknownOutcome: Type.Optional(Type.Boolean({ description: "兼容参数；模型填写 true 不构成未知结果重放授权，需用户命令或面板确认" })),
-  completionSummary: Type.Optional(Type.String({ description: "完成任务的实现摘要" })),
-  implementationRationale: Type.Optional(Type.String({ description: "为什么采用该实现；必须说明关键取舍或约束" })),
-  verification: Type.Optional(Type.Array(Type.String(), { description: "实际执行过的验证命令和结果" })),
-  reason: Type.Optional(Type.String({ description: "阻塞原因（block 必填）" })),
+  expectedMemoryRevision: Type.Optional(Type.Integer({ minimum: 0, description: "checkpoint必填，使用当前任务记忆revision拒绝陈旧覆盖" })),
+  memoryFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16, description: "checkpoint声明的项目相对文件；内容hash不证明完整验证依赖" })),
+  evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status只读查询当前任务原工具结果，不属于正式取证协议" })),
+  parentGoalId: Type.Optional(Type.String({ description: "目标归属ID，只分组、不创建执行栈" })),
+  summary: Type.Optional(Type.String({ description: "规划摘要或修正方向" })),
+  constraints: Type.Optional(Type.Array(Type.String())),
+  revisionId: Type.Optional(Type.String()),
+  retainTaskIds: Type.Optional(Type.Array(Type.String())),
+  tasks: Type.Optional(Type.Array(workflowTaskSchema, { minItems: 0, description: "依赖优先的顺序任务；建议不超过 " + WORKFLOW_RECOMMENDED_TASKS + " 项，不是硬上限" })),
+  reviewRequired: Type.Optional(Type.Boolean({ description: "仅用户明确要求先审阅规划时设置" })),
+  taskId: Type.Optional(Type.String()),
+  workflowId: Type.Optional(Type.String()),
+  planVersion: Type.Optional(Type.Integer({ minimum: 0 })),
+  sessionId: Type.Optional(Type.String()),
+  recoveryGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
+  attemptId: Type.Optional(Type.String()),
+  handoffId: Type.Optional(Type.String()),
+  confirmUnknownOutcome: Type.Optional(Type.Boolean({ description: "模型布尔值不构成未知结果重放授权，必须由用户命令或面板确认" })),
+  completionSummary: Type.Optional(Type.String()),
+  implementationRationale: Type.Optional(Type.String()),
+  verification: Type.Optional(Type.Array(Type.String())),
+  outcomeUnknown: Type.Optional(Type.Boolean({ description: "block时报告执行或副作用结果未知；仅增加保护，不授权清除未知状态或自动重试" })),
+  reason: Type.Optional(Type.String()),
 });

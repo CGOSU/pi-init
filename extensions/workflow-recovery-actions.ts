@@ -10,6 +10,7 @@ import {
 } from "../src/workflow-recovery-disposition.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
+import { latestWorkflowRecoverySource } from "./workflow-recovery.ts";
 
 export type WorkflowRecoveryActionDependencies = { report: WorkflowReport };
 
@@ -125,9 +126,10 @@ export function createWorkflowRecoveryActions(
       throwActionError("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法读取当前 sessionId；不得猜测隔离记录所属 session");
     }
     const branch = ctx.sessionManager.getBranch();
-    const source = branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow");
+    const latest = latestWorkflowRecoverySource(branch);
+    const source = latest.entry;
     if (!source || source.id !== requestedSourceEntryId
-      || branch.filter((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow" && entry.id === requestedSourceEntryId).length !== 1) {
+      || branch.filter((entry) => entry.type === "custom" && entry.customType === source.customType && entry.id === requestedSourceEntryId).length !== 1) {
       throwActionError("WORKFLOW_RECOVERY_SOURCE_CHANGED", "原记录已不再是当前 branch 的唯一最新工作流 entry；重新读取状态后再处理");
     }
     const sourceData = "data" in source ? source.data : undefined;

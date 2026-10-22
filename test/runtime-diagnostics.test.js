@@ -151,7 +151,9 @@ test("磁盘轮转、保留期限和截断行在报告中有明确边界", async
     assert.ok((await stat(path)).size <= 128 * 1024);
     assert.ok((await stat(path + ".1")).size <= 128 * 1024);
     await appendFile(path, "{broken\n");
-    assert.match(await monitor.report(ctx), /记录不完整/);
+    const beforeReport = await stat(path);
+      assert.match(await monitor.report(ctx), /记录不完整/);
+      assert.equal((await stat(path)).mtimeMs, beforeReport.mtimeMs);
     const old = new Date(Date.now() - 8 * 86400000);
     await utimes(path, old, old); await utimes(path + ".1", old, old);
     await emit("before_agent_start"); await emit("agent_settled"); await monitor.flush();

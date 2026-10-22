@@ -1,11 +1,11 @@
 import { Buffer } from "node:buffer";
 import type { ContextEvent } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
+import { groupToolMessages } from "./role-context-protocol.ts";
+import type { ContextGroup } from "./role-context-protocol.ts";
 
 type Message = ContextEvent["messages"][number];
-type Call = { id: string; name: string; arguments: unknown };
-type Unit = { indices: number[]; calls: Call[]; failed: boolean };
-const ANCHORS = new Set(["pi-init-workflow-task", "pi-init-workflow-replan", "pi-init-coordination-evidence", "pi-init-coordination-review",
+const ANCHORS = new Set(["pi-init-workflow-task", "pi-init-workflow-replan",
   "pi-init-task-memory-view", "pi-init-role-handoff", "pi-init-workflow-paused-context", "pi-init-role-recovery", "pi-init-role-context-view-diagnostic"]);
 
 export function contextByteBudget(contextWindow?: number) {
@@ -22,42 +22,22 @@ export function boundContextWindow(messages: Message[], budgetBytes = 192_000, s
     overBudget: inputBytes > budgetBytes, omittedMessages: 0, reason });
   if (inputBytes <= budgetBytes) return unchanged("within-budget");
   if (messages.some(message => (message as { role: string }).role === "system")) return unchanged("system-message-present");
-  const units: Unit[] = [];
-  const owners = new Map<string, Unit>();
-  const completed = new Set<string>();
-  const pinned = new Set<Unit>();
-  const anchors = new Map<string, Unit>();
-  for (const [index, message] of messages.entries()) {
-    if (message.role === "toolResult") {
-      const unit = owners.get(message.toolCallId);
-      if (!unit || completed.has(message.toolCallId)) return unchanged("unsafe-tool-pairs");
-      unit.indices.push(index);
-      unit.failed ||= message.isError;
-      completed.add(message.toolCallId);
-      continue;
-    }
-    const unit: Unit = { indices: [index], calls: [], failed: false };
-    if (message.role === "assistant") {
-      if (!Array.isArray(message.content)) return unchanged("unsafe-tool-pairs");
-      unit.calls = message.content.filter(part => part.type === "toolCall");
-      unit.failed = message.stopReason === "error" || message.stopReason === "aborted";
-      for (const call of unit.calls) {
-        if (owners.has(call.id)) return unchanged("unsafe-tool-pairs");
-        owners.set(call.id, unit);
-      }
-    }
+  const units = groupToolMessages(messages);
+  if (!units) return unchanged("unsafe-tool-pairs");
+  const pinned = new Set<ContextGroup>();
+  const anchors = new Map<string, ContextGroup>();
+  for (const unit of units) {
+    const message = messages[unit.indices[0]];
     if (message.role === "user") pinned.add(unit);
     if (message.role === "custom" && ANCHORS.has(message.customType)) anchors.set(message.customType, unit);
-    units.push(unit);
   }
-  if ([...owners.keys()].some(id => !completed.has(id))) return unchanged("unsafe-tool-pairs");
   for (const unit of anchors.values()) pinned.add(unit);
   for (const unit of units) {
     const summarized = unit.calls.length > 0 && unit.calls.every(call => summarizedToolCallIds.has(call.id));
     if (unit.failed && !summarized || unit.indices.includes(messages.length - 1)) pinned.add(unit);
   }
   const archiveLimit = Math.max(1_600, Math.min(12_000, Math.floor(budgetBytes / 3)));
-  const unitBytes = (unit: Unit) => unit.indices.reduce((sum, index) => sum + sizes[index] + 1, 0);
+  const unitBytes = (unit: ContextGroup) => unit.indices.reduce((sum, index) => sum + sizes[index] + 1, 0);
   let used = [...pinned].reduce((sum, unit) => sum + unitBytes(unit), 2);
   // Pruning only successes when protected evidence fills the budget erases task progress.
   if (used + archiveLimit > budgetBytes) return unchanged("protected-content-over-budget");

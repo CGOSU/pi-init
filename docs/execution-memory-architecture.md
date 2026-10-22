@@ -92,7 +92,7 @@ TaskMemory 不保存任务 status，不修改角色、不派发、不重试、�
 2. **接通读写协议**：现有 task_workflow 增加 checkpoint，status 提供记忆及来源读取；公共角色 Skill 说明何时登记、如何复用。
 3. **替换投影策略**：在现有 recovery/budget 模块固定工作记忆主干，只有大正文参与裁剪；沿用原压缩/停止边界。
 
-不一次性改动 workflow schema、队列、coordination 和 dispatcher。goals/goalId 继续只表达归属，任务继续走同一扁平执行队列。
+goals/goalId 继续只表达归属，任务走同一扁平队列与dispatcher；正式证据、结构契约和旧嵌套协议已退役，旧来源通过统一恢复诊断处理，不自动恢复。
 
 ## 验收底线
 

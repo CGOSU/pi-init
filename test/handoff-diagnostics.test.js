@@ -25,18 +25,18 @@ test("交接日志记录事件、身份和状态，观察器不改变任务或�
     const before = { ...state };
     assert.equal(handlers.get("input")({ source: "interactive", text: "secret-input" }, ctx), undefined);
     handlers.get("before_agent_start")({}, ctx);
-    await handlers.get("tool_call")({ toolName: "task_workflow", toolCallId: "call-1", input: { action: "request-evidence", workflowId: "workflow-1", request: { requestId: "request-1", question: "secret-question", scope: ["secret-scope"] } } }, ctx);
-    await handlers.get("tool_result")({ toolName: "task_workflow", toolCallId: "call-1", isError: true, content: [{ text: "secret-output" }], details: { code: "COORDINATION_NO_PROGRESS" } }, ctx);
+    await handlers.get("tool_call")({ toolName: "task_workflow", toolCallId: "call-1", input: { action: "request-replan", workflowId: "workflow-1", direction: "secret-direction" } }, ctx);
+    await handlers.get("tool_result")({ toolName: "task_workflow", toolCallId: "call-1", isError: true, content: [{ text: "secret-output" }], details: { code: "WORKFLOW_INVALID_STATE" } }, ctx);
     handlers.get("agent_settled")({}, ctx);
     await monitor.flush();
     const rows = await read();
     assert.deepEqual(rows.map((row) => row.event), ["input", "agent.before_start", "routing.tool_call", "routing.tool_result", "agent.settled"]);
     assert.deepEqual(rows.map((row) => row.sequence), [1, 2, 3, 4, 5]);
-    assert.equal(rows[2].data.request.requestId, "request-1");
+    assert.equal(rows[2].data.workflowId, "workflow-1");
     assert.equal(rows[2].snapshot.role, "docs-commit");
-    assert.equal(rows[3].data.code, "COORDINATION_NO_PROGRESS");
+    assert.equal(rows[3].data.code, "WORKFLOW_INVALID_STATE");
     assert.equal(rows[3].data.isError, true);
-    assert.ok(rows[2].data.request.questionHash);
+    assert.ok(rows[2].data.directionHash);
     assert.equal(JSON.stringify(rows).includes("secret-"), false);
     assert.deepEqual(state, before);
   });
@@ -44,17 +44,16 @@ test("交接日志记录事件、身份和状态，观察器不改变任务或�
 
 test("压缩与持久状态跟踪保留操作身份且不写入失败原因正文", async () => {
   await withMonitor(async ({ ctx, state, monitor, read }) => {
-    state.roleCompactionInFlight = true;
+    state.workflowRestoreError = { code: "WORKFLOW_RESTORE_FAILED", message: "private credential" };
+      state.roleCompactionInFlight = true;
     state.roleCompactionPhase = "compacting";
     state.roleCompactionOperationId = "operation-1";
-    state.coordinationRuntimeState = { coordination: { coordinationId: "coord-1", version: 1, phase: "investigating", requests: [{ requestId: "req-1", questionId: "q-1", round: 4, status: "pending", question: "private question", scope: ["private file"] }], reviews: [] }, recoveryGeneration: 2, handoff: { requestId: "req-1", role: "docs-commit", kind: "evidence", attemptId: "attempt-1", handoffId: "handoff-1", phase: "blocked", failure: { code: "UNKNOWN", message: "private credential" } } };
     state.traceHandoff(ctx, "compaction.long_wait", { operationId: "operation-1" });
     await monitor.flush();
     const [row] = await read();
     assert.equal(row.snapshot.compaction.operationId, "operation-1");
     assert.equal(row.snapshot.locks.compaction, true);
-    assert.equal(row.snapshot.coordination.request.round, 4);
-    assert.equal(row.snapshot.coordination.handoff.failureCode, "UNKNOWN");
+      assert.equal(row.snapshot.restoreErrorCode, "WORKFLOW_RESTORE_FAILED");
     assert.equal(JSON.stringify(row).includes("private"), false);
   });
 });
@@ -74,11 +73,12 @@ test("未信任项目或关闭日志时不创建文件", async () => {
 });
 
 test("日志轮转仅保留当前文件和一个备份", async () => {
-  await withMonitor(async ({ cwd, ctx, monitor, read }) => {
-    for (let i = 0; i < 5; i++) { monitor.trace(ctx, "test", { index: i }); await monitor.flush(); }
+  await withMonitor(async ({ cwd, ctx, state, monitor, read }) => {
+    const peer = createHandoffDiagnostics({ on() {} }, state, { enabled: true, maxBytes: 1 });
+      for (let i = 0; i < 5; i++) { monitor.trace(ctx, "test", { index: i }); peer.trace(ctx, "test", { index: i + 0.5 }); await Promise.all([monitor.flush(), peer.flush()]); }
     assert.deepEqual((await readdir(join(cwd, ".pi", "logs"))).sort(), ["handoff.jsonl", "handoff.jsonl.1"]);
-    assert.equal((await read()).at(-1).data.index, 4);
-    assert.equal(JSON.parse((await readFile(join(cwd, ".pi", "logs", "handoff.jsonl.1"), "utf8")).trim()).data.index, 3);
+    assert.equal((await read()).at(-1).data.index, 4.5);
+    assert.equal(JSON.parse((await readFile(join(cwd, ".pi", "logs", "handoff.jsonl.1"), "utf8")).trim()).data.index, 4);
   }, { maxBytes: 1 });
 });
 
@@ -121,7 +121,6 @@ test("开启监控后不抢占职责守卫，shutdown 刷新真实扩展的交�
     await emitExtensionEvent(harness, "session_shutdown");
     const rows = (await readFile(join(cwd, ".pi", "logs", "handoff.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
     assert.ok(rows.some((row) => row.event === "workflow.schedule"));
-    assert.ok(rows.some((row) => row.event === "coordination.schedule"));
     assert.equal(rows.at(-1).event, "session.shutdown");
     assert.equal(harness.sentMessages.length, 0);
   } finally {

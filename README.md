@@ -5,7 +5,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 ## 功能
 
 - 生成项目级 `AGENTS.md`、记忆文档和 `.pi/role-models.json`。
-- 随 package 发布公共 `pi-init-role-routing` Skill，集中维护角色职责、路由、交接、证据门控和工作流规则；新项目不再生成项目级角色 Skill。
+- 随 package 发布公共 `pi-init-role-routing` Skill，集中维护角色职责、路由、交接与工作流规则；新项目不再生成项目级角色 Skill。
 - 按风险分级执行：只读咨询和目标明确的低风险开发直接自主推进，不为一般技术选择、排查顺序或恢复既定行为的 bug 反复询问或交接；用户要求简单任务只做实现时，不默认运行全量测试、类型检查或构建，只保留最小必要核对并说明未执行项；复杂/高风险任务仍保留结构化证据、角色边界、真实验证和授权。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
 - 根据任务在公共 Skill 定义的职责之间切换模型；项目通过 `roleModels` 映射配置显式模型并启用自定义角色，内置标准职责无映射时沿用当前会话模型。
@@ -181,16 +181,14 @@ sh ./scripts/install-launchers.sh
 
 普通任务由匹配角色连续调查、实现和验证，切角不重启任务，也不默认创建正式证据链。已确认事实、有效验证与进度按需复用；身份由运行时绑定实际派发回合，模型通常只提交业务结果。暂停恢复、兼容行为和授权边界见 [`docs/role-continuity.md`](docs/role-continuity.md)；详细职责规则仍由公共 `pi-init-role-routing` Skill 维护。
 
-`architect` 只负责思考、分析、决策、规划和安排。其运行时仅允许 `switch_role` 与 `task_workflow(action="plan"/"replan"/"status"/"request-replan"/"request-child"/"review-child"/"request-evidence"/"review-evidence")`；后两项是纯协议规划/审阅动作，不授权读取仓库、运行取证或执行开发。`report-evidence`、`clarify`、`complete`、`block`、`resume`、`retry`、`cancel`，以及 `read`、搜索、shell、编辑、浏览器、脚本、协作和未知工具均由运行时 fail-closed 阻断。提示层只用于降低错误率，运行时守卫负责权限执行。
+`architect` 只分析、决策、规划和安排，仅允许 switch_role 与 task_workflow 的 plan/replan/status/request-replan/request-goal；不得作为执行任务角色，不直接读取仓库、运行代码或连接 MCP。新事实通过普通 docs-commit 调查任务获取，运行时继续守卫执行与验收权限。
 
-### 证据协作、开发契约与模型上下文
+### 普通调查、任务记忆与上下文
 
-- `request-evidence` / `review-evidence` 由 architect 创建问题并明确接受、补查或阻塞；受派发的 `docs-commit` 用 `report-evidence` 回报事实、推断或未知、来源及版本、检查范围、测试位置和实际执行验证。取证报告不会自动变成已接受证据；docs 取证阶段不例行 commit。
-- 正式协调动作通常由运行时绑定本轮派发身份，兼容显式 `coordinationHandoffId` 或完整 `coordinationIdentity`。未观察到真实派发消息的隐式提交不会套用当前状态；显式过期身份和冲突引用继续拒绝。
-- 报告输入校验失败（来源版本/位置冲突、重复 acceptedEvidence、未解决缺口等）且尚未持久化时，可在同一有效 handoff 内用同一身份修正后重提，不新建 attempt、不自动重试、不重新取证；权限失败、身份过期、恢复失败、持久化结果未知或已提交成功的动作不属于可直接重提。单条 finding 内 `id`/`location`/`version` 完全一致的来源会去重保留首次顺序，同 `id` 不同版本或位置仍拒绝；`acceptedEvidence` 只合并完全一致的三元引用，不会自动接受任何未明确引用的结论。
-- 普通计划不因 ready 旁账强制生成契约；主动携带 contract 或已绑定的正式/legacy 工作流仍校验有效证据、当前 revision、关键未决和副作用处置。不得删除契约降级或绕过正在进行/blocked 的显式取证。
-- 协调状态复用 Pi 当前 session 的 append/branch 和既有 local task executor；协调记录本身不是 architect 执行任务，不新增第二个 executor，也不占用开发任务额度。
-- 扩展通过公开 `context` 钩子为当前交接裁剪实际模型输入，保留原 session/branch 历史；Pi 管理的 system/tool state 不由扩展接管，不使用 `context_with_system`。边界可靠时保留当前角色工作窗口、真实工具调用与结果配对和新用户指令；交接、branch 或压缩映射不确定时保留完整输入并明确报告未裁剪。测试 harness 结果不代表已验证真实 Provider、Pi TUI/E2E、跨模型缓存或费用收益。
+- 调查使用普通 docs-commit 任务，开发使用 files/acceptanceCriteria/实际 verification；缺少关键事实或权限时 block，不建立正式证据或结构契约/clarify 协议。
+- task_workflow(checkpoint) 保存当前步骤、成果来源、剩余项与下一步；status 可按 evidenceIds 读取原工具结果，不因上下文裁剪重跑。
+- 上下文保留用户指令、真实身份、工作记忆和完整工具组；历史正文可归档，原 session 不改写。真实压力仍走原压缩/停止管理器。
+- 正式证据、结构契约/澄清、旧嵌套执行及 /fast 已退役。旧状态返回 WORKFLOW_FEATURE_RETIRED，不自动扁平化、恢复或重放；先核对副作用，再通过受保护的 discard-recovery 隔离或开启新会话。
 
 角色、模型和模式的关系：
 
@@ -222,7 +220,7 @@ flowchart LR
 控制中心提供快速初始化、高级初始化、项目模板同步、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
 
 ```text
-/fast <任务描述>
+
 /pi-init init [目录]
 /pi-init advanced [目录]
 /pi-init sync [目录]
@@ -237,7 +235,7 @@ flowchart LR
 /pi-init coordination reopen <reportId> <原因>
 ```
 
-`/fast <任务描述>` 是用户为本次任务显式选择 Fast Path，不设置持久开关、不修改项目配置或模型；Agent 忙碌、存在未结束工作流（running/paused/replanning）或有无法恢复的已保存工作流时仍会拒绝派发。它会跳过自动 Fast Path 的任务类型、规模和修改范围资格复核，直接按精简流程定向读取最少必要上下文、完成所需修改和风险匹配的最小验证；不会仅因自动资格不符而退回普通流程。安全、权限、需求/契约确认、职责边界、上下文恢复门、工作流保护和必要验证始终优先；任务独立要求架构规划或工作流时仍须遵循。
+`/fast` 已退役。普通低风险任务按明确目标连续调查、实现和最小必要验证，不需要额外快捷命令；安全、权限、职责恢复及真实验证仍优先。
 
 `/pi-init coordination resume` 只恢复已确认尚未派发的协作压缩失败；它不会解除证据审阅的 `block`。用户可用 `/pi-init coordination reopen <reportId> <原因>` 显式重开指定问题最新且明确阻塞的报告。重开保留原取证、来源版本和阻塞审阅记录，只创建新的 architect 复审轮次，不自动接受证据或派发开发；Agent 忙碌、项目不可信、状态恢复异常或存在未完成/结果未知的 handoff 时拒绝执行。
 
@@ -260,13 +258,9 @@ flowchart LR
 - `Ctrl+S` 和 `F2` 覆盖控制中心、角色与模型、模式、工作流策略、角色选择、模型搜索和推理强度等层级；初始化表单仍使用 `Enter` 确认、`Esc` 返回。
 - 执行 `/pi-init save` 仍是非 TUI 和兼容场景的显式保存入口。
 
-### 架构前置证据与职责边界
+### 调查与职责边界
 
-角色路由遵循公共 Skill 的单一层级：明确实现/测试直接交给 `developer-test`，明确文档、版本或 Git 收尾直接交给 `docs-commit`，不明确、含糊或跨职责的指令从 `architect` 开始。简单只读咨询可直接由适合的非 `architect` 角色完成；凡需要仓库、代码、测试、文档或外部事实取证，均由 `docs-commit` 完成并交接包含事实、来源、相关符号、调用/依赖、测试、工作区状态、风险和未确认项的结构化证据包。`architect` 只消费证据，负责思考、分析、决策、规划和安排，除 `switch_role` 与 `task_workflow` 的 `plan`/`replan`/`status` 外不调用工具、不连接 MCP；实现完成并验证后，只有产生文档、版本或 Git 收尾时才交给 `docs-commit`。
-
-当公共 Skill 或扩展更新后，已安装的 package 和当前 Pi 进程不会自动获得新规则；请执行 `pi update --extensions`，然后 `/reload` 或重启 Pi。新守卫只在扩展重新加载后生效。当前仓库源码的修改不会自动覆盖已安装 Git package；本次退役未执行安装、`pi update --extensions`、reload、真实 Pi E2E、提交或推送。
-
-任务工作流默认使用 `workflowMode: "auto"`。使用 `/pi-init config workflow` 在当前会话暂存 `off`、`on` 或 `auto`，执行 `/pi-init save` 后才写入项目配置；也可以直接编辑 `.pi/role-models.json` 的顶层 `workflowMode` 字段：`off` 不创建新规划，`on` 始终创建工作流，`auto` 对不超过 2 个任务的规划返回绕过提示、不持久化状态、不调度角色，并要求按各任务指定角色切换后直接顺序执行，架构角色不直接实现；超过 2 个任务才进入编排。所有 pi-init 工作流都在当前主会话内 local 顺序执行。缺省配置及旧 `workflowExecutor: "local"` 配置仍可用，但执行器不再作为菜单或 schema 选项；旧项目缺失 `workflowMode` 时，`workflowEnabled: true/false` 分别兼容为 `on/off`，两者同时存在时以 `workflowMode` 为准。
+architect 只分析、规划与安排；允许 plan/replan/status/request-replan/request-goal。需要新事实时安排普通 docs-commit 调查任务，直接交接事实、来源、实际验证和未知。developer-test 实现并验证，docs-commit 维护文档及按授权统一收尾；不额外建立取证审阅状态机。
 
 #### 已退役的旧 Runtime 数据
 
@@ -274,29 +268,14 @@ flowchart LR
 
 #### 工作流交接与恢复边界
 
-工作流状态使用 Pi 扩展公开的 `appendEntry` 写入当前 session，并在 `session_start`/`session_tree` 从活动 branch 恢复。该能力持久化的是 pi-init 的工作流记录，不是 AgentHarness durable operation API；`appendEntry`/`sendMessage` 的公开契约不提供事务、fsync 或外部副作用 exactly-once 保证。工作流继续由 `task_workflow` 唯一负责计划、依赖、阻塞、验收和重规划，Pi turn 结束或消息已排队都不代表业务任务已完成。`architect` 不能作为执行任务角色，complete/block 只能由匹配的非 architect 执行角色调用；发现旧计划违反该约束时不会自动改写角色或派发，需先检查并显式取消该旧工作流，再另建计划。
-
-创建工作流时会生成 `workflowId`、`planVersion`、当前 `sessionId` 与 `recoveryGeneration`；后续变更工具必须匹配当前基础身份。任务 `complete`/`block` 还须匹配当前 `taskId`、`attemptId` 和 `handoffId`，重规划还须匹配当前 `revisionId` 与 `handoffId`。这些身份由当前任务/重规划交接提供，缺失、旧 branch 或不匹配的身份会被拒绝，不从任务文本补齐。恢复时尚未派发的准备阶段可安全续接；已派发或已启动但无业务验收结果的任务会暂停为“结果未知”，不得自动重放。核对外部副作用后，用户可显式执行 `/pi-init workflow retry <taskId> --confirm-unknown-outcome` 创建新 attempt；这不是 exactly-once 或撤销既有副作用的保证。旧 local 状态可读取；缺少执行身份的 legacy `in_progress` 会暂停待核对，原 session entry 不原地改写，旧 Runtime 状态仍 fail-closed。
-
-协调证据绑定会在工作流状态成功写入后统一同步；完成、阻塞、重试、提醒暂停和恢复产生的新执行代次，不再依赖各动作分别维护关联。派发或补充取证前也会补偿同 session、同 workflowId、同 planVersion 的已有落后绑定；不会创建缺失绑定、改绑其他计划或倒退未来代次。同步失败时保留已完成结果、暂停后续派发，存储恢复后重试关联，不重跑已完成任务。来源版本、证据就绪与任务契约检查仍然生效，真实不匹配仍会阻断。
-
-工作流状态、单任务完成、工作流最终完成和普通执行计时分别由只读类型视图提供数据，并由纯文本与 TUI renderer 输出，不依据中文标题或已格式化文本推断类别。状态视图同时供状态文本、状态栏、进度面板及非暂停的 `task_workflow` 结果使用；进度面板的刷新与任务选择仍由运行层负责。完成报告保持中间任务精简、最终报告只展示明确的最终任务和整体耗时，验证只列明确失败项；计时缺失会显示不可用而非伪装成零。
-
-TUI 所需的 `workflowPresentation` 只附加在当前工具结果 `details` 中，不写入 `WorkflowState` 或 session entry；缺少展示元数据的旧结果保留原始工具文本。模型侧既有内容仍由纯文本 formatter 提供。
-
-状态阶段只来自共享状态视图中的当前工作流、活动任务与匹配 handoff；“执行中”要求 handoff 处于 executing，且任务启动、执行启动和 handoff 启动时间为同一有效值。当前任务位置按真实任务列表的一基索引展示，完成数仍独立显示为实际 `completed/total`；暂停、重规划、没有当前任务和终态不保留旧位置。
-
-工作流查看默认突出活动阶段、完成进度和当前任务；嵌套工作流的进度面板与状态摘要以树状展示父目标、当前子目标、父层等待状态，以及已完成/取消的子目标；暂停时仍优先显示真实阻塞原因。工具结果中的任务/工作流完成摘要也默认精简；展开后保留任务身份、完整结果、验证、时间和子工作流历史。TUI 进度面板刷新时尽量保留仍存在的选中任务；切换到不同 workflow 时重置到新工作流的当前任务。模型可见的完整状态文本与身份不受 UI 摘要裁剪影响。
-
-进度面板支持键盘分层浏览：↑↓ 选择任务，Enter 查看任务范围、验收、阻塞原因、结果和实际验证；Esc 从详情返回列表，在列表才关闭。按 `a` 打开与当前状态对应的继续/重试/取消操作，按 `d` 查看只读技术详情；长详情可用方向键或 PgUp/PgDn 滚动。刷新保留任务选择和详情滚动位置，切换工作流才重新定位当前任务；窄终端使用单列、固定底部提示。不可用操作显示原因，等待 AI 审阅不会提供跳过验收的入口。
-
-取消当前层与取消全部分开显示，确认说明目标和影响范围，默认选择“返回，不执行”。结果未知的重试必须先核对副作用并显式授权新尝试；确认前后均校验工作流来源、会话与上下文，旧面板不能操作新状态。界面只复用既有业务命令，不直接写状态；取消不回滚副作用，也不保证停止已运行工具。
-
-工作流动作失败时，工具仍向模型返回 `[PI-INIT_WORKFLOW_ERROR]` 下的结构化 JSON，`isError` 状态、身份守卫和失败行为保持不变；TUI 结果 renderer 对诊断先做窄化校验，再按类别、代码、原因、白名单身份差异及安全下一步分段显示。普通错误、损坏 JSON 和不符合字段要求的诊断以真实原文回退；未通过解析的输入不会被当作成功或无数据。此层只改变 TUI 展示，不替换模型诊断或触发自动重试。
+- 运行时绑定 workflow/session/plan/recovery 与 task/attempt/handoff 身份，拒绝陈旧回调及旧 branch；用户停止、任务消息真实启动和未知副作用确认保护保留。
+- 阶段成果使用 checkpoint 保存，任务仍须真实 complete/block；一个任务只有一个执行与验收路径。
+- 真实交接先保存结果与身份，按现有预算检查压缩，再派发；失败、迟到或未知派发不得自动继续或重放。
+- 旧正式证据、结构契约/clarify、嵌套状态和 Runtime authority 只报告结构化退役诊断，保留原记录。只有受信任、空闲且用户确认副作用后才允许隔离指定来源记录，不把隔离当成功或取消。
 
 ### 取消、告警确认与历史恢复处置
 
-- 新扁平工作流中，`/pi-init workflow cancel` 与工具同名动作取消当前共享队列；不会把目标归属分组当成独立执行器。对于旧 parentStack 状态，保留“取消当前层并返回旧父层处置”的兼容语义；`cancel-all` 取消整个旧父子流程。先持久化状态再撤销原身份续跑，写入失败不报告成功。取消只停止后续编排，不回滚副作用，也不保证已运行工具、进程或宿主压缩停止。
+- `/pi-init workflow cancel` 与工具同名动作取消当前共享队列；cancel-all 仅作为同一扁平取消的兼容别名。先持久化状态再撤销原身份续跑，写入失败不报告成功。取消不回滚副作用，也不保证已运行工具、进程或宿主压缩停止；旧嵌套状态只能按恢复诊断隔离，不再返回父层。
 - `task_workflow` 工具收到 `AbortSignal` 只中止本次工具操作，不会取消或改写整个工作流，也不等同于上面的 `cancel` 命令。
 - `/pi-init workflow acknowledge` 仅降低当前 session 中匹配告警的前台突出程度；详细状态、诊断、权限和恢复守卫保持不变。告警原因或 workflow/recovery/attempt 身份改变、切换 branch 或重新加载 session 后，未解决问题会重新突出；工作流进入 `completed`/`cancelled` 或不再有告警时清除对应标记。确认不是取消，也不会确认或隐藏独立的宿主压缩事实。
 - `/pi-init workflow status` 会提供恢复分类和受限建议。仅对明确列为不可恢复且没有可读/待持久化工作流状态的历史记录，才可考虑 `/pi-init workflow discard-recovery <entryId> --confirm-unknown-outcome`。它要求项目受信任、Agent 空闲、指定当前 branch 中唯一且最新的原始工作流 entry ID，并先核对任务可能产生的外部副作用、显式确认未知结果。成功会在原记录之后追加版本化处置记录；原记录不删除或改写，也不生成成功/取消状态、不回滚副作用、不自动重跑任务。
@@ -304,17 +283,7 @@ TUI 所需的 `workflowPresentation` 只附加在当前工具结果 `details` �
 
 ### 活动工作流中的目标与队列
 
-父子关系只表达目标归属与展示，不再用于新任务的运行时挂起/返回。所有新目标共用同一个 workflowId、任务列表和执行器；普通讨论、解释、纠正和“继续”文本不自动改变编排。修正或追加工作用 `request-replan`（或“重规划：…”、“追加任务：…”），明确新目标用 `request-goal`（或“新目标：…”、“插入目标：…”）。`request-child` 与旧“子流程：…”输入保留为插入目标的兼容别名，不创建新子流程。
-
-新目标在当前任务完成或正式阻塞的安全边界规划。architect 用 `replan` 提交新增任务，并以 `retainTaskIds` 明确确认仍有效的全部原有 pending 任务；原目标、已完成成果和阻塞记录保持。新任务 ID 在整个队列与历史中唯一，归属 ID 由运行时生成；后续任务可用 `goalId` 引用已有归属，`parentGoalId` 指定已有父目标（默认当前任务所属目标或根目标）。归属自身不建立执行依赖，不要求额外 subworkflowContract；任务仍有目标、文件范围与验收条件，协调契约/证据守卫不放宽。
-
-调度先检查 `dependsOn`，只在依赖完成的 pending 任务中比较 `priority`：默认 0、数值大者优先、同级保留原顺序。普通目标默认追加同级队尾；只有明确需要插队时才提高优先级。不会因为创建分组就自动加急，也不会强行中断正在运行的工具或写操作。
-
-发现原任务不再有效时，可将插入请求转成 `request-replan`，保留新目标意图与既有成果，再修改当前队列；不需要先 retry 或取消工作流。阻塞态在没有活动交接时也可申请重规划，未知副作用仍不得自动重试；没有结构化澄清处置的未知结果若被新任务替换，须显式 confirmUnknownOutcome=true 并提供 reason 核对说明，处置写入 revision 审计。插入任务完成后只重新选择当前就绪项，不恢复旧栈位置；若原任务仍受阻或依赖未满足，队列继续暂停。
-
-目标分组按实际任务验收与验证记录汇总，分组结束不代表根目标完成。撤销目标通过普通重规划移除其未完成任务并检查依赖；允许 `tasks=[]` 配合 `retainTaskIds` 只保留/撤销任务，替换记录保留在 revision 审计中，最终队列不能为空。新建 plan 或插入目标仍须至少一个任务。新扁平工作流的 `cancel` 取消整个当前队列，不把当前显示分组误当作独立执行器。
-
-状态 schema 升至 v7，新增 `goals`、`goalId` 与 `priority`。v1–v6 历史仍可读取；旧父子运行栈、旧待规划嵌套请求、已完成成果、执行身份和未知副作用记录按兼容协议保留，不在加载时强制展开、重排或重放。`review-child` 和子流程契约只为旧记录收尾保留，新分组不需要一次额外的出栈审阅。旧 attempt/revision/session/branch 的结果仍不能推进新状态。
+使用 request-replan 修改当前未完成计划，request-goal 插入目标分组；goals/goalId 只表达归属，所有任务仍共用同一个 workflow ID、依赖队列和 executor。依赖先于 priority，同级稳定，不抢占当前工具。插入目标必须 retainTaskIds 保留仍有效的 pending 任务；分组完成不等于全局验收。旧 parentStack/review-child 不再执行，恢复边界明确退役。
 
 ### 模型引用策略
 

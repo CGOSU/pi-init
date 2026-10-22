@@ -95,7 +95,7 @@ test("workflow acknowledge 只收起当前告警、按 branch/reload 重新提�
   assert.match(fullStatus.content[0].text, /缺少产品决策/);
 
   const statusBeforeFast = harness.branch.length;
-  await harness.commands.get("fast").handler("不可绕过的独立任务", harness.context);
+  assert.equal(harness.commands.has("fast"), false);
   assert.equal(harness.sentUserMessages.length, 0);
   assert.equal(harness.branch.length, statusBeforeFast);
   assert.equal(currentWorkflow().status, "paused");

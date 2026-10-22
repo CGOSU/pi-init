@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
-import { coordinationHandoffIdentity } from "./coordination-runtime-protocol.ts";
 import { roleLabel } from "../src/roles.ts";
 import { textOf, type ActiveRole, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
@@ -23,7 +22,6 @@ function sameRole(left: ActiveRole | undefined, right: ActiveRole) {
 export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState, deps: RoleHandoffDependencies) {
   function capture(ctx: ExtensionContext) {
     const workflow = state.workflowState;
-    const coordination = state.coordinationRuntimeState;
     const activeRole = deps.getActiveRole(ctx);
     return {
       sessionId: ctx.sessionManager.getSessionId(),
@@ -32,8 +30,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
       activeRole: activeRole ? { ...activeRole } : undefined,
       workKey: JSON.stringify({
         workflow: workflow ? { identity: workflowActionIdentity(workflow), status: workflow.status, handoff: workflowHandoffIdentity(workflow), replan: workflowReplanIdentity(workflow) } : undefined,
-        coordination: coordination ? { identity: coordinationHandoffIdentity(coordination), coordinationId: coordination.coordination.coordinationId, sessionId: coordination.sessionId, recoveryGeneration: coordination.recoveryGeneration } : undefined,
-      }),
+              }),
     };
   }
   type Scope = ReturnType<typeof capture>;

@@ -1,10 +1,7 @@
 import { cloneState, getWorkflowTask } from "./workflow-model.ts";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "./workflow-handoff.ts";
-import { getNextWorkflowTask, markWorkflowTaskStarted, setWorkflowHandoffPhase, blockWorkflowTask, cancelWorkflow, completeWorkflowTask, resumeWorkflow, retryWorkflowTask } from "./workflow-transitions.ts";
+import { getNextWorkflowTask, markWorkflowTaskStarted, setWorkflowHandoffPhase, blockWorkflowTask, cancelWorkflow, completeWorkflowTask, resumeWorkflow, retryWorkflowTask, markWorkflowTaskOutcomeUnknown } from "./workflow-transitions.ts";
 import type { WorkflowHandoffIdentity, WorkflowReplanIdentity, WorkflowState, WorkflowActionIdentity } from "./workflow-types.ts";
-import { returnFromNestedWorkflow, cancelWorkflowTree } from "./workflow-nesting.ts";
-import { reviewReturnedSubworkflow } from "./workflow-subworkflow.ts";
-
 export type WorkflowDispatchEvent =
   | { type: "task-dispatch-requested"; identity: WorkflowHandoffIdentity }
   | { type: "task-reminder-requested"; identity: WorkflowHandoffIdentity }
@@ -88,17 +85,15 @@ export function transitionWorkflowDispatch(
 
 export type WorkflowLifecycleEvent =
   | { type: "task-completed"; identity: WorkflowHandoffIdentity; completionSummary: unknown; implementationRationale: unknown; verification: unknown }
-  | { type: "task-blocked"; identity: WorkflowHandoffIdentity; reason: unknown }
-  | { type: "child-reviewed"; identity: WorkflowReplanIdentity; review: unknown }
+  | { type: "task-blocked"; identity: WorkflowHandoffIdentity; reason: unknown; outcomeUnknown?: boolean }
   | { type: "workflow-resumed"; identity: WorkflowActionIdentity }
   | { type: "task-retried"; identity: WorkflowActionIdentity; taskId?: string; confirmUnknownOutcome: boolean }
-  | { type: "workflow-cancelled"; identity: WorkflowActionIdentity; returnToParent: boolean };
+  | { type: "workflow-cancelled"; identity: WorkflowActionIdentity };
 
 export type WorkflowLifecycleEffect = { kind: "retire-continuation"; identity: WorkflowActionIdentity };
 export type WorkflowLifecycleTransition = {
   state: WorkflowState;
   taskState: WorkflowState;
-  returnedToParent: boolean;
   effects: WorkflowLifecycleEffect[];
 };
 
@@ -125,13 +120,11 @@ export function transitionWorkflowLifecycle(
         : state;
       next = event.type === "task-completed"
         ? completeWorkflowTask(started, { taskId: event.identity.taskId, completionSummary: event.completionSummary, implementationRationale: event.implementationRationale, verification: event.verification }, now)
-        : blockWorkflowTask(started, { taskId: event.identity.taskId, reason: event.reason }, now);
+        : event.outcomeUnknown === true
+          ? markWorkflowTaskOutcomeUnknown(started, { taskId: event.identity.taskId, reason: event.reason }, now)
+          : blockWorkflowTask(started, { taskId: event.identity.taskId, reason: event.reason }, now);
       break;
     }
-    case "child-reviewed":
-      if (!sameIdentity(workflowReplanIdentity(state), event.identity)) throw Object.assign(new Error("子流程审阅 handoff 已过期"), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
-      next = reviewReturnedSubworkflow(state, event.review, now);
-      break;
     case "workflow-resumed":
       next = resumeWorkflow(state, now);
       break;
@@ -139,17 +132,13 @@ export function transitionWorkflowLifecycle(
       next = retryWorkflowTask(state, event.taskId, now, { confirmUnknownOutcome: event.confirmUnknownOutcome });
       break;
     case "workflow-cancelled":
-      next = event.returnToParent ? cancelWorkflow(state, now) : cancelWorkflowTree(state, now);
+      next = cancelWorkflow(state, now);
       break;
   }
   const terminal = next.status === "completed" || next.status === "cancelled";
-  const parent = terminal && (event.type === "task-completed" || event.type === "child-reviewed" || (event.type === "workflow-cancelled" && event.returnToParent))
-    ? returnFromNestedWorkflow(next, next.status === "completed" ? "completed" : "cancelled", now)
-    : undefined;
   return {
-    state: parent ?? next,
+    state: next,
     taskState: next,
-    returnedToParent: parent !== undefined,
     effects: terminal ? [{ kind: "retire-continuation", identity: workflowActionIdentity(state) }] : [],
   };
 }

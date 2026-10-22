@@ -1,7 +1,4 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { checkTaskContractAgainstCoordination } from "../src/coordination.ts";
-import { checkCoordinationWorkflowReadiness } from "./coordination-readiness.ts";
-import { COORDINATION_ENTRY_TYPE, isRecord } from "./coordination-runtime-protocol.ts";
 import {
   blockWorkflowTask,
   cloneState,
@@ -21,7 +18,7 @@ import {
   validateWorkflowExecutionRoles,
 } from "../src/workflow.ts";
 import { validateWorkflowTaskStartMessage } from "./workflow-start-evidence.ts";
-import type { HydratedWorkflowState } from "../src/workflow-types.ts";
+import type { } from "../src/workflow-types.ts";
 import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery.ts";
 import {
   textOf,
@@ -41,8 +38,6 @@ export type WorkflowDispatchDependencies = {
   messages: WorkflowMessages;
   report: WorkflowReport;
   setCurrentContext: (ctx: ExtensionContext) => void;
-  synchronizeWorkflowLink?: (workflow: WorkflowState, ctx: ExtensionContext) => void;
-  onWorkflowRecovered?: (previous: HydratedWorkflowState, recovered: WorkflowState, ctx: ExtensionContext) => void;
 };
 
 function workflowIdentity(state: WorkflowState): WorkflowActionIdentity {
@@ -64,81 +59,8 @@ function sameReplanIdentity(left: WorkflowReplanIdentity, right: WorkflowReplanI
     && left.handoffId === right.handoffId;
 }
 
-function failedCoordinationSource(state: ExtensionRuntimeState, ctx: ExtensionContext) {
-  if (!state.coordinationRestoreError) return;
-  const sourceId = state.coordinationRestoreError.sourceEntryId;
-  const source = ctx.sessionManager.getBranch().findLast((entry) => entry.type === "custom"
-    && entry.customType === COORDINATION_ENTRY_TYPE && (!sourceId || entry.id === sourceId));
-  return source && "data" in source && isRecord(source.data) ? source.data : undefined;
-}
-
-export function hasUnfinishedRestoringEvidence(state: ExtensionRuntimeState, ctx: ExtensionContext) {
-  const source = failedCoordinationSource(state, ctx);
-  return Boolean(source?.sessionId === ctx.sessionManager.getSessionId() && isRecord(source?.coordination)
-    && !source.coordination.workflowLink
-    && ["evidence-gathering", "evidence-review", "blocked"].includes(String(source.coordination.phase)));
-}
-
 // An accepted side ledger is not an opt-in. Existing contracts or an explicit
 // workflow link are: deleting a contract must not downgrade an old formal plan.
-export function workflowUsesFormalEvidence(current: WorkflowState, state: ExtensionRuntimeState, ctx: ExtensionContext) {
-  if (current.tasks.some((task) => task.contract !== undefined)
-    || current.revisions.some((revision) => revision.replacedTasks?.some((task) => task.contract !== undefined))
-    || state.coordinationRuntimeState?.coordination.workflowLink?.workflowId === current.workflowId) return true;
-  // A malformed legacy ledger may not hydrate, but its explicit binding still
-  // prevents the linked workflow from treating that restore error as unrelated.
-  const source = failedCoordinationSource(state, ctx);
-  return Boolean(isRecord(source?.coordination) && isRecord(source.coordination.workflowLink)
-    && source.coordination.workflowLink.workflowId === current.workflowId);
-}
-
-function workflowCoordinationReadiness(current: WorkflowState, state: ExtensionRuntimeState, ctx: ExtensionContext) {
-  const unfinishedTasks = current.tasks.filter((task) => task.status !== "completed" && task.status !== "superseded");
-  const formal = workflowUsesFormalEvidence(current, state, ctx);
-  if (state.coordinationRestoreError) {
-    return formal || hasUnfinishedRestoringEvidence(state, ctx)
-      ? { ok: false as const, code: state.coordinationRestoreError.code, message: state.coordinationRestoreError.message }
-      : { ok: true as const };
-  }
-  const coordination = state.coordinationRuntimeState;
-  if (!coordination) {
-    return formal
-      ? { ok: false as const, code: "COORDINATION_STATE_MISSING", message: "协调任务缺少已恢复的证据账本" }
-      : { ok: true as const };
-  }
-  const link = coordination.coordination.workflowLink;
-  const linkMatches = Boolean(link && link.workflowId === current.workflowId && link.planVersion === current.planVersion
-    && link.recoveryGeneration === current.recoveryGeneration);
-  if (!formal) {
-    // Explicit unfinished/blocked evidence work remains a gate even for an
-    // ordinary queue; a ready, unbound ledger imposes no contract protocol.
-    if (!link && coordination.coordination.phase !== "ready") {
-      return checkCoordinationWorkflowReadiness(coordination.coordination);
-    }
-    return { ok: true as const };
-  }
-  if (!linkMatches) {
-    return { ok: false as const, code: "COORDINATION_WORKFLOW_LINK_MISMATCH", message: "协作证据未绑定当前 workflow revision" };
-  }
-  for (const task of unfinishedTasks) {
-    if (!task.contract) {
-      return {
-        ok: false as const,
-        code: "TASK_CONTRACT_REQUIRED",
-        message: `协调任务 ${task.id} 缺少结构化任务契约`,
-        taskId: task.id,
-        precondition: "协调计划中每个可执行任务必须携带结构化任务契约，且契约 evidence 必须指向当前已接受且未过期的协调证据",
-        nextAction: `由 architect 为任务 ${task.id} 补全契约后，使用当前身份重新提交 plan/replan。`,
-      };
-    }
-    if (task.contract.requirementSources.length === 0) {
-      return { ok: false as const, code: "TASK_CONTRACT_REQUIREMENT_SOURCE_MISSING", message: `协调任务 ${task.id} 缺少需求来源` };
-    }
-    const readiness = checkTaskContractAgainstCoordination(task.contract, coordination.coordination);
-    if (!readiness.ok) return readiness;
-  }
-  return { ok: true as const };
-}
 
 export function createWorkflowDispatch(
   state: ExtensionRuntimeState,
@@ -318,8 +240,7 @@ export function createWorkflowDispatch(
               ctx.ui.notify(`无法持久化工作流恢复状态：${textOf(error)}`, "error");
             }
             if (state.workflowState === recovered.value) {
-              deps.onWorkflowRecovered?.(restored.value, recovered.value, ctx);
-            }
+                  }
           }
         }
       }
@@ -464,8 +385,7 @@ export function createWorkflowDispatch(
       return;
     }
     try {
-      deps.synchronizeWorkflowLink?.(current, ctx);
-    } catch (error) {
+      } catch (error) {
       ctx.ui.notify(`证据绑定同步尚未持久化，已保存任务结果不会重放，暂不派发：${textOf(error)}`, "warning");
       return;
     }
@@ -474,12 +394,6 @@ export function createWorkflowDispatch(
     if (!effect) return;
     if (effect.kind === "replan") {
       await scheduleWorkflowReplan(ctx);
-      return;
-    }
-    const coordinationReadiness = workflowCoordinationReadiness(current, state, ctx);
-    if (!coordinationReadiness.ok) {
-      state.workflowDispatchInFlight = false;
-      ctx.ui.notify(`协调开发任务未通过就绪门（${coordinationReadiness.code}）：${coordinationReadiness.message}；不会派发。`, "error");
       return;
     }
     if (effect.kind === "dispatch-task") {

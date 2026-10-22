@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowState, getNextWorkflowTask, hydrateWorkflowState, startWorkflowTask, completeWorkflowTask, blockWorkflowTask, setWorkflowHandoffPhase, markWorkflowTaskStarted, cloneState, createNestedWorkflowState, requestWorkflowNestedGoal, requestWorkflowReplan, markWorkflowTaskOutcomeUnknown, applyWorkflowReplan } from "../src/workflow.ts";
+import { createWorkflowState, getNextWorkflowTask, hydrateWorkflowState, startWorkflowTask, completeWorkflowTask, blockWorkflowTask, setWorkflowHandoffPhase, markWorkflowTaskStarted, cloneState, requestWorkflowReplan, markWorkflowTaskOutcomeUnknown, applyWorkflowReplan } from "../src/workflow.ts";
 import { requestWorkflowGoal, createWorkflowGoalState, workflowGoalProgress } from "../src/workflow-goals.ts";
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
 import { formatWorkflowGoalTreeText, formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
@@ -86,25 +86,13 @@ test("暂停任务可以规划插入目标，但不会自动重试或假定副�
   assert.equal(finished.tasks[0].status, "blocked");
 });
 
-test("旧 v6 嵌套与已完成/未知结果只升级存储版本，不自动扁平化或重放", () => {
-  const oldRoot = createWorkflowState({ sessionId: "legacy-flat", summary: "旧目标", tasks: [{ ...task("done"), priority: undefined }, { ...task("pending"), priority: undefined }] }, 100);
-  Object.assign(oldRoot.tasks[0], { status: "completed", completionSummary: "旧成果保留", verification: ["旧验证"] });
-  let child = createNestedWorkflowState(requestWorkflowNestedGoal(oldRoot, { direction: "历史子目标" }, 101), { summary: "历史子目标", subworkflowContract: { inputs: ["旧输入"], expectedOutputs: ["旧输出"], acceptanceCriteria: ["旧验收"], allowedFiles: ["src"] }, tasks: [{ ...task("legacy-child"), priority: undefined }] }, 102);
-  child = markWorkflowTaskOutcomeUnknown(startWorkflowTask(child, "legacy-child", 103), { taskId: "legacy-child", reason: "旧执行结果无法确认" }, 104);
-  child.version = 6; child.parentStack[0].state.version = 6;
-  const before = JSON.stringify(child);
-  const restored = hydrateWorkflowState(JSON.parse(before));
-  assert.equal(restored.ok, true, restored.message);
-  assert.equal(restored.value.version, 7);
-  assert.equal(restored.value.workflowId, child.workflowId);
-  assert.equal(restored.value.parentStack[0].state.workflowId, oldRoot.workflowId);
-  assert.equal(restored.value.parentStack[0].state.tasks[0].completionSummary, "旧成果保留");
-  assert.equal(restored.value.tasks[0].outcomeUnknown, true);
-  assert.equal(restored.value.status, "paused");
-  assert.equal(getNextWorkflowTask(restored.value), undefined);
-  assert.equal(JSON.stringify(child), before);
-});
-test("目标分组按验收汇总展示，不把分组结束当作父目标成功", () => {
+test("旧嵌套状态不再恢复为扁平队列，原数据保持不变", () => {
+  const root = createWorkflowState({ summary: "flat", sessionId: "flat-session", tasks: [task("old-root")] });
+  const source = { ...root, version: 6, parentStack: [{ state: root }] };
+  const before = structuredClone(source);
+  assert.equal(hydrateWorkflowState(source).code, "WORKFLOW_FEATURE_RETIRED");
+  assert.deepEqual(source, before);
+});test("目标分组按验收汇总展示，不把分组结束当作父目标成功", () => {
   const queued = insert(); const next = complete(queued, "inserted");
   const view = createWorkflowStatusView(next, { roleCompactionPhase: "idle", workflowDispatchInFlight: false }, 120);
   const text = formatWorkflowGoalTreeText(view);

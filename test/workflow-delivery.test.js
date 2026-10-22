@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkflowDelivery } from "../extensions/workflow-delivery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
+import { createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
+import { formatWorkflowCompletionText } from "../extensions/workflow-completion-renderer.ts";
 import { hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 
 function fixture(overrides = {}) {
@@ -29,10 +31,10 @@ const result = id => ({ role: "toolResult", toolCallId: id, content: [] });
 const final = text => ({ message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] } });
 
 test("root-only prepare and immutable whole-workflow evidence", () => {
-  for (const condition of ["root", "running", "nested"]) {
+  for (const condition of ["root", "running", "cancelled"]) {
     const f = fixture();
     if (condition === "running") f.state.workflowState.status = "running";
-    if (condition === "nested") f.state.workflowState.parentStack = [{}];
+    if (condition === "cancelled") f.state.workflowState.status = "cancelled";
     const before = structuredClone(f.state.workflowState);
     f.controller.prepare("complete");
     f.emit("agent_settled");
@@ -137,12 +139,28 @@ test("fallback dispatch rejection is observed once without false success or auto
   assert.match(f.notifications[0], /Result 1/);
 });
 
-test("recorded cancelled child scope and unknown effects remain visible in final delivery", async () => {
+test("flat cancelled work and unknown effects remain visible without replay", async () => {
   const f = fixture();
-  f.state.workflowState.subworkflowHistory = [{ summary: "Historical scope", status: "cancelled", tasks: [{ id: "child", status: "blocked", blockReason: "Needs review", outcomeUnknown: true }] }];
+  f.state.workflowState.tasks.push({ id: "retired", task: "Cancelled work", status: "superseded",
+    blockReason: "Cancelled: Needs review", outcomeUnknown: true });
   f.controller.prepare("complete");
   await f.emit("agent_settled");
-  assert.match(f.sent[0][0].content, /cancelled/);
+  assert.match(f.sent[0][0].content, /Cancelled/);
   assert.match(f.sent[0][0].content, /Needs review/);
   assert.match(f.sent[0][0].content, /副作用结果未知/);
+});
+
+
+test("model basis and fallback share the immutable completion renderer", async () => {
+  const f = fixture();
+  const report = formatWorkflowCompletionText(createWorkflowCompletionView(f.state.workflowState));
+  f.controller.prepare("complete");
+  f.state.workflowState.tasks[0].completionSummary = "Later mutation";
+  const basis = f.emit("context", { messages: [] }).messages.at(-1).content;
+  assert.ok(basis.endsWith(report));
+  await f.emit("agent_settled");
+  assert.equal(f.sent[0][0].content, report);
+  assert.doesNotMatch(report, /Later mutation/);
+  assert.match(report, /未记录的验证、提交及推送状态均未知/);
+  assert.match(report, /不会自动续跑或重放/);
 });

@@ -1,35 +1,13 @@
 import { getNextWorkflowTask, isWorkflowActive, workflowActionIdentity } from "../src/workflow.ts";
-import { coordinationHandoffIdentity } from "./coordination-runtime-protocol.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
 export function buildHandoffSnapshot(state: ExtensionRuntimeState, role: string) {
   const workflow = state.workflowState;
-  const activeWorkflow = workflow && isWorkflowActive(workflow) ? workflow : undefined;
-  const task = activeWorkflow?.tasks.find((item) => item.id === activeWorkflow.currentTaskId)
-    ?? (activeWorkflow ? getNextWorkflowTask(activeWorkflow) : undefined);
-  const coordination = state.coordinationRuntimeState;
-  const handoff = coordination ? coordinationHandoffIdentity(coordination) : undefined;
-  return {
-    role,
-    workflow: activeWorkflow ? {
-      ...workflowActionIdentity(activeWorkflow),
-      status: activeWorkflow.status,
-      taskId: task?.id,
-      taskStatus: task?.status,
-      contractRef: task?.contract ? task.id : undefined,
-      verificationRefs: activeWorkflow.tasks.filter((item) => item.verification?.length).slice(-4).map((item) => item.id),
-    } : undefined,
-    coordination: handoff ? {
-      ...handoff,
-      status: coordination!.handoff!.phase,
-      reviewRefs: coordination!.coordination.reviews.slice(-4).map((review) => review.reviewId),
-    } : undefined,
-    nextAction: activeWorkflow
-      ? '按当前任务继续；缺少任务详情时调用 task_workflow(action="status") 按引用读取，不重做已完成工作。'
-      : handoff
-        ? "按当前 request/report 身份继续取证或复审；缺少详情时读取协调状态。"
-        : "继续用户目标中尚未完成的工作；没有待办就结束，不创造新任务。",
-  };
+  const active = workflow && isWorkflowActive(workflow) ? workflow : undefined;
+  const task = active?.tasks.find(item => item.id === active.currentTaskId) ?? (active ? getNextWorkflowTask(active) : undefined);
+  return { role, workflow: active ? { ...workflowActionIdentity(active), status: active.status, taskId: task?.id, taskStatus: task?.status,
+    verificationRefs: active.tasks.filter(item => item.verification?.length).slice(-4).map(item => item.id) } : undefined,
+    nextAction: active ? '按当前任务继续；缺少详情时调用 task_workflow(action="status")，不重做已完成工作。' : "继续用户目标中尚未完成的工作；没有待办就结束，不创造新任务。" };
 }
 
 export function handoffSnapshotPrompt(state: ExtensionRuntimeState, role: string) {

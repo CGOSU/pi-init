@@ -20,9 +20,7 @@ import {
   normalizeWorkflowContinuation,
   normalizeWorkflowHandoff,
   requireTimestamp,
-  requireText, normalizeWorkflowPriority } from "./workflow-model.ts";
-import { validateWorkflowTaskContract } from "./workflow-task-contract.ts";
-import { validateWorkflowTaskClarification } from "./workflow-clarification.ts";
+  requireText, normalizeWorkflowPriority, assertSupportedWorkflowFeatures } from "./workflow-model.ts";
 import type {
   HydratedWorkflowState,
   WorkflowHydrationResult,
@@ -31,12 +29,8 @@ import type {
   WorkflowStateVersion,
   WorkflowTask,
   WorkflowTaskNormalizationOptions,
-  WorkflowParentFrame,
-  WorkflowStateCore,
-  WorkflowSubworkflowSummary,
   WorkflowValidationFailure,
 } from "./workflow-types.ts";
-import { normalizeSubworkflowContract, normalizeSubworkflowReview, assertSubworkflowReview, assertSubworkflowTaskScope } from "./workflow-subworkflow.ts";
 import { normalizeWorkflowGoals } from "./workflow-goals.ts";
 
 function isRecord(value: unknown): value is WorkflowStateRecord {
@@ -70,7 +64,7 @@ function normalizeRevisionRecord(revision: unknown, index: number): WorkflowRevi
     ),
   };
   if (revision.kind !== undefined) {
-    if (revision.kind !== "replan" && revision.kind !== "nested" && revision.kind !== "goal") {
+    if (revision.kind !== "replan" && revision.kind !== "goal") {
       throw new Error(`已保存的工作流 revision ${revision.revisionId} 的 kind 无效`);
     }
     result.kind = revision.kind;
@@ -79,10 +73,10 @@ function normalizeRevisionRecord(revision: unknown, index: number): WorkflowRevi
     result.childGoal = requireText(revision.childGoal, `已保存的工作流 revision ${revision.revisionId} 的 childGoal`);
   }
   if (revision.goalParentId !== undefined) result.goalParentId = normalizeIdentityToken(revision.goalParentId, "目标父归属");
-  if ((result.kind === "nested" || result.kind === "goal") && !result.childGoal) {
+  if (result.kind === "goal" && !result.childGoal) {
     throw new Error(`已保存的嵌套工作流 revision ${revision.revisionId} 缺少 childGoal`);
   }
-  if (result.kind !== "nested" && result.kind !== "goal" && result.childGoal !== undefined) {
+  if (result.kind !== "goal" && result.childGoal !== undefined) {
     throw new Error(`非嵌套工作流 revision ${revision.revisionId} 不能包含 childGoal`);
   }
   if (revision.requestedFromTaskId !== undefined) {
@@ -175,19 +169,6 @@ function normalizeHydratedTask(
   if (task.outcomeUnknown === true && status !== "blocked" && !(allowSuperseded && status === "superseded")) {
     throw new Error(`已保存的工作流任务 ${task.id} outcomeUnknown=true 时必须处于 blocked 状态`);
   }
-  const contract = task.contract === undefined ? undefined : validateWorkflowTaskContract(task.contract);
-  if (contract && !contract.ok) {
-    throw Object.assign(new Error(contract.message), { code: contract.code });
-  }
-  const clarification = task.clarification === undefined ? undefined : validateWorkflowTaskClarification(task.clarification);
-  if (clarification && !clarification.ok) {
-    throw Object.assign(new Error(clarification.message), { code: clarification.code });
-  }
-  if (clarification?.ok && status !== "blocked" && status !== "superseded") {
-    throw Object.assign(new Error(`已保存的工作流任务 ${task.id} 含澄清记录但状态不是 blocked/superseded`), {
-      code: "WORKFLOW_CLARIFICATION_TASK_STATE_INVALID",
-    });
-  }
   const completionSummary = task.completionSummary === undefined
     ? undefined
     : requireText(task.completionSummary, `已保存的工作流任务 ${task.id ?? index + 1} 的 completionSummary`);
@@ -215,8 +196,6 @@ function normalizeHydratedTask(
       { required: true },
     ),
     dependsOn: normalizeTextList(task.dependsOn, `已保存的工作流任务 ${task.id} 的 dependsOn`),
-    ...(contract?.ok ? { contract: contract.value } : {}),
-    ...(clarification?.ok ? { clarification: clarification.value } : {}),
     status,
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(executionStartedAt !== undefined ? { executionStartedAt } : {}),
@@ -235,75 +214,7 @@ function normalizeHydratedTask(
   };
 }
 
-function normalizeSubworkflowHistory(value: unknown, workflowId: string, rootTaskIds: Set<string>): WorkflowSubworkflowSummary[] {
-  if (value === undefined) return [];
-  if (!isUnknownArray(value)) throw new Error("已保存的嵌套工作流历史必须是数组");
-  const knownWorkflowIds = new Set([workflowId]);
-  const knownTaskIds = new Map([[workflowId, rootTaskIds]]);
-  return value.map((item, index) => {
-    if (!isRecord(item)) throw new Error(`已保存的嵌套工作流历史 ${index + 1} 格式无效`);
-    const childWorkflowId = normalizeIdentityToken(item.workflowId, `已保存的嵌套工作流历史 ${index + 1} 的 workflowId`);
-    const parentWorkflowId = normalizeIdentityToken(item.parentWorkflowId, `已保存的嵌套工作流历史 ${index + 1} 的 parentWorkflowId`);
-    if (knownWorkflowIds.has(childWorkflowId)) throw new Error(`嵌套工作流身份重复：${childWorkflowId}`);
-    if (!knownWorkflowIds.has(parentWorkflowId)) throw new Error(`嵌套工作流 ${childWorkflowId} 的父工作流不存在或顺序无效`);
-    if (item.status !== "completed" && item.status !== "cancelled") {
-      throw new Error(`嵌套工作流 ${childWorkflowId} 的终止状态无效`);
-    }
-    if (!isUnknownArray(item.tasks) || item.tasks.length === 0) {
-      throw new Error(`嵌套工作流 ${childWorkflowId} 的任务摘要必须是非空数组`);
-    }
-    const taskIds = new Set<string>();
-    const tasks = item.tasks.map((task, taskIndex) => {
-      if (!isRecord(task)) throw new Error(`嵌套工作流 ${childWorkflowId} 的任务摘要 ${taskIndex + 1} 无效`);
-      const id = requireText(task.id, `嵌套工作流 ${childWorkflowId} 的任务摘要 ${taskIndex + 1} 的 id`).toLowerCase();
-      const status = task.status ?? "pending";
-      if (!TASK_ID_PATTERN.test(id) || taskIds.has(id) || !isOneOf(WORKFLOW_AUDIT_TASK_STATUSES, status)) {
-        throw new Error(`嵌套工作流 ${childWorkflowId} 的任务摘要 ${id} 无效或重复`);
-      }
-      taskIds.add(id);
-      return {
-        id,
-        task: requireText(task.task, `嵌套工作流 ${childWorkflowId} 的任务摘要 ${id} 的 task`),
-        status,
-        ...(task.verification !== undefined ? { verification: normalizeTextList(task.verification, "子流程任务验证") } : {}),
-        ...(task.outcomeUnknown !== undefined ? { outcomeUnknown: (() => { if (typeof task.outcomeUnknown !== "boolean") throw new Error("子流程结果未知标记无效"); return task.outcomeUnknown; })() } : {}),
-        ...(task.completionSummary !== undefined
-          ? { completionSummary: requireText(task.completionSummary, `嵌套工作流 ${childWorkflowId} 的任务摘要 ${id} 的 completionSummary`) }
-          : {}),
-      };
-    });
-    const parentTaskId = item.parentTaskId === undefined
-      ? undefined
-      : requireText(item.parentTaskId, `嵌套工作流 ${childWorkflowId} 的 parentTaskId`).toLowerCase();
-    const startedAt = normalizeTimestamp(item.startedAt, `嵌套工作流 ${childWorkflowId} 的 startedAt`);
-    const completedAt = normalizeTimestamp(item.completedAt, `嵌套工作流 ${childWorkflowId} 的 completedAt`);
-    if (startedAt !== undefined && completedAt !== undefined && completedAt < startedAt) {
-      throw new Error(`嵌套工作流 ${childWorkflowId} 的 completedAt 早于 startedAt`);
-    }
-    if (parentTaskId && !knownTaskIds.get(parentWorkflowId)?.has(parentTaskId)) {
-      throw new Error(`嵌套工作流 ${childWorkflowId} 的 parentTaskId 不属于父工作流`);
-    }
-    knownWorkflowIds.add(childWorkflowId);
-    knownTaskIds.set(childWorkflowId, taskIds);
-    const summary: WorkflowSubworkflowSummary = {
-      workflowId: childWorkflowId,
-      parentWorkflowId,
-      ...(parentTaskId ? { parentTaskId } : {}),
-      planVersion: normalizePlanVersion(item.planVersion, `嵌套工作流 ${childWorkflowId} 的 planVersion`),
-      summary: requireText(item.summary, `嵌套工作流 ${childWorkflowId} 的 summary`),
-      status: item.status,
-      tasks,
-      ...(item.contract !== undefined ? { contract: normalizeSubworkflowContract(item.contract) } : {}),
-      ...(item.reviews !== undefined ? { reviews: (() => { if (!isUnknownArray(item.reviews)) throw new Error("子流程审阅历史必须是数组"); return item.reviews.map((value) => { const review = normalizeSubworkflowReview(value); if (review.childWorkflowId !== childWorkflowId) throw new Error("子流程审阅身份不一致"); return review; }); })() } : {}),
-      ...(startedAt !== undefined ? { startedAt } : {}),
-      ...(completedAt !== undefined ? { completedAt } : {}),
-    };
-    for (const review of summary.reviews ?? []) assertSubworkflowReview(summary, review);
-    return summary;
-  });
-}
-
-function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack = true): HydratedWorkflowState {
+function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflowState {
   const version = state.version ?? 1;
   const supportedVersions = [1, 2, 3, 4, 5, 6, WORKFLOW_STATE_VERSION] as const satisfies readonly WorkflowStateVersion[];
   if (!isOneOf(supportedVersions, version)) {
@@ -353,17 +264,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack 
   const recoveryGeneration = legacy ? 0 : normalizePlanVersion(state.recoveryGeneration, "已保存的工作流 recoveryGeneration");
   const handoff = legacy || state.handoff === undefined ? undefined : normalizeWorkflowHandoff(state.handoff);
   const continuation = legacy ? undefined : normalizeWorkflowContinuation(state.continuation);
-  if (!allowParentStack && state.parentStack !== undefined) {
-    throw new Error("嵌套工作流 parent frame 不能再包含 parentStack");
-  }
-  if (state.parentStack !== undefined && version < 6) {
-    throw new Error("旧版本工作流不能包含嵌套 parentStack");
-  }
-  const subworkflowHistory = normalizeSubworkflowHistory(
-    state.subworkflowHistory,
-    workflowId ?? "legacy-workflow",
-    new Set(tasks.map((task) => task.id)),
-  );
+
   const goals = normalizeWorkflowGoals(state.goals, workflowId ?? "legacy-workflow", tasks);
   if (pendingRevision?.kind === "goal" && pendingRevision.goalParentId && pendingRevision.goalParentId !== workflowId && !goals.some(goal => goal.id === pendingRevision.goalParentId)) throw new Error("插入目标引用不存在的父归属");
   const requestedRevisions = revisions.filter((revision) => revision.status === "requested");
@@ -430,9 +331,6 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack 
     )) throw Object.assign(new Error("已保存的工作流 handoff 身份与当前状态不一致"), { code: "WORKFLOW_HANDOFF_IDENTITY_MISMATCH" });
   }
 
-  if (state.subworkflowContract !== undefined) {
-    assertSubworkflowTaskScope(normalizeSubworkflowContract(state.subworkflowContract), tasks.filter((task) => task.status !== "completed" && task.status !== "superseded"));
-  }
   const planSource = isRecord(state.plan) ? state.plan : {};
   const createdAt = normalizeTimestamp(state.createdAt, "已保存的工作流 createdAt");
   const updatedAt = normalizeTimestamp(state.updatedAt, "已保存的工作流 updatedAt");
@@ -474,41 +372,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord, allowParentStack 
     ...(state.goals !== undefined || tasks.some(task => task.goalId) ? { goals } : {}),
     revisions,
     ...(pendingRevision ? { pendingRevision } : {}),
-    subworkflowHistory,
-    ...(state.subworkflowContract !== undefined ? { subworkflowContract: normalizeSubworkflowContract(state.subworkflowContract) } : {}),
-    ...(allowParentStack && state.parentStack !== undefined
-      ? {
-          parentStack: (() => {
-            if (!isUnknownArray(state.parentStack) || state.parentStack.length > 32) {
-              throw new Error("已保存的工作流 parentStack 必须是最多 32 层的数组");
-            }
-            const seenWorkflowIds = new Set([workflowId]);
-            return state.parentStack.map((frame, index) => {
-              if (!isRecord(frame) || !isRecord(frame.state)) {
-                throw new Error(`已保存的工作流 parentStack 第 ${index + 1} 层格式无效`);
-              }
-              const parentTaskId = frame.parentTaskId === undefined
-                ? undefined
-                : requireText(frame.parentTaskId, `已保存的工作流 parentStack 第 ${index + 1} 层的 parentTaskId`).toLowerCase();
-              const parentState = hydrateWorkflowStateValue(frame.state, false) as WorkflowStateCore;
-              if (parentState.status !== "paused" || parentState.pauseReason !== "waiting-child-workflow") {
-                throw new Error(`已保存的工作流 parentStack 第 ${index + 1} 层不是等待子工作流的暂停状态`);
-              }
-              if (parentState.sessionId !== sessionId || seenWorkflowIds.has(parentState.workflowId)) {
-                throw new Error(`已保存的工作流 parentStack 第 ${index + 1} 层身份重复或 session 不匹配`);
-              }
-              if (parentTaskId && !parentState.tasks.some((task) => task.id === parentTaskId)) {
-                throw new Error(`已保存的工作流 parentStack 第 ${index + 1} 层 parentTaskId 不存在`);
-              }
-              seenWorkflowIds.add(parentState.workflowId);
-              return {
-                ...(parentTaskId ? { parentTaskId } : {}),
-                state: parentState,
-              } satisfies WorkflowParentFrame;
-            });
-          })(),
-        }
-      : {}),
+
   };
 }
 
@@ -535,6 +399,7 @@ export function hydrateWorkflowState(state: unknown): WorkflowHydrationResult {
     return resultFailure("WORKFLOW_STATE_RUNTIME_RETIRED", "已保存的 Runtime 工作流已退役；不会恢复或改写原始记录");
   }
   try {
+    assertSupportedWorkflowFeatures(state);
     if (Object.prototype.hasOwnProperty.call(state, "executor")) normalizeExecutor(state.executor);
     if (Object.prototype.hasOwnProperty.call(state, "authority")) normalizeExecutor(state.authority);
     return { ok: true, value: hydrateWorkflowStateValue(state) };

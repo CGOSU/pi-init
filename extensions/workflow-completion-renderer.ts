@@ -23,14 +23,15 @@ function verificationText(task: WorkflowCompletionTaskView) {
     : undefined;
 }
 
-function taskReportLines(task: WorkflowCompletionTaskView | undefined) {
-  if (!task) return ["内容：无"];
+function taskReportLines(task: WorkflowCompletionTaskView) {
   return [
     `ID：${task.id}`,
     `内容：${task.task}`,
     `摘要：${task.completionSummary ?? "无"}`,
     `实现原因：${task.implementationRationale ?? "无"}`,
-    ...(verificationText(task) ? [verificationText(task)!] : []),
+    `状态：${task.status}${task.blockReason ? `；阻塞：${task.blockReason}` : ""}`,
+    ...(task.outcomeUnknown ? ["副作用结果未知，禁止重放"] : []),
+    ...(task.verification.length ? task.verification.map(item => `验证记录：${item}`) : ["验证：未记录，不代表验证通过"]),
   ];
 }
 
@@ -66,47 +67,35 @@ export function formatWorkflowTaskCompletionText(view: WorkflowTaskCompletionVie
   ].join("\n");
 }
 
-/** Concise user-facing text; child identities and timing stay in expanded details. */
+/** Concise user-facing text; task records and timing stay in expanded details. */
 export function formatWorkflowCompletionSummaryText(view: WorkflowCompletionView) {
-  const cancelledChildren = view.subworkflows.filter((child) => child.status === "cancelled").length;
-  const completedChildren = view.subworkflows.length - cancelledChildren;
   const finalResult = view.finalTask?.completionSummary ?? view.finalTask?.task;
   return [
     "工作流完成报告",
     `目标：${view.summary}`,
     `已完成任务：${view.progress.completed}/${view.progress.total}`,
     ...(finalResult ? [`最终结果：${finalResult}`] : []),
-    ...(view.subworkflows.length > 0
-      ? [`子目标：${completedChildren} 完成，${cancelledChildren} 取消`]
-      : []),
     ...(view.finalTask && view.finalTask.verificationFailures.length > 0
       ? [`验证未通过：${view.finalTask.verificationFailures.join("；")}`]
       : []),
   ].join("\n");
 }
 
-/** Full tool text preserves child lineage, audit details, and timing for follow-up work. */
+/** Shared recorded basis for model reports, expanded inspection, and deterministic delivery. */
 export function formatWorkflowCompletionText(view: WorkflowCompletionView) {
-  const taskSection = view.subworkflows.length > 0 ? "3. 最终任务" : "2. 最终任务";
-  const timeSection = view.subworkflows.length > 0 ? "4. 时间" : "3. 时间";
   return [
-    "工作流完成报告",
+    formatWorkflowCompletionSummaryText(view),
+    `状态：${view.status}`,
+    `约束与限制：${view.constraints.join("；") || "未记录额外约束"}`,
     "",
-    "1. 总览",
-    `   - 目标：${view.summary}`,
-    `   - 已完成任务：${view.progress.completed}/${view.progress.total}`,
-    ...(view.subworkflows.length > 0
-      ? ["", "2. 子工作流历史（独立状态与结果）：", ...view.subworkflows.map((child) =>
-          `   - [${child.status}] ${child.workflowId} · ${child.summary} · ${child.completed}/${child.total} · 父工作流 ${child.parentWorkflowId}${child.parentTaskId ? ` · 父任务 ${child.parentTaskId}` : ""}`)]
-      : []),
+    "任务结果：",
+    ...view.tasks.flatMap(task => taskReportLines(task).map(line => `   - ${line}`)),
     "",
-    taskSection,
-    ...taskReportLines(view.finalTask).map((line) => `   - ${line}`),
-    "",
-    timeSection,
+    "时间：",
     `   - 开始时间：${formatWorkflowTimestamp(view.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
     `   - 结束时间：${formatWorkflowTimestamp(view.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
     `   - 总耗时：${durationText(view.duration, "不可用（工作流缺少有效的整体开始或结束时间）")}`,
+    "限制：以上仅依据已记录的事实；未记录的验证、提交及推送状态均未知，不能推断为成功。不会自动续跑或重放任务。",
   ].join("\n");
 }
 
@@ -164,7 +153,7 @@ export function renderWorkflowCompletion(view: WorkflowCompletionView, theme: Re
       ? theme.fg("error", line)
       : line.startsWith("结果：")
         ? theme.fg("success", line)
-        : line.startsWith("已完成任务：") || line.startsWith("子目标：")
+        : line.startsWith("已完成任务：")
           ? theme.fg("muted", line)
           : theme.fg("text", line)),
   ].join("\n"), 0, 0);

@@ -1,5 +1,5 @@
 import { appendFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
@@ -7,7 +7,6 @@ import { createRequire } from "node:module";
 import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains } from "./runtime-diagnostics-report.ts";
 
 const extensionVersion = readExtensionVersion();
-
 
 type Data = Record<string, unknown>;
 type Observation = { sequence: number; timestamp: string; event: string; data: Data };
@@ -44,6 +43,48 @@ function classify(event: string, data: Data) {
   return undefined;
 }
 
+export function createDiagnosticWriter(options: { file: string; maxBytes: number; maxPending: number; warning: string; retentionMs?: number; rejectOversize?: boolean; directoryMode?: number }) {
+  let failed = false, pending = 0, dropped = 0;
+  let tail = Promise.resolve();
+  function write(ctx: ExtensionContext, record: (dropped: number) => Data) {
+    if (failed || !ctx.isProjectTrusted()) return;
+    if (pending >= options.maxPending) { dropped++; return; }
+    const path = join(ctx.cwd, ".pi", options.file);
+    const line = JSON.stringify(record(dropped)) + "\n";
+    const bytes = Buffer.byteLength(line);
+    if (options.rejectOversize && bytes > options.maxBytes) { dropped++; return; }
+    dropped = 0; pending++;
+    const write = (queues.get(path) ?? Promise.resolve()).then(async () => {
+      if (failed) return;
+      await mkdir(dirname(path), { recursive: true, mode: options.directoryMode });
+      let size = 0;
+      const expired = (mtimeMs: number) => options.retentionMs !== undefined && Date.now() - mtimeMs > options.retentionMs;
+      try {
+        const info = await stat(path); size = info.size;
+        if (expired(info.mtimeMs)) { await rm(path, { force: true }); size = 0; }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (options.retentionMs !== undefined) {
+        try { if (expired((await stat(path + ".1")).mtimeMs)) await rm(path + ".1", { force: true }); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
+      if (size + bytes > options.maxBytes) {
+        await rm(path + ".1", { force: true });
+        if (size) await rename(path, path + ".1");
+      }
+      await appendFile(path, line, { mode: 0o600 });
+    }).catch(() => {
+      if (!failed) {
+        failed = true;
+        try { ctx.ui.notify(options.warning, "warning"); } catch {}
+      }
+    }).finally(() => { pending--; });
+    queues.set(path, write);
+    void write.then(() => { if (queues.get(path) === write) queues.delete(path); });
+    tail = Promise.all([tail, write]).then(() => {});
+  }
+  return { write, flush: () => tail, get failed() { return failed; }, get dropped() { return dropped; } };
+}
+
 export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number } = {}) {
   const maxBytes = Math.max(128 * 1024, Math.min(options.maxBytes ?? 2 * 1024 * 1024, 2 * 1024 * 1024));
   const runtimeId = randomUUID();
@@ -61,10 +102,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   let ring: Observation[] = [];
   let ringBytes = 0;
   let issues = new Map<string, Issue>();
-  let failed = false;
-  let pending = 0;
-  let dropped = 0;
-  let tail = Promise.resolve();
+
   let startedAt: number | undefined;
   let toolCalls = 0;
   let providerRequests = 0;
@@ -77,38 +115,9 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   const emptyProjection = () => ({ checks: 0, checkpointed: 0, overBudget: 0, last: undefined as Data | undefined });
   let contextProjection = emptyProjection();
   const seen = new Set<string>();
+  const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes, maxPending: MAX_PENDING, retentionMs: RETENTION_MS, rejectOversize: true, directoryMode: 0o700, warning: "运行黑匣子写入失败；已停用记录，不影响任务执行。" });
   function write(ctx: ExtensionContext, record: Data) {
-    if (failed || !ctx.isProjectTrusted()) return;
-    if (pending >= MAX_PENDING) { dropped++; return; }
-    const path = join(ctx.cwd, ".pi", "diagnostics", "runtime.jsonl");
-    const line = JSON.stringify({ version: 1, extensionVersion, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }) + "\n";
-    if (Buffer.byteLength(line) > maxBytes) { dropped++; return; }
-    dropped = 0;
-    pending++;
-    const write = (queues.get(path) ?? Promise.resolve()).then(async () => {
-      if (failed) return;
-      await mkdir(join(ctx.cwd, ".pi", "diagnostics"), { recursive: true, mode: 0o700 });
-      let size = 0;
-      let expired = false;
-      try { const info = await stat(path); size = info.size; expired = Date.now() - info.mtimeMs > RETENTION_MS; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      try { if (Date.now() - (await stat(path + ".1")).mtimeMs > RETENTION_MS) await rm(path + ".1", { force: true }); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (expired) { await rm(path, { force: true }); size = 0; }
-      if (size + Buffer.byteLength(line) > maxBytes) {
-        await rm(path + ".1", { force: true });
-        if (size) await rename(path, path + ".1");
-      }
-      await appendFile(path, line, { mode: 0o600 });
-    }).catch(() => {
-      if (!failed) {
-        failed = true;
-        try { ctx.ui.notify("运行黑匣子写入失败；已停用记录，不影响任务执行。", "warning"); } catch {}
-      }
-    }).finally(() => { pending--; });
-    queues.set(path, write);
-    void write.then(() => { if (queues.get(path) === write) queues.delete(path); });
-    tail = Promise.all([tail, write]).then(() => {});
+    writer.write(ctx, dropped => ({ version: 1, extensionVersion, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }));
   }
   function save(ctx: ExtensionContext, issue: Issue) {
     if (!issue.dirty) return;
@@ -123,7 +132,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   }
   function observe(ctx: ExtensionContext, event: string, raw: Data = {}) {
     try {
-      if (failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); scope = ""; return; }
+      if (writer.failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); scope = ""; return; }
       if (baselineCwd !== ctx.cwd) { baselines.clear(); baselineCwd = ctx.cwd; }
       const nextScope = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]);
       if (scope !== nextScope || event === "session.tree" || event === "session.start") {
@@ -202,7 +211,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         let summary: Data | undefined;
         if (startedAt !== undefined) {
           const durationMs = Math.max(0, nowMs() - startedAt);
-          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, budget, contextProjection, providerObservations, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped };
+          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, budget, contextProjection, providerObservations, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped: writer.dropped };
           if (profile && profile.thinkingLevel !== "unknown" && isHealthySample(summary)) {
             const key = JSON.stringify(profile);
             const history = baselines.get(key) ?? [];
@@ -228,7 +237,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   }
   async function report(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return "运行黑匣子：未信任项目，不读取诊断。";
-    await tail;
+    await writer.flush();
     const latest = new Map<string, Data>();
     const summaries: Data[] = [];
       const requests: Data[] = [];
@@ -258,9 +267,9 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || failed || dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
   }
-  return { observe, report, flush: () => tail };
+  return { observe, report, flush: () => writer.flush() };
 }
 function readExtensionVersion() {
   try {

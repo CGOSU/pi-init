@@ -60,6 +60,7 @@ export function classifyWorkflowRecoveryError(code: unknown): WorkflowRecoveryDi
     case "WORKFLOW_STATE_MISSING":
     case "WORKFLOW_STATE_INVALID_TYPE":
     case "WORKFLOW_STATE_INVALID":
+    case "WORKFLOW_FEATURE_RETIRED":
     case "WORKFLOW_STATE_RUNTIME_RETIRED":
     case "WORKFLOW_EXECUTOR_RETIRED":
     case "WORKFLOW_EXECUTOR_INVALID":

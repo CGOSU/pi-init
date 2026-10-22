@@ -2,6 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { hasCompleteToolPairs, messageRecord, toolCallIds, type ContextMessage } from "./role-context-protocol.ts";
 
+import { createWorkflowCompletionView } from "./workflow-completion-view.ts";
+import { formatWorkflowCompletionText } from "./workflow-completion-renderer.ts";
+
 const BASIS_TYPE = "pi-init-workflow-delivery-basis";
 const REPORT_TYPE = "pi-init-workflow-delivery-report";
 
@@ -12,7 +15,7 @@ export function createWorkflowDelivery(pi: ExtensionAPI, state: ExtensionRuntime
   const clear = () => { receipt = undefined; };
   function scope(ctx: ExtensionContext): string | undefined {
     const workflow = state.workflowState;
-    if (!workflow || workflow.status !== "completed" || workflow.parentStack?.length
+    if (!workflow || workflow.status !== "completed"
       || state.runtimeDisposed || workflow.sessionId !== ctx.sessionManager.getSessionId()) return;
     return JSON.stringify([workflow.sessionId, workflow.workflowId, workflow.planVersion, workflow.recoveryGeneration,
       state.roleContextGeneration, state.roleTransitionGeneration, state.activeRole ?? null,
@@ -33,23 +36,8 @@ export function createWorkflowDelivery(pi: ExtensionAPI, state: ExtensionRuntime
     if (!key) return;
     if (receipt?.scope === key) return;
     const workflow = state.workflowState!;
-    const lines = ["工作流完成报告（运行时依据已记录结果生成）", `目标：${workflow.plan.summary}`,
-      `已完成任务：${workflow.tasks.filter(task => task.status === "completed").length}/${workflow.tasks.length}`,
-      `约束与限制：${workflow.plan.constraints.join("；") || "未记录额外约束"}`];
-    const groups = [{ summary: workflow.plan.summary, tasks: workflow.tasks }, ...(workflow.subworkflowHistory ?? [])];
-    for (const group of groups) {
-      lines.push(`工作范围：${group.summary}`, `范围状态：${"status" in group ? group.status : workflow.status}`);
-      for (const task of group.tasks.filter(task => task.status !== "completed")) {
-        lines.push(`历史/未完成记录 ${task.id}：${task.status}${"blockReason" in task && task.blockReason ? `；阻塞：${task.blockReason}` : ""}${"outcomeUnknown" in task && task.outcomeUnknown ? "；副作用结果未知，禁止重放" : ""}`);
-      }
-      for (const task of group.tasks.filter(task => task.status === "completed")) {
-        lines.push(`任务 ${task.id}：${task.task}`, `结果：${task.completionSummary ?? "未记录完成摘要"}`,
-          `实现原因：${("implementationRationale" in task ? task.implementationRationale : undefined) ?? "未记录"}`,
-          ...(task.verification?.length ? task.verification.map(item => `验证记录：${item}`) : ["验证：未记录，不代表验证通过"]));
-      }
-    }
-    lines.push("限制：以上仅依据已记录的完成事实；未记录的验证、提交及推送状态均未知，不能推断为成功。");
-    receipt = { scope: key, toolCallId, report: lines.join("\n"), delivered: false, blocked: false, fallbackAttempted: false };
+    receipt = { scope: key, toolCallId, report: formatWorkflowCompletionText(createWorkflowCompletionView(workflow)),
+      delivered: false, blocked: false, fallbackAttempted: false };
     trace(ctx, "prepared");
   }
 

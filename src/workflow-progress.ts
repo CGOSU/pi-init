@@ -15,13 +15,7 @@ export type WorkflowProgressObservation = {
   lastVerifiedProgress?: { kind: "task-completion"; taskId: string; summary: string };
   suspicion?: WorkflowProgressSuspicion;
 };
-
-type SemanticClarification = Omit<NonNullable<WorkflowTask["clarification"]>, "handoff" | "createdAt">;
-type SemanticTask = Omit<Pick<WorkflowTask,
-  "id" | "task" | "role" | "files" | "acceptanceCriteria" | "dependsOn" | "goalId" | "priority" | "status"
-  | "completionSummary" | "implementationRationale" | "verification" | "blockReason" | "outcomeUnknown"
-  | "contract" | "clarification"
->, "clarification"> & { clarification?: SemanticClarification };
+type SemanticTask = Pick<WorkflowTask, "id" | "task" | "role" | "files" | "acceptanceCriteria" | "dependsOn" | "goalId" | "priority" | "status" | "completionSummary" | "implementationRationale" | "verification" | "blockReason" | "outcomeUnknown">;
 type SemanticGoal = { id: string; parentId: string; summary: string; constraints: string[] };
 
 type SemanticState = {
@@ -63,20 +57,7 @@ function semanticState(workflow: WorkflowState): SemanticState {
       ...(task.verification ? { verification: task.verification } : {}),
       ...(task.blockReason ? { blockReason: task.blockReason } : {}),
       ...(task.outcomeUnknown ? { outcomeUnknown: true } : {}),
-      ...(task.contract ? { contract: task.contract } : {}),
-      ...(task.clarification ? {
-        clarification: {
-          issueId: task.clarification.issueId,
-          category: task.clarification.category,
-          question: task.clarification.question,
-          impact: task.clarification.impact,
-          checkedFacts: task.clarification.checkedFacts,
-          completedWork: task.clarification.completedWork,
-          verification: task.clarification.verification,
-          sideEffects: task.clarification.sideEffects,
-        },
-      } : {}),
-    })),
+      })),
     ...(workflow.goals ? {
       goals: workflow.goals.map(({ id, parentId, summary, constraints }) => ({ id, parentId, summary, constraints })),
     } : {}),

@@ -110,7 +110,7 @@ test("新目标与原任务共用扁平队列，完成目标分组不等于完�
     assert.equal(latestWorkflow(harness).status, "running");
     assert.equal(latestWorkflow(harness).workflowId, rootWorkflowId);
     assert.equal(latestWorkflow(harness).pendingRevision, undefined);
-    assert.equal(latestWorkflow(harness).subworkflowHistory.length, 0);
+    assert.equal(latestWorkflow(harness).subworkflowHistory, undefined);
     await assert.rejects(execute(harness, { action: "complete", ...oldGoalAttempt, completionSummary: "旧结果", implementationRationale: "不能覆盖新状态", verification: ["旧验证"] }), error => error.code === "WORKFLOW_ACTION_IDENTITY_STALE");
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(workflowMessageIdentity(harness, "pi-init-workflow-task").taskId, "parent-second");

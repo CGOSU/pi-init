@@ -2,18 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkflowActions } from "../extensions/workflow-actions.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createWorkflowState, requestWorkflowNestedGoal, workflowActionIdentity, recoverWorkflowState, startWorkflowTask, workflowHandoffIdentity, ensureWorkflowReplanHandoff, workflowReplanIdentity } from "../src/workflow.ts";
-import { createNestedWorkflowState } from "../src/workflow-nesting.ts";
+import { createWorkflowState, workflowActionIdentity, recoverWorkflowState, startWorkflowTask, workflowHandoffIdentity, ensureWorkflowReplanHandoff, workflowReplanIdentity } from "../src/workflow.ts";
 import { transitionWorkflowDispatch, transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
 
-function plan(summary, id) {
-  return { summary, subworkflowContract: { inputs: ["需求"], expectedOutputs: ["目标完成"], acceptanceCriteria: ["测试通过"], allowedFiles: ["src"] }, tasks: [{ id, task: summary, role: "developer-test", files: ["src"], acceptanceCriteria: ["测试通过"] }] };
-}
+function plan(summary, id) { return { summary, tasks: [{ id, task: summary, role: "developer-test", files: ["src"], acceptanceCriteria: ["测试通过"] }] }; }
 
-function nestedState() {
-  const parent = createWorkflowState({ ...plan("父目标", "parent-task"), sessionId: "test-session" }, 100);
-  return createNestedWorkflowState(requestWorkflowNestedGoal(parent, { direction: "子目标" }, 101), plan("子目标", "child-task"), 102);
-}
+function flatState() { return createWorkflowState({ ...plan("目标", "child-task"), sessionId: "test-session" }, 100); }
 
 function actionHarness(initial, options = {}) {
   const state = createExtensionRuntimeState();
@@ -41,15 +35,15 @@ function actionHarness(initial, options = {}) {
         return next;
       },
       formatWorkflowState: () => "状态",
+      formatWorkflowPauseSummary: () => "暂停",
     },
     dispatch: { scheduleWorkflow: async () => { order.push("schedule"); } },
-    coordination: { isLinkedToWorkflow: () => false },
   });
   return { state, actions, ctx, retired, order };
 }
 
-test("子工作流取消写入失败不提前撤销续跑", async () => {
-  const initial = nestedState();
+test("扁平工作流取消写入失败不提前撤销续跑", async () => {
+  const initial = flatState();
   const h = actionHarness(initial, { fail: true });
   await assert.rejects(h.actions.runTaskWorkflowAction({ action: "cancel", ...workflowActionIdentity(initial) }, undefined, h.ctx), /session write failed/);
   assert.equal(h.state.workflowState, initial);
@@ -57,18 +51,17 @@ test("子工作流取消写入失败不提前撤销续跑", async () => {
   assert.deepEqual(h.order, ["persist"]);
 });
 
-test("子工作流取消提交后才撤销旧身份续跑，不使用递增后的身份", async () => {
-  const initial = nestedState();
+test("扁平工作流取消提交后才撤销旧身份续跑，不使用递增后的身份", async () => {
+  const initial = flatState();
   const h = actionHarness(initial);
   await h.actions.runTaskWorkflowAction({ action: "cancel", ...workflowActionIdentity(initial) }, undefined, h.ctx);
   assert.deepEqual(h.order, ["persist", "retire"]);
   assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
-  assert.equal(h.state.workflowState.workflowId, initial.parentStack[0].state.workflowId);
-  assert.equal(h.state.workflowState.status, "replanning");
-  assert.equal(h.state.workflowState.pauseReason, "child-result-review");
+  assert.equal(h.state.workflowState.workflowId, initial.workflowId);
+  assert.equal(h.state.workflowState.status, "cancelled");
 });
 
-function executingState(initial = nestedState()) {
+function executingState(initial = flatState()) {
   const prepared = startWorkflowTask(initial, undefined, 110);
   const identity = workflowHandoffIdentity(prepared);
   const dispatching = transitionWorkflowDispatch(prepared, { type: "task-dispatch-requested", identity }, 111).state;
@@ -87,7 +80,7 @@ function completionParams(state) {
   return { action: "complete", ...identity, ...result };
 }
 
-test("子工作流完成写入失败不撤销续跑、不返回父层；成功后使用原身份撤销", async () => {
+test("扁平工作流完成写入失败不撤销续跑、成功后使用原身份撤销", async () => {
   const initial = executingState();
   const failed = actionHarness(initial, { fail: true });
   await assert.rejects(failed.actions.runTaskWorkflowAction(completionParams(initial), undefined, failed.ctx), /session write failed/);
@@ -97,12 +90,12 @@ test("子工作流完成写入失败不撤销续跑、不返回父层；成功�
   const result = await h.actions.runTaskWorkflowAction(completionParams(initial), undefined, h.ctx);
   assert.deepEqual(h.order, ["persist", "retire"]);
   assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
-  assert.equal(h.state.workflowState.workflowId, initial.parentStack[0].state.workflowId);
-  assert.equal(h.state.workflowState.subworkflowHistory[0].tasks[0].status, "completed");
-  assert.match(result.content[0].text, /子流程已完成/);
+  assert.equal(h.state.workflowState.workflowId, initial.workflowId);
+  assert.equal(h.state.workflowState.tasks[0].status, "completed");
+  assert.match(result.content[0].text, /工作流已完成/);
 });
 
-test("生命周期转换确定、输入不变，返回父层与完成子层分开保存", () => {
+test("生命周期转换确定、输入不变，完成状态单一", () => {
   const initial = executingState();
   const snapshot = structuredClone(initial);
   const event = completionEvent(initial);
@@ -111,8 +104,7 @@ test("生命周期转换确定、输入不变，返回父层与完成子层分�
   assert.deepEqual(transitionWorkflowLifecycle(initial, event, 120), result);
   assert.equal(result.taskState.workflowId, initial.workflowId);
   assert.equal(result.taskState.status, "completed");
-  assert.equal(result.state.workflowId, initial.parentStack[0].state.workflowId);
-  assert.equal(result.returnedToParent, true);
+  assert.equal(result.state.workflowId, initial.workflowId);
   assert.deepEqual(result.effects, [{ kind: "retire-continuation", identity: workflowActionIdentity(initial) }]);
 });
 
@@ -131,7 +123,7 @@ test("完成与阻塞事件校验全部 handoff 身份字段，迟到结果不�
 });
 
 test("queued 任务在验收时补记真实启动，prepared 阶段仍拒绝", () => {
-  const prepared = startWorkflowTask(nestedState(), undefined, 110);
+  const prepared = startWorkflowTask(flatState(), undefined, 110);
   const identity = workflowHandoffIdentity(prepared);
   const dispatching = transitionWorkflowDispatch(prepared, { type: "task-dispatch-requested", identity }, 111).state;
   const queued = transitionWorkflowDispatch(dispatching, { type: "task-queued", identity }, 112).state;
@@ -185,12 +177,12 @@ test("架构审阅恢复由生命周期事件推进，重复恢复身份被拒�
   assert.throws(() => transitionWorkflowLifecycle(next.state, event, 121), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
 });
 
-test("命令取消与工具一致，返回父层等待结果处置", async () => {
-  const initial = nestedState();
+test("命令取消与工具一致，保持单一终态", async () => {
+  const initial = flatState();
   const h = actionHarness(initial);
   await h.actions.workflowCommand("cancel", undefined, h.ctx);
-  assert.equal(h.state.workflowState.workflowId, initial.parentStack[0].state.workflowId);
-  assert.equal(h.state.workflowState.status, "replanning");
+  assert.equal(h.state.workflowState.workflowId, initial.workflowId);
+  assert.equal(h.state.workflowState.status, "cancelled");
   assert.deepEqual(h.order, ["persist", "retire"]);
   assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
 });
@@ -224,33 +216,26 @@ test("工具重试和恢复的写入失败不报告成功或改变业务状态",
   }
 });
 
-test("结果验收写入失败不会启动父队列，成功才解除结果审阅门", async () => {
-  const initial = executingState();
-  const completed = transitionWorkflowLifecycle(initial, completionEvent(initial), 120);
-  const pending = ensureWorkflowReplanHandoff(completed.state);
-  pending.continuation.phase = "queued";
-  const params = { action: "review-child", ...workflowReplanIdentity(pending), childReview: { childWorkflowId: initial.workflowId, decision: "continue", parentPlanValid: true, reason: "全部输出已核实，父计划有效", acceptedOutputs: ["目标完成"], verification: ["核查通过"] } };
-  const failed = actionHarness(pending, { fail: true, role: "architect" });
-  await assert.rejects(failed.actions.runTaskWorkflowAction(params, undefined, failed.ctx), /session write failed/);
-  assert.equal(failed.state.workflowState, pending);
-  assert.deepEqual(failed.order, ["persist"]);
-  const h = actionHarness(pending, { role: "architect" });
-  await h.actions.runTaskWorkflowAction(params, undefined, h.ctx);
-  assert.equal(h.state.workflowState.status, "running");
-  assert.equal(h.state.workflowState.subworkflowHistory[0].reviews[0].decision, "continue");
-  assert.deepEqual(h.order, ["persist"]);
+test("退役的子流程审阅事件不能改变当前扁平工作流", () => {
+  const state = executingState(); const before = structuredClone(state);
+  assert.throws(() => transitionWorkflowLifecycle(state, { type: "child-reviewed", identity: workflowActionIdentity(state), review: {} }, 200));
+  assert.deepEqual(state, before);
+});test("cancel-all兼容命令与cancel使用同一扁平终态", async () => {
+  const initial = flatState();
+  const h = actionHarness(initial);
+  await h.actions.workflowCommand("cancel-all", undefined, h.ctx);
+  assert.equal(h.state.workflowState.status, "cancelled");
+  assert.equal(h.state.workflowState.workflowId, initial.workflowId);
+  assert.deepEqual(h.order, ["persist", "retire"]);
 });
-test("cancel-all 命令与工具都终止整棵流程并保留取消历史", async () => {
-  const initial = nestedState();
-  const command = actionHarness(initial);
-  await command.actions.workflowCommand("cancel-all", undefined, command.ctx);
-  const tool = actionHarness(initial);
-  await tool.actions.runTaskWorkflowAction({ action: "cancel-all", ...workflowActionIdentity(initial) }, undefined, tool.ctx);
-  for (const h of [command, tool]) {
-    assert.equal(h.state.workflowState.workflowId, initial.parentStack[0].state.workflowId);
-    assert.equal(h.state.workflowState.status, "cancelled");
-    assert.equal(h.state.workflowState.subworkflowHistory[0].status, "cancelled");
-    assert.deepEqual(h.order, ["persist", "retire"]);
-    assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
-  }
+
+test("plain block can preserve unknown side effects without the retired clarification protocol", async () => {
+  const initial = executingState();
+  const h = actionHarness(initial);
+  await h.actions.runTaskWorkflowAction({ action: "block", ...workflowHandoffIdentity(initial), reason: "external side effects not confirmed", outcomeUnknown: true }, undefined, h.ctx);
+  const blocked = h.state.workflowState;
+  assert.equal(blocked.status, "paused");
+  assert.equal(blocked.tasks[0].outcomeUnknown, true);
+  assert.equal(blocked.handoff, undefined);
+  assert.throws(() => transitionWorkflowLifecycle(blocked, { type: "task-retried", identity: workflowActionIdentity(blocked), taskId: blocked.tasks[0].id, confirmUnknownOutcome: false }, 500), error => error.code === "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED");
 });

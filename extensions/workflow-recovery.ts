@@ -16,7 +16,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function latestWorkflowRecoverySource(branch: readonly unknown[]): WorkflowRecoverySource {
   const index = branch.findLastIndex((entry) => isRecord(entry)
     && entry.type === "custom"
-    && entry.customType === "pi-init-workflow");
+    && (entry.customType === "pi-init-workflow" || entry.customType === "pi-init-coordination"));
   const entry = index < 0 ? undefined : branch[index];
   const source = isRecord(entry) ? entry : undefined;
   const entryId = typeof source?.id === "string"

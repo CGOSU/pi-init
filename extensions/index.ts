@@ -20,7 +20,6 @@ import { registerActivityStatusSources } from "./activity-status-registration.ts
 import { createArchitectBoundary, ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
 import { createWorkflowActions } from "./workflow-actions.ts";
-import { createCoordinationRuntime, type CoordinationRuntime } from "./coordination-runtime.ts";
 import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
 import { createWorkflowMessages } from "./workflow-messages.ts";
 import { createWorkflowReport } from "./workflow-report.ts";
@@ -80,7 +79,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.registerTool(createEditGuardTool());
   let workflowDispatch: WorkflowDispatch;
   let workflowReport: ReturnType<typeof createWorkflowReport>;
-  let coordinationRuntime: CoordinationRuntime;
   const workflowMessages = createWorkflowMessages(runtimeState, {
     pi,
     setInternalContinuationPending: (value) => {
@@ -97,10 +95,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     sendWorkflowTaskMessage: (ctx, taskId, note, identity) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note, identity),
     scheduleWorkflow: (ctx, identity, reason) => workflowDispatch.scheduleWorkflow(ctx, identity, reason),
     sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
-    sendCoordinationMessage: (ctx, identity) => coordinationRuntime.sendCoordinationMessage(ctx, identity),
     acknowledgeRoleRecovery: roleRecovery.acknowledge,
     finishWorkflowBoundary: (ctx, identity, failed) => workflowDispatch.finishWorkflowBoundary(ctx, identity, failed),
-    continueCoordinationBoundary: (ctx, identity, failed) => coordinationRuntime.continueCoordinationBoundary(ctx, identity, failed),
   });
   const roleHandoff = createRoleHandoff(pi, runtimeState, { getActiveRole: roleRuntime.activeRoleFor, requireRecovery: roleRecovery.requireConfirmation });
   const userControl = createWorkflowUserControl(pi, runtimeState, {
@@ -139,18 +135,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
-  coordinationRuntime = createCoordinationRuntime(runtimeState, {
-    pi,
-    roleRuntime,
-    setInternalContinuationPending: (value) => {
-      runtimeState.internalContinuationPending = value;
-    },
-  });
   workflowReport = createWorkflowReport(runtimeState, {
     pi, roleRuntime, activityStatus,
-    onWorkflowPersisted: (workflow, ctx) => {
+    onWorkflowPersisted: (workflow) => {
       workflowProgressObserver.observe(workflow);
-      coordinationRuntime.synchronizeWorkflowLink(workflow, ctx);
     },
   });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
@@ -160,15 +148,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     setCurrentContext: (ctx) => {
       runtimeState.currentContext = ctx;
     },
-    synchronizeWorkflowLink: (workflow, ctx) => { coordinationRuntime.synchronizeWorkflowLink(workflow, ctx); },
-    onWorkflowRecovered: (previous, recovered, ctx) =>
-      coordinationRuntime.reconcileWorkflowRecovery(previous, recovered, ctx),
   });
   const workflowActions = createWorkflowActions(runtimeState, {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
-    coordination: coordinationRuntime,
     taskMemory,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
@@ -215,8 +199,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   async function persistWorkflowDirection(next: NonNullable<typeof runtimeState.workflowState>, ctx: ExtensionContext) {
-    const previous = runtimeState.workflowState;
-    if (previous && coordinationRuntime.isLinkedToWorkflow(previous)) coordinationRuntime.linkWorkflow(next, ctx);
     workflowReport.persistWorkflowState(next, ctx);
     if (next.status === "replanning") await workflowDispatch.scheduleWorkflow(ctx);
   }
@@ -251,21 +233,21 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         } catch (error) { ctx.ui.notify(`无法调整队列请求：${textOf(error)}`, "warning"); }
         return true;
       }
-      if (explicitChild !== (revision.kind === "nested" || revision.kind === "goal")) {
+      if (explicitChild !== (revision.kind === "goal")) {
         ctx.ui.notify("当前已有不同类型的待处理请求；未将新指令混入该请求，请先处理或取消当前请求。", "warning");
         return true;
       }
       try {
         const next = appendWorkflowReplanDirection(runtimeState.workflowState, event.text.trim());
         await persistWorkflowDirection(next, ctx);
-        const nested = revision.kind === "nested" || revision.kind === "goal";
+        const nested = revision.kind === "goal";
         ctx.ui.notify(
           next.status === "replanning"
             ? nested
-              ? `已将新目标合并到待处理的子工作流 ${revision.revisionId}，并交由架构师规划；父工作流保持不变。`
+              ? `已将新目标合并到待处理的目标分组 ${revision.revisionId}，并交由架构师规划；原有成果与队列保留。`
               : `已将新指令合并到待处理 revision ${revision.revisionId}，并重新交给架构师重规划。`
             : nested
-              ? `已将新目标合并到待处理的子工作流 ${revision.revisionId}，将在当前任务边界规划；父工作流保持不变。`
+              ? `已将新目标合并到待处理的目标分组 ${revision.revisionId}，将在当前任务边界规划；原有成果与队列保留。`
               : `已将新指令合并到待处理 revision ${revision.revisionId}，将在任务边界交给架构师重规划。`,
           "info",
         );
@@ -276,8 +258,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
 
     try {
-      const previous = runtimeState.workflowState;
-      if (!previous) return false;
+        const previous = runtimeState.workflowState;
+        if (!previous) return false;
       const direction = event.text.trim();
       const next = explicitReplan
         ? requestWorkflowReplan(previous, { direction })
@@ -327,7 +309,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("message_start", (event, ctx) => {
-    coordinationRuntime.markCurrentHandoffStartedFromMessage(ctx, event.message);
     if (!workflowTaskConsumptionRunActive) return;
     workflowDispatch.markCurrentTaskStartedFromMessage(ctx, event.message);
   });
@@ -349,8 +330,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     }
     settleExternalRunTiming();
     roleRuntime.startPendingRoleCompaction(ctx);
-    await coordinationRuntime.schedule(ctx);
-    if ((runtimeState.coordinationRuntimeState?.handoff && runtimeState.internalContinuationPending) || runtimeState.roleCompactionInFlight || runtimeState.pendingRoleCompaction) return;
+    if (runtimeState.roleCompactionInFlight || runtimeState.pendingRoleCompaction) return;
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -365,8 +345,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runTimingDiagnostics.reset();
     runtimeState.internalContinuationPending = false;
     roleRecovery.reset();
-    runtimeState.coordinationRuntimeState = undefined;
-    runtimeState.coordinationRestoreError = undefined;
     runtimeState.configuredRoleNames = [];
     runtimeState.currentContext = undefined;
   });
@@ -385,7 +363,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.workflowNoticeAcknowledgement = undefined;
       roleRecovery.restore(ctx, event.reason);
       runtimeState.currentContext = ctx;
-      coordinationRuntime.restore(ctx);
       workflowDispatch.restoreWorkflowState(ctx);
       userControl.restore(ctx);
       workflowProgressObserver.observe();
@@ -413,8 +390,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         );
       }
       if (!runtimeState.userStopRequested) {
-        await coordinationRuntime.schedule(ctx);
-        await workflowDispatch.scheduleWorkflow(ctx);
+            await workflowDispatch.scheduleWorkflow(ctx);
       }
     } catch (error) {
       ctx.ui.notify(textOf(error), "error");
@@ -425,7 +401,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.agentRunActive = false;
     roleHandoff.reset();
     workflowTaskConsumptionRunActive = false;
-    coordinationRuntime.restore(ctx);
     workflowDispatch.restoreWorkflowState(ctx);
     userControl.restore(ctx);
     workflowProgressObserver.observe();
@@ -439,28 +414,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       roleRecovery.restore(ctx);
     }
     workflowReport.updateWorkflowStatus(ctx);
-    if (!runtimeState.userStopRequested) await coordinationRuntime.schedule(ctx);
   });
-
-  pi.registerCommand("fast", { description: "按 Fast Path 请求执行一次任务（用法：/fast <任务描述>）", handler: async (args, ctx) => {
-    const task = args.trim(), workflow = runtimeState.workflowState;
-    const restoreError = runtimeState.workflowRestoreError;
-    if (!task || !ctx.isIdle() || restoreError || (workflow && !["completed", "cancelled"].includes(workflow.status))) return ctx.ui.notify(
-      !task ? "用法：/fast <任务描述>"
-        : !ctx.isIdle() ? "Agent 正忙；请等待当前操作完成后再使用 /fast。"
-          : restoreError ? `已保存的工作流无法恢复（${restoreError.code}）：${restoreError.message}；/fast 不会启动新任务。`
-            : "当前有未结束的工作流；/fast 不会绕过或覆盖它，请按工作流流程继续。",
-      "warning",
-    );
-    await pi.sendUserMessage(`用户通过 /fast 明确选择对下面这一项单次启用 Fast Path；这不是持久模式，也不修改模型或项目配置。\n这是对 Fast Path 自动适用条件的手动选择：不要因任务类型、范围、文件数、代码行数或修改复杂度而退回普通流程。直接定向读取最少必要上下文，完成任务所需修改和风险匹配的最小验证；不要仅因不符合自动适用条件而创建 task_workflow 或做例行留痕。\n安全、权限、需求/契约确认、数据保护、architect 职责限制、上下文恢复门、工作流保护和必要验证仍优先；若这些独立边界要求暂停或升级流程，简要说明具体原因，不要只以自动 Fast Path 资格为由退回。\n\n用户任务：\n${task}`);
-  }});
 
   pi.registerCommand("pi-init", {
     description: "打开 Pi Init 控制中心：初始化项目、配置角色和切换模型",
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "sync", "config", "save", "role", "mode", "workflow", "coordination"];
+        const values = ["init", "advanced", "sync", "config", "save", "role", "mode", "workflow"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -473,7 +434,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           ? ROLE_MODES
           : action === "workflow"
             ? ["status", "acknowledge", "resume", "retry", "cancel"]
-            : action === "coordination" ? ["resume", "reopen"] : [];
+            : [];
       const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
       const matches = values.filter((value) => value.startsWith(partial));
       return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
@@ -494,21 +455,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         }
         if (action === "role") { await (await loadControlCenter()).switchRole(tokens[0], ctx); return; }
         if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
-        if (action === "coordination") {
-          const coordinationAction = tokens.shift();
-          if (coordinationAction === "resume" && tokens.length === 0) {
-            if (!userControl.resume(ctx)) return;
-            await coordinationRuntime.resumeBoundary(ctx);
-            return;
-          }
-          if (coordinationAction === "reopen" && tokens.length >= 2) {
-            const reportId = tokens.shift();
-            const reason = tokens.join(" ");
-            await coordinationRuntime.reopenReview(reportId, reason, ctx);
-            return;
-          }
-          throw new Error("用法：/pi-init coordination resume | /pi-init coordination reopen <reportId> <原因>");
-        }
         if (action === "workflow") {
           const workflowAction = tokens.shift();
           if (workflowAction === "stop") { userControl.suspend(ctx, "user-command"); ctx.ui.notify("自动续跑已停止；未完成、取消或重试任务。", "info"); return; }
@@ -517,7 +463,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;
         }
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|coordination] [参数]", "error");
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
       } catch (error) {
         ctx.ui.notify(textOf(error), "error");
       }
@@ -588,18 +534,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     name: "task_workflow",
     label: "Task Workflow",
     description:
-      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker. Task contracts are optional for ordinary plans; a task may carry contract only together with accepted, non-stale coordination evidence for the current workflow revision, so ordinary tasks keep a contract-free path.`,
+      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",
       "Never assign architect as an executable task role; planning validation rejects it, retained architect tasks cannot be applied by replan, and old active plans with architect execution tasks are not recovered or dispatched.",
       "Architect 只规划与决策，不读取、执行或连接 MCP。优先复用已有调查；缺少决策关键事实时才交给 docs-commit 集中补查，不因切角重读规则或重复调查。普通任务无需正式取证协议。",
       "本轮工具调用的工作流与协调身份由运行时绑定，通常只提交业务参数和真实结果，无需手填 workflow/session/attempt/handoff 等身份。兼容显式身份仍严格校验；不能套用最新状态提交旧回合结果。",
-      `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；请求与审阅证据是纯协议动作，可传回当前 coordinationHandoffId 短引用，report-evidence 等执行动作仍被阻断。`,
-      "task contract 与协调状态是双向门控：携带 contract 的任务必须有绑定当前 workflow revision 且已接受、未过期的协调证据，contract.evidence 必须引用该账本；没有协调证据的普通计划不要附带 contract，否则会被拒。",
+      `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；实现、验证与结果提交必须由当前执行角色负责。`,
+      "任务使用files、acceptanceCriteria、实际verification和工作记忆checkpoint；缺少关键事实或权限时block，不建立正式证据或嵌套协议。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
-      "Discussion does not change workflow state. Use request-replan to revise the existing queue and request-goal (request-child is a compatible alias) to insert a goal group. Parent/child IDs express ownership only; all tasks share one workflow ID, ready queue and executor. New goal planning must explicitly retain existing pending task IDs; dependencies take precedence over priority, ties preserve order, and running tools are not preempted. Old parentStack and review-child are legacy recovery paths, not new task grouping.",
+      "Discussion does not change workflow state. Use request-replan to revise the existing queue and request-goal to insert a goal group. Parent/child IDs express ownership only; all tasks share one workflow ID, ready queue and executor. New goal planning must explicitly retain existing pending task IDs; dependencies take precedence over priority, ties preserve order, and running tools are not preempted. Old nested workflows are retired and never resumed automatically.",
     ],
     parameters: taskWorkflowParameters,
     renderCall(args, theme) {

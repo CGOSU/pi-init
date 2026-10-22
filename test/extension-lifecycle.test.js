@@ -69,7 +69,6 @@ const {
   createExtensionHarness,
   emitExtensionEvent,
   runExternalAgent,
-  assertFastCommandContract,
 } = helpers;
 
 test("角色配置先写会话，显式保存才落盘", async () => {
@@ -312,10 +311,9 @@ test("扩展注册工作流工具、命令和生命周期处理器", async () =>
   assert.equal(activeHarness.sentMessages[0].message.customType, "pi-init-workflow-task");
 });
 
-test("/fast 命令遵守一次性范围、资格和工作流状态约束", async () => {
-  await assertFastCommandContract();
+test("退役的fast命令不再注册", () => {
+  assert.equal(createExtensionHarness().commands.has("fast"), false);
 });
-
 test("init_project 首次使用按需加载脚手架并支持 dryRun", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory, hasUI: false });

@@ -312,7 +312,7 @@ test("task_workflow 报告区分任务级别并筛选验证结果", () => {
 
   const workflowReport = report.formatWorkflowCompletion(completed, completed.tasks[1]);
   assert.match(workflowReport, /npm test：失败：1 个测试失败/);
-  assert.doesNotMatch(workflowReport, /git diff --check：通过/);
+  assert.match(workflowReport, /验证记录：git diff --check：通过/);
   assert.match(workflowReport, /总耗时：60 毫秒/);
 
   const passedOnlyReport = report.formatWorkflowTaskCompletion({

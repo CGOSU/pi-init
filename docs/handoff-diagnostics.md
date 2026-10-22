@@ -22,7 +22,7 @@ pi --no-extensions -e ./extensions/index.ts
 
 已安装为 Pi package 时，设置变量后使用原有 Pi 启动命令即可。扩展加载时读取开关；取消变量恢复自动黑匣子；设为 0 则完全关闭采集，再重新加载扩展。
 
-日志写入当前项目的 .pi/logs/handoff.jsonl，每行一个 JSON。约 2 MiB 轮转，保留一个 handoff.jsonl.1 备份。正在发生的问题可用 PowerShell 实时查看：
+日志写入当前项目的 .pi/logs/handoff.jsonl，每行一个 JSON。约 2 MiB 轮转，保留一个 handoff.jsonl.1 备份；与自动黑匣子复用 runtime-diagnostics.ts 中的有界写队列、轮转和失败停用处理，不合并文件或采集内容。正在发生的问题可用 PowerShell 实时查看：
 
 ```powershell
 Get-Content .pi/logs/handoff.jsonl -Tail 30 -Wait
@@ -38,7 +38,7 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl
 node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/to/project/.pi/logs/handoff.jsonl
 ```
 
-不传路径时读取当前目录 `.pi/logs/handoff.jsonl`，输出 JSON 到 stdout，不修改日志，不进入模型上下文。输出包含工具调用/执行/错误数、SDK 耗时合计、回合耗时、同角色切换候选、同版本读取重叠候选和角色派发/协调交接延迟。
+不传路径时读取当前目录 `.pi/logs/handoff.jsonl`，输出 JSON 到 stdout，不修改日志，不进入模型上下文。输出包含工具调用/执行/错误数、SDK 耗时合计、回合耗时、同角色切换候选、同版本读取重叠候选和角色派发延迟。
 
 回合从 before_start 到 settled，排除下一次用户输入前的空闲；未闭合为 null，多次 agent.start 明确警告，不把 run 误当唯一执行实例。缺失片段不推断失败；无效/截断行、重复和日志丢弃均披露。只分析成功且未标记截断的 read 结果中有明确版本与行范围的记录；重叠是请求范围统计，不证明实际返回行数或操作可省略，版本按 stat 观察隔离。SDK 耗时可能重叠或嵌套，不可相减推算模型推理耗时。同角色切换仅列候选，不自动跳过模型配置或恢复操作。
 
@@ -46,8 +46,8 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 
 1. 按 sessionId、runtimeId 和 sequence 还原顺序，run 表示本次扩展实例中的 Agent 回合编号。
 2. 从 routing.model_proposed 查看模型提出的交接（包括随后可能被守卫拒绝的调用）；从 routing.tool_call 查看进入执行入口的 action、目标角色和身份，对照相同 toolCallId 的 routing.tool_result。
-3. 对照 workflow.persisted、coordination.persisted，检查 revision、取证 round、任务状态和 handoff 是否持续变化。
-4. workflow.schedule、coordination.schedule 记录调度入口及锁状态；workflow.nudge_requested 表示因未提交完成/阻塞结果而请求续跑。
+3. 对照 workflow.persisted，检查 revision、任务状态和 handoff 是否持续变化。
+4. workflow.schedule 记录调度入口及锁状态；workflow.nudge_requested 表示因未提交完成/阻塞结果而请求续跑。
 5. agent.continuation 区分内部续跑与非内部回合；handoff.message_consumed 仅代表消息被观察到，实际启动状态以持久状态记录为准。
 6. compaction.started、compaction.long_wait、compaction.settled 关联 operationId。只有 started 而无 settled 表示本次压缩尚未观察到收敛；通用 compaction.event 不等价于确认该操作成功。
 
@@ -102,7 +102,7 @@ node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/t
 - 文件工具记录项目相对路径、offset/limit 或批量 ranges，以及观察时的 bytes 和 version。versionKind=stat 表示版本由设备、inode、大小、mtime 和 ctime 元数据生成，不读取源码、不等于内容哈希，也不证明两个文件语义相同。调用和结果阶段分别采样，可观察编辑前后变化；不扫描任意 shell 命令可能修改的全部文件。
 - 每条输入最多采样 16 个文件，每个文件最多保留 16 个范围，fileCount/filesTruncated 和 rangesTruncated 标识截断。项目外路径、超过 256 字符的相对路径只保存路径指纹；项目外文件不采样元数据。采样失败记录 statCode，不中断工具。
 - isError 保留宿主工具错误标志；details.ok（无 details 时取 structuredContent.ok）另记为 businessOk，避免把 isError=false 的业务拒绝误认为成功。结构化错误码、退出码、结果文本长度及可用的读取截断信息一并记录，但不记录正文。
-- 每条事件仍带运行状态快照；任务额外记录 outcomeUnknown、executionStartedAt，协调状态记录 workflowLink，锁状态包含恢复持久化失败和待持久化恢复标志。可对照暂停状态与后续 edit/bash 事件排查状态脱节，不自动放行或阻断操作。
+- 每条事件仍带运行状态快照；任务额外记录 outcomeUnknown、executionStartedAt，锁状态包含恢复持久化失败和待持久化恢复标志。可对照暂停状态与后续 edit/bash 事件排查状态脱节，不自动放行或阻断操作。
 
 问题、范围、缺口、方向、澄清、工具输入和结果正文只保存指纹，不保存用户提示、模型回复、源码、工具命令或结果正文。项目内文件路径、读取范围、标识符和模型名称仍会记录；分享日志前请检查敏感信息。指纹不是加密，不能保证低熵内容不可猜测。跨重启的指纹可比较，但重启会创建新 runtimeId。
 

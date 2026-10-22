@@ -8,8 +8,7 @@ import {
   roleLabel,
   roleModeLabel,
   shouldCompactAfterWorkflowTask,
-  unwrapRoleResult,
-} from "../src/roles.ts";
+  unwrapRoleResult, mergeRoleConfigData } from "../src/roles.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -20,7 +19,6 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
-import type { CoordinationHandoffIdentity } from "../src/coordination-runtime-types.ts";
 import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
 import type { RoleMode, WorkflowMode } from "../src/role-types.ts";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
@@ -47,10 +45,8 @@ export type RoleRuntimeDependencies = {
   sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: WorkflowHandoffIdentity) => void;
   scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity, reason?: "context-budget") => Promise<void>;
   sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
-  sendCoordinationMessage: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity) => Promise<boolean>;
   acknowledgeRoleRecovery: (role: string) => void;
   finishWorkflowBoundary: (ctx: ExtensionContext, identity: WorkflowActionIdentity, failed?: boolean) => Promise<void>;
-  continueCoordinationBoundary: (ctx: ExtensionContext, identity: CoordinationHandoffIdentity, failed?: boolean) => Promise<void>;
 };
 
 export function workflowModeLabel(mode: WorkflowMode) {
@@ -148,27 +144,7 @@ export function createRoleRuntime(
   function isManualRoleMode(config: Pick<ResolvedRoleConfig, "mode">) { return effectiveRoleMode(config) === "manual"; }
 
   function stageRoleConfig(changes: Record<string, unknown>) {
-    const next = { ...state.sessionRoleConfigOverrides, ...changes };
-    const roleModels = state.sessionRoleConfigOverrides.roleModels
-      && typeof state.sessionRoleConfigOverrides.roleModels === "object"
-      && !Array.isArray(state.sessionRoleConfigOverrides.roleModels)
-      ? { ...(state.sessionRoleConfigOverrides.roleModels as Record<string, unknown>) }
-      : {};
-    let hasRoleModels = Object.keys(roleModels).length > 0;
-    if (changes.roleModels && typeof changes.roleModels === "object" && !Array.isArray(changes.roleModels)) {
-      Object.assign(roleModels, changes.roleModels);
-      hasRoleModels = true;
-    }
-    for (const [role, value] of Object.entries(changes)) {
-      if (!["schemaVersion", "mode", "workflowMode", "workflowEnabled", "workflowExecutor", "roleModels", "providerPolicy"].includes(role)
-        && value && typeof value === "object" && !Array.isArray(value)) {
-        roleModels[role] = value;
-        delete next[role];
-        hasRoleModels = true;
-      }
-    }
-    if (hasRoleModels) next.roleModels = roleModels;
-    state.sessionRoleConfigOverrides = next;
+    state.sessionRoleConfigOverrides = mergeRoleConfigData(state.sessionRoleConfigOverrides, changes);
   }
 
   function clearStagedRoleConfig(role: string) {

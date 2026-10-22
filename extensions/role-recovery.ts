@@ -163,9 +163,9 @@ export function createRoleRecovery(
     if (workflowAction === "retry" || (workflowAction === "replan" && event.input?.confirmUnknownOutcome === true)) {
       const taskId = event.input?.taskId;
       const task = workflowAction === "replan"
-        ? workflow?.tasks.find(item => item.outcomeUnknown || item.clarification?.sideEffects.status === "unknown")
+        ? workflow?.tasks.find(item => item.outcomeUnknown)
         : workflow?.tasks.find(item => taskId === undefined ? item.status === "blocked" : item.id === taskId);
-      if (task?.outcomeUnknown || task?.clarification?.sideEffects.status === "unknown") return {
+      if (task?.outcomeUnknown) return {
         block: true,
         reason: "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。请核对副作用，由用户执行 /pi-init workflow retry <taskId> --confirm-unknown-outcome 或使用工作流面板确认。",
       };

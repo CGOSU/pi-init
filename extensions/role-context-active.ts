@@ -1,10 +1,9 @@
 import type { ContextEvent, ContextEventResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isWorkflowActive, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
-import { COORDINATION_EVIDENCE_MESSAGE_TYPE, COORDINATION_REVIEW_MESSAGE_TYPE, coordinationHandoffIdentity } from "./coordination-runtime-protocol.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { reusableToolContext } from "./role-context-reuse.ts";
 import { type ContextMessage, WORKFLOW_TASK_MESSAGE_TYPE, WORKFLOW_REPLAN_MESSAGE_TYPE,
-  isRecord, messageRecord, identityMatches, isManagedHandoffMessage, branchContainsExactlyOneAnchor, toolCallIds, hasCompleteToolPairs, failOpen } from "./role-context-protocol.ts";
+  isRecord, messageRecord, identityMatches, isManagedHandoffMessage, branchContainsExactlyOneAnchor, hasCompleteToolPairs, failOpen, groupToolMessages } from "./role-context-protocol.ts";
 
 type ContextAnchor = {
   customType: string;
@@ -12,102 +11,17 @@ type ContextAnchor = {
   role: string;
 };
 
-function acceptedReviewAnchor(
-  state: ExtensionRuntimeState,
-  sessionId: string,
-  branch: unknown,
-): ContextAnchor | undefined {
-  const runtime = state.coordinationRuntimeState;
-  const latestReview = runtime?.coordination.reviews.at(-1);
-  if (
-    !runtime
-    || runtime.sessionId !== sessionId
-    || runtime.handoff
-    || runtime.coordination.phase !== "ready"
-    || runtime.coordination.workflowLink
-    || state.activeRole?.role !== "architect"
-    || latestReview?.decision !== "accept"
-  ) return undefined;
-
-  const report = runtime.coordination.reports.find((item) => item.reportId === latestReview.reportId);
-  const request = report && runtime.coordination.requests.find((item) => item.requestId === report.requestId);
-  if (!report || !request) return undefined;
-
-  if (!Array.isArray(branch)) return undefined;
-  const matches = branch.filter((entry) => {
-    if (!isRecord(entry) || entry.type !== "custom_message" || entry.customType !== COORDINATION_REVIEW_MESSAGE_TYPE) return false;
-    const identity = entry.details;
-    return isRecord(identity)
-      && identity.coordinationId === runtime.coordination.coordinationId
-      && identity.coordinationVersion === runtime.coordination.version
-      && identity.sessionId === runtime.sessionId
-      && identity.recoveryGeneration === runtime.recoveryGeneration
-      && identity.requestId === request.requestId
-      && identity.reportId === report.reportId
-      && identity.role === "architect"
-      && identity.kind === "review"
-      && typeof identity.attemptId === "string"
-      && typeof identity.handoffId === "string";
-  });
-  if (matches.length !== 1 || !isRecord(matches[0].details)) return undefined;
-  return {
-    customType: COORDINATION_REVIEW_MESSAGE_TYPE,
-    identity: matches[0].details,
-    role: "architect",
-  };
-}
-
-function currentAnchor(
-  state: ExtensionRuntimeState,
-  branch: unknown,
-  sessionId: string,
-): ContextAnchor | undefined {
-  const coordination = state.coordinationRuntimeState;
-  const coordinationHandoff = coordination?.handoff;
-  if (coordinationHandoff) {
-    if (
-      !coordination
-      || coordination.sessionId !== sessionId
-      || (coordinationHandoff.phase !== "queued" && coordinationHandoff.phase !== "executing")
-    ) return undefined;
-    const identity = coordinationHandoffIdentity(coordination);
-    if (!identity) return undefined;
-    return {
-      customType: coordinationHandoff.kind === "review"
-        ? COORDINATION_REVIEW_MESSAGE_TYPE
-        : COORDINATION_EVIDENCE_MESSAGE_TYPE,
-      identity: identity as unknown as Record<string, unknown>,
-      role: coordinationHandoff.role,
-    };
-  }
-
+function currentAnchor(state: ExtensionRuntimeState, sessionId: string): ContextAnchor | undefined {
   const workflow = state.workflowState;
-  if (!workflow || workflow.sessionId !== sessionId) return acceptedReviewAnchor(state, sessionId, branch);
-
-  if (
-    workflow.status === "replanning"
-    && workflow.continuation?.kind === "replan"
-    && workflow.continuation.phase === "queued"
-    && state.activeRole?.role === "architect"
-  ) {
+  if (!workflow || workflow.sessionId !== sessionId) return;
+  if (workflow.status === "replanning" && workflow.continuation?.kind === "replan" && workflow.continuation.phase === "queued" && state.activeRole?.role === "architect") {
     const identity = workflowReplanIdentity(workflow);
     if (identity) return { customType: WORKFLOW_REPLAN_MESSAGE_TYPE, identity, role: "architect" };
   }
-
-  if (isWorkflowActive(workflow) && workflow.currentTaskId) {
-    const task = workflow.tasks.find((item) => item.id === workflow.currentTaskId);
-    const identity = workflowHandoffIdentity(workflow);
-    if (
-      task?.status === "in_progress"
-      && identity?.taskId === task.id
-      && state.activeRole?.role === task.role
-      && (workflow.handoff?.phase === "queued" || workflow.handoff?.phase === "executing")
-    ) {
-      return { customType: WORKFLOW_TASK_MESSAGE_TYPE, identity, role: task.role };
-    }
-  }
-
-  return acceptedReviewAnchor(state, sessionId, branch);
+  const task = workflow.tasks.find(item => item.id === workflow.currentTaskId);
+  const identity = workflowHandoffIdentity(workflow);
+  if (isWorkflowActive(workflow) && task?.status === "in_progress" && identity?.taskId === task.id && state.activeRole?.role === task.role
+    && (workflow.handoff?.phase === "queued" || workflow.handoff?.phase === "executing")) return { customType: WORKFLOW_TASK_MESSAGE_TYPE, identity, role: task.role };
 }
 
 function priorHandoffBoundary(
@@ -128,77 +42,12 @@ function priorHandoffBoundary(
   return { ok: true, index: -1 };
 }
 
-function failureContextIndices(
-  messages: readonly ContextMessage[],
-  startIndex: number,
-  endIndex: number,
-): Set<number> | undefined {
-  const selected = new Set<number>();
-  for (let index = startIndex; index < endIndex; index += 1) {
-    const record = messageRecord(messages[index]);
-    if (!record) return undefined;
-    if (record.role === "assistant" && (record.stopReason === "error" || (typeof record.errorMessage === "string" && record.errorMessage))) {
-      selected.add(index);
-    }
-    if (record.role !== "toolResult" || record.isError !== true) continue;
-    if (typeof record.toolCallId !== "string") return undefined;
-    selected.add(index);
-    let callIndex = -1;
-    for (let candidate = index - 1; candidate >= startIndex; candidate -= 1) {
-      const candidateRecord = messageRecord(messages[candidate]);
-      if (candidateRecord?.role !== "assistant") continue;
-      const ids = toolCallIds(candidateRecord);
-      if (!ids) return undefined;
-      if (ids.includes(record.toolCallId)) {
-        callIndex = candidate;
-        break;
-      }
-    }
-    if (callIndex < 0) return undefined;
-    const callRecord = messageRecord(messages[callIndex]);
-    const callIds = callRecord && toolCallIds(callRecord);
-    if (!callRecord || !callIds || callIds.length === 0) return undefined;
-    selected.add(callIndex);
-    for (let resultIndex = callIndex + 1; resultIndex < endIndex; resultIndex += 1) {
-      const result = messageRecord(messages[resultIndex]);
-      if (result?.role === "toolResult" && typeof result.toolCallId === "string" && callIds.includes(result.toolCallId)) {
-        selected.add(resultIndex);
-      }
-    }
-  }
-  return selected;
-}
-
 function hasManagedWork(state: ExtensionRuntimeState) {
-  if (state.workflowRestoreError || state.coordinationRestoreError) return true;
-  if (state.workflowState && (state.workflowState.status === "running" || state.workflowState.status === "replanning")) return true;
-  const coordination = state.coordinationRuntimeState;
-  if (coordination?.handoff) return true;
-  const latestReview = coordination?.coordination.reviews.at(-1);
-  return Boolean(
-    coordination
-    && !coordination.coordination.workflowLink
-    && coordination.coordination.phase === "ready"
-    && state.activeRole?.role === "architect"
-    && latestReview?.decision === "accept",
-  );
+    return Boolean(state.workflowRestoreError || state.workflowState && ["running", "replanning"].includes(state.workflowState.status));
 }
 
 function needsManagedView(state: ExtensionRuntimeState, sessionId: string) {
-  if (state.workflowRestoreError || state.coordinationRestoreError) return true;
-  if (state.workflowState?.sessionId === sessionId && (state.workflowState.status === "running" || state.workflowState.status === "replanning")) return true;
-  const coordination = state.coordinationRuntimeState;
-  if (coordination?.sessionId === sessionId && coordination.handoff) return true;
-  const latestReview = coordination?.coordination.reviews.at(-1);
-  return Boolean(
-    coordination
-    && coordination.sessionId === sessionId
-    && !coordination.handoff
-    && !coordination.coordination.workflowLink
-    && coordination.coordination.phase === "ready"
-    && state.activeRole?.role === "architect"
-    && latestReview?.decision === "accept",
-  );
+    return Boolean(state.workflowRestoreError || state.workflowState?.sessionId === sessionId && ["running", "replanning"].includes(state.workflowState.status));
 }
 
 export function activeContextView(state: ExtensionRuntimeState, event: ContextEvent, ctx: ExtensionContext): ContextEventResult | undefined {
@@ -209,7 +58,7 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_STATE_INVALID", "持久化工作流或协调状态结构损坏；完整输入保留且不隔离");
   }
   if (!managedWork) return undefined;
-  if (state.workflowRestoreError || state.coordinationRestoreError) {
+  if (state.workflowRestoreError) {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_RESTORE_UNCERTAIN", "持久协作状态恢复失败；完整输入保留且不隔离");
   }
   if (state.roleCompactionInFlight || state.roleCompactionPhase === "compacting" || state.activeRoleCompaction || state.pendingRoleCompaction) {
@@ -227,19 +76,8 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
   }
   const activeWorkflow = state.workflowState
     && (state.workflowState.status === "running" || state.workflowState.status === "replanning");
-  const coordination = state.coordinationRuntimeState;
-  const latestReview = coordination?.coordination.reviews.at(-1);
-  const activeCoordination = Boolean(coordination?.handoff
-    || (coordination
-      && !coordination.coordination.workflowLink
-      && coordination.coordination.phase === "ready"
-      && state.activeRole?.role === "architect"
-      && latestReview?.decision === "accept"));
   if (activeWorkflow && state.workflowState?.sessionId !== sessionId) {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_SESSION_MISMATCH", "当前 workflow 属于其他 session；完整输入保留且不隔离");
-  }
-  if (activeCoordination && coordination?.sessionId !== sessionId) {
-    return failOpen(event.messages, "ROLE_CONTEXT_VIEW_SESSION_MISMATCH", "当前协调 handoff 属于其他 session；完整输入保留且不隔离");
   }
   let managedForSession: boolean;
   try {
@@ -254,7 +92,7 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
 
   let anchor: ContextAnchor | undefined;
   try {
-    anchor = currentAnchor(state, branch, sessionId);
+    anchor = currentAnchor(state, sessionId);
   } catch {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_STATE_INVALID", "当前任务/request 身份结构损坏；完整输入保留且不隔离");
   }
@@ -306,11 +144,18 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
   }
 
   const failureStart = previousIndex >= 0 ? previousIndex + 1 : ([...userIndices].at(-1) ?? anchorIndex);
-  const failures = failureContextIndices(event.messages, failureStart, anchorIndex);
-  if (!failures) {
-    return failOpen(event.messages, "ROLE_CONTEXT_VIEW_FAILURE_BOUNDARY_UNAVAILABLE", "先前失败记录或其工具调用配对不完整");
-  }
-  const reused = reusableToolContext(event.messages, failureStart, anchorIndex);
+  const groups = groupToolMessages(event.messages, failureStart, anchorIndex);
+  if (!groups) return failOpen(event.messages, "ROLE_CONTEXT_VIEW_REUSE_PAIR_UNSAFE", "上一窗口工具观察配对不完整，未尝试复用裁剪");
+  const failures = new Set(groups.flatMap(group => {
+    const failedResult = group.indices.some(index => {
+      const message = messageRecord(event.messages[index]);
+      return message?.role === "toolResult" && message.isError === true;
+    });
+    if (failedResult) return group.indices;
+    const head = messageRecord(event.messages[group.indices[0]]);
+    return head?.role === "assistant" && (head.stopReason === "error" || typeof head.errorMessage === "string" && head.errorMessage) ? [group.indices[0]] : [];
+  }));
+  const reused = reusableToolContext(event.messages, groups);
   if (!reused) return failOpen(event.messages, "ROLE_CONTEXT_VIEW_REUSE_PAIR_UNSAFE", "上一窗口工具观察配对不完整，未尝试复用裁剪");
   const prefixIndices = [...new Set([...userIndices, ...failures, ...reused.indices])].sort((left, right) => left - right);
   const messages = [...prefixIndices.map((index) => event.messages[index]), ...suffix];

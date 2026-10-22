@@ -36,9 +36,9 @@ export function createContextBudgetChecker(
       : state.runtimeDisposed ? "disposed"
       : ctx.signal?.aborted ? "aborted"
       : state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError
-        || state.coordinationRestoreError || state.pendingWorkflowRecovery ? "recovery"
+        || state.pendingWorkflowRecovery ? "recovery"
       : ctx.hasPendingMessages() || state.internalContinuationPending ? "queued-continuation"
-      : state.coordinationRuntimeState ? "coordination-active" : undefined;
+      : undefined;
     const blocked = guard();
     if (blocked) return report("guard", blocked);
     if (checking || state.roleCompactionInFlight || state.pendingRoleCompaction || state.workflowDispatchInFlight) return report("inflight", "operation-pending");

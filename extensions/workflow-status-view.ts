@@ -43,28 +43,6 @@ export type WorkflowStatusTaskView = {
   completionSummary?: string;
   duration: { kind: "available"; milliseconds: number } | { kind: "unavailable" };
 };
-
-export type WorkflowStatusAncestorView = {
-  workflowId: string;
-  planSummary: string;
-  status: WorkflowState["status"];
-  completed: number;
-  total: number;
-  subworkflows: WorkflowStatusSubworkflowView[];
-  parentTaskId?: string;
-};
-
-export type WorkflowStatusSubworkflowView = {
-  workflowId: string;
-  parentWorkflowId: string;
-  parentTaskId?: string;
-  planVersion: number;
-  summary: string;
-  status: "completed" | "cancelled";
-  completed: number;
-  total: number;
-};
-
 export type WorkflowStatusView =
   | { kind: "no-workflow" }
   | { kind: "restore-error"; code: string; message: string; sourceEntryId?: string }
@@ -76,8 +54,6 @@ export type WorkflowStatusView =
       startedAt?: number;
       elapsed: { kind: "available"; milliseconds: number } | { kind: "unavailable" };
       planSummary: string;
-      lineage: WorkflowStatusAncestorView[];
-      subworkflows: WorkflowStatusSubworkflowView[];
       goals?: ReturnType<typeof workflowGoalProgress>;
       identity: {
         action: WorkflowActionIdentity;
@@ -203,19 +179,6 @@ function activityFor(
   return "waiting-task";
 }
 
-function statusSubworkflows(state: WorkflowState) {
-  return (state.subworkflowHistory ?? []).map((child) => ({
-    workflowId: child.workflowId,
-    parentWorkflowId: child.parentWorkflowId,
-    ...(child.parentTaskId ? { parentTaskId: child.parentTaskId } : {}),
-    planVersion: child.planVersion,
-    summary: child.summary,
-    status: child.status,
-    completed: child.tasks.filter((task) => task.status === "completed").length,
-    total: child.tasks.length,
-  }));
-}
-
 function elapsedFor(state: WorkflowState, now: number) {
   const { startedAt, completedAt } = getWorkflowExecutionBounds(state);
   const endAt = state.status === "completed"
@@ -263,29 +226,6 @@ export function createWorkflowStatusView(
     startedAt: getWorkflowExecutionBounds(workflowState).startedAt,
     elapsed: elapsedFor(workflowState, now),
     planSummary: workflowState.plan.summary,
-    lineage: [
-      ...(workflowState.parentStack ?? []).map((frame) => {
-        const ancestorProgress = workflowProgress(frame.state);
-        return {
-          workflowId: frame.state.workflowId,
-          planSummary: frame.state.plan.summary,
-          status: frame.state.status,
-          completed: ancestorProgress.completed,
-          total: ancestorProgress.total,
-          subworkflows: statusSubworkflows(frame.state),
-          ...(frame.parentTaskId ? { parentTaskId: frame.parentTaskId } : {}),
-        };
-      }),
-      {
-        workflowId: workflowState.workflowId,
-        planSummary: workflowState.plan.summary,
-        status: workflowState.status,
-        completed: progress.completed,
-        total: progress.total,
-        subworkflows: statusSubworkflows(workflowState),
-      },
-    ],
-    subworkflows: statusSubworkflows(workflowState),
     goals: workflowGoalProgress(workflowState),
     identity: {
       action: workflowActionIdentity(workflowState),

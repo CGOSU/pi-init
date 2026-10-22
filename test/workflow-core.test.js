@@ -416,7 +416,7 @@ test("version 5 工作流迁移到嵌套状态版本且保留身份和任务历�
   assert.equal(restored.value.version, 7);
   assert.equal(restored.value.workflowId, current.workflowId);
   assert.equal(restored.value.planVersion, current.planVersion);
-  assert.deepEqual(restored.value.subworkflowHistory, []);
+  assert.equal(restored.value.subworkflowHistory, undefined);
   assert.equal(restored.value.tasks[0].id, "legacy-task");
 });
 

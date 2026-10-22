@@ -403,7 +403,7 @@ function stagedRoleModels(changes: Record<string, unknown>): Record<string, unkn
   return result;
 }
 
-function mergeRoleConfigData(base: unknown, changes: unknown): Record<string, unknown> {
+export function mergeRoleConfigData(base: unknown, changes: unknown): Record<string, unknown> {
   const baseConfig = configObject(base);
   const changeConfig = configObject(changes);
   const merged = { ...baseConfig, ...changeConfig };
@@ -413,6 +413,9 @@ function mergeRoleConfigData(base: unknown, changes: unknown): Record<string, un
       ...normalizeRoleModels(baseConfig),
       ...roleChanges,
     };
+    for (const role of Object.keys(merged.roleModels as Record<string, unknown>)) {
+      if (!CONFIG_METADATA_KEYS.has(role)) delete merged[role];
+    }
   }
   return merged;
 }

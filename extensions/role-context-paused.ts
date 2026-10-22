@@ -62,7 +62,7 @@ export function pausedContextView(
     const workflow = state.workflowState!;
     const sessionId = ctx.sessionManager.getSessionId();
     if (workflow.sessionId !== sessionId) return fail("ROLE_CONTEXT_VIEW_SESSION_MISMATCH", "暂停工作流属于其他 session");
-    if (state.workflowRestoreError || state.coordinationRestoreError || state.roleRecoveryPersistenceFailed) {
+    if (state.workflowRestoreError || state.roleRecoveryPersistenceFailed) {
       return fail("ROLE_CONTEXT_VIEW_RESTORE_UNCERTAIN", "持久状态或恢复门尚未可靠恢复");
     }
     if (state.roleCompactionInFlight || state.roleCompactionPhase === "compacting" || state.activeRoleCompaction || state.pendingRoleCompaction) {
@@ -130,7 +130,7 @@ export function pausedContextView(
       pendingRevision: workflow.pendingRevision,
       tasks: workflow.tasks.map((task) => ({
         taskId: task.id, status: task.status, blockReason: task.blockReason,
-        outcomeUnknown: task.outcomeUnknown, contractRef: task.contract ? task.id : undefined,
+        outcomeUnknown: task.outcomeUnknown,
         verificationRef: task.verification?.length ? task.id : undefined,
       })),
     };

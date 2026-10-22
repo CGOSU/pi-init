@@ -74,8 +74,7 @@ test("已保存 Runtime workflow 仅报告恢复错误，不本地重放或改�
     assert.ok(harness.notifications.some(({ message }) => message.includes("WORKFLOW_STATE_RUNTIME_RETIRED")));
     assert.ok(harness.statusCalls.some(({ text }) => text?.includes("WORKFLOW_STATE_RUNTIME_RETIRED")));
 
-    await harness.commands.get("fast").handler("continue old work", harness.context);
-    assert.ok(harness.notifications.some(({ message }) => message.includes("/fast 不会启动新任务")));
+    assert.equal(harness.commands.has("fast"), false);
     assert.deepEqual(harness.sentMessages, []);
 
     await assert.rejects(
@@ -289,4 +288,48 @@ test("迟到的重规划异常不告警旧工作流或清除新工作流调度",
 
   assert.equal(state.workflowDispatchInFlight, true);
   assert.equal(notifications.some(({ message }) => message.includes("暂停等待架构师重规划")), false);
+});
+
+test("retired evidence, contracts, clarification and nested state never resume as a flat workflow", () => {
+  const base = localWorkflow();
+  for (const patch of [
+    { tasks: base.tasks.map(task => ({ ...task, contract: {} })) },
+    { tasks: base.tasks.map(task => ({ ...task, clarification: {} })) },
+    { parentStack: [{ state: base }] },
+    { subworkflowHistory: [{ workflowId: "old-child" }] },
+    { subworkflowContract: {} },
+    { pendingRevision: { revisionId: "old", direction: "child", requestedAt: 1, kind: "nested", childGoal: "old goal" } },
+  ]) {
+    const source = { ...base, ...patch }; const original = structuredClone(source);
+    assertHydrationError(source, "WORKFLOW_FEATURE_RETIRED");
+    assert.deepEqual(source, original);
+  }
+  assert.throws(() => createWorkflowState({ summary: "old protocol", tasks: [{ task: "work", files: ["src/a.ts"], acceptanceCriteria: ["done"], contract: {} }] }), error => error.code === "WORKFLOW_FEATURE_RETIRED");
+});
+
+test("retired coordination and nested records share the protected recovery disposition boundary", async () => {
+  const flat = localWorkflow();
+  for (const source of [
+    { type: "custom", customType: "pi-init-coordination", id: "retired-source", data: { sessionId: "test-session", runtimeVersion: 1, coordination: { phase: "blocked" } } },
+    { type: "custom", customType: "pi-init-workflow", id: "retired-source", data: { ...flat, parentStack: [{ state: flat }] } },
+  ]) await withTempDirectory(async cwd => {
+    const before = structuredClone(source);
+    const h = createExtensionHarness([source], { cwd, trusted: true, mode: "rpc" });
+    try {
+      await emitExtensionEvent(h, "session_start");
+      const tool = h.tools.find(tool => tool.name === "task_workflow");
+      const status = await tool.execute("status", { action: "status" }, undefined, undefined, h.context);
+      assert.equal(status.details.error.code, "WORKFLOW_FEATURE_RETIRED");
+      assert.equal(status.details.recovery.kind, "discardable");
+      assert.equal(h.sentMessages.length, 0);
+      assert.deepEqual(h.branch[0], before);
+      await h.commands.get("pi-init").handler("workflow discard-recovery retired-source --confirm-unknown-outcome", h.context);
+      assert.ok(h.branch.some(entry => entry.customType === "pi-init-workflow-recovery-disposition" && entry.data.sourceEntryId === "retired-source"));
+      assert.deepEqual(h.branch[0], before);
+      await emitExtensionEvent(h, "session_start");
+      const cleared = await tool.execute("status-after-discard", { action: "status" }, undefined, undefined, h.context);
+      assert.equal(cleared.details.error, undefined);
+      assert.equal(h.sentMessages.length, 0);
+    } finally { await emitExtensionEvent(h, "session_shutdown"); }
+  });
 });

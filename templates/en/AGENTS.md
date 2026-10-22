@@ -42,7 +42,7 @@ pi-init workflows run sequentially in the current main session (local only); mis
 <!-- pi-init:managed:start fast-path-wrap-up -->
 ## Fast Path Wrap-up Priority
 
-When all Fast Path conditions defined by the global `AGENTS.md` are met, or the user explicitly selects a one-time Fast Path via `/fast`, this section takes precedence over the general session wrap-up rules below. `/fast` overrides automatic eligibility based on task type, size, and change scope; safety, permissions, requirement confirmation, role boundaries, the context-recovery gate, and necessary verification still take precedence.
+When all lightweight-task conditions defined by the global `AGENTS.md` are met, this section takes precedence over general wrap-up rules. Safety, permissions, requirements, role boundaries, recovery gates and necessary verification still apply.
 
 - Modify only explicitly targeted files and direct related files required to keep the repository consistent;
 - Do not create `task_workflow` or an additional written plan solely because the task does not meet automatic Fast Path eligibility; still follow architecture-planning or workflow requirements independently imposed by the task;
@@ -52,7 +52,7 @@ When all Fast Path conditions defined by the global `AGENTS.md` are met, or the 
 
 If the target file itself is documentation or a project record, it may be read and modified directly without exiting Fast Path.
 
-Without an explicit `/fast` selection, any of the following means the task is ineligible for automatic Fast Path; manual selection does not override the corresponding safety, role, verification, or record-keeping requirements:
+Any of the following makes the lightweight-task path ineligible; the corresponding safety, role, verification and record-keeping requirements still apply:
 
 - The change modifies an API, data structure, dependency, architecture, business rule, permission, route, interaction, or accessibility semantics;
 - The change creates a new fact, important decision, remaining issue, key verification result, or recurring pitfall that later development depends on;
