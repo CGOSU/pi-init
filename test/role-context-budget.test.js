@@ -129,3 +129,35 @@ test("unavailable or oversized required memory pauses through the existing bound
     assert.ok(result.messages.includes(user));
   }
 });
+
+test("live executing task uses SDK token budget instead of repeatedly discarding its own history", () => {
+  const state = createExtensionRuntimeState();
+  const fixture = memoryFixture();
+  const stored = fixture.read().memory;
+  const memory = { read: () => ({ status: "available", memory: { ...stored, checkpoint: undefined, revision: 0, progressRevision: 0 } }), suspend() { assert.fail("byte size is not token pressure"); } };
+  const identity = stored.identity;
+  const anchor = { type: "custom_message", id: "anchor", customType: "pi-init-workflow-task", details: identity, content: "current task" };
+  state.activeRole = { role: "developer-test", provider: "test", model: "model", thinkingLevel: "high" };
+  state.workflowState = { ...identity, status: "running", currentTaskId: identity.taskId, tasks: [{ id: identity.taskId, role: "developer-test", status: "in_progress" }], handoff: { ...identity, phase: "executing" } };
+  const observations = [];
+  state.traceHandoff = (_ctx, event, data) => observations.push({ event, data });
+  let branch = [anchor];
+  const ctx = { model: { contextWindow: 500000, maxTokens: 32000 }, getContextUsage: () => ({ tokens: 47386, contextWindow: 500000, percent: 9.4772 }), sessionManager: { getSessionId: () => identity.sessionId, getBranch: () => branch } };
+  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+  const source = [{ role: "user", content: "finish patch" }, ...Array.from({ length: 30 }, (_, i) => pair(i, "document content".repeat(1000))).flat()];
+  source[1].content.unshift({ type: "thinking", thinking: "", thinkingSignature: "opaque".repeat(40000) });
+  let messages = source;
+  for (let i = 0; i < 100; i++) {
+    messages = recovery.context({ type: "context", messages }, ctx).messages;
+    for (const message of source) assert.ok(messages.includes(message), "successful work must survive without a voluntary checkpoint");
+    assert.equal(messages.some(message => message.customType === "pi-init-context-checkpoint"), false);
+  }
+  assert.equal(observations.at(-1).data.reason, "sdk-token-budget");
+  assert.equal(observations.at(-1).data.budgetBytes, null);
+  assert.equal(observations.at(-1).data.omittedMessages, 0);
+  ctx.getContextUsage = () => ({ tokens: 450000, contextWindow: 500000, percent: 90 });
+  assert.equal(recovery.context({ type: "context", messages: source }, ctx).messages.includes(source[2]), true);
+  branch = [];
+  recovery.context({ type: "context", messages: source }, ctx);
+  assert.notEqual(observations.at(-1).data.reason, "sdk-token-budget");
+});

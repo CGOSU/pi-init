@@ -13,13 +13,14 @@ export function contextByteBudget(contextWindow?: number) {
     ? Math.max(8_000, Math.min(192_000, Math.floor(contextWindow! * 1.5))) : 192_000;
 }
 
-export function boundContextWindow(messages: Message[], budgetBytes = 192_000, summarizedToolCallIds: ReadonlySet<string> = new Set()) {
+export function boundContextWindow(messages: Message[], budgetBytes: number | null = 192_000, summarizedToolCallIds: ReadonlySet<string> = new Set()) {
   let sizes: number[];
   try { sizes = messages.map(message => Buffer.byteLength(JSON.stringify(message))); }
   catch { return { messages, inputBytes: 0, outputBytes: 0, budgetBytes, checkpointed: false, overBudget: true, omittedMessages: 0, reason: "unserializable-context" }; }
   const inputBytes = sizes.reduce((sum, bytes) => sum + bytes, 2 + Math.max(0, messages.length - 1));
   const unchanged = (reason: string) => ({ messages, inputBytes, outputBytes: inputBytes, budgetBytes, checkpointed: false,
-    overBudget: inputBytes > budgetBytes, omittedMessages: 0, reason });
+    overBudget: budgetBytes !== null && inputBytes > budgetBytes, omittedMessages: 0, reason });
+  if (budgetBytes === null) return unchanged("sdk-token-budget");
   if (inputBytes <= budgetBytes) return unchanged("within-budget");
   if (messages.some(message => (message as { role: string }).role === "system")) return unchanged("system-message-present");
   const units = groupToolMessages(messages);

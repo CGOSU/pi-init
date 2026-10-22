@@ -29,3 +29,24 @@ test("untrusted snapshots cannot smuggle arbitrary shapes or an unsupported sche
   assert.equal(parseTaskMemory({ ...createTaskMemory(identity), observations: [{ id: "fake" }] }), undefined);
   assert.equal(parseTaskMemory({ ...createTaskMemory(identity), identity: { ...identity, attemptId: "" } }), undefined);
 });
+
+test("identical observations do not evict distinct progress or claim semantic progress", () => {
+  let memory = recordTaskObservations(createTaskMemory(identity), [observation("actual-work")], "actual-work");
+  for (let i = 0; i < 40; i++) {
+    const repeated = { ...observation("read-" + i), toolName: "read", inputHash: "same-path-and-range", outputHash: "same-content" };
+    memory = recordTaskObservations(memory, [repeated], repeated.id);
+  }
+  assert.ok(memory.observations.some(item => item.id === "actual-work"));
+  assert.equal(memory.observations.length, 2);
+  assert.equal(memory.observations.at(-1).id, "read-39");
+  assert.equal(memory.progressRevision, 0);
+  memory = recordTaskObservations(memory, [{ ...observation("changed"), toolName: "read", inputHash: "same-path-and-range", outputHash: "changed-content" }], "changed");
+  assert.equal(memory.observations.length, 3);
+});
+
+test("identical command receipts are not collapsed because side effects may repeat", () => {
+  const first = { ...observation("command-1"), inputHash: "same-command", outputHash: "same-output" };
+  const second = { ...first, id: "command-2", toolCallId: "command-2" };
+  const memory = recordTaskObservations(createTaskMemory(identity), [first, second], second.id);
+  assert.deepEqual(memory.observations.map(item => item.id), ["command-1", "command-2"]);
+});

@@ -1,5 +1,5 @@
 import type { ContextEvent, ContextEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { } from "../src/workflow.ts";
+import { validateWorkflowHandoffIdentity } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
@@ -100,7 +100,15 @@ export function createRoleRecovery(
         messages.splice(lastUser + 1, 0, { role: "custom", customType: TASK_MEMORY_MESSAGE, content: memoryText, display: false, timestamp: 0 } as ContextEvent["messages"][number]);
       }
       const summarized = new Set(memory?.status === "available" ? memory.memory?.observations.map(item => item.toolCallId) ?? [] : []);
-      const bounded = boundContextWindow(messages, contextByteBudget(ctx.model?.contextWindow), summarized);
+      const workflow = state.workflowState;
+      const task = workflow?.tasks.find(task => task.id === workflow.currentTaskId);
+      const liveTask = workflow?.status === "running" && workflow.handoff?.phase === "executing"
+        && task?.status === "in_progress" && !task.outcomeUnknown && state.activeRole?.role === task.role
+        && !state.roleRecoveryPending && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError
+        && !state.pendingWorkflowRecovery && !state.userStopRequested && !state.runtimeDisposed
+        && validateWorkflowHandoffIdentity(workflow, workflow.handoff, ctx).ok;
+      // Live task history belongs to the SDK token-budget/compaction path, not a second byte-sized sliding window.
+      const bounded = boundContextWindow(messages, liveTask ? null : contextByteBudget(ctx.model?.contextWindow), summarized);
       const covered = !memoryText || bounded.messages.some(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE && message.content === memoryText);
       if (memoryText && (!covered || bounded.overBudget || memory?.status === "unavailable")) taskMemory?.suspend(ctx);
       const projected = bounded.checkpointed ? bounded.messages.map(message => {

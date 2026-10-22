@@ -70,7 +70,15 @@ export function recordTaskObservations(memory: TaskMemory, observations: TaskObs
   if (!added.length) return memory;
   const pinned = new Set(memory.checkpoint?.accomplished.flatMap(item => item.evidenceIds) ?? []);
   const combined = [...memory.observations, ...added];
-  const recent = new Set(combined.filter(item => !pinned.has(item.id)).slice(-16).map(item => item.id));
+  const distinct = new Map<string, TaskObservation>();
+  for (const item of [...combined].reverse()) {
+    if (pinned.has(item.id)) continue;
+    const key = ["read", "grep", "find", "ls"].includes(item.toolName)
+      ? JSON.stringify([item.toolName, item.inputHash, item.outputHash, item.outcome]) : item.id;
+    if (!distinct.has(key)) distinct.set(key, item);
+    if (distinct.size === 16) break;
+  }
+  const recent = new Set([...distinct.values()].map(item => item.id));
   const retained = combined.filter(item => pinned.has(item.id) || recent.has(item.id));
   return { ...memory, watermark, observations: retained, omittedObservations: memory.omittedObservations + combined.length - retained.length };
 }
