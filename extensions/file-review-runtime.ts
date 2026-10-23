@@ -169,7 +169,8 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       "[pi-init 增量审阅候选]",
       "日常范围：当前 session/branch 基线后实际观察到的文件变化；不代表精准任务 Git diff。",
       "完整候选库存仍由 file_review(action=\"list\", offset=...) 与 /large 承接。",
-      `结构审阅阈值：超过 ${FILE_REVIEW_THRESHOLD} 个物理行进入审阅；这不是文件上限，不自动拆分或拒绝编辑。`,
+      `结构审阅阈值：超过 ${FILE_REVIEW_THRESHOLD} 个物理行进入候选库存；这不是文件上限，不自动拆分或拒绝编辑。`,
+      STRUCTURE_REVIEW_GUIDANCE,
     ];
     if (session.errors.length > 0) {
       lines.push("扫描或审阅状态不完整；下列结果可能不完整，不能据此断言没有其他待审文件：");
@@ -195,7 +196,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       } else if (deps.getActiveRole(ctx)?.role === "architect") {
         lines.push("当前职责为 architect：不得读取或审阅代码；将审阅工作交给 developer-test 或 docs-commit。");
       } else {
-        lines.push("结构审阅：读取文件内容，判断职责是否内聚；调用 file_review(action=\"complete\") 记录有理由的 keep 或 recommend-split。拆分只是建议，不自动修改代码；若内容版本变化，旧审阅失效。");
+        lines.push("确需结构审阅时：读取文件内容，判断职责是否内聚；调用 file_review(action=\"complete\") 记录有理由的 keep 或 recommend-split。拆分只是建议，不自动修改代码；若内容版本变化，旧审阅失效。");
       }
       if (session.readCoverage.size > 0) lines.push("只有 Pi read 工具读取覆盖当前完整文件版本后，审阅确认才会被接受；分段读取也可累积完整覆盖。");
     }
@@ -212,7 +213,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 
   function incrementalNotice(candidates: readonly IncrementalReviewCandidate[]) {
     if (candidates.length === 0) return undefined;
-    return `[pi-init 增量审阅待处理]\n${candidates.map(formatIncrementalCandidate).join("\n")}\n请先审阅职责边界；结构行数不是拆分命令。`;
+    return `[pi-init 增量审阅候选]\n${candidates.map(formatIncrementalCandidate).join("\n")}\n${STRUCTURE_REVIEW_GUIDANCE}`;
   }
 
   function markNotified(current: ReviewSession, candidates: readonly IncrementalReviewCandidate[]) {
@@ -581,7 +582,8 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     description: "List paginates the project-wide inventory of pending structural candidates in supported code files over the review threshold, not a path-specific review. Path is used only by complete and ignored by list. Complete records a reasoned keep/split conclusion for the exact current file version after reading it. Markdown is not supported.",
     promptSnippet: "Review large files without treating line count as a hard limit",
     promptGuidelines: [
-      `${FILE_REVIEW_THRESHOLD} lines triggers structural review; it is not a rule to split or reject edits.`,
+      `${FILE_REVIEW_THRESHOLD} lines identifies candidates, not a mandatory review for every edit; it is not a rule to split or reject edits.`,
+      STRUCTURE_REVIEW_GUIDANCE,
       "list is project inventory pagination via offset/limit, not a review of the supplied path. path is used only by complete; list discloses any ignored path and still returns global candidates.",
       "Only supported code files are reviewed; Markdown is excluded. A list result is not evidence that a supplied path was reviewed.",
       "Read the full current file using read before submitting a review; use offset/limit chunks when needed.",
@@ -653,3 +655,4 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 }
 
 export type FileReviewRuntime = ReturnType<typeof createFileReviewRuntime>;
+const STRUCTURE_REVIEW_GUIDANCE = "行数只标记候选，不等于本次任务必须审阅。明确局部、低风险且不改变职责结构的展示默认值/文案调整，不必仅因行数触发全文件读取或新增结构审阅；候选保持未审。新增职责、跨模块耦合、结构复杂度变化、用户明确要求或验收确需时再审阅，不能借小改动掩盖结构问题。";

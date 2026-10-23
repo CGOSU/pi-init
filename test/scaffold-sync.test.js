@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { syncScaffold, createScaffold } from "../src/scaffold.ts";
-import { FAST_PATH_BLOCK, TEMPLATE_STATE_PATH } from "../src/template-sync.ts";
+import { FAST_PATH_BLOCK, TEMPLATE_STATE_PATH, hashText, findManagedBlock } from "../src/template-sync.ts";
 
 async function makeProject(name) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-init-sync-"));
@@ -117,4 +117,44 @@ test("没有状态文件的旧版托管区块被修改时不静默覆盖", async
   } finally {
     await cleanup(root);
   }
+});
+
+test("lightweight display changes bypass archive preload without weakening high-risk rules", async () => {
+  for (const language of ["zh-CN", "en"]) {
+    const { root, target } = await makeProject("light-" + language);
+    try {
+      await createScaffold(target, { projectName: "Light", language });
+      const content = await readFile(path.join(target, "AGENTS.md"), "utf8");
+      const block = findManagedBlock(content).content;
+      assert.match(block, language === "en" ? /default grouping/ : /默认分组/);
+      assert.match(block, language === "en" ? /before.*history|history.*before/ : /会话开始.*历史|历史.*会话开始/);
+      assert.match(block, language === "en" ? /actual.*routing/ : /实际.*路由/);
+      assert.match(block, language === "en" ? /explicit.*validation|explicit.*checks/ : /明确.*验证/);
+    } finally { await cleanup(root); }
+  }
+});
+test("known old managed policy updates without touching custom instructions or historical documents", async () => {
+  const { root, target } = await makeProject("old-policy");
+  try {
+    await createScaffold(target, { projectName: "Custom" });
+    const agentsPath = path.join(target, "AGENTS.md");
+    const generated = await readFile(agentsPath, "utf8");
+    const current = findManagedBlock(generated);
+    const oldBlock = FAST_PATH_BLOCK.startMarker + "\n## Fast Path 收尾优先级\n\n旧规则：任何交互变化都退出。\n" + FAST_PATH_BLOCK.endMarker;
+    const prefix = "# 自定义规则\n不要覆盖本段。\n\n";
+    await writeFile(agentsPath, prefix + generated.slice(0, current.start) + oldBlock + generated.slice(current.end));
+    const statePath = path.join(target, TEMPLATE_STATE_PATH);
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    state.managedBlocks[FAST_PATH_BLOCK.id].hash = hashText(oldBlock);
+    await writeFile(statePath, JSON.stringify(state));
+    const historyPath = path.join(target, "docs/session-log.md");
+    const history = await readFile(historyPath, "utf8");
+    const result = await syncScaffold(target, { projectName: "Custom" });
+    assert.equal(result.conflicts.length, 0);
+    const updated = await readFile(agentsPath, "utf8");
+    assert.ok(updated.startsWith(prefix));
+    assert.match(findManagedBlock(updated).content, /默认分组/);
+    assert.equal(await readFile(historyPath, "utf8"), history);
+    assert.equal((await syncScaffold(target, { projectName: "Custom" })).changed, false);
+  } finally { await cleanup(root); }
 });

@@ -462,3 +462,21 @@ test("旧价值 session 条目原样忽略；旧调用明确失败且结构审�
     assert.equal(branch.filter((entry) => entry.customType === "pi-init-file-review").length, 1);
   });
 });
+
+test("large-file candidates do not demand full review for a local display default change", async () => {
+  await withTempDirectory(async directory => {
+    const h = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(h, "session_start", { reason: "startup" });
+    await h.tools.find(tool => tool.name === "switch_role").execute("role", { role: "developer-test" }, undefined, undefined, h.context);
+    await writeFile(path.join(directory, "src/large.ts"), makeFile("initial").replace("initial-1\n", "region-1\n"));
+    const output = await emitToolResult(h, { type: "tool_result", toolName: "edit", toolCallId: "small-default", input: { path: "src/large.ts", edits: [{ oldText: "initial-1", newText: "region-1" }] }, content: [{ type: "text", text: "edited" }], isError: false });
+    assert.match(output.content.at(-1).text, /候选/);
+    assert.match(output.content.at(-1).text, /不必.*全文件读取/);
+    const tool = h.tools.find(tool => tool.name === "file_review");
+    const listed = await tool.execute("list", { action: "list" }, undefined, undefined, h.context);
+    assert.equal(listed.details.total, 1);
+    assert.equal((await completeReview(h, listed.details.candidates[0])).details.code, "FILE_NOT_FULLY_READ");
+    assert.equal(h.sentUserMessages.length, 0);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});

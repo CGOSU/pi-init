@@ -10,7 +10,7 @@ export const ROLE_RECOVERY_ENTRY_TYPE = "pi-init-role-recovery";
 export const ROLE_RECOVERY_MESSAGE_TYPE = "pi-init-role-recovery";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
-const ROLE_RECOVERY_REASON = "上下文刚完成压缩，职责尚未重新确认；请先成功调用 switch_role(role=...)。";
+const ROLE_RECOVERY_REASON = "上下文刚完成压缩，职责尚未重新确认；请先成功调用 switch_role(role=...)。优先按当前任务声明的角色确认；普通代码/测试通常用 developer-test，文档/Git收尾用 docs-commit。恢复门解除前不要先读取Skill或仓库；缺少凭据应停止，不自动更换模型。";
 const SESSION_REARM_REASONS = new Set(["startup", "reload", "resume", "fork"]);
 
 function isPendingEntry(entry: unknown) {

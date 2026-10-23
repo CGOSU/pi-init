@@ -488,3 +488,14 @@ test("shared tool grouping preserves interleaved parallel results and absolute w
     assert.equal(hasCompleteToolPairs(broken), false);
   }
 });
+
+test("recovery bootstrap names the next role step instead of requiring a blocked Skill read", () => {
+  const state = createExtensionRuntimeState(); state.roleRecoveryPending = true;
+  const recovery = createRoleRecovery({ on() {} }, state);
+  const result = recovery.guardToolCall({ toolName: "read", input: { path: "SKILL.md" } });
+  assert.equal(result.block, true);
+  assert.match(result.reason, /developer-test/);
+  assert.match(result.reason, /docs-commit/);
+  assert.match(result.reason, /不要先读取Skill/);
+  assert.equal(recovery.guardToolCall({ toolName: "switch_role", input: { role: "developer-test" } }), undefined);
+});

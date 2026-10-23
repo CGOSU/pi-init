@@ -42,23 +42,25 @@ pi-init workflows run sequentially in the current main session (local only); mis
 <!-- pi-init:managed:start fast-path-wrap-up -->
 ## Fast Path Wrap-up Priority
 
-When all lightweight-task conditions defined by the global `AGENTS.md` are met, this section takes precedence over general wrap-up rules. Safety, permissions, requirements, role boundaries, recovery gates and necessary verification still apply.
+Use a lightweight path for a clear, local, low-risk and reversible goal. Subject to higher-priority safety and permission rules, this section takes precedence over general wrap-up rules and unconditional bulk history reading at session start. Scope the task before reading history. Preserve explicitly required validation, role boundaries, recovery gates and pre-commit safety checks.
 
-- Modify only explicitly targeted files and direct related files required to keep the repository consistent;
-- Do not create `task_workflow` or an additional written plan solely because the task does not meet automatic Fast Path eligibility; still follow architecture-planning or workflow requirements independently imposed by the task;
-- Do not pre-read or update `docs/current-state.md`, `docs/decisions.md`, `docs/session-log.md`, or `docs/pitfalls.md` merely to decide whether to leave a record;
-- Do not run test, typecheck, lint, formatter, build, or dev server by default; perform only necessary static checks;
-- Do not switch roles merely for planning or routine record-keeping; role routing, the context-recovery gate, and the architect's execution prohibition remain effective.
+- Search only necessary history by keyword; do not dump all project memory files merely to decide whether a record is needed;
+- Changes to default grouping, initial presentation, local display sorting, styling or copy may stay lightweight when actual item selection, connections/routing, business rules, storage formats and accessibility behavior remain unchanged; not every UI behavior change requires a heavier process;
+- Modify only the target and directly related consistency requirements; file size or changed-line count alone does not determine risk;
+- Do not create `task_workflow` or an additional written plan solely because automatic Fast Path eligibility is not met; independently required architecture planning still applies;
+- Do not update `docs/current-state.md`, `docs/decisions.md`, `docs/session-log.md` and `docs/pitfalls.md` for routine bookkeeping. A small display change already expressed by code does not automatically require three records; correct only necessary canonical facts when existing documentation would become wrong;
+- Do not default to the full test suite, typecheck, lint, formatter, build or dev server. Select the smallest necessary checks by risk, perform explicit user/project validation requirements, and never claim an unrun check passed;
+- Do not switch roles for routine records. Actual documentation, release or Git work still follows role rules; preserve fresh ownership/staging checks before committing and explicit authorization before pushing.
 
-If the target file itself is documentation or a project record, it may be read and modified directly without exiting Fast Path.
+Documentation may be the direct task target without making it ineligible for the lightweight path.
 
-Any of the following makes the lightweight-task path ineligible; the corresponding safety, role, verification and record-keeping requirements still apply:
+Escalate when any of the following applies:
 
-- The change modifies an API, data structure, dependency, architecture, business rule, permission, route, interaction, or accessibility semantics;
-- The change creates a new fact, important decision, remaining issue, key verification result, or recurring pitfall that later development depends on;
-- The scope is no longer local, low-risk, or reversible.
+- Public APIs, data formats, dependencies/architecture, business decisions, permissions, actual connections/routing, user operation flows or accessibility semantics change. Internal field renames/mappings stay lightweight only when external contracts, persistence and safety semantics are unchanged;
+- Later work needs a consequential decision, operating procedure, unresolved blocker or recurring pitfall that current code/tests cannot adequately express;
+- Scope is no longer local, low-risk or reversible, or important impact remains uncertain.
 
-When the user explicitly requests tests, builds, other documentation updates, or Git wrap-up, perform only the requested action and continue to follow the applicable responsibility rules.
+An explicit request for tests, builds, documentation or Git adds those actions, not the entire process. Safety, credentials, role recovery and necessary validation remain mandatory.
 <!-- pi-init:managed:end fast-path-wrap-up -->
 
 ## Session Wrap-up
