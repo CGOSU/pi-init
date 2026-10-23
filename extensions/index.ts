@@ -11,7 +11,7 @@ import {
   WORKFLOW_RECOMMENDED_TASKS,
   isWorkflowActive,
   appendWorkflowReplanDirection,
-  requestWorkflowReplan, requestWorkflowGoal, markWorkflowTaskOutcomeUnknown } from "../src/workflow.ts";
+  requestWorkflowReplan, requestWorkflowGoal, markWorkflowTaskOutcomeUnknown, workflowActionIdentity } from "../src/workflow.ts";
 import { Text } from "@earendil-works/pi-tui";
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput, isExplicitWorkflowChildInput } from "../src/workflow-input-intent.ts";
@@ -62,9 +62,18 @@ type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
+  let assistantFailureScope: string | undefined;
+  function executionScope(ctx: ExtensionContext) {
+    return JSON.stringify([ctx.sessionManager.getSessionId(), runtimeState.roleContextGeneration, runtimeState.roleTransitionGeneration, runtimeState.activeRole,
+      workflowActionIdentity(runtimeState.workflowState), runtimeState.workflowState?.handoff?.handoffId]);
+  }
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant") return;
+    assistantFailureScope = ["error", "aborted"].includes(event.message.stopReason) ? executionScope(ctx) : undefined;
+  });
   const workflowBinding = createWorkflowToolBinding(pi, runtimeState);
   const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"));
-  const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState);
+  const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, { onRepeatedRead: ctx => userControl.suspend(ctx, "repeated-read") });
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
   const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context, (event, ctx, code) => {
@@ -104,7 +113,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     interrupt: (ctx) => {
       const current = runtimeState.workflowState;
       if (!current || current.status !== "running" || !current.currentTaskId || !["executing", "queued", "dispatching"].includes(current.handoff?.phase ?? "")) return;
-      const next = markWorkflowTaskOutcomeUnknown(current, { taskId: current.currentTaskId, reason: "用户停止或重复拒绝保护中断了活动回合；已发生的副作用需核对，不自动重放。" });
+      const next = markWorkflowTaskOutcomeUnknown(current, { taskId: current.currentTaskId, reason: "活动回合中断或失败；已发生的副作用需核对，不自动重放。" });
       try { workflowReport.persistWorkflowState(next, ctx); }
       catch (error) { runtimeState.pendingWorkflowRecovery ??= next; throw error; }
     },
@@ -293,6 +302,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
+    assistantFailureScope = undefined;
     runtimeState.traceHandoff?.(ctx, "agent.continuation", { internal: runtimeState.internalContinuationPending });
     runTimingDiagnostics.beforeAgentStart(runtimeState.internalContinuationPending);
     runtimeState.internalContinuationPending = false;
@@ -324,6 +334,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.currentContext = ctx;
     roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
     if (runtimeState.userStopRequested) { settleExternalRunTiming(); userControl.settled(); return; }
+    if (assistantFailureScope === executionScope(ctx) && runtimeState.workflowState
+      && ["running", "replanning"].includes(runtimeState.workflowState.status)) {
+      assistantFailureScope = undefined;
+      userControl.suspend(ctx, "assistant-failure", true);
+      settleExternalRunTiming();
+      userControl.settled();
+      return;
+    }
     if (await roleHandoff.schedule(ctx)) {
       if (runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed) settleExternalRunTiming();
       return;
@@ -350,6 +368,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    assistantFailureScope = undefined;
     runtimeState.agentRunActive = false;
     roleHandoff.reset();
     try {
@@ -542,7 +561,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       "Architect 只规划与决策，不读取、执行或连接 MCP。优先复用已有调查；缺少决策关键事实时才交给 docs-commit 集中补查，不因切角重读规则或重复调查。普通任务无需正式取证协议。",
       "本轮工具调用的工作流与协调身份由运行时绑定，通常只提交业务参数和真实结果，无需手填 workflow/session/attempt/handoff 等身份。兼容显式身份仍严格校验；不能套用最新状态提交旧回合结果。",
       `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；实现、验证与结果提交必须由当前执行角色负责。`,
-      "任务使用files、acceptanceCriteria、实际verification和工作记忆checkpoint；缺少关键事实或权限时block，不建立正式证据或嵌套协议。",
+      "每项任务围绕一个可独立验收的交付物，使用task/constraints/files/acceptanceCriteria说明目标、非目标、产物和风险匹配的验证；不要按读取→修改→测试机械拆分。必要事实先调查，远期不确定内容在边界细化；缺少关键事实或权限时block，不建立正式证据或嵌套协议。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
       "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
       "Discussion does not change workflow state. Use request-replan to revise the existing queue and request-goal to insert a goal group. Parent/child IDs express ownership only; all tasks share one workflow ID, ready queue and executor. New goal planning must explicitly retain existing pending task IDs; dependencies take precedence over priority, ties preserve order, and running tools are not preempted. Old nested workflows are retired and never resumed automatically.",

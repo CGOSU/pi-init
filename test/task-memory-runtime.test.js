@@ -8,6 +8,7 @@ import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.t
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowActions } from "../extensions/workflow-actions.ts";
 import { createExtensionHarness, createWorkflowState, emitExtensionEvent, withTempDirectory } from "./helpers.js";
+import { hydrateWorkflowState } from "../src/workflow.ts";
 
 function fixture() {
   const handlers = new Map();
@@ -184,6 +185,17 @@ test("registered extension records SDK results, binds checkpoint and injects mem
       assert.match(JSON.stringify(messages), /91 passed/);
       assert.match(JSON.stringify(messages), /generate patch/);
       assert.equal(h.branch.findLast(entry => entry.customType === "pi-init-workflow").data.tasks[0].status, "in_progress");
+      const complete = { action: "complete", completionSummary: "patch produced", implementationRationale: "minimal change", verification: ["historical command result checked"], evidenceIds: ["sdk-result"] };
+      await emitExtensionEvent(h, "before_provider_request");
+      const finishMessage = { role: "assistant", timestamp: 5, content: [{ type: "toolCall", id: "complete-memory", name: "task_workflow", arguments: complete }] };
+      await emitExtensionEvent(h, "message_start", { message: finishMessage });
+      await emitExtensionEvent(h, "message_end", { message: finishMessage });
+      await tool.execute("complete-memory", complete, undefined, undefined, h.context);
+      const completed = h.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+      assert.deepEqual(completed.tasks[0].verificationEvidenceIds, ["sdk-result"]);
+      const restored = hydrateWorkflowState(completed);
+      assert.equal(restored.ok, true);
+      assert.deepEqual(restored.value.tasks[0].verificationEvidenceIds, ["sdk-result"]);
     } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
 });
@@ -215,4 +227,38 @@ test("failed checkpoint write cannot return an ack or advance the saved revision
   assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0), error => error.code === "TASK_MEMORY_WRITE_FAILED");
   assert.equal(f.branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data.revision, 0);
   assert.equal(f.stops, 1);
+});
+
+test("missing checkpoint revision is reported accurately with a usable revision", async () => {
+  const f = fixture(); await f.commit(); const id = f.runtime.read(f.ctx).memory.observations[0].id;
+  assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id)), error => error.code === "TASK_MEMORY_REVISION_REQUIRED" && error.message.includes("expectedMemoryRevision=0"));
+  assert.equal(f.runtime.read(f.ctx).memory.revision, 0);
+  assert.match(taskMemoryText(f.runtime.read(f.ctx)), /expectedMemoryRevision=0/);
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
+  assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0), error => error.code === "TASK_MEMORY_REVISION_STALE");
+});
+
+test("verification sources reject missing or failed receipts without claiming test semantics", async () => {
+  const f = fixture(); await f.commit("command returned successfully"); const good = f.runtime.read(f.ctx).memory.observations[0].id;
+  await f.commit("failed test", true); const bad = f.runtime.read(f.ctx).memory.observations.at(-1).id;
+  assert.deepEqual(f.runtime.verificationSources(f.ctx, [good, good]), [good]);
+  for (const ids of [[bad], ["fake"], []]) assert.throws(() => f.runtime.verificationSources(f.ctx, ids), error => error.code === "TASK_MEMORY_VERIFICATION_INVALID");
+  assert.equal(f.state.workflowState.tasks[0].status, "in_progress");
+});
+test("only declared successful direct-dependency sources can be reused as historical observations", async () => {
+  const f = fixture(); await f.commit(); const id = f.runtime.read(f.ctx).memory.observations[0].id;
+  const previous = f.state.workflowState.tasks[0]; previous.status = "completed"; previous.verificationEvidenceIds = [id];
+  f.state.workflowState.planVersion = 1;
+  f.state.workflowState.currentTaskId = "next";
+  f.state.workflowState.tasks.push({ id: "next", role: "developer-test", status: "in_progress", dependsOn: ["task"] });
+  const current = { ...f.identity, taskId: "next", planVersion: 1, handoffId: "next-handoff", attemptId: "next-attempt" };
+  f.state.workflowState.handoff = { ...current, phase: "executing" };
+  f.branch.push({ type: "custom_message", id: "next-anchor", customType: "pi-init-workflow-task", details: current, content: "next" });
+  const observed = f.runtime.read(f.ctx, [id]);
+  assert.equal(observed.evidence[0].sourceTaskId, "task");
+  assert.equal(observed.evidence[0].historical, true);
+  assert.match(observed.evidence[0].text, /91 passed/);
+  assert.throws(() => f.runtime.verificationSources(f.ctx, [id]), error => error.code === "TASK_MEMORY_VERIFICATION_INVALID");
+  f.state.workflowState.tasks[1].dependsOn = [];
+  assert.equal(f.runtime.read(f.ctx, [id]).status, "unavailable");
 });

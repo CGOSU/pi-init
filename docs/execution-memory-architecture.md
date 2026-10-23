@@ -8,6 +8,8 @@
 
 不新增事件总线、独立数据库、完整事件溯源系统、周期快照系统、第二套调度器或独立无进展引擎。
 
+保持单一扁平队列：architect 确定目标/边界，执行者自主一般技术选择并完成可验收交付，仅真实偏差重规划。任务按可交付结果切分，不按读取→修改→测试机械拆分；复用 task/constraints/files/acceptanceCriteria 表达目标、非目标、交付物与风险匹配的验收，不新增复杂 schema。必要事实调查先于冻结详细计划；architect 仍禁止直接工具取证，所需调查由普通 docs-commit 任务交接。不确定远期只留里程碑，在边界细化，不强制每项重规划。developer-test 不做发布/Git 收尾，docs-commit 通常最后统一一次。
+
 ## 一张结构图
 
 ```text
@@ -36,7 +38,9 @@ SDK 已保存的工具结果 ──► TaskMemoryRuntime ──► TaskMemory
 
 严格区分：工具成功、测试通过、需求满足、任务验收。普通 stdout 出现 passed 不能自动成为已验证结论；模型无来源的描述只算声明。
 
-TaskMemory 不保存任务 status，不修改角色、不派发、不重试、不授权 complete。验收继续走现有契约、协调证据和 complete/block/clarify。
+TaskMemory 不保存任务 status，不修改角色、不派发、不重试、不授权 complete。验收继续走现有任务 acceptanceCriteria 和 complete/block，不重建正式证据、结构契约/clarify 或嵌套协议。
+
+complete 可选 evidenceIds 引用实际成功工具来源，记录为 verificationEvidenceIds。这只证明真实历史工具观察，不证明需求全部满足或依赖版本当前有效，不能替代 completionSummary/implementationRationale/verification 中的验收文字。
 
 ## 2. TaskMemoryRuntime：唯一写入路径
 
@@ -44,8 +48,8 @@ TaskMemory 不保存任务 status，不修改角色、不派发、不重试、�
 
 - 复用真实 run binding，在 `turn_end` 用 SDK 的 messageEntryId/toolResultEntryIds 记录已发生的观察；提议、tool_call 和 execution_start 不算成功。
 - 自动记录成功和失败的有界结果摘要与来源，不只记录错误；保留最近16条普通观察与最多32项 checkpoint 关键引用，完整正文仍在原 session。旧来源退出近期索引后仍可按真实来源 ID 读取并登记到 checkpoint，不必重跑。
-- 阶段完成、验证结束或产物生成后，模型通过现有 `task_workflow` 的新动作 `checkpoint` 更新当前步骤、成果和剩余项，不新增独立记忆工具。
-- checkpoint 必须引用当前 branch 可核对的真实来源；通过现有绑定拒绝旧任务、旧回合或恢复身份的提交。revision 是写入并发版本，内容变更才递增；progressRevision 仅在新增支持事实或声明文件版本变化时递增，改写措辞不算进展。
+- 阶段完成、验证结束或产物生成后，模型可通过现有 `task_workflow` 的 `checkpoint` 更新当前步骤、成果和剩余项，不新增独立记忆工具，不要求频繁 checkpoint 或每次工具后登记。
+- checkpoint 必须引用当前 branch 可核对的真实来源；通过现有绑定拒绝旧任务、旧回合或恢复身份的提交。revision 是写入并发版本，内容变更才递增；缺少 expectedMemoryRevision 时准确返回当前 revision 供补齐，不伪报陈旧写入。progressRevision 仅在新增支持事实或声明文件版本变化时递增，改写措辞不算进展。
 - 读取复用 `task_workflow(status)`；可按记忆中的来源 ID 返回有界原结果。不能因为上下文裁掉了结果，就要求模型重新执行命令。
 - 使用 `pi.appendEntry("pi-init-task-memory", snapshot)` 持久化，恢复时取当前 branch 上最后一份身份可信的完整快照。只缓存可重建状态，不另建日志或数据库。
 - 工具观察按来源 entry ID 去重；当前 checkpoint 的来源是已绑定的请求/branch 锚点，不能引用尚未产生的自身工具结果。
@@ -86,13 +90,16 @@ TaskMemory 不保存任务 status，不修改角色、不派发、不重试、�
 - HEAD 相同不代表工作区相同；关键证据按相关文件内容核对，新增/未跟踪文件也不能遗漏。stat 只作变化线索。
 - 无法确定任意 shell 的依赖范围就标记 unverified，不假装能证明全仓库未变；需要复用时定向核对，不默认重跑。
 - 查一次 Git 不会自动让所有测试失效；重复查状态、查同一历史或重写 checkpoint 不增加进展 revision。
+- 不为 complete 或文档变化重复全仓验证；相关来源/配置未变可引用真实已有结果并说明适用范围，变化才针对性补测。低风险文案/展示可核对差异与产物；中风险局部行为验证相关测试及直接影响；高风险权限、数据或恢复路径不能省略失败与恢复边界。
 - source entry 可读不代表属于当前 branch，更不代表获得当前 attempt 的执行授权。恢复门和未知结果保护不变。
 
 ## 重复操作怎么收敛
 
-第一版先修“记忆不会消失”，不再新建检测引擎。现有进展观察器随后可读取 TaskMemory revision，区分任务内部进展和纯重复观察；停止仍走既有保护，不增加另一套提醒/续跑协议。
+重复观察保护只在现有进展观察器内保守收敛，不新建检测引擎或调度器：仅识别 native read/grep/find/ls 的相同工具、输入 hash 和输出 hash，且身份、branch、executing 任务和角色匹配、无恢复/用户停止门时启用。新事实、真实非只读工具活动或任务/角色/session/branch 变化重置；status/checkpoint 改写不算新事实，失败不能混成成功观察，不推断 bash/codemode 副作用。先有界提醒，持续相同且无新事实才走既有暂停边界，不缓存或跳过实际工具执行，不新增自动模型回合。
 
-不设置“最多查几次 Git”或“最多交接几次”的硬上限，不根据一条重复就自动停止，更不自动完成任务。新来源、真实复测或用户要求复核都可能是合理重复。
+最终 assistant 错误不自动 nudge；提醒不生成任务授权锚点，不能用提醒获得任务写入或完成权限。
+
+任务耗时和工具数只是软信号，不是强制终止条件。不设置“最多查几次 Git”或“最多交接几次”的硬上限，不根据一条重复就自动停止，更不自动完成任务。同范围无新事实的重复阈值不是工具总数或任务时长上限；新内容、真实复测或用户要求复核都可能是合理重复。
 
 ## 实施顺序
 

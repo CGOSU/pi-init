@@ -22,6 +22,7 @@ export type WorkflowCompletionTaskView = {
   blockReason?: string;
   outcomeUnknown?: boolean;
   verification: string[];
+  verificationEvidenceIds?: string[];
   verificationFailures: string[];
 };
 
@@ -58,6 +59,7 @@ function completionTaskView(task: WorkflowTask): WorkflowCompletionTaskView {
     blockReason: task.blockReason,
     outcomeUnknown: task.outcomeUnknown,
     verification: task.verification ?? [],
+    ...(task.verificationEvidenceIds ? { verificationEvidenceIds: [...task.verificationEvidenceIds] } : {}),
     verificationFailures: task.verification?.filter(isVerificationFailure) ?? [],
   };
 }

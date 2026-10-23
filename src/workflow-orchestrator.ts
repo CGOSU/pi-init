@@ -84,7 +84,7 @@ export function transitionWorkflowDispatch(
 }
 
 export type WorkflowLifecycleEvent =
-  | { type: "task-completed"; identity: WorkflowHandoffIdentity; completionSummary: unknown; implementationRationale: unknown; verification: unknown }
+  | { type: "task-completed"; identity: WorkflowHandoffIdentity; completionSummary: unknown; implementationRationale: unknown; verification: unknown; verificationEvidenceIds?: string[] }
   | { type: "task-blocked"; identity: WorkflowHandoffIdentity; reason: unknown; outcomeUnknown?: boolean }
   | { type: "workflow-resumed"; identity: WorkflowActionIdentity }
   | { type: "task-retried"; identity: WorkflowActionIdentity; taskId?: string; confirmUnknownOutcome: boolean }
@@ -119,7 +119,7 @@ export function transitionWorkflowLifecycle(
         ? markWorkflowTaskStarted(state, event.identity.taskId, now)
         : state;
       next = event.type === "task-completed"
-        ? completeWorkflowTask(started, { taskId: event.identity.taskId, completionSummary: event.completionSummary, implementationRationale: event.implementationRationale, verification: event.verification }, now)
+        ? completeWorkflowTask(started, { taskId: event.identity.taskId, completionSummary: event.completionSummary, implementationRationale: event.implementationRationale, verification: event.verification, verificationEvidenceIds: event.verificationEvidenceIds }, now)
         : event.outcomeUnknown === true
           ? markWorkflowTaskOutcomeUnknown(started, { taskId: event.identity.taskId, reason: event.reason }, now)
           : blockWorkflowTask(started, { taskId: event.identity.taskId, reason: event.reason }, now);

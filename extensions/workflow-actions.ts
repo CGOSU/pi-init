@@ -276,7 +276,7 @@ export function createWorkflowActions(
       case "checkpoint": {
         const identity = requireTaskHandoffIdentity(params, ctx);
         if (!deps.taskMemory) throw Object.assign(new Error("任务记忆运行时不可用"), { code: "TASK_MEMORY_UNAVAILABLE" });
-        const memory = deps.taskMemory.checkpoint(ctx, identity, params.checkpoint, params.expectedMemoryRevision ?? -1, params.memoryFiles);
+        const memory = deps.taskMemory.checkpoint(ctx, identity, params.checkpoint, params.expectedMemoryRevision, params.memoryFiles);
         return { content: [{ type: "text", text: "任务记忆已保存；任务未被完成或重新派发。\n" + taskMemoryText(memory) }], details: { taskMemory: memory } };
       }
       case "request-replan":
@@ -415,9 +415,11 @@ export function createWorkflowActions(
         const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
         if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
         requireTaskRole(task, ctx);
+        const verificationEvidenceIds = params.evidenceIds === undefined ? undefined : deps.taskMemory?.verificationSources(ctx, params.evidenceIds);
+        if (params.evidenceIds !== undefined && !verificationEvidenceIds) throw Object.assign(new Error("验证来源运行时不可用"), { code: "TASK_MEMORY_UNAVAILABLE" });
         markCurrentTaskStarted(ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, {
-          type: "task-completed", identity,
+          type: "task-completed", verificationEvidenceIds, identity,
           completionSummary: params.completionSummary,
           implementationRationale: params.implementationRationale,
           verification: params.verification,

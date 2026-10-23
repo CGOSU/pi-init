@@ -11,6 +11,8 @@ import {
   path,
   writeFile,
 } from "./helpers.js";
+import { branchContainsExactlyOneAnchor } from "../extensions/role-context-protocol.ts";
+import { workflowHandoffIdentity } from "../src/workflow.ts";
 
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
 const idleRuntime = { roleCompactionPhase: "idle", workflowDispatchInFlight: false };
@@ -252,7 +254,7 @@ test("无进展时先发一次纠偏续跑，仍无结果则暂停且不再自�
   await withTempDirectory(async (directory) => {
     const harness = await createTaskHarness(directory, { deferSendMessagePersistence: true });
     const runUnfinishedTurn = async () => {
-      const message = latestTaskMessage(harness);
+      const message = harness.sentMessages.at(-1).message;
       await emitExtensionEvent(harness, "agent_start");
       await emitExtensionEvent(harness, "message_start", taskMessageEvent(message));
       await emitExtensionEvent(harness, "message_end", { type: "message_end", message: taskMessageEvent(message).message });
@@ -266,7 +268,7 @@ test("无进展时先发一次纠偏续跑，仍无结果则暂停且不再自�
     await runUnfinishedTurn();
     assert.equal(latestWorkflow(harness).status, "running");
     assert.equal(latestWorkflow(harness).nudgeCount, 2);
-    const correction = latestTaskMessage(harness);
+    const correction = harness.sentMessages.at(-1).message;
     assert.match(correction.content, /停止重复查询|反复读取/);
     assert.match(correction.content, /未知.*操作|副作用/);
 
@@ -291,5 +293,79 @@ test("已退休 runtime 忽略延迟到达的旧任务消息事件", async () =>
     await emitExtensionEvent(harness, "message_start", taskMessageEvent(sentMessage));
     assert.equal(latestWorkflow(harness).handoff.phase, "queued");
     assert.equal(latestWorkflow(harness).tasks[0].executionStartedAt, undefined);
+  });
+});
+
+test("final provider failure pauses once instead of redispatching the same task", async () => {
+  await withTempDirectory(async directory => {
+    const h = await createTaskHarness(directory, { deferSendMessagePersistence: true });
+    await emitExtensionEvent(h, "before_agent_start", { systemPrompt: "" });
+    await emitExtensionEvent(h, "agent_start");
+    const first = latestTaskMessage(h);
+    await emitExtensionEvent(h, "message_start", taskMessageEvent(first));
+    h.persistSentMessage(first);
+    const sent = h.sentMessages.length;
+    await emitExtensionEvent(h, "message_end", { message: { role: "assistant", content: [], stopReason: "error", errorMessage: "The usage limit has been reached" } });
+    await emitExtensionEvent(h, "agent_end");
+    await emitExtensionEvent(h, "agent_settled", { aborted: false });
+    assert.equal(latestWorkflow(h).status, "paused");
+    assert.equal(latestWorkflow(h).tasks[0].outcomeUnknown, true);
+    assert.equal(h.sentMessages.length, sent);
+    await emitExtensionEvent(h, "agent_settled", { aborted: false });
+    assert.equal(h.sentMessages.length, sent);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+test("ordinary continuation preserves exactly one task authorization anchor", async () => {
+  await withTempDirectory(async directory => {
+    const h = await createTaskHarness(directory, { deferSendMessagePersistence: true });
+    await emitExtensionEvent(h, "agent_start");
+    const first = latestTaskMessage(h);
+    await emitExtensionEvent(h, "message_start", taskMessageEvent(first));
+    h.persistSentMessage(first);
+    const identity = workflowHandoffIdentity(latestWorkflow(h));
+    await emitExtensionEvent(h, "message_end", { message: { role: "assistant", content: [], stopReason: "stop" } });
+    await emitExtensionEvent(h, "agent_end");
+    await emitExtensionEvent(h, "agent_settled");
+    const reminder = h.sentMessages.at(-1).message;
+    assert.equal(reminder.customType, "pi-init-workflow-continuation");
+    h.persistSentMessage(reminder);
+    assert.equal(branchContainsExactlyOneAnchor(h.branch, "pi-init-workflow-task", identity), true);
+    assert.deepEqual(workflowHandoffIdentity(latestWorkflow(h)), identity);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("a recovered assistant response is not treated as a final provider failure", async () => {
+  await withTempDirectory(async directory => {
+    const h = await createTaskHarness(directory, { deferSendMessagePersistence: true });
+    await emitExtensionEvent(h, "agent_start");
+    const first = latestTaskMessage(h);
+    await emitExtensionEvent(h, "message_start", taskMessageEvent(first)); h.persistSentMessage(first);
+    await emitExtensionEvent(h, "message_end", { message: { role: "assistant", content: [], stopReason: "error" } });
+    await emitExtensionEvent(h, "message_end", { message: { role: "assistant", content: [], stopReason: "stop" } });
+    await emitExtensionEvent(h, "agent_end"); await emitExtensionEvent(h, "agent_settled");
+    assert.equal(latestWorkflow(h).status, "running");
+    assert.equal(h.sentMessages.at(-1).message.customType, "pi-init-workflow-continuation");
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+test("registered repeated-read guard pauses without replaying or dispatching another task", async () => {
+  await withTempDirectory(async directory => {
+    const h = await createTaskHarness(directory, { deferSendMessagePersistence: true });
+    await emitExtensionEvent(h, "agent_start");
+    const first = latestTaskMessage(h);
+    await emitExtensionEvent(h, "message_start", taskMessageEvent(first)); h.persistSentMessage(first);
+    const before = h.sentMessages.length;
+    for (let i = 0; i < 7; i++) {
+      await emitExtensionEvent(h, "tool_call", { toolName: "read", toolCallId: "same-" + i, input: { path: "src/first.ts" } });
+      await emitExtensionEvent(h, "tool_result", { toolName: "read", toolCallId: "same-" + i, input: { path: "src/first.ts" }, content: [{ type: "text", text: "unchanged" }], isError: false });
+    }
+    assert.equal(latestWorkflow(h).status, "paused");
+    assert.equal(latestWorkflow(h).tasks[0].outcomeUnknown, true);
+    await emitExtensionEvent(h, "agent_end"); await emitExtensionEvent(h, "agent_settled");
+    assert.equal(h.sentMessages.length, before);
+    assert.ok(h.branch.some(entry => entry.customType === "pi-init-user-control" && entry.data.reason === "repeated-read"));
+    await emitExtensionEvent(h, "session_shutdown");
   });
 });

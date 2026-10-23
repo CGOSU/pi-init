@@ -16,12 +16,12 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
     if (!ctx.isProjectTrusted()) throw new Error("项目尚未信任，未保存停止记录");
     pi.appendEntry(ENTRY, { version: 1, sessionId: ctx.sessionManager.getSessionId(), workflowId: state.workflowState?.workflowId ?? null, stopped, reason });
   }
-  function suspend(ctx: ExtensionContext, reason: string) {
+  function suspend(ctx: ExtensionContext, reason: string, interrupt = state.agentRunActive) {
     state.userStopRequested = true;
     externalTurn = false;
     state.internalContinuationPending = false;
     deps.retire();
-    if (state.agentRunActive) {
+    if (interrupt) {
       try { deps.interrupt?.(ctx); } catch (error) { ctx.ui.notify("执行已停止，但中断状态尚未确认持久化：" + textOf(error), "warning"); }
     }
     try { persist(ctx, true, reason); }

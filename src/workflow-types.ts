@@ -36,6 +36,7 @@ export type WorkflowTask = {
   completionSummary?: string;
   implementationRationale?: string;
   verification?: string[];
+  verificationEvidenceIds?: string[];
   blockReason?: string;
   outcomeUnknown?: boolean;
   delegation?: WorkflowTaskDelegation;

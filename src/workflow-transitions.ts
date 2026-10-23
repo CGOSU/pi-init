@@ -14,6 +14,7 @@ type CompleteTaskInput = {
   completionSummary: unknown;
   implementationRationale: unknown;
   verification: unknown;
+  verificationEvidenceIds?: string[];
 };
 type TaskReasonInput = { taskId: string; reason: unknown };
 
@@ -112,7 +113,7 @@ export function getWorkflowTaskDuration(task: WorkflowTask | null | undefined): 
 
 export function completeWorkflowTask(
   state: WorkflowState,
-  { taskId, completionSummary, implementationRationale, verification }: CompleteTaskInput,
+  { taskId, completionSummary, implementationRationale, verification, verificationEvidenceIds }: CompleteTaskInput,
   now = Date.now(),
 ): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不在执行中");
@@ -130,6 +131,7 @@ export function completeWorkflowTask(
   task.completionSummary = summary;
   task.implementationRationale = rationale;
   task.verification = checks;
+  if (verificationEvidenceIds !== undefined) task.verificationEvidenceIds = normalizeTextList(verificationEvidenceIds, "验证来源ID", { required: true });
   task.completedAt = now;
   result.currentTaskId = undefined;
   delete result.handoff;

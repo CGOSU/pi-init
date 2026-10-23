@@ -26,20 +26,22 @@ metadata:
 - 先定位相关符号、调用方和测试，再精读必要内容。项目历史记忆按关键词读取，不整批读历史文件前若干百行；已有且仍有效的调查和验证连续复用，来源变化或关键缺口才定向补查。
 - edit 只使用 path/edits；每个 oldText 必须精确唯一匹配，区域不得重叠。零匹配只定向重读并最多重试一次，不模糊替换、不缓存旧 diff 冒充当前结果。保留精确编辑运行时守卫。
 - file_review 只提供超过500行代码的结构建议 keep/recommend-split，不是文件上限。登记前须完整读取当前内容版本；版本改变失效。/large 只在扫描与状态可靠、Agent空闲且安全门允许时派发结构审阅，不伪造已审或自动拆文件。
-- 增量补测按行为变化和必要直接影响选择，优先复用已有测试。纯展示默认不补，不机械限定修改行数，也不按年龄、通过时间或覆盖率删除有价值回归。
+- 增量补测按行为变化和必要直接影响选择，优先复用已有测试。纯展示默认不补，不机械限定修改行数，也不按年龄、通过时间或覆盖率删除有价值回归。低风险文案/展示可核对差异与产物；中风险局部行为变更运行相关测试及直接影响检查；高风险权限、数据或恢复路径必须覆盖失败与恢复边界，不能以最小验证省略。
+- 不为 complete 或文档变化重复全仓验证；相关来源和配置未变时可引用真实已有结果并说明适用范围，变化才针对性补测。任务耗时和工具数只是软信号，不是强制终止条件。
 
 ## 扁平工作流
 
 - task_workflow 是唯一规划、依赖、验收、阻塞和重规划状态机，只有当前主会话 local 顺序执行。workflowMode off/on/auto 分别拒绝新规划、始终编排、两项以内直接顺序执行；12项只是规划软建议。
-- plan/replan 只由 architect 提交。每项明确 task/files/acceptanceCriteria/dependsOn 与实际执行角色；仅用户明确要求先审阅时设 reviewRequired。
+- plan/replan 只由 architect 提交，确定目标和边界，执行者负责可验收交付。按可交付结果切任务，不按读取→修改→测试机械拆分；每项用现有 task/constraints/files/acceptanceCriteria 写清目标、非目标、交付物和风险匹配的验收，保留 dependsOn 与实际执行角色，不新增复杂 schema；仅用户明确要求先审阅时设 reviewRequired。
+- 必要事实调查先于冻结详细计划；architect 不直接工具取证，仍安排普通 docs-commit 调查。远期不确定工作只留里程碑，在任务边界细化，不强制每项重规划；只有目标、约束或事实发生真实偏差才重规划。
 - 执行者在真实 executing 身份下可用 request-replan 登记方向，仍须完成当前任务或 block 后再重规划，不提前离开任务角色。讨论不自动改变计划。新目标用 request-goal，goals/goalId 仅分组；依赖先于 priority，同级稳定，不抢占运行工具，不创建子流程运行栈。
 - 插入目标须通过 retainTaskIds 保留仍有效的 pending 任务。原任务失效可转普通重规划，保留已完成成果与未知副作用；目标分组结束不等于整个工作流验收。
-- 当前执行角色真实完成并验证后提交 complete，提供 completionSummary/implementationRationale/verification；真实阻塞用 block；执行或副作用结果不确定时填写 outcomeUnknown=true，保持暂停并要求用户核对，不能用普通重规划绕过。进程退出、Agent回复或工具成功都不自动等于需求验收。
+- 当前执行角色真实完成并验证后提交 complete，提供 completionSummary/implementationRationale/verification；可选 evidenceIds 引用实际成功工具来源并记录为 verificationEvidenceIds。引用只证明真实历史工具观察，不证明需求全部满足或依赖版本当前有效，不能替代验收文字。真实阻塞用 block；执行或副作用结果不确定时填写 outcomeUnknown=true，保持暂停并要求用户核对，不能用普通重规划绕过。进程退出、Agent回复或工具成功都不自动等于需求验收。
 - 活动工作流通常统一安排一次文档/Git收尾，不在每个子任务后重复全仓检查或提交。首次修改确认归属；归属/冲突/共享工作区变化和真实提交前再必要刷新。只提交本任务明确所属改动，push须用户明确授权。
 
 ## 工作记忆与上下文
 
-- 每次上下文携带当前任务成果、真实工具来源、checkpoint、剩余项与下一步。阶段切换、验证结束或产物生成后用 task_workflow(checkpoint, expectedMemoryRevision=当前revision, checkpoint={step,accomplished:[{summary,evidenceIds}],remaining,blockers,nextStep}) 登记，不要求每个工具后额外登记。
+- 每次上下文携带当前任务成果、真实工具来源、checkpoint、剩余项与下一步。阶段切换、验证结束或产物生成后可用 task_workflow(checkpoint, expectedMemoryRevision=当前revision, checkpoint={step,accomplished:[{summary,evidenceIds}],remaining,blockers,nextStep}) 登记，不要求频繁或每个工具后额外登记。缺少 expectedMemoryRevision 时准确返回当前 revision 供补齐，不伪报陈旧写入。
 - 原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不因正文已归档就重复查Git、搜索聊天历史或重跑。checkpoint不完成、恢复或派发任务；工具成功不等于测试通过，历史通过不证明当前版本仍有效。
 - memoryFiles 最多16个项目相对文件，只记录登记时内容hash，不证明完整验证依赖或测试执行时版本。revision拒绝陈旧覆盖；progressRevision不因改写措辞增加。
 - 只有当前真实 executing 任务可写checkpoint；queued、暂停、恢复或旧回合不授权提交。来源缺失、超限或保存失败如实报告，不靠重跑未知副作用补齐，不声称已持久化。
@@ -49,7 +51,7 @@ metadata:
 
 - session/branch/role/attempt/handoff/recovery身份由运行时绑定；不手填猜测或把旧结果贴到新身份。恢复门未确认时只允许原规则下的只读查询及职责确认，不授权修改、执行或完成。
 - 结果未知的活动执行先暂停核对副作用；模型填写 confirmUnknownOutcome=true 不构成授权。必须用户命令/面板显式确认新attempt，不自动重放。状态、持久化或权限失败不能用默认值掩盖。
-- 普通换角不触发压缩；真实任务边界和预算压缩沿同一管理器，绑定操作与身份。失败、迟到回调或未知派发不得自动继续；用户停止保留成果。
+- 普通换角不触发压缩；真实任务边界和预算压缩沿同一管理器，绑定操作与身份。失败、迟到回调或未知派发不得自动继续；最终 assistant 错误不自动 nudge，提醒不生成任务授权锚点；用户停止保留成果。
 - 根完成仍须回复整体成果、验证及未处理项。正常回复与一次性确定性兜底共用完成视图；报告阶段不重新调查、轮询或执行Git，不补称未记录的提交/推送成功，不额外触发模型回合。
 - 正式证据协议、结构任务契约/clarify、旧嵌套执行和/fast已退役。旧持久记录不得静默当作普通任务恢复；检查副作用后用受保护的 discard-recovery 隔离或开启新会话，原记录保留。
 - 不伪造成功、权限、验证或依赖，不泄露密钥与敏感信息。行为变化先记录用户已确认的需求与决定。

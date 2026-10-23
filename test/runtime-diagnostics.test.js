@@ -491,3 +491,67 @@ test("healthy rounds retain only bounded projection summaries without creating i
     assert.equal((await rows()).at(-1).contextProjection.checks, 0);
   });
 });
+
+async function withDirectDiagnostics(fn) {
+  await withBox(async ({ cwd, ctx }) => {
+    const box = createRuntimeDiagnostics(() => ({}));
+    const rows = async () => {
+      await box.flush();
+      return (await readFile(join(cwd, ".pi/diagnostics/runtime.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    };
+    try { await fn({ ctx, box, rows }); } finally { await box.flush(); }
+  });
+}
+
+test("workflow rejection correlates only observed call IDs; real failures and private result boundaries remain", async () => {
+  await withDirectDiagnostics(async ({ ctx, box, rows }) => {
+    box.observe(ctx, "agent.before_start");
+    box.observe(ctx, "workflow.action_rejected", { toolCallId: "rejected", code: "TASK_MEMORY_REVISION_STALE" });
+    const result = { toolCallId: "rejected", toolName: "task_workflow", isError: true, text: "private-result", input: { secret: "private-input" } };
+    box.observe(ctx, "routing.tool_result", result);
+    box.observe(ctx, "tool.result", result);
+    box.observe(ctx, "routing.tool_result", { ...result, toolCallId: "real-failure" });
+    box.observe(ctx, "routing.tool_result", { ...result, code: "EIO" });
+    box.observe(ctx, "agent.settled");
+    const data = await rows();
+    const latest = [...new Map(data.filter(row => row.kind === "issue").map(row => [row.id, row])).values()];
+    assert.deepEqual(latest.map(row => [row.category, row.code, row.count]), [
+      ["business-rejection", "TASK_MEMORY_REVISION_STALE", 1], ["tool-failure", "UNKNOWN", 1], ["tool-failure", "EIO", 1],
+    ]);
+    assert.equal(data.find(row => row.kind === "summary").issueOccurrences, 3);
+    assert.ok(latest[0].events.some(row => row.event === "routing.tool_result" && row.data.toolCallId === "rejected" && row.data.isError));
+    assert.equal(JSON.stringify(data).includes("private-"), false);
+    assert.equal(result.isError, true);
+  });
+});
+
+test("rejection correlation clears on run, capture, session, settlement, shutdown and trust boundaries", async () => {
+  for (const boundary of ["agent.before_start", "session.tree", "session.start", "session-change", "agent.settled", "session.shutdown", "untrusted"]) {
+    await withDirectDiagnostics(async ({ ctx, box, rows }) => {
+      box.observe(ctx, "agent.before_start");
+      box.observe(ctx, "workflow.action_rejected", { toolCallId: "same", code: "TASK_MEMORY_REVISION_STALE" });
+      if (boundary === "session-change") ctx.sessionManager.getSessionId = () => "other";
+      else if (boundary === "untrusted") {
+        ctx.isProjectTrusted = () => false;
+        box.observe(ctx, "input");
+        ctx.isProjectTrusted = () => true;
+      } else box.observe(ctx, boundary);
+      box.observe(ctx, "routing.tool_result", { toolCallId: "same", isError: true });
+      box.observe(ctx, "agent.settled");
+      assert.ok((await rows()).some(row => row.category === "tool-failure" && row.code === "UNKNOWN"), boundary);
+    });
+  }
+});
+
+test("correlation is bounded and never inferred from text or tool name", async () => {
+  await withDirectDiagnostics(async ({ ctx, box, rows }) => {
+    box.observe(ctx, "agent.before_start");
+    for (let i = 0; i < 129; i++) box.observe(ctx, "workflow.action_rejected", { toolCallId: `id-${i}`, code: "TASK_MEMORY_REVISION_STALE" });
+    box.observe(ctx, "routing.tool_result", { toolCallId: "id-0", toolName: "task_workflow", isError: true, text: "TASK_MEMORY_REVISION_STALE" });
+    box.observe(ctx, "routing.tool_result", { toolCallId: "id-128", isError: true });
+    box.observe(ctx, "agent.settled");
+    const failures = (await rows()).filter(row => row.category === "tool-failure");
+    assert.equal(failures.at(-1).count, 1);
+    assert.equal(failures.at(-1).latestTrigger.data.toolCallId, "id-0");
+  });
+});

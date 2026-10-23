@@ -115,6 +115,8 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   const emptyProjection = () => ({ checks: 0, checkpointed: 0, overBudget: 0, last: undefined as Data | undefined });
   let contextProjection = emptyProjection();
   const seen = new Set<string>();
+  // Only explicit workflow rejection observations establish result correlation.
+  const rejectedCalls = new Map<string, string>();
   const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes, maxPending: MAX_PENDING, retentionMs: RETENTION_MS, rejectOversize: true, directoryMode: 0o700, warning: "运行黑匣子写入失败；已停用记录，不影响任务执行。" });
   function write(ctx: ExtensionContext, record: Data) {
     writer.write(ctx, dropped => ({ version: 1, extensionVersion, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }));
@@ -132,11 +134,11 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   }
   function observe(ctx: ExtensionContext, event: string, raw: Data = {}) {
     try {
-      if (writer.failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); scope = ""; return; }
+      if (writer.failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); rejectedCalls.clear(); scope = ""; return; }
       if (baselineCwd !== ctx.cwd) { baselines.clear(); baselineCwd = ctx.cwd; }
       const nextScope = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]);
       if (scope !== nextScope || event === "session.tree" || event === "session.start") {
-        ring = []; ringBytes = 0; issues = new Map(); seen.clear(); startedAt = undefined; tokens = {}; toolCalls = 0; providerRequests = 0; issueOccurrences = 0; overflow = 0;
+        ring = []; ringBytes = 0; issues = new Map(); seen.clear(); rejectedCalls.clear(); startedAt = undefined; tokens = {}; toolCalls = 0; providerRequests = 0; issueOccurrences = 0; overflow = 0;
         budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
         scope = nextScope; captureId = randomUUID(); profile = undefined; profileChanged = false; stopReason = undefined;
       }
@@ -150,7 +152,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         else { issue.events.splice(16, 1); issue.events.push(row); issue.incomplete = true; issue.evidenceTruncated = true; issue.dirty = true; }
       }
       if (event === "agent.before_start") {
-        run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear();
+        run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear(); rejectedCalls.clear();
         profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
         budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
       }
@@ -185,7 +187,22 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
           write(ctx, { kind: "provider-request", timestamp: now, ...row.data, missingObservations });
         }
       }
-      const problem = classify(event, raw);
+      const classified = classify(event, raw);
+      // Compare full IDs, not the truncated display metadata; oversized IDs fail open.
+      const callId = typeof raw.toolCallId === "string" && raw.toolCallId.length > 0 && raw.toolCallId.length <= 512 ? raw.toolCallId : undefined;
+      const rejectionCode = callId ? rejectedCalls.get(callId) : undefined;
+      const correlatedResult = (event === "tool.result" || event === "routing.tool_result")
+        && rejectionCode !== undefined && classified !== undefined
+        && (classified.code === "UNKNOWN" || classified.code === rejectionCode)
+        && (classified.category === "tool-failure" || classified.category === "business-rejection");
+      // The real row is already retained above as evidence, without another occurrence.
+      // A distinct structured failure code remains an independent failure.
+      const problem = correlatedResult ? undefined : classified;
+      if (event === "workflow.action_rejected" && callId && classified) {
+        rejectedCalls.delete(callId);
+        rejectedCalls.set(callId, classified.code);
+        if (rejectedCalls.size > 128) rejectedCalls.delete(rejectedCalls.keys().next().value!);
+      }
       if (problem) {
         const stage = problem.category === "business-rejection" ? "business" : problem.category === "tool-failure" ? "tool" : event;
         const toolName = typeof row.data.toolName === "string" ? row.data.toolName : raw.action === "switch_role" ? "switch_role" : event === "workflow.action_rejected" ? "task_workflow" : undefined;
@@ -208,6 +225,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         }
       }
       if (event === "agent.settled" || event === "session.shutdown") {
+        rejectedCalls.clear();
         let summary: Data | undefined;
         if (startedAt !== undefined) {
           const durationMs = Math.max(0, nowMs() - startedAt);

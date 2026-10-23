@@ -88,14 +88,14 @@ export const workflowTaskRoleSchema = Type.String({
 });
 export const workflowTaskSchema = Type.Object({
   id: Type.String({ description: "唯一任务 ID，小写字母、数字、点、下划线或连字符" }),
-  task: Type.String({ description: "任务目标和实现范围" }),
+  task: Type.String({ description: "一个可独立验收的交付物及非目标；不按读取/修改/测试机械拆任务，执行者在范围内自主闭环" }),
   files: Type.Array(Type.String(), {
     minItems: 1,
     description: "任务允许涉及的文件或目录，用于约束实现范围",
   }),
   acceptanceCriteria: Type.Array(Type.String(), {
     minItems: 1,
-    description: "任务完成前必须满足的验收标准",
+    description: "交付物与按风险选择的真实验证；明确相关检查/失败边界，来源未变时复用有效结果，不默认全仓重验",
   }),
   role: Type.Optional(workflowTaskRoleSchema),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
@@ -113,7 +113,7 @@ export const taskWorkflowParameters = Type.Object({
   })),
   expectedMemoryRevision: Type.Optional(Type.Integer({ minimum: 0, description: "checkpoint必填，使用当前任务记忆revision拒绝陈旧覆盖" })),
   memoryFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16, description: "checkpoint声明的项目相对文件；内容hash不证明完整验证依赖" })),
-  evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status只读查询当前任务原工具结果，不属于正式取证协议" })),
+  evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status读取当前任务或已完成直接依赖的声明来源；complete可引用本任务成功工具结果。仅证明历史观察，不证明需求全部满足或当前版本有效" })),
   parentGoalId: Type.Optional(Type.String({ description: "目标归属ID，只分组、不创建执行栈" })),
   summary: Type.Optional(Type.String({ description: "规划摘要或修正方向" })),
   constraints: Type.Optional(Type.Array(Type.String())),

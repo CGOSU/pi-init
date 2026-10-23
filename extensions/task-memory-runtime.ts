@@ -12,7 +12,7 @@ export const TASK_MEMORY_ENTRY = "pi-init-task-memory";
 export const TASK_MEMORY_MESSAGE = "pi-init-task-memory-view";
 type Entry = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>[number];
 type MemoryBinding = { source: (message: object, ctx: ExtensionContext) => WorkflowHandoffIdentity | undefined };
-export type TaskMemoryView = { status: "available" | "legacy" | "unavailable"; memory?: TaskMemory; reason?: string; applicability?: "historical" | "matches-checkpoint-files" | "changed" | "unverified"; evidence?: { id: string; text: string; truncated: boolean }[] };
+export type TaskMemoryView = { status: "available" | "legacy" | "unavailable"; memory?: TaskMemory; reason?: string; applicability?: "historical" | "matches-checkpoint-files" | "changed" | "unverified"; evidence?: { id: string; text: string; truncated: boolean; sourceTaskId: string; historical: true }[] };
 function bounded(text: string, maximum: number) {
   if (text.length <= maximum) return text;
   const marker = "\n[中间省略；可按来源读取]\n";
@@ -54,7 +54,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     return undefined;
   }
   function scope(ctx: ExtensionContext, current: WorkflowHandoffIdentity) { return JSON.stringify([ctx.cwd, current]); }
-  function sourceObservation(branch: Entry[], id: string, current: WorkflowHandoffIdentity): TaskObservation | undefined {
+  function sourceObservation(branch: Entry[], id: string, current: WorkflowHandoffIdentity, dependency = false): TaskObservation | undefined {
     const resultIndex = branch.findIndex(entry => entry.id === id);
     const result = branch[resultIndex];
     if (!result || result.type !== "message" || result.message.role !== "toolResult") return undefined;
@@ -68,7 +68,9 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     const anchor = branch.slice(0, ownerIndex).findLast(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task");
     if (!anchor || anchor.type !== "custom_message" || !anchor.details || typeof anchor.details !== "object") return undefined;
     const details = anchor.details as WorkflowHandoffIdentity;
-    if (taskMemoryScope(details) !== taskMemoryScope(current)) return undefined;
+    if (taskMemoryScope(details) !== taskMemoryScope(current) && !(dependency
+      && details.sessionId === current.sessionId && details.workflowId === current.workflowId && details.taskId === current.taskId
+      && Number.isSafeInteger(details.planVersion) && details.planVersion >= 0 && details.planVersion <= current.planVersion)) return undefined;
     const owner = branch[ownerIndex];
     if (owner.type !== "message" || owner.message.role !== "assistant") return undefined;
     const call = owner.message.content.find(part => part.type === "toolCall" && part.id === message.toolCallId);
@@ -146,18 +148,23 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       }
       if (evidenceIds.length > 8) return taskMemoryError("TASK_MEMORY_SOURCE_LIMIT", "一次最多读取8项来源");
       const evidence = evidenceIds.map(id => {
-        if (!sourceObservation(ctx.sessionManager.getBranch(), id, current)) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "只能读取当前任务在当前branch中的真实工具来源");
+        const branch = ctx.sessionManager.getBranch();
+        const task = state.workflowState?.tasks.find(task => task.id === current.taskId);
+        const dependency = state.workflowState?.tasks.find(source => source.status === "completed" && task?.dependsOn?.includes(source.id) && source.verificationEvidenceIds?.includes(id));
+        const own = sourceObservation(branch, id, current);
+        const source = own ?? (dependency ? sourceObservation(branch, id, { ...current, taskId: dependency.id }, true) : undefined);
+        if (!source) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "只能读取当前任务或已完成直接依赖声明的真实验证来源；旧结果不构成当前执行授权");
         const entry = ctx.sessionManager.getBranch().find(item => item.id === id);
         if (!entry || entry.type !== "message" || entry.message.role !== "toolResult") return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "来源不可读取");
         const text = contentText(entry.message.content);
-        return { id, text: bounded(text, 4096), truncated: text.length > 4096 };
+        return { id, text: bounded(text, 4096), truncated: text.length > 4096, sourceTaskId: own ? current.taskId : dependency!.id, historical: true as const };
       });
       return { status: found || memory.observations.length ? "available" : "legacy", memory, applicability, ...(evidence.length ? { evidence } : {}) };
     } catch (error) {
       return { status: "unavailable", reason: error && typeof error === "object" && "code" in error ? String(error.code) : "TASK_MEMORY_UNAVAILABLE" };
     }
   }
-  function checkpoint(ctx: ExtensionContext, submitted: WorkflowHandoffIdentity, input: unknown, expectedRevision: number, paths: string[] = []) {
+  function checkpoint(ctx: ExtensionContext, submitted: WorkflowHandoffIdentity, input: unknown, expectedRevision: number | undefined, paths: string[] = []) {
     const current = identity(ctx);
     const workflow = state.workflowState;
     const task = workflow?.tasks.find(item => item.id === current?.taskId);
@@ -173,6 +180,8 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       : state.activeRole?.role !== task.role ? "role-mismatch" : undefined;
     if (blocked) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆只能由当前真实执行者登记，不能沿用旧身份或解除恢复门：" + blocked);
     const { memory } = load(ctx, current);
+    if (expectedRevision === undefined) return taskMemoryError("TASK_MEMORY_REVISION_REQUIRED", "checkpoint缺少expectedMemoryRevision；当前可用expectedMemoryRevision=" + memory.revision + "。提交时仍会校验版本，不必为缺失字段重复查询status。");
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return taskMemoryError("TASK_MEMORY_REVISION_INVALID", "expectedMemoryRevision必须是非负整数");
     if (expectedRevision !== memory.revision) return taskMemoryError("TASK_MEMORY_REVISION_STALE", "任务记忆已更新，先读取status中的最新revision，不覆盖较新进展");
     const parsed = parseTaskCheckpoint(input);
     if (!parsed) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "checkpoint缺少有效步骤、成果来源、剩余项或下一步");
@@ -200,9 +209,19 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       if (!(error && typeof error === "object" && "code" in error && error.code === "TASK_MEMORY_WRITE_FAILED")) suspend(ctx);
     }
   });
+  function verificationSources(ctx: ExtensionContext, ids: string[]) {
+    const current = identity(ctx);
+    if (!current || !Array.isArray(ids) || ids.length < 1 || ids.length > 8 || ids.some(id => typeof id !== "string" || !id.trim())) return taskMemoryError("TASK_MEMORY_VERIFICATION_INVALID", "验证来源须为1至8个真实工具结果ID");
+    const branch = ctx.sessionManager.getBranch();
+    for (const id of ids) {
+      const source = sourceObservation(branch, id, current);
+      if (!source || source.outcome !== "tool-ok") return taskMemoryError("TASK_MEMORY_VERIFICATION_INVALID", "验证来源不存在、不属于当前任务或工具报告失败；不能将其记录为本任务成功验证");
+    }
+    return [...new Set(ids)];
+  }
   function reset() { failures.clear(); stopped.clear(); }
   pi.on("session_start", reset); pi.on("session_tree", reset); pi.on("session_shutdown", reset);
-  return { read, checkpoint, suspend };
+  return { read, checkpoint, verificationSources, suspend };
 }
 export type TaskMemoryRuntime = ReturnType<typeof createTaskMemoryRuntime>;
 export function taskMemoryText(view: TaskMemoryView) {
@@ -211,5 +230,5 @@ export function taskMemoryText(view: TaskMemoryView) {
   const memory = view.memory;
   return "[任务工作记忆；历史观察不是当前执行授权]\n" + JSON.stringify({ revision: memory.revision, progressRevision: memory.progressRevision, taskId: memory.identity.taskId,
     checkpoint: memory.checkpoint, observations: memory.observations, omittedObservations: memory.omittedObservations, applicability: view.applicability,
-    evidence: view.evidence }) + "\n原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不必重跑。阶段完成后用checkpoint登记成果、剩余项和下一步；工具成功不等于测试或需求验收。matches-checkpoint-files仅表示声明文件与登记时一致，不证明完整依赖或测试当时版本。";
+    evidence: view.evidence }) + "\n原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不必重跑。阶段完成后用checkpoint登记成果、剩余项和下一步，提交expectedMemoryRevision=" + memory.revision + "；工具成功不等于测试或需求验收。matches-checkpoint-files仅表示声明文件与登记时一致，不证明完整依赖或测试当时版本。";
 }

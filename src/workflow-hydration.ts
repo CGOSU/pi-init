@@ -207,6 +207,7 @@ function normalizeHydratedTask(
     ...(task.supersededBy !== undefined
       ? { supersededBy: normalizeRevisionId(task.supersededBy, `已保存的工作流任务 ${task.id} 的 supersededBy`) }
       : {}),
+    ...(task.verificationEvidenceIds !== undefined ? { verificationEvidenceIds: normalizeTextList(task.verificationEvidenceIds, "已保存的验证来源ID", { required: true }) } : {}),
     ...(task.verification
       ? { verification: normalizeTextList(task.verification, `已保存的工作流任务 ${task.id} 的 verification`) }
       : {}),

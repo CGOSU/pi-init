@@ -40,7 +40,7 @@ function taskDirectionGuidance(role: string) {
 
 function taskCompletionGuidance(role: string) {
   if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
-  return '阶段完成或验证结束后用task_workflow(checkpoint)登记成果与剩余工作；真实完成并验证后调用complete，提供completionSummary、implementationRationale和verification。确有阻塞用block。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
+  return '阶段完成或验证结束后用task_workflow(checkpoint)登记成果与剩余工作；真实完成并验证后调用complete，提供completionSummary、implementationRationale和verification；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞用block。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
 }
 
 export type WorkflowMessageDependencies = {
@@ -65,7 +65,7 @@ export function createWorkflowMessages(
     const dependencyIds = new Set(task.dependsOn);
     const completed = workflowState.tasks
       .filter((item) => item.status === "completed" && dependencyIds.has(item.id))
-      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}${item.implementationRationale ? `；取舍：${item.implementationRationale}` : ""}${(item.verification ?? []).length ? `；验证：${(item.verification ?? []).join("；")}` : ""}`);
+      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}${item.implementationRationale ? `；取舍：${item.implementationRationale}` : ""}${(item.verification ?? []).length ? `；验证：${(item.verification ?? []).join("；")}` : ""}${item.verificationEvidenceIds?.length ? `；历史验证来源ID（status可读，不证明当前版本）：${item.verificationEvidenceIds.join(", ")}` : ""}`);
 
     return [
       "[PI-INIT 自动任务工作流]",
@@ -79,6 +79,8 @@ export function createWorkflowMessages(
       `允许涉及的文件或目录：${task.files.join(", ")}`,
       `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
       taskRoleGuidance(task.role),
+      "围绕当前可验收交付物连续调查、实现和验证，不按操作步骤反复换角。一般技术选择自主决定，真实目标/边界偏差才重规划。",
+      "验证按风险覆盖相关行为与失败边界；来源及配置未变时复用已有真实结果，不因文档修改或填写complete重跑全仓检查。命令和管道须保留被验证程序的真实退出码，不用最后echo/grep的成功掩盖失败。",
       note ? `调度提示：${note}` : "",
       taskToolGuidance(task.role),
 
@@ -116,7 +118,7 @@ export function createWorkflowMessages(
       dispatchAttempted = true;
       deps.pi.sendMessage(
         {
-          customType: "pi-init-workflow-task",
+          customType: firstDispatch ? "pi-init-workflow-task" : "pi-init-workflow-continuation",
           content,
           display: false,
           details: identity,
