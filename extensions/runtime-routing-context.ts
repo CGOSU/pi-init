@@ -1,9 +1,11 @@
 import type { BeforeAgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getWorkflowTask } from "../src/workflow.ts";
-import { roleLabel } from "../src/roles.ts";
+import { roleLabel, isValidRoleId } from "../src/roles.ts";
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 
 import { nextWorkflowAction } from "./workflow-action-policy.ts";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const SECTION_KEY = "pi_init_runtime";
 
@@ -67,9 +69,33 @@ export function createRuntimeRoutingContext(
   state: ExtensionRuntimeState,
   deps: RuntimeRoutingDependencies,
 ) {
+    const policyRoot = new URL("../skills/pi-init-role-routing/", import.meta.url);
+      const source = readFileSync(new URL("SKILL.md", policyRoot), "utf8");
+      const frontmatterEnd = source.startsWith("---\n") ? source.indexOf("\n---", 4) : -1;
+      const commonPolicy = frontmatterEnd < 0 ? source : source.slice(frontmatterEnd + 4).trim();
+      const rolePolicies = new Map<string, string | undefined>();
+      function rolePolicy(role: string | undefined) {
+        if (!role || !isValidRoleId(role)) return undefined;
+        if (!rolePolicies.has(role)) {
+          try { rolePolicies.set(role, readFileSync(new URL("roles/" + role + ".md", policyRoot), "utf8")); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            rolePolicies.set(role, undefined);
+          }
+        }
+        return rolePolicies.get(role);
+      }
   function beforeAgentStart(event: BeforeAgentStartEvent, ctx: ExtensionContext) {
     if (!event.systemPromptOptions?.sections) return;
-    event.systemPromptOptions.sections[SECTION_KEY] = buildRuntimeSection(state, ctx, deps);
+    const sections = event.systemPromptOptions.sections;
+    sections.pi_init_policy = "[pi-init 插件自有规范，已加载，无需重复读取SKILL.md]\n来源：" + fileURLToPath(new URL("SKILL.md", policyRoot))
+      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。\n" + commonPolicy;
+    const active = deps.getActiveRole(ctx);
+    const profile = rolePolicy(active?.role);
+    if (profile) sections.pi_init_role_policy = "[当前插件角色说明，已加载]\n来源：" + fileURLToPath(new URL("roles/" + active!.role + ".md", policyRoot)) + "\n" + profile;
+    else delete sections.pi_init_role_policy;
+    delete sections[SECTION_KEY];
+    sections[SECTION_KEY] = buildRuntimeSection(state, ctx, deps);
   }
 
   return { beforeAgentStart };

@@ -4,7 +4,7 @@ Pi 扩展：为项目生成 AI Coding 协作上下文，并提供角色编排。
 
 ## 功能
 
-- 生成项目级 `AGENTS.md`、记忆文档和 `.pi/role-models.json`。
+- 只在缺失时生成项目级 `AGENTS.md`、记忆文档和 `.pi/role-models.json`；生成后归项目维护者所有，重复初始化和插件升级不覆盖。
 - 随 package 发布公共 `pi-init-role-routing` Skill，集中维护角色职责、路由、交接与工作流规则；新项目不再生成项目级角色 Skill。
 - 按风险分级执行：只读咨询和目标明确的低风险开发直接自主推进，不为一般技术选择、排查顺序或恢复既定行为的 bug 反复询问或交接；用户要求简单任务只做实现时，不默认运行全量测试、类型检查或构建，只保留最小必要核对并说明未执行项；复杂/高风险任务仍保留结构化证据、角色边界、真实验证和授权。
 - 通过统一的 `/pi-init` 控制中心完成初始化、角色配置和模型切换。
@@ -100,31 +100,24 @@ sh ./scripts/install-launchers.sh
 <project-root>/
 ├── AGENTS.md
 ├── docs/
-│   ├── clean-code.md
 │   ├── current-state.md
 │   ├── decisions.md
 │   ├── session-log.md
 │   └── pitfalls.md
 └── .pi/
-    ├── role-models.json
-    └── pi-init-state.json
+    └── role-models.json
 ```
 
-初始化提供两条路径：快速路径自动读取 `package.json`、锁文件和目录名，只需一次确认；高级路径可编辑项目名称、语言、项目定位、测试命令和角色模型，不再询问 Skill 名称或 slug。当前项目初始化完成后会自动 reload。另可通过 `/pi-init sync [目录]` 安全同步已有项目的托管模板区块。生成的 `AGENTS.md` 只保留项目定位、环境、命令和知识库等项目特有规则，并引用随 package 发布的 `pi-init-role-routing` Skill；通用任务执行流程、证据门控、工具调用、角色交接和真实验证规则统一由公共 Skill 维护。它仍要求按需读取随模板生成的 `docs/clean-code.md`，并记录当前 Pi 宿主系统、CPU 架构和平台命令约定；如果项目实际运行在 WSL、容器或远程主机，应重新执行检测。
+初始化提供快速与高级两条路径，只创建缺失文件。AGENTS保留项目定位、目录职责、环境、命令、具体约束和记忆位置，之后由维护者直接编辑；项目模型配置同样不会被重复初始化覆盖，显式配置/保存仍走既有入口。实际创建当前项目文件后才reload，无变更不重复reload。
 
-默认模板面向 CGOSU 工作流，包含团队知识库和 Git 身份规则。其他团队使用前，请修改：
+### 项目文件与插件规范分层
 
-- `templates/AGENTS.md`
-- `templates/en/AGENTS.md`
-
-### 模板同步与历史保留
-
-`/pi-init sync [目录]` 用于把已有项目升级到当前模板版本，不会重新初始化或覆盖项目配置。脚手架会在 `.pi/pi-init-state.json` 中记录模板 schema 版本和托管区块基线。
-
-- `AGENTS.md` 仅同步带有 `pi-init` 标记的托管区块；其他项目规则保持不变。
-- `docs/current-state.md`、`docs/decisions.md`、`docs/session-log.md` 和 `docs/pitfalls.md` 已存在时完整保留，只在缺失时创建。
-- 老项目首次同步会迁移可精确识别的 Fast Path 区块；无法确认是否为模板内容时报告冲突，不静默覆盖。
-- 同步会先执行内部 `dryRun` 预览，区分新增、更新、保留和冲突；冲突时不写入文件，成功后可重复执行且不会重复插入区块。
+- **项目拥有**：AGENTS、项目记忆、自定义规范、角色模型配置。文件已存在就保留，包含符号链接；使用独占创建防止预览后出现的文件被覆盖。
+- **插件拥有**：公共Skill、roles中的职责说明、包内references/clean-code.md。回合开始时以固定section加载通用规则及当前角色，切角替换职责说明，不把旧角色规则继续叠加；不确定或自定义角色不会冒充另一个标准角色。
+- 更新插件并reload/重启即更新插件规则，不需要同步项目文档。详细Clean Code细则在编码/结构任务需要时读取，不再生成docs/clean-code.md副本。
+- sync已退役：菜单和补全不再提供，旧命令只提示、旧API明确报TEMPLATE_SYNC_RETIRED，不创建、迁移或覆盖任何项目文件。
+- 旧AGENTS托管区块、旧docs/clean-code.md和.pi/pi-init-state.json均原样保留；维护者确认后可自行清理重复条款，插件不会猜测并删除手改内容。
+- 项目具体要求不被插件通用建议默默替换；身份、工具权限、职责恢复、用户停止和未知副作用等运行时安全门仍然优先。
 
 ## 公共角色 Skill 与动态配置
 
@@ -191,7 +184,7 @@ sh ./scripts/install-launchers.sh
 
 公共Skill使用SDK提供的真实路径及宿主允许的读取工具，不猜测项目Skill、不绕过context-mode的项目边界。短小的日期/状态/退出码直接回传，No matching不等于空输出或成功；只补取缺失原结果，不能为补输出重放副作用。
 
-已有项目更新扩展后，仍需通过 `/pi-init sync` 同步AGENTS托管区块。同步保留自定义条款、项目历史与角色配置；基线缺失或本地修改会报告冲突，不静默覆盖。自定义条款与轻量路径冲突时应明确对齐，而不是绕过。
+轻量执行规则归插件维护，更新并reload即可更新；不再通过sync改写项目AGENTS。已有自定义条款仍由维护者控制，有冲突时明确对齐，不默默覆盖。
 
 ### 交付粒度与验证策略
 
@@ -235,13 +228,12 @@ flowchart LR
 /pi-init
 ```
 
-控制中心提供快速初始化、高级初始化、项目模板同步、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
+控制中心提供快速初始化、高级初始化、角色与模型配置、独立的工作流策略配置、角色切换和模式切换；主状态摘要会显示当前工作流策略与执行进度。熟悉命令行时也可以直接使用：
 
 ```text
 
 /pi-init init [目录]
 /pi-init advanced [目录]
-/pi-init sync [目录]
 /pi-init role <role-id>
 /pi-init config [role-id]
 /pi-init config workflow

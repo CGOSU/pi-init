@@ -29,46 +29,35 @@ async function waitForRoleModelConfig(directory, expected) {
   assert.fail(`角色模型配置未持久化：${JSON.stringify(expected)}`);
 }
 
-test("/pi-init sync 提供命令补全并同步指定目录", async () => {
-  await withTempDirectory(async (directory) => {
+test("旧sync命令只说明退役，不补全、不修改项目或reload", async () => {
+  await withTempDirectory(async directory => {
     const target = path.join(directory, "legacy-project");
     await mkdir(target, { recursive: true });
-    const harness = createExtensionHarness([], { cwd: directory, hasUI: false });
-    const command = harness.commands.get("pi-init");
-    assert.ok(command.getArgumentCompletions("s").some((item) => item.value === "sync"));
-
-    await command.handler(`sync ${target}`, harness.context);
-
-    assert.match(await readFile(path.join(target, "AGENTS.md"), "utf8"), /fast-path-wrap-up/);
-    assert.equal(harness.reloadCalls.length, 0);
+    const original = "# Maintainer owned\nCustomized project rules\n";
+    await writeFile(path.join(target, "AGENTS.md"), original);
+    const h = createExtensionHarness([], { cwd: directory, hasUI: false });
+    const command = h.commands.get("pi-init");
+    assert.equal(command.getArgumentCompletions("s").some(item => item.value === "sync"), false);
+    await command.handler("sync " + target, h.context);
+    assert.equal(await readFile(path.join(target, "AGENTS.md"), "utf8"), original);
+    assert.ok(h.notifications.some(item => /sync已退役/.test(item.message)));
+    assert.equal(h.reloadCalls.length, 0);
+    await assert.rejects(readFile(path.join(target, ".pi/pi-init-state.json")), { code: "ENOENT" });
   });
 });
-
-test("控制中心提供模板同步入口并在当前项目变更后 reload", async () => {
-  await withTempDirectory(async (directory) => {
-    let menuCalls = 0;
-    const harness = createExtensionHarness([], {
-      cwd: directory,
-      mode: "tui",
-      custom: async (call) => {
-        menuCalls += 1;
-        if (menuCalls === 1) {
-          call.component.handleInput("\u001b[B");
-          call.component.handleInput("\u001b[B");
-          call.component.handleInput("\n");
-        } else {
-          call.component.handleInput("\u001b");
-        }
-      },
-    });
-
-    await harness.commands.get("pi-init").handler("", harness.context);
-
-    assert.match(await readFile(path.join(directory, "AGENTS.md"), "utf8"), /fast-path-wrap-up/);
-    assert.equal(harness.reloadCalls.length, 1);
+test("控制中心不再提供改写项目规则的同步菜单", async () => {
+  await withTempDirectory(async directory => {
+    let rendered = "";
+    const h = createExtensionHarness([], { cwd: directory, mode: "tui", custom: async call => {
+      rendered = call.component.render(120).join("\n");
+      call.component.handleInput("\u001b");
+    } });
+    await h.commands.get("pi-init").handler("", h.context);
+    assert.doesNotMatch(rendered, /同步项目模板/);
+    assert.equal(h.reloadCalls.length, 0);
+    await assert.rejects(readFile(path.join(directory, "AGENTS.md")), { code: "ENOENT" });
   });
 });
-
 test("TUI 菜单 Ctrl+S 保存后仍保持打开并可返回", async () => {
   let saveCalls = 0;
   const harness = createExtensionHarness([], {

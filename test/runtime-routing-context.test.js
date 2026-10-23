@@ -45,3 +45,38 @@ test("paused routing never grants execution just because role recovery was confi
   assert.match(section, /不是.*执行授权/);
   assert.match(section, /task_workflow\(action="status"\)/);
 });
+
+test("package policy follows the active role without replacing project instructions or retaining old roles", () => {
+  const state = createExtensionRuntimeState();
+  const h = createExtensionHarness([], { sessionId: "routing-session" });
+  const event = { systemPromptOptions: { sections: { project_owned: "Project-specific rules remain unchanged" } } };
+  const runtime = createRuntimeRoutingContext(state, { getActiveRole: () => state.activeRole, getThinkingLevel: () => "high" });
+  state.activeRole = { role: "developer-test", provider: "test", model: "test", thinkingLevel: "high" };
+  runtime.beforeAgentStart(event, h.context);
+  const sections = event.systemPromptOptions.sections;
+  assert.match(sections.pi_init_policy, /规则所有权/);
+  assert.match(sections.pi_init_role_policy, /开发测试工程师/);
+  const common = sections.pi_init_policy;
+  state.activeRole.role = "docs-commit";
+  runtime.beforeAgentStart(event, h.context);
+  assert.match(sections.pi_init_role_policy, /文档与提交工程师/);
+  assert.doesNotMatch(sections.pi_init_role_policy, /# 开发测试工程师/);
+  assert.equal(sections.pi_init_policy, common);
+  assert.equal(sections.project_owned, "Project-specific rules remain unchanged");
+  assert.equal(Object.keys(sections).at(-1), "pi_init_runtime");
+  state.activeRole = undefined;
+  runtime.beforeAgentStart(event, h.context);
+  assert.equal(sections.pi_init_role_policy, undefined);
+  assert.equal(sections.project_owned, "Project-specific rules remain unchanged");
+});
+test("unknown or invalid custom role never inherits a standard role policy", () => {
+  const state = createExtensionRuntimeState();
+  const h = createExtensionHarness([], { sessionId: "routing-session" });
+  const runtime = createRuntimeRoutingContext(state, { getActiveRole: () => state.activeRole, getThinkingLevel: () => "high" });
+  const event = { systemPromptOptions: { sections: {} } };
+  for (const role of ["developer-test", "custom-project-role", "../../credentials"]) {
+    state.activeRole = { role, provider: "test", model: "test", thinkingLevel: "high" };
+    runtime.beforeAgentStart(event, h.context);
+    if (role !== "developer-test") assert.equal(event.systemPromptOptions.sections.pi_init_role_policy, undefined);
+  }
+});

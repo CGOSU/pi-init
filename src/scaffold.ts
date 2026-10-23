@@ -1,33 +1,11 @@
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+
+import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveRoleConfig, unwrapRoleResult } from "./roles.ts";
-import {
-  createTemplateState,
-  FAST_PATH_BLOCK,
-  findLegacyBlock,
-  findManagedBlock,
-  hashText,
-  managedBlockBody,
-  parseTemplateState,
-  replaceBlock,
-  replaceManagedBlock,
-  TEMPLATE_STATE_PATH,
-} from "./template-sync.ts";
-import type {
-  EnvironmentFormatOptions,
-  RenderedTemplateFile,
-  ScaffoldConflict,
-  ScaffoldOptions,
-  ScaffoldResult,
-  SyncAgentsResult,
-  SyncScaffoldResult,
-  TemplateFileDefinition,
-  ParsedTemplateState,
-  TemplateLanguage,
-  TemplateVariables,
-} from "./scaffold-types.ts";
+
+import type { EnvironmentFormatOptions, RenderedTemplateFile, ScaffoldOptions, ScaffoldResult, TemplateFileDefinition, TemplateLanguage, TemplateVariables } from "./scaffold-types.ts";
 
 const TEMPLATE_ROOT = fileURLToPath(new URL("../templates/", import.meta.url));
 const SUPPORTED_LANGUAGES: ReadonlySet<string> = new Set(["zh-CN", "en"]);
@@ -42,10 +20,8 @@ const PLATFORM_NAMES: Record<string, string> = {
   sunos: "SunOS",
   win32: "Windows",
 };
-
 const TEMPLATE_FILES: readonly TemplateFileDefinition[] = [
   ["AGENTS.md", () => "AGENTS.md"],
-  ["docs/clean-code.md", () => "docs/clean-code.md"],
   ["docs/current-state.md", () => "docs/current-state.md"],
   ["docs/decisions.md", () => "docs/decisions.md"],
   ["docs/session-log.md", () => "docs/session-log.md"],
@@ -134,10 +110,9 @@ function escapeInlineCode(value: string): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-
 async function pathExists(filePath: string): Promise<boolean> {
   try {
-    await access(filePath);
+    await lstat(filePath);
     return true;
   } catch (error) {
     if (isRecord(error) && error.code === "ENOENT") {
@@ -175,57 +150,10 @@ async function renderTemplateFiles(
   );
 }
 
-async function readOptionalText(filePath: string): Promise<string | undefined> {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") return undefined;
-    throw error;
-  }
-}
 
-function buildTemplateStateFile(
-  absoluteTarget: string,
-  language: TemplateLanguage,
-  files: RenderedTemplateFile[],
-): RenderedTemplateFile {
-  const agents = files.find((file) => file.relativePath === FAST_PATH_BLOCK.file);
-  const managed = agents && findManagedBlock(agents.content, FAST_PATH_BLOCK);
-  if (!managed || managed.kind !== "managed") {
-    throw new Error("AGENTS.md 模板缺少可同步的 Fast Path 托管区块");
-  }
-  const state = createTemplateState(language, {
-    [FAST_PATH_BLOCK.id]: {
-      file: FAST_PATH_BLOCK.file,
-      hash: hashText(managed.content),
-    },
-  });
-  return {
-    relativePath: TEMPLATE_STATE_PATH,
-    absolutePath: path.join(absoluteTarget, TEMPLATE_STATE_PATH),
-    content: `${JSON.stringify(state, null, 2)}\n`,
-  };
-}
 
-function conflict(pathname: string, code: string, message: string): ScaffoldConflict {
-  return { path: pathname, code, message };
-}
 
-function resolveSyncLanguage(
-  options: ScaffoldOptions,
-  state: ParsedTemplateState | undefined,
-  agents: string | undefined,
-): TemplateLanguage {
-  if (options.language !== undefined) return resolveLanguage(options.language);
-  if (isTemplateLanguage(state?.language)) return state.language;
-  if (agents?.includes(FAST_PATH_BLOCK.sectionEnd.en)) return "en";
-  return "zh-CN";
-}
-
-/**
- * Generate the long-term AI collaboration files for a project.
- * Existing generated files are intentionally overwritten; unrelated files are untouched.
- */
+/** Create missing project-owned files only; existing entries are never overwritten. */
 export async function createScaffold(targetDir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
   const absoluteTarget = path.resolve(targetDir);
 
@@ -264,224 +192,29 @@ export async function createScaffold(targetDir: string, options: ScaffoldOptions
     absolutePath: path.join(absoluteTarget, roleConfigPath),
     content: `${JSON.stringify(roleConfig, null, 2)}\n`,
   });
-  files.push(buildTemplateStateFile(absoluteTarget, language, files));
 
-  const conflicts: string[] = [];
+
+  const preserved: string[] = [];
+  const created: string[] = [];
+  const dryRun = options.dryRun === true;
   for (const file of files) {
     if (await pathExists(file.absolutePath)) {
-      conflicts.push(file.relativePath);
+      preserved.push(file.relativePath);
+      continue;
     }
-  }
-
-  if (!options.dryRun) {
-    for (const file of files) {
+    if (!dryRun) {
       await mkdir(path.dirname(file.absolutePath), { recursive: true });
-      await writeFile(file.absolutePath, file.content, "utf8");
+      try {
+        await writeFile(file.absolutePath, file.content, { encoding: "utf8", flag: "wx" });
+      } catch (error) {
+        if (isRecord(error) && error.code === "EEXIST") {
+          preserved.push(file.relativePath);
+          continue;
+        }
+        throw error;
+      }
     }
-  }
-
-  return {
-    targetDir: absoluteTarget,
-    projectName,
-    language,
-    dryRun: options.dryRun === true,
-    conflicts,
-    files: files.map((file) => file.relativePath),
-  };
-}
-
-function syncAgentsBlock(
-  current: string,
-  desired: string,
-  language: TemplateLanguage,
-  state: ParsedTemplateState | undefined,
-): SyncAgentsResult {
-  const desiredMatch = findManagedBlock(desired, FAST_PATH_BLOCK);
-  if (!desiredMatch || desiredMatch.kind !== "managed") {
-    throw new Error("当前模板缺少可同步的 Fast Path 托管区块");
-  }
-
-  const stateEntry = isRecord(state?.managedBlocks) ? state.managedBlocks[FAST_PATH_BLOCK.id] : undefined;
-  const stateEntryHash = isRecord(stateEntry) ? stateEntry.hash : undefined;
-  const currentMatch = findManagedBlock(current, FAST_PATH_BLOCK);
-  if (currentMatch.kind === "invalid") {
-    return { conflict: conflict("AGENTS.md", currentMatch.code, "现有 AGENTS.md 的托管区块标记不完整或重复") };
-  }
-  if (currentMatch.kind === "managed") {
-    if (stateEntryHash && hashText(currentMatch.content) !== stateEntryHash) {
-      return {
-        conflict: conflict(
-          "AGENTS.md",
-          "MANAGED_BLOCK_MODIFIED",
-          "现有 Fast Path 托管区块已被本地修改，未自动覆盖",
-        ),
-      };
-    }
-    if (!stateEntry && hashText(currentMatch.content) !== hashText(desiredMatch.content)) {
-      return {
-        conflict: conflict(
-          "AGENTS.md",
-          "MANAGED_BLOCK_BASELINE_MISSING",
-          "缺少同步基线且现有 Fast Path 托管区块与当前模板不同",
-        ),
-      };
-    }
-    if (hashText(currentMatch.content) === hashText(desiredMatch.content)) {
-      return { content: current, action: "preserved" };
-    }
-    return {
-      content: replaceManagedBlock(current, currentMatch, desiredMatch.content),
-      action: "updated",
-    };
-  }
-
-  if (stateEntry) {
-    return {
-      conflict: conflict(
-        "AGENTS.md",
-        "MANAGED_BLOCK_MISSING",
-        "同步状态记录了 Fast Path 托管区块，但现有 AGENTS.md 中未找到该区块",
-      ),
-    };
-  }
-
-  const legacyMatch = findLegacyBlock(current, language, FAST_PATH_BLOCK);
-  if (legacyMatch.kind === "invalid") {
-    return { conflict: conflict("AGENTS.md", legacyMatch.code, "旧版 Fast Path 区块缺少结束标题") };
-  }
-  if (legacyMatch.kind === "legacy") {
-    if (managedBlockBody(legacyMatch.content, FAST_PATH_BLOCK) !== managedBlockBody(desiredMatch.content, FAST_PATH_BLOCK)) {
-      return {
-        conflict: conflict(
-          "AGENTS.md",
-          "LEGACY_BLOCK_MODIFIED",
-          "旧版 Fast Path 区块已被本地修改，未自动覆盖",
-        ),
-      };
-    }
-    return {
-      content: replaceBlock(current, legacyMatch.start, legacyMatch.end, `${desiredMatch.content}\n`),
-      action: "updated",
-    };
-  }
-
-  const anchor = FAST_PATH_BLOCK.sectionEnd[language];
-  const anchorIndex = current.indexOf(anchor);
-  if (anchorIndex < 0) {
-    return {
-      conflict: conflict(
-        "AGENTS.md",
-        "SESSION_WRAP_UP_ANCHOR_MISSING",
-        "无法在现有 AGENTS.md 中定位会话收尾章节，未自动插入 Fast Path 区块",
-      ),
-    };
-  }
-  return {
-    content: replaceBlock(current, anchorIndex, anchorIndex, `${desiredMatch.content}\n`),
-    action: "updated",
-  };
-}
-
-/**
- * Synchronize managed template sections without overwriting project memory or role configuration.
- * Existing files are preserved unless they contain an unmodified managed section.
- */
-export async function syncScaffold(targetDir: string, options: ScaffoldOptions = {}): Promise<SyncScaffoldResult> {
-  const absoluteTarget = path.resolve(targetDir);
-  if (!(await pathExists(absoluteTarget))) {
-    throw new Error(`同步目标目录不存在：${absoluteTarget}`);
-  }
-  const targetStat = await stat(absoluteTarget);
-  if (!targetStat.isDirectory()) {
-    throw new Error(`目标路径不是目录：${absoluteTarget}`);
-  }
-
-  const statePath = path.join(absoluteTarget, TEMPLATE_STATE_PATH);
-  const stateText = await readOptionalText(statePath);
-  let state: ParsedTemplateState | undefined;
-  const conflicts: ScaffoldConflict[] = [];
-  if (stateText !== undefined) {
-    const parsedState = parseTemplateState(stateText);
-    if (!parsedState.ok) {
-      conflicts.push(conflict(TEMPLATE_STATE_PATH, parsedState.code, parsedState.message));
-    } else {
-      state = parsedState.value;
-    }
-  }
-
-  const currentAgents = await readOptionalText(path.join(absoluteTarget, FAST_PATH_BLOCK.file));
-  const language = resolveSyncLanguage(options, state, currentAgents);
-  const projectName = validateProjectName(options.projectName ?? path.basename(absoluteTarget));
-  const projectDescription = options.description
-    ? validateSingleLine(options.description, "项目描述")
-    : language === "en"
-      ? "To be completed by the project maintainer."
-      : "待项目维护者补充。";
-  const testCommand = options.testCommand
-    ? validateSingleLine(options.testCommand, "测试命令")
-    : language === "en"
-      ? "To be completed by the project maintainer."
-      : "待项目维护者补充。";
-  const variables: TemplateVariables = {
-    PROJECT_NAME: projectName,
-    PROJECT_DESCRIPTION: projectDescription,
-    TEST_COMMAND: escapeInlineCode(testCommand),
-    ENVIRONMENT_CONTEXT: formatEnvironmentInstructions(language),
-  };
-  const renderedFiles = await renderTemplateFiles(absoluteTarget, language, variables);
-  const desiredAgents = renderedFiles.find((file) => file.relativePath === FAST_PATH_BLOCK.file);
-  if (!desiredAgents) throw new Error("AGENTS.md 模板缺少可同步的 Fast Path 托管区块");
-  const created: string[] = [];
-  const updated: string[] = [];
-  const preserved: string[] = [];
-  const writes: RenderedTemplateFile[] = [];
-
-  if (currentAgents === undefined) {
-    writes.push(desiredAgents);
-    created.push(FAST_PATH_BLOCK.file);
-  } else {
-    const result = syncAgentsBlock(currentAgents, desiredAgents.content, language, state);
-    if (result.conflict) conflicts.push(result.conflict);
-    else if (result.action === "updated") {
-      writes.push({ ...desiredAgents, content: result.content });
-      updated.push(FAST_PATH_BLOCK.file);
-    } else preserved.push(FAST_PATH_BLOCK.file);
-  }
-
-  for (const file of renderedFiles) {
-    if (file.relativePath === FAST_PATH_BLOCK.file) continue;
-    if (await pathExists(file.absolutePath)) preserved.push(file.relativePath);
-    else {
-      writes.push(file);
-      created.push(file.relativePath);
-    }
-  }
-
-  const desiredMatch = findManagedBlock(desiredAgents.content, FAST_PATH_BLOCK);
-  if (desiredMatch.kind !== "managed") throw new Error("AGENTS.md 模板缺少可同步的 Fast Path 托管区块");
-  const nextState = createTemplateState(language, {
-    [FAST_PATH_BLOCK.id]: {
-      file: FAST_PATH_BLOCK.file,
-      hash: hashText(desiredMatch.content),
-    },
-  });
-  const nextStateContent = `${JSON.stringify(nextState, null, 2)}\n`;
-  if (stateText === undefined) {
-    writes.push({ relativePath: TEMPLATE_STATE_PATH, absolutePath: statePath, content: nextStateContent });
-    created.push(TEMPLATE_STATE_PATH);
-  } else if (state && stateText !== nextStateContent) {
-    writes.push({ relativePath: TEMPLATE_STATE_PATH, absolutePath: statePath, content: nextStateContent });
-    updated.push(TEMPLATE_STATE_PATH);
-  } else if (stateText !== undefined) {
-    preserved.push(TEMPLATE_STATE_PATH);
-  }
-
-  const dryRun = options.dryRun === true;
-  if (conflicts.length === 0 && !dryRun) {
-    for (const file of writes) {
-      await mkdir(path.dirname(file.absolutePath), { recursive: true });
-      await writeFile(file.absolutePath, file.content, "utf8");
-    }
+    created.push(file.relativePath);
   }
 
   return {
@@ -489,10 +222,12 @@ export async function syncScaffold(targetDir: string, options: ScaffoldOptions =
     projectName,
     language,
     dryRun,
-    changed: conflicts.length === 0 && writes.length > 0,
-    created,
-    updated,
+    conflicts: [],
     preserved,
-    conflicts,
+    files: created,
   };
+}
+
+export async function syncScaffold(_targetDir: string, _options: ScaffoldOptions = {}): Promise<never> {
+  throw Object.assign(new Error("Template synchronization is retired; project files belong to their maintainers."), { code: "TEMPLATE_SYNC_RETIRED" });
 }

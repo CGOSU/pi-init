@@ -11,6 +11,13 @@ metadata:
 
 本 Skill 随 package 发布；项目只引用它，不复制通用规则或生成项目级副本。角色说明按需读取：[architect](roles/architect.md)、[developer-test](roles/developer-test.md)、[docs-commit](roles/docs-commit.md)。
 
+## 规则所有权
+
+- 项目AGENTS、业务描述、目录说明、历史记录和模型配置由维护者拥有；初始化只补缺失文件，插件更新不覆盖已有内容。项目具体约束必须保留，通用建议不默默覆盖它们；工具授权、身份/恢复和未知副作用保护始终由运行时执行。
+- 本Skill、角色说明和包内[Clean Code细则](references/clean-code.md)归pi-init维护。每回合运行时已加载通用规则和当前角色说明时，不再重复读取它们；详细编码细则只在代码/结构任务需要时读取包内引用。项目已有的自定义规范仍按其适用范围读取，不复制或删除它们。
+- 不再使用sync改写项目规则。升级插件并reload更新插件规范；旧AGENTS托管区块、旧.pi/pi-init-state.json及docs/clean-code.md均留给维护者核对，不自动搬迁、覆盖或删除。
+- 项目记忆按任务相关性读取；轻量展示变更不整批预读历史或例行维护三份记录。仅有新事实才更新对应项目记录，一个事实保留一个来源，其他地方引用即可。Git身份和自动提交约定属于项目/用户授权，不由插件擅自设置；push必须明确授权。
+
 ## 角色与模型
 
 - 明确实现/测试交给 developer-test；项目 Markdown、版本及 Git 收尾交给 docs-commit；需求或架构判断交给 architect。普通只读咨询和局部低风险开发直接由合适的非 architect 角色连续调查、实现、验证，不为流程形式往返。

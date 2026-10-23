@@ -24,7 +24,6 @@ export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
   roleRuntime: RoleRuntime;
   quickInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
-  syncProject: (targetDir: string, ctx: ExtensionCommandContext) => Promise<{ reloaded: boolean }>;
   advancedInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void | typeof MENU_BACK>;
   getThinkingLevel: () => string;
   workflowCommand: (
@@ -286,7 +285,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       const section = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "init", label: "初始化", description: "快速初始化或高级初始化当前项目" },
         { value: "change", label: "变更", description: "角色与模型、工作流策略、角色和会话模式" },
-        { value: "sync", label: "同步", description: "同步项目模板并保留项目记忆" },
         { value: "workflow", label: "工作流", description: "查看、恢复、重试或取消架构分配的任务" },
         { value: "exit", label: "← 返回" },
       ], { summary, selectedValue: selectedSection, ...saveMenuOptions(ctx) });
@@ -344,11 +342,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         continue;
       }
 
-      if (section === "sync") {
-        const result = await deps.syncProject(".", ctx);
-        if (result.reloaded) return;
-        continue;
-      }
       if (section === "workflow") {
         await deps.workflowCommand("status", undefined, ctx);
       }

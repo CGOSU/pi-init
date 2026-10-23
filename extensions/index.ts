@@ -175,8 +175,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         state: runtimeState,
         roleRuntime,
         quickInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).quickInit(targetDir, ctx),
-        syncProject: async (targetDir, ctx) => (await loadScaffoldRuntime()).syncProject(targetDir, ctx),
-        advancedInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).advancedInit(targetDir, ctx),
+                advancedInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).advancedInit(targetDir, ctx),
         getThinkingLevel: () => pi.getThinkingLevel(),
         workflowCommand: workflowActions.workflowCommand,
       }),
@@ -440,7 +439,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "sync", "config", "save", "role", "mode", "workflow"];
+        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -465,7 +464,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (!action) { await (await loadControlCenter()).showControlCenter(ctx); return; }
         if (action === "init") { await (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx); return; }
         if (action === "advanced") { await (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx); return; }
-        if (action === "sync") { await (await loadScaffoldRuntime()).syncProject(tokens.join(" ") || ".", ctx); return; }
+        if (action === "sync") { ctx.ui.notify("sync已退役：项目AGENTS和历史归维护者所有，不再同步覆盖。插件规则随pi-init更新，执行/reload或重启后生效。", "warning"); return; }
         if (action === "config") { await (await loadControlCenter()).configureRole(tokens[0], ctx); return; }
         if (action === "save") {
           const result = await roleRuntime.saveRoleConfig(ctx);
@@ -517,9 +516,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const prefix = details.dryRun ? "预览" : "已生成";
       const lines = [
         theme.fg("success", `✓ ${prefix} ${details.files.length} 个文件`),
-        details.conflicts.length > 0
-          ? theme.fg("warning", `覆盖 ${details.conflicts.length} 个已有文件`)
-          : theme.fg("muted", "无文件冲突"),
+        theme.fg("muted", `保留 ${details.preserved.length} 个维护者已有文件`),
       ];
       if (expanded) lines.push(...details.files.map((file) => theme.fg("dim", `  ${file}`)));
       return new Text(lines.join("\n"), 0, 0);

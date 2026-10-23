@@ -6,7 +6,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_ROLE_NAMES } from "../src/roles.ts";
-import { createScaffold, syncScaffold } from "../src/scaffold.ts";
+import { createScaffold } from "../src/scaffold.ts";
 import type { ScaffoldOptions, TemplateLanguage } from "../src/scaffold-types.ts";
 import type { RoleModelConfig } from "./contracts.ts";
 import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
@@ -70,6 +70,7 @@ export function formatResult(result: {
   projectName: string;
   files: string[];
   conflicts: string[];
+  preserved?: string[];
   dryRun: boolean;
   cancelled?: boolean;
 }) {
@@ -86,30 +87,22 @@ export function formatResult(result: {
   ];
 
   if (result.conflicts.length > 0) {
-    lines.push("将覆盖已有文件：", ...result.conflicts.map((file) => `- ${file}`));
+    lines.push("冲突路径（未覆盖）：", ...result.conflicts.map((file) => `- ${file}`));
   }
 
+  if (result.preserved?.length) lines.push("保留维护者已有文件：", ...result.preserved.map(file => `- ${file}`));
   return lines.join("\n");
 }
 
 function formatCompactResult(result: ScaffoldOutcome) {
   if (result.cancelled) return "已取消初始化";
   const prefix = result.dryRun ? "预览" : "✓ 已生成";
-  const conflicts = result.conflicts.length > 0 ? ` · 覆盖 ${result.conflicts.length} 个文件` : " · 无文件冲突";
+  const conflicts = ` · 保留 ${result.preserved.length} 个已有文件`;
   return `${prefix} ${result.files.length} 个文件${conflicts}\n${result.targetDir}`;
-}
-
-function formatCompactSyncResult(result: SyncOutcome) {
-  const changes = result.created.length + result.updated.length;
-  const conflictText = result.conflicts.length > 0 ? ` · 冲突 ${result.conflicts.length}` : "";
-  return `${result.dryRun ? "预览" : "✓ 已同步"} ${changes} 个变更 · 保留 ${result.preserved.length} 个${conflictText}\n${result.targetDir}`;
 }
 
 type ScaffoldResult = Awaited<ReturnType<typeof createScaffold>>;
 export type ScaffoldOutcome = ScaffoldResult & { cancelled?: boolean; backedOut?: boolean };
-type SyncResult = Awaited<ReturnType<typeof syncScaffold>>;
-export type SyncOutcome = SyncResult;
-
 type AdvancedOptions = {
   projectName: string;
   language: TemplateLanguage;
@@ -173,6 +166,7 @@ export async function runScaffold(
       return preview;
     }
 
+    if (preview.files.length === 0) return { ...preview, dryRun: false };
     const needsConfirmation =
       confirmation === "always" || (confirmation === "conflicts" && preview.conflicts.length > 0);
     if (needsConfirmation) {
@@ -187,9 +181,9 @@ export async function runScaffold(
           : []),
         `目录：${preview.targetDir}`,
         `将生成 ${preview.files.length} 个文件。`,
-        ...(preview.conflicts.length > 0
-          ? [`已有文件将被覆盖：${preview.conflicts.join(", ")}`]
-          : ["无文件冲突"]),
+        ...(preview.preserved.length > 0
+          ? [`已有文件将保留：${preview.preserved.join(", ")}`]
+          : ["只创建缺失文件"]),
       ].join("\n");
       const decision = await confirmScaffold(ctx, message, allowBack);
       if (decision === MENU_BACK) {
@@ -319,42 +313,10 @@ function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
 export async function finishScaffold(ctx: ExtensionCommandContext, result: ScaffoldOutcome) {
   notifyResult(ctx, result);
   const isCurrentProject = result.targetDir === resolve(ctx.cwd, ".");
-  if (isCurrentProject && !result.dryRun && !result.cancelled) {
+  if (isCurrentProject && !result.dryRun && !result.cancelled && result.files.length > 0) {
     ctx.ui.notify("当前项目已更新，正在重新加载 Skill。", "info");
     await ctx.reload();
   }
-}
-
-export async function finishSync(ctx: ExtensionCommandContext, result: SyncOutcome): Promise<boolean> {
-  ctx.ui.notify(formatCompactSyncResult(result), result.conflicts.length > 0 ? "warning" : "info");
-  const isCurrentProject = result.targetDir === resolve(ctx.cwd, ".");
-  if (isCurrentProject && !result.dryRun && result.changed && result.conflicts.length === 0) {
-    ctx.ui.notify("当前项目模板已更新，正在重新加载 Skill。", "info");
-    await ctx.reload();
-    return true;
-  }
-  return false;
-}
-
-export type SyncProjectOutcome = SyncOutcome & { reloaded: boolean };
-
-export async function syncProject(targetDir: string, ctx: ExtensionCommandContext): Promise<SyncProjectOutcome> {
-  const result = await runSync(ctx, targetDir, {});
-  const reloaded = await finishSync(ctx, result);
-  return { ...result, reloaded };
-}
-
-export async function runSync(
-  ctx: ExtensionCommandContext,
-  targetDir: string,
-  options: ScaffoldOptions = {},
-): Promise<SyncOutcome> {
-  const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
-  return withFileMutationQueue(absoluteTarget, async () => {
-    const preview = await syncScaffold(absoluteTarget, { ...options, dryRun: true });
-    if (options.dryRun === true || preview.conflicts.length > 0 || !preview.changed) return preview;
-    return syncScaffold(absoluteTarget, options);
-  });
 }
 
 export async function quickInit(targetDir: string, ctx: ExtensionCommandContext) {

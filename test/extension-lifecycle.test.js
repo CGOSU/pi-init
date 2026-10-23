@@ -434,3 +434,25 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   );
 });
 
+test("repeat initialization preserves project ownership and does not reload a no-op", async () => {
+  await withTempDirectory(async directory => {
+    const h = createExtensionHarness([], { cwd: directory, hasUI: false });
+    const command = h.commands.get("pi-init");
+    await command.handler("init", h.context);
+    assert.equal(h.reloadCalls.length, 1);
+    const original = "# Project-specific maintained rules\nNo plugin may rewrite this.\n";
+    await writeFile(path.join(directory, "AGENTS.md"), original);
+    const history = "User-maintained history\n";
+    await writeFile(path.join(directory, "docs/current-state.md"), history);
+    const models = JSON.stringify({ schemaVersion: 2, mode: "manual", roleModels: {} });
+    await writeFile(path.join(directory, ".pi/role-models.json"), models);
+    await command.handler("init", h.context);
+    assert.equal(h.reloadCalls.length, 1);
+    assert.equal(await readFile(path.join(directory, "AGENTS.md"), "utf8"), original);
+    assert.equal(await readFile(path.join(directory, "docs/current-state.md"), "utf8"), history);
+    assert.equal(await readFile(path.join(directory, ".pi/role-models.json"), "utf8"), models);
+    assert.ok(h.notifications.some(item => /保留/.test(item.message)));
+    await assert.rejects(readFile(path.join(directory, "docs/clean-code.md")), { code: "ENOENT" });
+    await assert.rejects(readFile(path.join(directory, ".pi/pi-init-state.json")), { code: "ENOENT" });
+  });
+});
