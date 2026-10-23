@@ -464,7 +464,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (!action) { await (await loadControlCenter()).showControlCenter(ctx); return; }
         if (action === "init") { await (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx); return; }
         if (action === "advanced") { await (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx); return; }
-        if (action === "sync") { ctx.ui.notify("sync已退役：项目AGENTS和历史归维护者所有，不再同步覆盖。插件规则随pi-init更新，执行/reload或重启后生效。", "warning"); return; }
         if (action === "config") { await (await loadControlCenter()).configureRole(tokens[0], ctx); return; }
         if (action === "save") {
           const result = await roleRuntime.saveRoleConfig(ctx);

@@ -29,22 +29,6 @@ async function waitForRoleModelConfig(directory, expected) {
   assert.fail(`角色模型配置未持久化：${JSON.stringify(expected)}`);
 }
 
-test("旧sync命令只说明退役，不补全、不修改项目或reload", async () => {
-  await withTempDirectory(async directory => {
-    const target = path.join(directory, "legacy-project");
-    await mkdir(target, { recursive: true });
-    const original = "# Maintainer owned\nCustomized project rules\n";
-    await writeFile(path.join(target, "AGENTS.md"), original);
-    const h = createExtensionHarness([], { cwd: directory, hasUI: false });
-    const command = h.commands.get("pi-init");
-    assert.equal(command.getArgumentCompletions("s").some(item => item.value === "sync"), false);
-    await command.handler("sync " + target, h.context);
-    assert.equal(await readFile(path.join(target, "AGENTS.md"), "utf8"), original);
-    assert.ok(h.notifications.some(item => /sync已退役/.test(item.message)));
-    assert.equal(h.reloadCalls.length, 0);
-    await assert.rejects(readFile(path.join(target, ".pi/pi-init-state.json")), { code: "ENOENT" });
-  });
-});
 test("控制中心不再提供改写项目规则的同步菜单", async () => {
   await withTempDirectory(async directory => {
     let rendered = "";

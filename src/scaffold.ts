@@ -227,7 +227,3 @@ export async function createScaffold(targetDir: string, options: ScaffoldOptions
     files: created,
   };
 }
-
-export async function syncScaffold(_targetDir: string, _options: ScaffoldOptions = {}): Promise<never> {
-  throw Object.assign(new Error("Template synchronization is retired; project files belong to their maintainers."), { code: "TEMPLATE_SYNC_RETIRED" });
-}
