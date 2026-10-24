@@ -172,7 +172,9 @@ sh ./scripts/install-launchers.sh
 
 ### 读取与探索策略
 
-普通任务由匹配角色连续调查、实现和验证，切角不重启任务，也不默认创建正式证据链。已确认事实、有效验证与进度按需复用；身份由运行时绑定实际派发回合，模型通常只提交业务结果。暂停恢复、兼容行为和授权边界见 [`docs/role-continuity.md`](docs/role-continuity.md)；详细职责规则仍由公共 `pi-init-role-routing` Skill 维护。
+普通任务由匹配角色连续调查、实现和验证，切角不重启任务，也不默认创建正式证据链。已确认事实、有效验证与进度按需复用；身份由运行时绑定实际派发回合，模型通常只提交业务结果。轻量调查边界是减少无关探索的软约束，不是搜索审批或路径白名单；来源路径只是优先线索，执行角色可沿直接相关线索扩展，关键事实不足时定向核实。暂停恢复、兼容行为和授权边界见 [`docs/role-continuity.md`](docs/role-continuity.md)；详细职责规则仍由公共 `pi-init-role-routing` Skill 维护。
+
+codemode 在 `tool_call` 阶段有针对异常空输出参数的拒绝保护：仅当 code 参数包含连续至少 256 行单行空 `text()`，且这类行占非空行至少 90% 时拒绝执行。该保护不截断或改写脚本、不自动重放，也无法覆盖未到达 `tool_call` 的生成失败，不能减少已经发生的生成耗时；不应视为通用 JavaScript 检测或安全边界。
 
 `architect` 只分析、决策、规划和安排，仅允许 switch_role 与 task_workflow 的 plan/replan/status/request-replan/request-goal；不得作为执行任务角色，不直接读取仓库、运行代码或连接 MCP。新事实通过普通 docs-commit 调查任务获取，运行时继续守卫执行与验收权限。
 

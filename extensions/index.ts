@@ -54,6 +54,7 @@ import { createWorkflowDelivery } from "./workflow-delivery.ts";
 import { createWorkflowUserControl } from "./workflow-user-control.ts";
 import { registerContextBudgetMonitor } from "./context-budget-monitor.ts";
 import { createTaskMemoryRuntime } from "./task-memory-runtime.ts";
+import { registerAbnormalToolGuard } from "./abnormal-tool-guard.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -144,6 +145,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
   pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
+  registerAbnormalToolGuard(pi, ctx => userControl.suspend(ctx, "abnormal-tool-arguments"));
   workflowReport = createWorkflowReport(runtimeState, {
     pi, roleRuntime, activityStatus,
     onWorkflowPersisted: (workflow) => {
