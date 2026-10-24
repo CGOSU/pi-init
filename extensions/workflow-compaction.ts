@@ -11,6 +11,7 @@ import {
   type WorkflowActionIdentity,
 } from "./runtime-state.ts";
 import type { ActivityStatusReporter } from "./activity-status.ts";
+import type { RoleHandoffCompaction } from "./role-handoff.ts";
 
 export const WORKFLOW_COMPACTION_WATCHDOG_MS = 30_000;
 const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
@@ -21,6 +22,7 @@ const ROLE_SWITCH_COMPACTION_INSTRUCTIONS = [
 const ROLE_SWITCH_DIAGNOSTIC_TYPE = "pi-init-role-transition";
 
 type WorkflowCompactionDependencies = {
+  roleHandoff?: RoleHandoffCompaction;
   activityStatus?: ActivityStatusReporter;
   setWorkflowDispatchInFlight: (value: boolean) => void;
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
@@ -89,7 +91,7 @@ export function createWorkflowCompaction(
   function watchdogNextStep(operation: ActiveCompaction) {
     const continuation = operation.transition.continuation;
     if (!continuation) return "当前压缩没有可执行续跑，不会派发工作流任务；等待Pi完成后检查职责恢复状态。";
-    if (!continuationIsCurrent(operation.transition)) return "关联的工作流身份已变化，不继续旧交接。";
+    if (!continuationIsCurrent(operation.transition, operation.ctx)) return "关联的工作流身份已变化，不继续旧交接。";
     return continuation.kind === "workflow-review" ? "仍等待用户审阅，压缩完成不自动恢复。" : "检查当前工作流，仅以仍匹配的身份显式恢复。";
   }
 
@@ -131,8 +133,9 @@ export function createWorkflowCompaction(
       && left.thinkingLevel === right.thinkingLevel;
   }
 
-  function continuationIsCurrent(transition: PendingRoleCompaction) {
+  function continuationIsCurrent(transition: PendingRoleCompaction, ctx: ExtensionContext) {
     if (transition.budget) {
+      if (transition.budget.roleHandoffId) return deps.roleHandoff?.pendingId(ctx) === transition.budget.roleHandoffId;
       const workflow = state.workflowState;
       const expected = transition.budget.identity;
       if (!expected) return transition.budget.inactiveWorkflowKey
@@ -214,7 +217,7 @@ export function createWorkflowCompaction(
         || state.pendingWorkflowRecovery))
       || state.roleTransitionGeneration !== transition.roleTransitionGeneration
       || !roleMatches
-      || !continuationIsCurrent(transition)) return false;
+      || !continuationIsCurrent(transition, ctx)) return false;
     return !state.pendingRoleCompaction
       || state.pendingRoleCompaction.roleTransitionGeneration === transition.roleTransitionGeneration;
   }
@@ -245,10 +248,23 @@ export function createWorkflowCompaction(
     }
   }
 
+  function retireRoleHandoff(operation: ActiveCompaction) {
+    const handoffId = operation.transition.budget?.roleHandoffId;
+    if (handoffId) deps.roleHandoff?.retireCompaction(handoffId);
+  }
+
+  function resumeRoleHandoff(operation: ActiveCompaction) {
+    const handoffId = operation.transition.budget?.roleHandoffId;
+    if (!handoffId) return;
+    void deps.roleHandoff?.resumeAfterCompaction(operation.ctx, handoffId)
+      .catch(error => operation.ctx.ui.notify(`预算压缩后的职责交接未完成：${textOf(error)}`, "warning"));
+  }
+
   function continueAfterCompaction(operation: ActiveCompaction, warning?: string) {
     const { transition, ctx } = operation;
     state.traceHandoff?.(ctx, "compaction.settled", { operationId: operation.operationId, failed: Boolean(warning), current: operationIsCurrent(operation) });
     if (!operationIsCurrent(operation)) {
+      retireRoleHandoff(operation);
       deps.setWorkflowDispatchInFlight(false);
       if (contextIsCurrent(operation)
         && state.roleTransitionGeneration === transition.roleTransitionGeneration
@@ -259,6 +275,7 @@ export function createWorkflowCompaction(
       return;
     }
     if (warning) {
+      retireRoleHandoff(operation);
       ctx.ui.notify(warning, "warning");
       deps.setWorkflowDispatchInFlight(false);
       if (transition.continuation?.kind === "workflow-boundary") {
@@ -268,7 +285,9 @@ export function createWorkflowCompaction(
       return;
     }
     if (transition.budget) {
-      if (transition.budget.identity && !state.agentRunActive && ctx.isIdle()) {
+      if (transition.budget.roleHandoffId) {
+        resumeRoleHandoff(operation);
+      } else if (transition.budget.identity && !state.agentRunActive && ctx.isIdle()) {
         void deps.scheduleWorkflow(ctx, workflowActionIdentity(state.workflowState!), "context-budget")
           .catch(error => ctx.ui.notify(`预算压缩后的可信续做未完成：${textOf(error)}`, "warning"));
       } else if (!transition.budget.identity) {
@@ -336,6 +355,7 @@ export function createWorkflowCompaction(
       settled: false,
     };
     if (!operationIsCurrent(operation)) {
+      retireRoleHandoff(operation);
       state.pendingRoleCompaction = undefined;
       deps.setWorkflowDispatchInFlight(false);
       if (contextIsCurrent(operation)
@@ -387,7 +407,10 @@ export function createWorkflowCompaction(
     const operation = active;
     clearWatchdog();
     active = undefined;
-    if (operation) deps.activityStatus?.setCompaction(operation.ctx, undefined);
+    if (operation) {
+      retireRoleHandoff(operation);
+      deps.activityStatus?.setCompaction(operation.ctx, undefined);
+    }
     state.pendingRoleCompaction = undefined;
     clearTransientState(operation?.operationId);
     deps.setWorkflowDispatchInFlight(false);

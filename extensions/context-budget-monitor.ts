@@ -4,6 +4,7 @@ import { workflowActionIdentity, workflowHandoffIdentity } from "../src/workflow
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 import type { RoleMode } from "../src/role-types.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
+import type { RoleHandoffCompaction } from "./role-handoff.ts";
 
 const COOLDOWN_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -12,6 +13,7 @@ type BudgetDependencies = {
   mode: (ctx: ExtensionContext) => Promise<RoleMode>;
   activeRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   start: (ctx: ExtensionContext) => boolean;
+  roleHandoff?: Pick<RoleHandoffCompaction, "pendingId">;
 };
 
 /** Observation only: no timers, message dispatch, or independent compaction operation. */
@@ -66,12 +68,13 @@ export function createContextBudgetChecker(
         ? JSON.stringify([workflowActionIdentity(storedWorkflow), storedWorkflow.status]) : undefined;
       const workflow = inactiveWorkflowKey ? undefined : storedWorkflow;
       const task = workflow?.tasks.find(item => item.id === workflow.currentTaskId);
-      const identity = workflow ? workflowHandoffIdentity(workflow) : undefined;
-      if (workflow && (workflow.status !== "running" || workflow.pendingRevision || workflow.continuation
+      const roleHandoffId = deps.roleHandoff?.pendingId(ctx);
+      const identity = workflow && !roleHandoffId ? workflowHandoffIdentity(workflow) : undefined;
+      if (workflow && !roleHandoffId && (workflow.status !== "running" || workflow.pendingRevision || workflow.continuation
         || workflow.handoff?.phase !== "executing" || !identity || !task || task.status !== "in_progress"
         || task.outcomeUnknown || task.delegation || identity.taskId !== task.id || role?.role !== task.role
         || identity.sessionId !== sessionId)) return report("guard", "task-identity-unverified");
-      const key = JSON.stringify([sessionId, generation, transitionGeneration, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), role?.role, identity, inactiveWorkflowKey]);
+      const key = JSON.stringify([sessionId, generation, transitionGeneration, ctx.model.provider, ctx.model.id, pi.getThinkingLevel(), role?.role, identity, roleHandoffId, inactiveWorkflowKey]);
       if (observation?.key !== key) observation = undefined;
       if (observation) {
         observation.minimum = Math.min(observation.minimum, tokens);
@@ -89,7 +92,7 @@ export function createContextBudgetChecker(
         fromRole: targetRole.role, toRole: targetRole.role, sessionId,
         contextGeneration: generation, roleTransitionGeneration: transitionGeneration, targetRole: { ...targetRole },
         budget: {
-          branchEntryIds, identity, inactiveWorkflowKey, explicitRole: Boolean(role),
+          branchEntryIds, identity, roleHandoffId, inactiveWorkflowKey, explicitRole: Boolean(role),
           snapshot: JSON.stringify({ kind: "context-budget", sessionId, role: role?.role ?? null,
             workflow: identity ?? null, task: task ? { id: task.id, status: task.status } : null,
             instruction: "Preserve the current unfinished task, constraints, decisions, changed files and actual verification. This is not a handoff; do not replay or dispatch work, mark it complete, or start another model turn." }),

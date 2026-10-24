@@ -37,7 +37,7 @@ export type PendingRoleCompaction = {
   roleTransitionGeneration: number;
   targetRole: ActiveRole;
   continuation?: RoleCompactionContinuation;
-  budget?: { branchEntryIds: string[]; identity?: WorkflowHandoffIdentity; inactiveWorkflowKey?: string; explicitRole: boolean; snapshot: string };
+  budget?: { branchEntryIds: string[]; identity?: WorkflowHandoffIdentity; roleHandoffId?: string; inactiveWorkflowKey?: string; explicitRole: boolean; snapshot: string };
 };
 
 export type RoleCompactionPhase = "idle" | "compacting";

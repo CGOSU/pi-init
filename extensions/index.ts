@@ -71,6 +71,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
     assistantFailureScope = ["error", "aborted"].includes(event.message.stopReason) ? executionScope(ctx) : undefined;
+    if (assistantFailureScope) roleHandoff.reset();
   });
   const workflowBinding = createWorkflowToolBinding(pi, runtimeState);
   const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"));
@@ -97,6 +98,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     persistWorkflowState: (next, ctx) => workflowReport.persistWorkflowState(next, ctx),
   });
   const roleRuntime = createRoleRuntime(pi, runtimeState, {
+    roleHandoff: {
+      pendingId: ctx => roleHandoff.pendingId(ctx),
+      resumeAfterCompaction: (ctx, handoffId) => roleHandoff.resumeAfterCompaction(ctx, handoffId),
+      retireCompaction: handoffId => roleHandoff.retireCompaction(handoffId),
+    },
     activityStatus, getWorkflowState: () => runtimeState.workflowState,
     setWorkflowDispatchInFlight: (value) => {
       runtimeState.workflowDispatchInFlight = value;
@@ -311,6 +317,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("agent_start", (_event, ctx) => {
     if (runtimeState.userStopRequested && !userControl.allowsExternalTurn()) { ctx.abort(); return; }
+    roleHandoff.reset(); // A host-started run consumes any waiting continuation.
     runtimeState.agentRunActive = true;
     workflowTaskConsumptionRunActive = !runtimeState.userStopRequested;
     runtimeState.currentContext = ctx;

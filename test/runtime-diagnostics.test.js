@@ -368,7 +368,7 @@ test("provider request summaries disclose missing observations and safe structur
   });
 });
 
-test("正常预算判断不当作问题，健康Provider请求不逐条落盘", async () => {
+test("正常预算判断及健康Provider请求不生成问题，只保留缓存观测与回合摘要", async () => {
   await withBox(async ({ ctx, monitor, emit, rows, notices }) => {
     await emit("before_agent_start");
     monitor.trace(ctx, "context.budget_checked", { tokens: 100, contextWindow: 1000, percent: 10, decision: "threshold", reason: "below-threshold" });
@@ -378,10 +378,11 @@ test("正常预算判断不当作问题，健康Provider请求不逐条落盘", 
     await emit("message_end", { message: { role: "assistant", stopReason: "stop", content: [] } });
     await emit("agent_settled");
     const data = await rows();
-    assert.deepEqual(data.map(row => row.kind), ["summary"]);
-    assert.equal(data[0].issueOccurrences, 0);
-    assert.equal(data[0].budget.last.decision, "threshold");
-    assert.equal(data[0].providerObservations.requests, 1);
+    assert.deepEqual(data.map(row => row.kind), ["cache-request", "summary"]);
+    assert.equal(data[0].cacheConclusion, "unknown");
+    assert.equal(data[1].issueOccurrences, 0);
+    assert.equal(data[1].budget.last.decision, "threshold");
+    assert.equal(data[1].providerObservations.requests, 1);
     assert.match(await monitor.report(ctx), /Provider 请求摘要：1；观察缺失：0/);
     assert.equal(notices.length, 0);
   });

@@ -106,6 +106,31 @@ export function formatProviderObservations(records: Data[]) {
   const detail = detailed ? "；钩子缺失（有细项的 " + detailed + " 个请求）：headers=" + hooks.headers + "，response=" + hooks.response + "，assistant=" + hooks.assistant : "";
   return "Provider 请求摘要：" + total + "；观察缺失：" + missing + detail + "（仅统计启用记录后已观察到的请求；缺失不等于请求失败，不推断启用前的请求）。";
 }
+export function formatCacheObservations(records: Data[]) {
+  const requests = new Map<string, Data>();
+  for (const row of records) {
+    if (row.kind !== "cache-request" || typeof row.runtimeId !== "string" || !Number.isSafeInteger(row.requestNumber) || Number(row.requestNumber) < 1) continue;
+    requests.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.requestNumber]), row);
+  }
+  if (!requests.size) return "缓存请求诊断：暂无请求级观测（未启用、旧日志或 hook 未触发均可能；不补零）。";
+  let positive = 0, zero = 0;
+  for (const row of requests.values()) {
+    if (row.correlation !== "ordered-hooks" || row.cacheOutcome !== "assistant" || row.rawUsageState !== "observed" || !Number.isSafeInteger(row.rawReadTokens)) continue;
+    if (row.rawReadState === "positive" && Number(row.rawReadTokens) > 0) positive++;
+    if (row.rawReadState === "zero" && row.rawReadTokens === 0) zero++;
+  }
+  const label = (value: unknown) => typeof value === "number" ? String(value) : typeof value === "string" ? value.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 128) : "未知";
+  const lines = ["缓存请求诊断：" + requests.size + "；原始读字段正值：" + positive + "；显式零：" + zero + "；未知：" + (requests.size - positive - zero)];
+  for (const row of [...requests.values()].slice(-6)) {
+    lines.push("请求 #" + label(row.requestNumber) + " · " + [row.profileProvider, row.profileModel, row.profileRole, row.profileThinkingLevel].map(label).join("/")
+      + "：raw=" + label(row.rawUsageState) + "/" + label(row.rawReadState) + "(" + label(row.rawReadTokens) + ")"
+      + "；normalized=" + label(row.normalizedReadState) + "(" + label(row.normalizedReadTokens) + ")；关联=" + label(row.correlation) + "；结束=" + label(row.cacheOutcome)
+      + "；缓存键=" + label(row.cacheKeyPresence) + "；contextGeneration=" + label(row.contextGeneration) + "；压缩=" + label(row.compactionPhase));
+  }
+  lines.push("指纹仅对应 before_provider_request 当时选定的提示/工具/上下文字段，HMAC 只可在同一运行时比较；原始 usage 为归一化前的已解析事件，normalized 为 message_end 观察。"
+    + "公开 hook 无请求 ID，关联仅依据有序 hook 与可用响应身份；实际 transport/full-delta unavailable。字段缺失、失败或关联未知不等于零命中；显式零也不证明服务端缓存未命中原因，观测不等于最终网络请求。");
+  return lines.join("\n");
+}
 export function formatContextProjections(records: Data[]) {
   const rounds = new Map<string, Data>();
   for (const row of records) if (row.kind === "summary" && row.contextProjection && typeof row.contextProjection === "object") {

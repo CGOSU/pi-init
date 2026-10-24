@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createRequire } from "node:module";
-import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains } from "./runtime-diagnostics-report.ts";
+import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
+import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains, formatCacheObservations } from "./runtime-diagnostics-report.ts";
 
 const extensionVersion = readExtensionVersion();
 
@@ -16,7 +17,7 @@ const RETENTION_MS = 7 * 86400000;
 const MAX_RING_BYTES = 32 * 1024;
 const MAX_ISSUES = 24;
 const MAX_PENDING = 32;
-const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome", "mode", "reasonCode", "inputBytes", "outputBytes", "budgetBytes", "checkpointed", "omittedMessages", "overBudget"]);
+const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome", "mode", "reasonCode", "inputBytes", "outputBytes", "budgetBytes", "checkpointed", "omittedMessages", "overBudget", ...cacheDiagnosticFields]);
 function metadata(data: Data): Data {
   const result: Data = {};
   for (const key of fields) {
@@ -178,6 +179,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         if (raw.overBudget === true) contextProjection.overBudget++;
         contextProjection.last = row.data;
       }
+      if (event === "cache.request") write(ctx, { kind: "cache-request", timestamp: now, ...row.data });
       if (event === "provider.request_summary") {
         const missingObservations = ["headers", "response", "assistant"].filter(name => raw[name + "Observed"] !== true);
         providerObservations.requests++;
@@ -258,7 +260,8 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
     await writer.flush();
     const latest = new Map<string, Data>();
     const summaries: Data[] = [];
-      const requests: Data[] = [];
+    const requests: Data[] = [];
+    const cacheRequests: Data[] = [];
     let incomplete = false;
     for (const suffix of [".1", ""]) {
       const path = join(ctx.cwd, ".pi", "diagnostics", "runtime.jsonl" + suffix);
@@ -271,7 +274,8 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
           try {
             const row = JSON.parse(line);
             if (row && row.kind === "summary") summaries.push(row);
-              if (row && row.kind === "provider-request") requests.push(row);
+            if (row && row.kind === "provider-request") requests.push(row);
+            if (row && row.kind === "cache-request") cacheRequests.push(row);
             if (row.dropped > 0 || row.overflow > 0 || row.incomplete === true) incomplete = true;
             if (row.version === 1 && row.kind === "issue" && typeof row.id === "string" && typeof row.runtimeId === "string" && Number.isSafeInteger(row.count) && row.count > 0) latest.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.id]), row);
           } catch { incomplete = true; }
@@ -285,7 +289,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
   }
   return { observe, report, flush: () => writer.flush() };
 }

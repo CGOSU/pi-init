@@ -255,6 +255,9 @@ function createExtensionHarness(branch = [], options = {}) {
     isIdle() {
       return options.isIdle ?? true;
     },
+    hasPendingMessages() {
+      return false;
+    },
     ui: {
       theme: {
         fg(_color, text) {

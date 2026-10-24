@@ -34,10 +34,12 @@ import {
 } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createContextBudgetChecker } from "./context-budget-monitor.ts";
+import type { RoleHandoffCompaction } from "./role-handoff.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
 import type { ActivityStatusReporter } from "./activity-status.ts";
 
 export type RoleRuntimeDependencies = {
+  roleHandoff?: RoleHandoffCompaction;
   activityStatus: ActivityStatusReporter;
   getWorkflowState: () => WorkflowState | undefined;
   setWorkflowDispatchInFlight: (value: boolean) => void;
@@ -70,6 +72,7 @@ export function createRoleRuntime(
     mode: async (ctx) => effectiveRoleMode(await readSessionRoleConfig(ctx)),
     activeRole: activeRoleFor,
     start: workflowCompaction.start,
+    roleHandoff: deps.roleHandoff,
   });
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return { ok: true as const, value: undefined };

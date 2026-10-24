@@ -127,7 +127,7 @@ function fixture(overrides = {}) {
   state.activeRole = { role: "architect", provider: "test", model: "model", thinkingLevel: "high" };
   const records = [];
   const sent = [];
-  const ctx = { isIdle: () => true, sessionManager: { getSessionId: () => "session" }, ui: { notify() {} } };
+  const ctx = { isIdle: () => true, hasPendingMessages: () => false, sessionManager: { getSessionId: () => "session", getBranch: () => [] }, ui: { notify() {} } };
   const pi = { appendEntry(type, data) { records.push({ type, data }); }, async sendMessage(message) { sent.push(message); }, ...overrides };
   const controller = createRoleHandoff(pi, state, { getActiveRole: () => state.activeRole, requireRecovery: () => { state.roleRecoveryPending = true; } });
   const source = controller.capture(ctx);

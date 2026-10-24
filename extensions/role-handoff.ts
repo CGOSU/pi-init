@@ -9,6 +9,12 @@ import { checkWorkflowRoleSwitch } from "./workflow-action-policy.ts";
 export const ROLE_HANDOFF_MESSAGE_TYPE = "pi-init-role-handoff";
 const ROLE_HANDOFF_ENTRY_TYPE = "pi-init-role-handoff-state";
 
+export type RoleHandoffCompaction = {
+  pendingId: (ctx: ExtensionContext) => string | undefined;
+  resumeAfterCompaction: (ctx: ExtensionContext, handoffId: string) => Promise<void>;
+  retireCompaction: (handoffId: string) => void;
+};
+
 type RoleHandoffDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   requireRecovery: (ctx: ExtensionContext, reason: string) => void;
@@ -23,18 +29,22 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
   function capture(ctx: ExtensionContext) {
     const workflow = state.workflowState;
     const activeRole = deps.getActiveRole(ctx);
+    const task = workflow?.tasks.find(task => task.id === workflow.currentTaskId);
     return {
       sessionId: ctx.sessionManager.getSessionId(),
       contextGeneration: state.roleContextGeneration,
       runActive: state.agentRunActive,
       activeRole: activeRole ? { ...activeRole } : undefined,
       workKey: JSON.stringify({
-        workflow: workflow ? { identity: workflowActionIdentity(workflow), status: workflow.status, handoff: workflowHandoffIdentity(workflow), replan: workflowReplanIdentity(workflow) } : undefined,
-              }),
+        workflow: workflow ? { identity: workflowActionIdentity(workflow), status: workflow.status, handoff: workflowHandoffIdentity(workflow), replan: workflowReplanIdentity(workflow),
+          task: task ? { id: task.id, status: task.status, outcomeUnknown: task.outcomeUnknown, delegated: Boolean(task.delegation) } : undefined,
+          handoffPhase: workflow.handoff?.phase,
+          continuationPhase: workflow.continuation?.kind === "review" ? undefined : workflow.continuation?.phase } : undefined,
+      }),
     };
   }
   type Scope = ReturnType<typeof capture>;
-  type Handoff = { handoffId: string; scope: Scope; targetRole: ActiveRole; roleTransitionGeneration: number };
+  type Handoff = { handoffId: string; scope: Scope; targetRole: ActiveRole; roleTransitionGeneration: number; branchEntryIds: string[]; compactionRetired?: boolean };
   let pending: Handoff | undefined;
   let sending: Handoff | undefined;
 
@@ -44,7 +54,9 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
       && current.contextGeneration === scope.contextGeneration && current.workKey === scope.workKey;
   }
   function current(ctx: ExtensionContext, handoff: Handoff) {
+    const branch = ctx.sessionManager.getBranch();
     return sameScope(ctx, handoff.scope) && handoff.roleTransitionGeneration === state.roleTransitionGeneration
+      && handoff.branchEntryIds.every((id, index) => branch[index]?.id === id)
       && sameRole(deps.getActiveRole(ctx), handoff.targetRole);
   }
   function identity(handoff: Handoff) {
@@ -61,7 +73,8 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
       state.traceHandoff?.(ctx, "role.handoff_discarded", { role: result.role });
       return { terminate: true, handoffFailure: "stale-or-aborted" };
     }
-    const handoff: Handoff = { handoffId: randomUUID(), scope, targetRole: { ...result }, roleTransitionGeneration: state.roleTransitionGeneration };
+    const handoff: Handoff = { handoffId: randomUUID(), scope, targetRole: { ...result }, roleTransitionGeneration: state.roleTransitionGeneration,
+      branchEntryIds: ctx.sessionManager.getBranch().map(entry => entry.id) };
     try {
       persist(handoff, "prepared");
       pending = handoff;
@@ -78,18 +91,22 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
     if (sending) return true;
     const handoff = pending;
     if (!handoff) return false;
+    // Retain the retired boundary until reset/new handoff so settled cannot fall
+    // through to the workflow scheduler after failed or unverified compaction.
+    if (handoff.compactionRetired) return true;
     if (!current(ctx, handoff)) {
       pending = undefined;
       state.traceHandoff?.(ctx, "role.handoff_discarded", identity(handoff));
       return false;
     }
     if (state.agentRunActive || !ctx.isIdle() || state.roleCompactionInFlight || state.pendingRoleCompaction) return true;
-    if (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) {
+    if (recoveryBlocked()) {
       pending = undefined;
       state.traceHandoff?.(ctx, "role.handoff_blocked_by_recovery", identity(handoff));
       ctx.ui.notify("职责恢复尚未确认；旧回合已结束，未自动启动角色交接，请先确认当前职责。", "warning");
       return true;
     }
+    if (ctx.hasPendingMessages() || state.internalContinuationPending) return true;
     pending = undefined;
     sending = handoff;
     try {
@@ -123,6 +140,23 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
     return true;
   }
 
+  function recoveryBlocked() {
+    return state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError || state.pendingWorkflowRecovery;
+  }
+
+  function pendingId(ctx: ExtensionContext) {
+    return pending && !pending.compactionRetired && current(ctx, pending) && !recoveryBlocked() ? pending.handoffId : undefined;
+  }
+
+  async function resumeAfterCompaction(ctx: ExtensionContext, handoffId: string) {
+    if (pending?.handoffId !== handoffId) return;
+    await schedule(ctx);
+  }
+
+  function retireCompaction(handoffId: string) {
+    if (pending?.handoffId === handoffId) pending.compactionRetired = true;
+  }
+
   function reset() { pending = undefined; sending = undefined; }
-  return { capture, finishSwitch, schedule, reset, checkSwitchRole: (targetRole: string) => checkWorkflowRoleSwitch(state, targetRole) };
+  return { capture, finishSwitch, schedule, reset, pendingId, resumeAfterCompaction, retireCompaction, checkSwitchRole: (targetRole: string) => checkWorkflowRoleSwitch(state, targetRole) };
 }

@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
 import { createDiagnosticWriter, createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
+import { createCacheRequestDiagnostics } from "./cache-request-diagnostics.ts";
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING = 128;
@@ -57,6 +58,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   const report = (ctx: ExtensionContext) => mode === "off" ? Promise.resolve("运行黑匣子已关闭。") : blackbox.report(ctx);
 
   const writer = createDiagnosticWriter({ file: "logs/handoff.jsonl", maxBytes: options.maxBytes ?? MAX_LOG_BYTES, maxPending: MAX_PENDING, warning: "角色交接诊断日志写入失败；已停用日志，不影响任务执行。" });
+  const cache = createCacheRequestDiagnostics(state, (ctx, event, data) => trace(ctx, event, data));
   const runtimeId = randomUUID();
   let sequence = 0;
   let run = 0;
@@ -95,6 +97,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
         if (!closing) observeSignals(ctx);
         return;
       }
+      if (event === "cache.request") blackbox.observe(ctx, event, data);
       writer.write(ctx, dropped => ({ version: 1, timestamp: new Date().toISOString(), runtimeId, sequence: ++sequence,
         sessionId: ctx.sessionManager.getSessionId(), run, event, dropped, data, snapshot: handoffSnapshot(state) }));
     } catch {
@@ -105,8 +108,9 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   if (mode === "off") return { trace, flush, report };
   state.traceHandoff = trace;
   pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
-  pi.on("before_agent_start", (_event, ctx) => { pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
+  pi.on("before_agent_start", (_event, ctx) => { cache.boundary(ctx, "new-run"); pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
+  pi.on("turn_start", (_event, ctx) => { cache.boundary(ctx, "turn-change"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
   function providerFields(ctx: ExtensionContext) {
     if (providerRequest?.cwd !== ctx.cwd || providerRequest?.sessionId !== ctx.sessionManager.getSessionId() || providerRequest?.run !== run) providerRequest = undefined;
@@ -120,17 +124,20 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
       assistantObserved: outcome === "assistant", outcome, errorCodeHint });
     providerRequest = undefined;
   }
-  pi.on("before_provider_request", (_event, ctx) => {
+  pi.on("before_provider_request", (event, ctx) => {
     try {
-      if (writer.failed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      if (writer.failed || !ctx.isProjectTrusted()) { cache.boundary(ctx, "unavailable"); pendingProviderHeaders = undefined; providerRequest = undefined; return; }
       providerFields(ctx);
       if (providerRequest) { trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" }); finishProvider(ctx, "superseded"); }
       providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), run,
         headersObserved: pendingProviderHeaders === JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]) };
       pendingProviderHeaders = undefined;
+      cache.request(ctx, event.payload, requestNumber, pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown");
       trace(ctx, "provider.request", { requestNumber });
     } catch {}
   });
+  try { pi.on("provider_stream_event", (event, ctx) => { cache.stream(ctx, event); }); }
+  catch { cache.streamUnavailable(); }
   pi.on("before_provider_headers", (_event, ctx) => {
     try {
       if (writer.failed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
@@ -141,10 +148,11 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
     } catch {}
   });
   pi.on("after_provider_response", (event, ctx) => {
-    try { const fields = providerFields(ctx); if (providerRequest) { providerRequest.responseObserved = true; providerRequest.status = event.status; } trace(ctx, "provider.response", { ...fields, status: event.status }); } catch {}
+    try { cache.response(ctx, event.status); const fields = providerFields(ctx); if (providerRequest) { providerRequest.responseObserved = true; providerRequest.status = event.status; } trace(ctx, "provider.response", { ...fields, status: event.status }); } catch {}
   });
   pi.on("agent_settled", (event, ctx) => {
     try {
+      cache.settle(ctx, event.aborted);
       if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: event.aborted ? "aborted" : "settled-without-assistant" });
       finishProvider(ctx, event.aborted ? "aborted" : "settled-without-assistant");
       pendingProviderHeaders = undefined;
@@ -181,6 +189,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   });
   pi.on("message_start", (event, ctx) => {
     const message = event.message as unknown as Record<string, unknown>;
+    cache.assistantStart(ctx, message);
     if (message.role === "custom" && typeof message.customType === "string" && message.customType.startsWith("pi-init-")) {
       trace(ctx, "handoff.message_consumed", { customType: message.customType, ...routingFields(message.details) });
     }
@@ -188,6 +197,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   pi.on("message_end", async (event, ctx) => {
     const message = event.message as unknown as Record<string, unknown>;
     if (message.role !== "assistant") return;
+    cache.assistant(ctx, message);
     try {
       const usage = message.usage && typeof message.usage === "object" ? message.usage as Record<string, unknown> : {};
       const tokens: Record<string, number> = {};
@@ -210,12 +220,12 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
       }
     }
   });
-  pi.on("session_before_compact", (_event, ctx) => { trace(ctx, "compaction.before"); });
-  pi.on("session_compact", (_event, ctx) => { trace(ctx, "compaction.event"); });
-  pi.on("session_start", (event, ctx) => { providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.start", { reason: event.reason }); });
-  pi.on("session_tree", (_event, ctx) => { providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.tree"); });
-  pi.on("model_select", (_event, ctx) => { trace(ctx, "role.model_selected"); });
-  pi.on("session_shutdown", async (_event, ctx) => { pendingProviderHeaders = undefined; trace(ctx, "session.shutdown"); await flush(); });
+  pi.on("session_before_compact", (_event, ctx) => { cache.boundary(ctx, "compaction"); trace(ctx, "compaction.before"); });
+  pi.on("session_compact", (_event, ctx) => { cache.boundary(ctx, "compaction"); trace(ctx, "compaction.event"); });
+  pi.on("session_start", (event, ctx) => { cache.boundary(ctx, "session-start"); providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.start", { reason: event.reason }); });
+  pi.on("session_tree", (_event, ctx) => { cache.boundary(ctx, "branch-change"); providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.tree"); });
+  pi.on("model_select", (_event, ctx) => { cache.boundary(ctx, "model-change"); trace(ctx, "role.model_selected"); });
+  pi.on("session_shutdown", async (_event, ctx) => { cache.boundary(ctx, "shutdown"); pendingProviderHeaders = undefined; trace(ctx, "session.shutdown"); await flush(); });
   return { trace, flush, report };
 }
 function providerErrorHint(value: unknown) {
