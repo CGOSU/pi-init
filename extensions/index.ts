@@ -583,6 +583,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       if (context.isError) return renderWorkflowOperationFailure(contentText, theme);
       const presentation = workflowPresentationFromDetails(result.details);
       if (presentation) return renderWorkflowPresentation(presentation, expanded, theme);
+      if (!expanded && (result.details as { checkpointSaved?: boolean } | undefined)?.checkpointSaved === true) {
+        return new Text("任务记忆已保存", 0, 0);
+      }
 
       const details = result.details as import("./runtime-state.ts").WorkflowState | undefined;
       if (!details || !Array.isArray(details.tasks)) {
