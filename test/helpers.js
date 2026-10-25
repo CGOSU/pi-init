@@ -25,7 +25,6 @@ import {
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,
   ROLE_MODE_LABELS,
-  ROLE_SWITCH_COMPACTION_THRESHOLD,
   THINKING_LEVELS,
   filterRoleModels,
   findMatchingRole,
@@ -38,7 +37,6 @@ import {
   resolveRoleModel,
   shouldOrchestrateWorkflow,
   unwrapRoleResult,
-  shouldCompactAfterWorkflowTask,
 } from "../src/roles.ts";
 import {
   WORKFLOW_MAX_NUDGES,
@@ -482,7 +480,6 @@ export {
   DEFAULT_WORKFLOW_MODE,
   ROLE_LABELS,
   ROLE_MODE_LABELS,
-  ROLE_SWITCH_COMPACTION_THRESHOLD,
   THINKING_LEVELS,
   filterRoleModels,
   findMatchingRole,
@@ -495,7 +492,6 @@ export {
   resolveRoleModel,
   shouldOrchestrateWorkflow,
   unwrapRoleResult,
-  shouldCompactAfterWorkflowTask,
   WORKFLOW_MAX_NUDGES,
   blockWorkflowTask,
   cancelWorkflow,

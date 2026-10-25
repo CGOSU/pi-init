@@ -13,7 +13,7 @@ function fixture(cwd) {
   const model = { provider: "test", id: "configured" };
   const ctx = { cwd, model, isProjectTrusted: () => true,
     modelRegistry: { find: () => model }, ui: { notify() {} } };
-  const pi = { getThinkingLevel: () => thinking, setThinkingLevel(level) { thinking = level; counts.thinking++; },
+  const pi = { on() {}, getThinkingLevel: () => thinking, setThinkingLevel(level) { thinking = level; counts.thinking++; },
     async setModel(value) { ctx.model = value; counts.model++; return true; } };
   const runtime = createRoleRuntime(pi, state, { activityStatus: { setRole() {} },
     acknowledgeRoleRecovery() { state.roleRecoveryPending = false; counts.recovery++; } });

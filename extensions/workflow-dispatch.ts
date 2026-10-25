@@ -79,9 +79,9 @@ export function createWorkflowDispatch(
     const fromRole = deps.roleRuntime.activeRoleFor(ctx)?.role;
     const toRole = current.status === "replanning" ? "architect" : getNextWorkflowTask(current)?.role;
     if (!fromRole || !toRole) return false;
-    const compact = await deps.roleRuntime.shouldCompactForRole(ctx, toRole);
+    const decision = await deps.roleRuntime.compactionDecisionForRole(ctx, toRole);
     if (state.runtimeDisposed || state.workflowState !== current) return true;
-    if (!compact) return false;
+    if (!decision.ok || !decision.compact) return false;
     if (!ctx.isIdle()) return true;
     const identity = workflowIdentity(current);
     const next = cloneState(current);

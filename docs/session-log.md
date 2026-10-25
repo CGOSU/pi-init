@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-25：将 SoL-Pi 成本判断迁入 pi-init 压缩管理器
+
+- 实现：移除固定 50% 主动压缩阈值。按模型 token 价格、真实 workflow task 请求样本、后续可确认的同角色队列和 Pi 原生可压缩投影估算缓存重建/摘要成本与预期收益；未知上下文/价格/未来任务、replan、不同模型投影和未回收压缩成本时拒绝经济型主动压缩。接入 pi-init 唯一压缩管理器，保留任务身份、停止/恢复/未知结果保护与容量保护；不启用 SoL 独立 Online Context Compact 或其 update_plan/续跑状态机。
+- 来源与许可：改编 NVIDIA SoL-Pi `economics.ts` 和 `projection.ts`（revision `2195680`，MIT），保留 SPDX 署名及 `THIRD-PARTY-NOTICES` 说明；不修改第三方安装目录。
+- 验证：`npm test` 676 项通过；`npm run typecheck` 退出码 0；成本策略及真实工作流边界针对性测试 12 项通过；`git diff --check` 通过。详见下列实际工具检查结果。
+- 未验证：未连接真实 OpenAI Provider 或 Pi TUI 测量缓存费用/压缩收益；插件代码修改尚未安装或 reload 到其他 Pi 实例；未修改用户全局 SoL 配置，未 push。
+
 ### 2026-10-24：压缩后受限续接角色交接并增加缓存请求诊断
 
 - 完成（交接）：预算压缩管理器仅在本次压缩成功且原角色 handoff ID、session/context、角色代次仍匹配时回到既有调度器；调度器复核 branch、目标角色、恢复/停止门、Agent/宿主忙碌及排队消息。没有创建任务或 attempt。另保留失败压缩撤销边界，避免 settled 后由工作流提醒绕过失败。

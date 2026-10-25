@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { shouldCompactAfterWorkflowTask } from "../src/roles.ts";
+import type { CompactionDecision } from "../src/compaction-economics.ts";
 import { workflowActionIdentity, workflowHandoffIdentity } from "../src/workflow.ts";
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 import type { RoleMode } from "../src/role-types.ts";
@@ -13,6 +13,7 @@ type BudgetDependencies = {
   mode: (ctx: ExtensionContext) => Promise<RoleMode>;
   activeRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   start: (ctx: ExtensionContext) => boolean;
+  decide: (ctx: ExtensionContext) => CompactionDecision;
   roleHandoff?: Pick<RoleHandoffCompaction, "pendingId">;
 };
 
@@ -85,7 +86,9 @@ export function createContextBudgetChecker(
         if (observation.attempts >= MAX_ATTEMPTS || Date.now() - observation.at < COOLDOWN_MS
           || tokens - observation.minimum < Math.max(8192, contextWindow * 0.05)) return report("cooldown", observation.attempts >= MAX_ATTEMPTS ? "attempt-limit" : "await-fresh-usage-growth");
       }
-      if (!shouldCompactAfterWorkflowTask({ mode, contextUsage: { tokens, percent }, targetModel: ctx.model })) return report("threshold", "below-threshold");
+      const decision = deps.decide(ctx);
+      if (!decision.ok) return report("unavailable", decision.code + ": " + decision.message);
+      if (!decision.compact) return report("economics", decision.reason);
       observation = { key, attempts: (observation?.attempts ?? 0) + 1, at: Date.now(), tokens, minimum: tokens };
       const targetRole = role ?? { role: "", provider: ctx.model.provider, model: ctx.model.id, thinkingLevel: pi.getThinkingLevel() };
       state.pendingRoleCompaction = {

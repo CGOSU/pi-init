@@ -164,7 +164,7 @@ test("完整工具组预算压缩后沿同一任务身份续做一次，不累�
     const h = await runningHarness(cwd);
     try {
       h.context.model = { ...h.context.model, contextWindow: 100000, maxTokens: 1000 };
-      h.context.getContextUsage = () => ({ tokens: 80000, contextWindow: 100000, percent: 80 });
+      h.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
       h.context.hasPendingMessages = () => false;
       let callbacks;
       h.context.compact = options => { callbacks = options; };

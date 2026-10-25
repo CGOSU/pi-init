@@ -6,14 +6,14 @@ async function waitForDispatch(harness) {
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionHarness, createWorkflowState, emitExtensionEvent, workflowMessageIdentity, withTempDirectory, mkdir, path, writeFile } from "./helpers.js";
-const developer = { provider: "test", id: "developer" };
-const docs = { provider: "test", id: "docs" };
+const developer = { provider: "test", id: "developer", contextWindow: 100000, maxTokens: 1000 };
+const docs = { ...developer, id: "docs" };
 async function boundaryHarness(directory, secondRole = "docs-commit") {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ schemaVersion: 2, mode: "auto", workflowMode: "on", roleModels: { "developer-test": { provider: "test", model: "developer", thinkingLevel: "high" }, "docs-commit": { provider: "test", model: "docs", thinkingLevel: "high" }, architect: { provider: "test", model: "architect", thinkingLevel: "high" } } }));
   const workflow = createWorkflowState({ summary: "任务边界", tasks: [ { id: "first", role: "developer-test", task: "实现", files: ["src"], acceptanceCriteria: ["通过"] }, { id: "second", role: secondRole, task: "继续", files: ["src"], acceptanceCriteria: ["通过"] } ] });
-  const harness = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: workflow }], { cwd: directory, trusted: true, model: developer, thinkingLevel: "high", availableModels: [developer, docs, { provider: "test", id: "architect" }] });
-  harness.context.getContextUsage = () => ({ percent: 60 });
+  const harness = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: workflow }], { cwd: directory, trusted: true, model: developer, thinkingLevel: "high", availableModels: [developer, docs, { ...developer, id: "architect" }] });
+  harness.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
   await emitExtensionEvent(harness, "session_start");
   return harness;
 }
@@ -123,15 +123,15 @@ test("取消撤销边界续跑，压缩迟到完成不派发下一角色", async
   });
 });
 
-test("上下文未到阈值及最终完成均不额外压缩", async () => {
+test("收益未知且容量充足时不按 50% 压缩，最终完成也不额外压缩", async () => {
   await withTempDirectory(async (directory) => {
     const harness = await boundaryHarness(directory);
     let calls = 0;
-    harness.context.getContextUsage = () => ({ percent: 49 });
+    harness.context.getContextUsage = () => ({ tokens: 60000, contextWindow: 100000, percent: 60 });
     harness.context.compact = () => { calls++; };
     await finishFirst(harness);
     assert.equal(messageCount(harness), 2);
-    harness.context.getContextUsage = () => ({ percent: 90 });
+    harness.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
     await emitExtensionEvent(harness, "agent_start");
     const tool = harness.tools.find((item) => item.name === "task_workflow");
     await tool.execute("final", { ...workflowMessageIdentity(harness), action: "complete", taskId: "second", completionSummary: "最终完成", implementationRationale: "无后续交接", verification: ["通过"] }, undefined, undefined, harness.context);

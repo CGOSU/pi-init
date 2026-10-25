@@ -4,6 +4,7 @@ import { createWorkflowState, startWorkflowTask, setWorkflowHandoffPhase, markWo
 import { createRoleHandoff } from "../extensions/role-handoff.ts";
 import { createContextBudgetChecker } from "../extensions/context-budget-monitor.ts";
 import { createWorkflowCompaction } from "../extensions/workflow-compaction.ts";
+import { createCompactionPolicy } from "../extensions/compaction-policy.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 function fixture() {
@@ -20,7 +21,7 @@ function fixture() {
   const ctx = {
     model: { provider: "test", id: "model", contextWindow: 100000, maxTokens: 1000 },
     sessionManager: { getSessionId: () => "session", getBranch: () => branch },
-    getContextUsage: () => ({ tokens: 90000, contextWindow: 100000, percent: 90 }),
+    getContextUsage: () => ({ tokens: 96000, contextWindow: 100000, percent: 96 }),
     isIdle: () => true, hasPendingMessages: () => false,
     compact: options => { callbacks = options; }, ui: { notify() {} },
   };
@@ -45,6 +46,7 @@ function fixture() {
   });
   const check = createContextBudgetChecker(pi, state, {
     mode: async () => "auto", activeRole: () => state.activeRole, start: manager.start, roleHandoff,
+    decide: createCompactionPolicy({ on() {} }, state).evaluate,
   });
   const result = { summary: "preserved task", firstKeptEntryId: "initial", tokensBefore: 90000 };
   let compacted = false;

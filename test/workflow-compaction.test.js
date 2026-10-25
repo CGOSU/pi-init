@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
 import { createWorkflowCompaction } from "../extensions/workflow-compaction.ts";
+import { createCompactionPolicy } from "../extensions/compaction-policy.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { workflowHandoffIdentity } from "../src/workflow.ts";
 
@@ -13,12 +14,11 @@ const {
   emitExtensionEvent,
   mkdir,
   path,
-  shouldCompactAfterWorkflowTask,
   withTempDirectory,
   writeFile,
 } = helpers;
 
-const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
+const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna", contextWindow: 100000, maxTokens: 1000 };
 const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
 
 function tasks() {
@@ -60,7 +60,7 @@ function completeParams(harness, taskId, summary) {
   };
 }
 
-test("同角色任务在上下文达到阈值时于任务边界压缩", async () => {
+test("同角色任务在接近容量上限时于任务边界压缩", async () => {
   await withTempDirectory(async (directory) => {
     await writeWorkflowConfig(directory, "local");
     const branch = [{
@@ -75,7 +75,7 @@ test("同角色任务在上下文达到阈值时于任务边界压缩", async ()
       availableModels: [developerModel],
     });
     let compactCalls = 0;
-    harness.context.getContextUsage = () => ({ percent: 60 });
+    harness.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
     harness.context.compact = ({ onComplete }) => {
       compactCalls++;
       onComplete?.({});
@@ -115,7 +115,7 @@ test("无归属的 session_compact 信号不能确认压缩交接，只有本次
       model: developerModel,
       availableModels: [developerModel, architectModel],
     });
-    harness.context.getContextUsage = () => ({ percent: 60 });
+    harness.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
     let completeCompaction;
     harness.context.compact = ({ onComplete }) => { completeCompaction = onComplete; };
 
@@ -152,7 +152,7 @@ test("主动压缩同步异常和 onError 都给出模型可见失败且不盲�
         model: developerModel,
         availableModels: [developerModel, architectModel],
       });
-      harness.context.getContextUsage = () => ({ percent: 60 });
+      harness.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
       harness.context.compact = failure === "throw"
         ? () => { throw new Error("同步压缩失败"); }
         : ({ onError }) => onError?.(new Error("回调压缩失败"));
@@ -441,7 +441,7 @@ test("Local resume 在主动压缩期间不清锁也不重复派发", async () =
       model: developerModel,
       availableModels: [developerModel, architectModel],
     });
-    harness.context.getContextUsage = () => ({ percent: 60 });
+    harness.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
     harness.context.compact = () => {};
 
     await emitExtensionEvent(harness, "session_start");
@@ -457,18 +457,26 @@ test("Local resume 在主动压缩期间不清锁也不重复派发", async () =
     assert.equal(harness.notifications.length > 0, true);
   });
 });
-test("目标模型预算识别低于 50% 的大窗口到小窗口交接", () => {
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 20, tokens: 40000 }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), true);
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 20, tokens: 40000 }, targetModel: { contextWindow: 200000, maxTokens: 8000 } }), false);
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "manual", contextUsage: { percent: 20, tokens: 40000 }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), false);
+test("目标模型容量保护识别大窗口到小窗口交接，无需收益预测", () => {
+  const state = createExtensionRuntimeState();
+  const policy = createCompactionPolicy({ on() {} }, state);
+  const ctx = { model: developerModel, getContextUsage: () => ({ percent: 20, tokens: 40000 }) };
+  assert.equal(policy.evaluate(ctx, { ...developerModel, contextWindow: 32000, maxTokens: 8000 }).compact, true);
+  const big = { ...developerModel, contextWindow: 200000, maxTokens: 8000 };
+  ctx.sessionManager = { getBranch: () => [], getSessionId: () => 'test' };
+  assert.equal(policy.evaluate(ctx, big).compact, false);
+  state.roleModeStatus = 'manual';
+  assert.equal(policy.evaluate(ctx, big).ok, false);
 });
 
-test("预算不可用时沿用 50% 兜底，不增加恢复门槛", () => {
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 50 } }), true);
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 49.9 } }), false);
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: null } }), false);
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "confirm", contextUsage: { percent: 90 } }), false);
-  assert.equal(shouldCompactAfterWorkflowTask({ mode: "auto", contextUsage: { percent: 49, tokens: null }, targetModel: { contextWindow: 32000, maxTokens: 8000 } }), false);
+test("预算不可用时明确拒绝估算，不再以 50% 作为兜底", () => {
+  const state = createExtensionRuntimeState();
+  const policy = createCompactionPolicy({ on() {} }, state);
+  for (const percent of [49.9, 50, 90]) {
+    const result = policy.evaluate({ model: developerModel, getContextUsage: () => ({ percent }) });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'COMPACTION_USAGE_UNAVAILABLE');
+  }
 });
 
 test('budget operation without explicit role verifies actual result and never dispatches or acknowledges recovery', async () => {
@@ -481,7 +489,7 @@ test('budget operation without explicit role verifies actual result and never di
     const ctx = {
       model: { provider: 'test', id: 'model', contextWindow: 100000, maxTokens: 1000 },
       sessionManager: { getSessionId: () => sessionId, getBranch: () => branch },
-      getContextUsage: () => ({ tokens: 90000, contextWindow: 100000, percent: 90 }),
+      getContextUsage: () => ({ tokens: 96000, contextWindow: 100000, percent: 96 }),
       hasPendingMessages: () => false,
       ui: { notify: text => notifications.push(text) },
       compact: options => { callbacks = options; },
@@ -499,7 +507,8 @@ test('budget operation without explicit role verifies actual result and never di
       sendCoordinationMessage: () => assert.fail('handoff replay'),
     });
     const check = createContextBudgetChecker(pi, state,
-      { mode: async () => 'auto', activeRole: () => state.activeRole, start: controller.start });
+      { mode: async () => 'auto', activeRole: () => state.activeRole, start: controller.start,
+        decide: createCompactionPolicy({ on() {} }, state).evaluate });
     assert.equal(await check(ctx), true, outcome);
     assert.equal(state.roleCompactionInFlight, true);
     assert.match(callbacks.customInstructions, /System-derived current task snapshot/);
@@ -532,10 +541,11 @@ test("budget compaction resumes a verified unfinished workflow once through exis
   state.agentRunActive = true;
   const branch = [{ id: "a", type: "message" }];
   let callbacks, scheduled = 0;
-  const ctx = { model: { provider: "test", id: "model", contextWindow: 100000, maxTokens: 1000 }, sessionManager: { getSessionId: () => "budget-live", getBranch: () => branch }, getContextUsage: () => ({ tokens: 90000, contextWindow: 100000, percent: 90 }), hasPendingMessages: () => false, isIdle: () => !state.agentRunActive, ui: { notify() {} }, compact: options => { callbacks = options; } };
+  const ctx = { model: { provider: "test", id: "model", contextWindow: 100000, maxTokens: 1000 }, sessionManager: { getSessionId: () => "budget-live", getBranch: () => branch }, getContextUsage: () => ({ tokens: 96000, contextWindow: 100000, percent: 96 }), hasPendingMessages: () => false, isIdle: () => !state.agentRunActive, ui: { notify() {} }, compact: options => { callbacks = options; } };
   const pi = { getThinkingLevel: () => "off" };
   const controller = createWorkflowCompaction(pi, state, { getActiveRole: () => state.activeRole, setWorkflowDispatchInFlight: value => { state.workflowDispatchInFlight = value; }, requireRoleRecovery() {}, acknowledgeRoleRecovery() {}, sendWorkflowTaskMessage: () => assert.fail("task replay"), scheduleWorkflow: async (_ctx, identity) => { assert.equal(identity.workflowId, state.workflowState.workflowId); scheduled++; }, sendWorkflowReplanMessage: () => assert.fail("replan replay"), sendCoordinationMessage: () => assert.fail("evidence replay") });
-  const check = createContextBudgetChecker(pi, state, { mode: async () => "auto", activeRole: () => state.activeRole, start: controller.start });
+  const check = createContextBudgetChecker(pi, state, { mode: async () => "auto", activeRole: () => state.activeRole, start: controller.start,
+    decide: createCompactionPolicy({ on() {} }, state).evaluate });
   assert.equal(await check(ctx), true);
   state.agentRunActive = false;
   const result = { summary: "compressed", firstKeptEntryId: "a", tokensBefore: 90000 };

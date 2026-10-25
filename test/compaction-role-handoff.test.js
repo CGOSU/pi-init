@@ -45,7 +45,7 @@ async function fixture({ replanning = false, executing = false, changeRole = tru
     assert.equal(workflow?.tasks[0].outcomeUnknown, undefined);
   }
   if (changeRole) assert.equal((await switchRole(h, executing ? "developer-test" : "architect")).terminate, true);
-  h.context.getContextUsage = () => ({ tokens: 90000, contextWindow: 100000, percent: 90 });
+  h.context.getContextUsage = () => ({ tokens: 96000, contextWindow: 100000, percent: 96 });
   await emitExtensionEvent(h, "turn_end", {
     outcome: "completed", message: { role: "assistant", content: [{ type: "toolCall", id: "switch" }] },
     toolResults: [{ toolCallId: "switch" }], toolResultEntryIds: ["switch-result"],

@@ -7,7 +7,6 @@ import {
   resolveRoleModel,
   roleLabel,
   roleModeLabel,
-  shouldCompactAfterWorkflowTask,
   unwrapRoleResult, mergeRoleConfigData } from "../src/roles.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -34,6 +33,7 @@ import {
 } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
 import { createContextBudgetChecker } from "./context-budget-monitor.ts";
+import { createCompactionPolicy } from "./compaction-policy.ts";
 import type { RoleHandoffCompaction } from "./role-handoff.ts";
 import { createWorkflowCompaction } from "./workflow-compaction.ts";
 import type { ActivityStatusReporter } from "./activity-status.ts";
@@ -64,6 +64,7 @@ export function createRoleRuntime(
   deps: RoleRuntimeDependencies,
 ) {
   let internalModelSelectionDepth = 0;
+  const compactionPolicy = createCompactionPolicy(pi, state);
   const workflowCompaction = createWorkflowCompaction(pi, state, {
     ...deps,
     getActiveRole: activeRoleFor,
@@ -72,6 +73,7 @@ export function createRoleRuntime(
     mode: async (ctx) => effectiveRoleMode(await readSessionRoleConfig(ctx)),
     activeRole: activeRoleFor,
     start: workflowCompaction.start,
+    decide: compactionPolicy.evaluate,
     roleHandoff: deps.roleHandoff,
   });
   async function readRoleConfig(ctx: ExtensionContext) {
@@ -120,14 +122,12 @@ export function createRoleRuntime(
     return activeRoleMatches(state, ctx, pi.getThinkingLevel()) ? state.activeRole : undefined;
   }
 
-  async function shouldCompactForRole(ctx: ExtensionContext, role: string) {
-    const usage = ctx.getContextUsage();
-    if (shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: usage })) return true;
-    if (state.roleModeStatus !== "auto" || usage?.tokens == null) return false;
+  async function compactionDecisionForRole(ctx: ExtensionContext, role: string) {
     const config = await readSessionRoleConfig(ctx);
     const target = unwrapRoleResult(resolveRoleModel(config, role, sessionDefaultModel(ctx)));
     const model = ctx.modelRegistry.find(target.provider, target.model);
-    return shouldCompactAfterWorkflowTask({ mode: state.roleModeStatus, contextUsage: usage, targetModel: model });
+    if (!model) return { ok: false as const, code: "COMPACTION_TARGET_UNAVAILABLE", message: "目标模型不可用，无法估算压缩收益或容量。" };
+    return compactionPolicy.evaluate(ctx, model);
   }
 
   function hasPendingRoleConfigChanges() { return Object.keys(state.sessionRoleConfigOverrides).length > 0; }
@@ -447,7 +447,7 @@ export function createRoleRuntime(
   return {
     activeRoleFor,
     checkContextBudget,
-    shouldCompactForRole,
+    compactionDecisionForRole,
     readSessionRoleConfig,
     hasPendingRoleConfigChanges,
     isRoleModelConfigPersisted,

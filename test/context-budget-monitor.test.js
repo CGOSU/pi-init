@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createContextBudgetChecker, registerContextBudgetMonitor } from '../extensions/context-budget-monitor.ts';
 import { createExtensionRuntimeState } from '../extensions/runtime-state.ts';
+import { createCompactionPolicy } from '../extensions/compaction-policy.ts';
 
 function fixture() {
   const state = createExtensionRuntimeState();
   const traces = [];
   state.traceHandoff = (_ctx, event, data) => traces.push({ event, ...data });
-  let usage = { tokens: 90000, contextWindow: 100000, percent: 90 };
+  let usage = { tokens: 96000, contextWindow: 100000, percent: 96 };
   const branch = [{ id: 'a', type: 'message' }];
   const ctx = { model: { provider: 'test', id: 'model', contextWindow: 100000, maxTokens: 1000 },
     sessionManager: { getSessionId: () => 'session', getBranch: () => branch },
@@ -16,6 +17,7 @@ function fixture() {
   let starts = 0;
   const check = createContextBudgetChecker({ getThinkingLevel: () => 'off' }, state, {
     mode: async () => 'auto', activeRole: () => state.activeRole,
+    decide: createCompactionPolicy({ on() {} }, state).evaluate,
     start: () => { starts++; state.pendingRoleCompaction = undefined; return true; },
   });
   return { state, ctx, traces, check, branch, setUsage: value => { usage = value; }, starts: () => starts };
@@ -76,7 +78,7 @@ test('manual and confirm modes preserve configuration; low usage and queue guard
   const f = fixture();
   f.setUsage({ tokens: 100, contextWindow: 100000, percent: 0.1 });
   await f.check(f.ctx);
-  assert.equal(f.traces.at(-1).decision, 'threshold');
+  assert.equal(f.traces.at(-1).decision, 'economics');
   f.ctx.hasPendingMessages = () => true;
   await f.check(f.ctx);
   assert.equal(f.traces.at(-1).reason, 'queued-continuation');
@@ -92,7 +94,7 @@ test('no-gain/failed attempts require cooldown AND measured growth, then stop at
     now += 60001;
     await f.check(f.ctx);
     assert.equal(f.starts(), 1, 'time alone cannot rearm');
-    for (const tokens of [100000, 110000, 120000]) {
+    for (const tokens of [106000, 116000, 126000]) {
       now += 60001;
       f.setUsage({ tokens, contextWindow: 100000, percent: tokens / 1000 });
       await f.check(f.ctx);
@@ -141,7 +143,7 @@ test("productive measured reductions rearm long tasks beyond three successful co
   try {
     for (let i = 0; i < 5; i++) {
       now += 60001;
-      f.setUsage({ tokens: 90000, contextWindow: 100000, percent: 90 });
+      f.setUsage({ tokens: 96000, contextWindow: 100000, percent: 96 });
       await f.check(f.ctx);
       f.setUsage({ tokens: 30000, contextWindow: 100000, percent: 30 });
       await f.check(f.ctx);

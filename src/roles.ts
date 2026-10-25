@@ -18,7 +18,6 @@ export const DEFAULT_WORKFLOW_MODE: WorkflowMode = "auto";
 export const WORKFLOW_EXECUTORS = ["local"] as const satisfies readonly WorkflowExecutor[];
 export const DEFAULT_WORKFLOW_EXECUTOR: WorkflowExecutor = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
-export const ROLE_SWITCH_COMPACTION_THRESHOLD = 50;
 export const ROLE_CONFIG_SCHEMA_VERSION = 2;
 export const ROLE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -122,24 +121,6 @@ function resolveModelReference(value: unknown, label = "模型"): RoleConfigResu
 /** Normalize a fully qualified model argument or a Pi Model object. */
 export function normalizeModelReference(value: unknown, label = "模型"): RoleConfigResult<ModelReference> {
   return resolveModelReference(value, label);
-}
-
-export function shouldCompactAfterWorkflowTask({
-  mode,
-  contextUsage,
-  targetModel,
-}: {
-  mode: RoleMode;
-  contextUsage?: { percent?: number | null; tokens?: number | null } | null;
-  targetModel?: { contextWindow: number; maxTokens: number };
-}): boolean {
-  if (mode !== "auto") return false;
-  if (contextUsage?.percent != null && contextUsage.percent >= ROLE_SWITCH_COMPACTION_THRESHOLD) return true;
-  if (contextUsage?.tokens == null || !targetModel || !(targetModel.contextWindow > 0)) return false;
-  // Usage includes the existing prompt; leave room for output and the next handoff/tools delta.
-  const outputReserve = Math.min(targetModel.maxTokens, Math.floor(targetModel.contextWindow / 4));
-  const handoffReserve = 4096;
-  return contextUsage.tokens + outputReserve + handoffReserve >= targetModel.contextWindow;
 }
 
 export function findMatchingRole(
