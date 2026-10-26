@@ -27,7 +27,7 @@
 
 ## 执行记忆架构
 
-- [执行记忆与上下文重设计](execution-memory-architecture.md) 的简化实现已接通：TaskMemory 与唯一管理模块保存/恢复真实工具来源，现有 task_workflow 支持 checkpoint 与 status 按来源读取，最终上下文固定携带进展。保留扁平队列、唯一 dispatcher 和身份/验收/压缩保护；只改措辞不计证据进展，关键记忆不可用或超限时走原停止边界。尚未部署到正在运行的 Pi，真实重复率/完成率收益待验证。
+- [执行记忆与上下文重设计](execution-memory-architecture.md) 的简化实现已接通：TaskMemory 与唯一管理模块保存/恢复真实工具来源，现有 task_workflow 支持 checkpoint 与 status 按来源读取，最终上下文固定携带进展。活动执行中不再随每次工具观察把变化的任务记忆投影插入既有消息前部；保留持久化、边界恢复摘要、扁平队列、唯一 dispatcher 和身份/验收/压缩保护。关键记忆不可用或超限时走原停止边界。动态审阅库存也不再注入 system，改由稳定工具说明与按需 `file_review(action="list")`、`/large` 查询。自动回归通过，但尚未部署到正在运行的 Pi，真实 Provider A/B、重复率/完成率及缓存成本收益待验证。
 
 ## 功能收敛
 
@@ -38,7 +38,7 @@
 
 - 自动经济型压缩只在可信活动工作流且可核实同模型请求价格、已完成同角色任务请求量、当前 Pi 原生可移除前缀和后续同角色队列时评估；预计省下的缓存读取成本必须覆盖摘要与缓存重建成本，并考虑上一轮压缩的未偿成本。普通任务、重规划和未知历史不伪造未来请求；容量风险独立触发原生窗口保护。压缩仍由唯一 pi-init 管理器执行，Online Context Compact 独立功能未启用，也未在真实 Provider 费用上验证收益。
 - SoL-Pi `economics.ts` 与 `projection.ts` 的 MIT 改编来源见 [`THIRD-PARTY-NOTICES`](../THIRD-PARTY-NOTICES)，实现边界和估算假设见 [`docs/decisions.md`](decisions.md)。
-- 2026-10-26 对 `clash_foward_rev` 实际会话的诊断发现：活动任务记忆视图插入旧消息前部可能截断 Provider 可复用前缀；该项尚未修复，减法方案及证据记录见 [`docs/pitfalls.md`](pitfalls.md#2026-10-26动态任务记忆视图会截断可复用的提示前缀)。
+- 2026-10-26 对 `clash_foward_rev` 实际会话的诊断发现，旧活动任务记忆视图及动态审阅 system section 可能改变可复用提示前缀；现已移除这两类重复动态注入。实现范围、离线/自动测试结果及尚未完成的真实 Provider A/B 见 [`docs/pitfalls.md`](pitfalls.md#2026-10-26动态任务记忆与审阅库存曾改变可复用提示前缀)。
 
 ## 角色交接现状
 
@@ -97,6 +97,7 @@
 
 ## 最近一次更新
 
+- 2026-10-26：取消活动执行中的重复任务记忆注入，并将动态审阅库存移出 system；自动回归通过，真实 Provider A/B 和缓存收益尚未验证。详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-24：修复预算压缩成功后可信角色交接的受限续接，并增加按请求关联的脱敏缓存 usage 诊断；扩展观测不代表最终网络请求或服务端缓存事实，未验证真实 Pi/Provider。实现、验证与限制见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-24：增加 codemode 异常空输出参数的执行前拒绝保护，并明确轻量调查路径为软约束；SDK 不提供可靠的请求专属流式取消契约，未实现生成中止。实现范围、限制和验证见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-21：工作流状态视图增加易失的无进展循环诊断；修复普通工具活动绕过暂停轮询保护、离线循环统计断 streak，以及重规划计划变化误清循环观察窗口的问题。运行任务现有一次纠偏续跑，仍无结果则暂停为未知，不自动重放副作用。

@@ -3,7 +3,9 @@ import test from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTaskMemoryRuntime, TASK_MEMORY_ENTRY, taskMemoryText } from "../extensions/task-memory-runtime.ts";
+import { createTaskMemoryRuntime, TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE, taskMemoryText } from "../extensions/task-memory-runtime.ts";
+import { createRoleRecovery } from "../extensions/role-recovery.ts";
+import { createRoleContextView } from "../extensions/role-context-view.ts";
 import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowActions } from "../extensions/workflow-actions.ts";
@@ -19,14 +21,21 @@ function fixture() {
   let branch = [{ type: "custom_message", id: "anchor", customType: "pi-init-workflow-task", details: identity, content: "task", timestamp: "2026-01-01T00:00:00Z" }];
   let serial = 0, fail = false, stops = 0;
   const notices = [];
-  const pi = { on(name, fn) { handlers.set(name, [...(handlers.get(name) ?? []), fn]); }, appendEntry(customType, data) {
+  const pi = { on(name, fn) { handlers.set(name, [...(handlers.get(name) ?? []), fn]); }, sendMessage(message, options) {
+    assert.equal(options.triggerTurn, false);
+    branch.push({ type: "custom_message", id: "summary-" + (++serial), ...message });
+  }, appendEntry(customType, data) {
     if (fail) throw new Error("disk failure");
     branch.push({ type: "custom", customType, data: structuredClone(data), id: "snapshot-" + (++serial), parentId: branch.at(-1)?.id });
   } };
   const ctx = { cwd: process.cwd(), isProjectTrusted: () => true, sessionManager: { getSessionId: () => "session", getBranch: () => branch, getEntry: id => branch.find(entry => entry.id === id) }, ui: { notify: (...args) => notices.push(args) } };
   const binding = createWorkflowToolBinding(pi, state);
   const runtime = createTaskMemoryRuntime(pi, state, binding, () => { stops++; });
-  async function emit(name, event = {}) { for (const fn of handlers.get(name) ?? []) await fn(event, ctx); }
+  async function emit(name, event = {}) {
+    let result;
+    for (const fn of handlers.get(name) ?? []) result = await fn(event, ctx) ?? result;
+    return result;
+  }
   async function commit(text = "Tests 91 passed", isError = false) {
     const n = ++serial;
     const message = { role: "assistant", timestamp: n, provider: "test", model: "model", content: [{ type: "toolCall", id: "call-" + n, name: "bash", arguments: { command: "verify" } }] };
@@ -145,7 +154,7 @@ test("paused recovery can read historical memory without reviving the old handof
   assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(view.memory.observations[0].id), 0), error => error.code === "TASK_MEMORY_IDENTITY_INVALID");
 });
 
-test("registered extension records SDK results, binds checkpoint and injects memory in the real context chain", async () => {
+test("registered extension records SDK results and binds checkpoint without injecting live memory", async () => {
   await withTempDirectory(async cwd => {
     const workflow = createWorkflowState({ sessionId: "test-session", summary: "memory integration", tasks: [{ id: "first", role: "developer-test", task: "generate patch", files: ["patches/"], acceptanceCriteria: ["patch generated"] }] });
     const h = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: workflow }], { cwd, trusted: true, deferSendMessagePersistence: true });
@@ -181,7 +190,7 @@ test("registered extension records SDK results, binds checkpoint and injects mem
         const projected = await handler({ type: "context", messages }, h.context);
         if (projected?.messages) messages = projected.messages;
       }
-      assert.equal(messages.filter(item => item.customType === "pi-init-task-memory-view").length, 1);
+      assert.equal(messages.filter(item => item.customType === TASK_MEMORY_MESSAGE).length, 0);
       assert.match(JSON.stringify(messages), /91 passed/);
       assert.match(JSON.stringify(messages), /generate patch/);
       assert.equal(h.branch.findLast(entry => entry.customType === "pi-init-workflow").data.tasks[0].status, "in_progress");
@@ -198,6 +207,101 @@ test("registered extension records SDK results, binds checkpoint and injects mem
       assert.deepEqual(restored.value.tasks[0].verificationEvidenceIds, ["sdk-result"]);
     } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
+});
+
+test("ordinary observations and checkpoints leave the model history prefix unchanged", async () => {
+  const f = fixture();
+  const recovery = createRoleRecovery(f.pi, f.state, undefined, undefined, f.runtime);
+  await f.emit("before_agent_start"); // The initial handoff has no observations to restore.
+  await f.commit();
+  const messages = [{ role: "user", content: "work", timestamp: 0 },
+    ...f.branch.filter(entry => entry.type === "message").map(entry => entry.message)];
+  const prefix = structuredClone(messages);
+  assert.equal(recovery.context({ type: "context", messages }, f.ctx), undefined);
+  const id = f.runtime.read(f.ctx).memory.observations[0].id;
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
+  await f.commit("new observation");
+  assert.equal(await f.emit("before_agent_start"), undefined);
+  assert.equal(recovery.context({ type: "context", messages }, f.ctx), undefined);
+  assert.deepEqual(messages, prefix);
+  assert.equal(f.branch.some(entry => entry.customType === TASK_MEMORY_MESSAGE), false);
+  assert.match(f.runtime.read(f.ctx, [id]).evidence[0].text, /91 passed/);
+});
+
+test("recovery summaries are captured once per boundary, not refreshed by tool results", async () => {
+  const f = fixture(); await f.commit();
+  const summary = (await f.emit("before_agent_start")).message;
+  assert.equal(summary.customType, TASK_MEMORY_MESSAGE);
+  assert.match(summary.content, /91 passed/);
+  const frozen = structuredClone(summary);
+  await f.commit("later observation");
+  assert.equal(await f.emit("before_agent_start"), undefined);
+  assert.deepEqual(summary, frozen);
+  await f.emit("session_compact");
+  const compacted = f.branch.findLast(entry => entry.customType === TASK_MEMORY_MESSAGE);
+  assert.match(compacted.content, /later observation/);
+  assert.equal(await f.emit("before_agent_start"), undefined);
+  await f.emit("session_tree");
+  const restored = (await f.emit("before_agent_start")).message;
+  assert.match(restored.content, /later observation/);
+  assert.equal(await f.emit("before_agent_start"), undefined);
+});
+
+test("compacted paused views retain the persisted summary only after validating the workflow snapshot", async () => {
+  const f = fixture(); await f.commit();
+  f.state.workflowState.status = "paused";
+  f.state.workflowState.recoveryGeneration++;
+  delete f.state.workflowState.handoff;
+  f.state.roleRecoveryPending = true;
+  delete f.state.workflowState.currentTaskId;
+  Object.assign(f.state.workflowState.tasks[0], {
+    task: "generate patch", files: ["patches/"], acceptanceCriteria: ["patch generated"],
+    status: "blocked", blockReason: "paused for recovery",
+  });
+  const saved = hydrateWorkflowState(f.state.workflowState);
+  assert.equal(saved.ok, true, JSON.stringify(saved));
+  f.pi.appendEntry("pi-init-workflow", f.state.workflowState);
+  const summary = { role: "custom", ...(await f.emit("before_agent_start")).message, timestamp: 10 };
+  const user = { role: "user", content: "continue safely", timestamp: 11 };
+  const messages = [summary, user]; // Compaction omitted the old handoff message.
+  const view = createRoleContextView(f.state);
+  const projected = view.context({ type: "context", messages }, f.ctx);
+  assert.ok(projected.messages.includes(summary));
+  assert.ok(projected.messages.includes(user));
+  assert.equal(f.state.roleRecoveryPending, true);
+  assert.equal(f.state.workflowState.handoff, undefined);
+  f.state.workflowState.sessionId = "another-session";
+  const rejected = view.context({ type: "context", messages }, f.ctx);
+  assert.equal(rejected.messages.includes(summary), false);
+  assert.ok(rejected.messages.includes(user));
+});
+
+test("paused recovery snapshots remain historical and corruption still stops execution", async () => {
+  const f = fixture(); await f.commit();
+  f.state.workflowState.status = "paused";
+  f.state.workflowState.recoveryGeneration++;
+  delete f.state.workflowState.handoff;
+  f.state.roleRecoveryPending = true;
+  const summary = (await f.emit("before_agent_start")).message;
+  assert.match(summary.content, /91 passed/);
+  const id = f.runtime.read(f.ctx).memory.observations[0].id;
+  assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0), error => error.code === "TASK_MEMORY_IDENTITY_INVALID");
+  f.branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data.observations[0].summary = "fabricated success";
+  await f.emit("session_start");
+  const invalid = (await f.emit("before_agent_start")).message;
+  assert.doesNotMatch(invalid.content, /91 passed/);
+  assert.equal(f.stops, 1);
+});
+
+test("a not-yet-persisted dispatch anchor does not cause a false recovery failure", async () => {
+  const f = fixture();
+  f.setBranch([]);
+  assert.equal(await f.emit("before_agent_start"), undefined);
+  assert.equal(f.stops, 0);
+  f.setBranch([{ type: "custom_message", id: "anchor", customType: "pi-init-workflow-task", details: f.identity }]);
+  await f.commit();
+  assert.equal(await f.emit("before_agent_start"), undefined);
+  assert.equal(f.stops, 0);
 });
 
 test("archived source IDs remain readable and can support a later checkpoint", async () => {

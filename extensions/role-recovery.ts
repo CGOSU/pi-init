@@ -3,7 +3,7 @@ import { validateWorkflowHandoffIdentity } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
-import { taskMemoryText, TASK_MEMORY_MESSAGE } from "./task-memory-runtime.ts";
+import { TASK_MEMORY_MESSAGE } from "./task-memory-runtime.ts";
 import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
 
 export const ROLE_RECOVERY_ENTRY_TYPE = "pi-init-role-recovery";
@@ -89,17 +89,9 @@ export function createRoleRecovery(
   function context(event: ContextEvent, ctx: ExtensionContext) {
     const view = state.roleRecoveryPending && state.workflowState?.status !== "paused" ? undefined : contextView?.(event, ctx);
     function finalize(result: ContextEventResult | undefined) {
-      const memory = taskMemory?.read(ctx);
-      const memoryText = memory ? taskMemoryText(memory) : "";
-      if (!result?.messages && !memoryText) return result;
-      const original = result?.messages ?? event.messages;
-      const hasMemory = original.some(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE);
-      const messages = memoryText || hasMemory ? original.filter(message => message.role !== "custom" || message.customType !== TASK_MEMORY_MESSAGE) : original;
-      if (memoryText) {
-        const lastUser = messages.findLastIndex(message => message.role === "user");
-        messages.splice(lastUser + 1, 0, { role: "custom", customType: TASK_MEMORY_MESSAGE, content: memoryText, display: false, timestamp: 0 } as ContextEvent["messages"][number]);
-      }
-      const summarized = new Set(memory?.status === "available" ? memory.memory?.observations.map(item => item.toolCallId) ?? [] : []);
+      const messages = result?.messages ?? event.messages;
+      const memory = messages.findLast(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE);
+      if (!result?.messages && !memory) return result;
       const workflow = state.workflowState;
       const task = workflow?.tasks.find(task => task.id === workflow.currentTaskId);
       const liveTask = workflow?.status === "running" && workflow.handoff?.phase === "executing"
@@ -108,9 +100,10 @@ export function createRoleRecovery(
         && !state.pendingWorkflowRecovery && !state.userStopRequested && !state.runtimeDisposed
         && validateWorkflowHandoffIdentity(workflow, workflow.handoff, ctx).ok;
       // Live task history belongs to the SDK token-budget/compaction path, not a second byte-sized sliding window.
+      const summarizedIds = memory?.role === "custom" ? (memory.details as { summarizedToolCallIds?: unknown } | undefined)?.summarizedToolCallIds : undefined;
+      const summarized = new Set(Array.isArray(summarizedIds) ? summarizedIds.filter((id): id is string => typeof id === "string") : []);
       const bounded = boundContextWindow(messages, liveTask ? null : contextByteBudget(ctx.model?.contextWindow), summarized);
-      const covered = !memoryText || bounded.messages.some(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE && message.content === memoryText);
-      if (memoryText && (!covered || bounded.overBudget || memory?.status === "unavailable")) taskMemory?.suspend(ctx);
+      if (memory && (!bounded.messages.includes(memory) || bounded.overBudget)) taskMemory?.suspend(ctx);
       const projected = bounded.checkpointed ? bounded.messages.map(message => {
         if (message.role !== "custom" || message.customType !== "pi-init-role-context-view-diagnostic" || typeof message.content !== "string") return message;
         return { ...message, content: message.content.replaceAll("完整模型消息已保留", "交接边界投影未执行，随后已应用有界预算检查点")

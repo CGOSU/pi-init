@@ -119,6 +119,12 @@ export function pausedContextView(
       if (!observations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
       selected = messages.filter((message) => protectedContextMessage(message) || observations.has(message));
     }
+    // A persisted recovery summary is an observation, even when compaction removed the old handoff.
+    const memory = messages.findLast(message => messageRecord(message)?.customType === "pi-init-task-memory-view");
+    if (memory && !selected.includes(memory)) {
+      const retained = new Set([...selected, memory]);
+      selected = messages.filter(message => retained.has(message));
+    }
     if (!hasCompleteToolPairs(selected.filter(message => messageRecord(message)?.role !== "system"))) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "恢复窗口中的工具调用/结果配对不完整或重复");
     const identity = workflowActionIdentity(workflow);
     const snapshot = {

@@ -4,6 +4,7 @@ import { boundContextWindow } from "../extensions/role-context-budget.ts";
 import { createRoleRecovery } from "../extensions/role-recovery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createTaskMemory, recordTaskObservations, checkpointTaskMemory } from "../src/task-memory.ts";
+import { TASK_MEMORY_MESSAGE, taskMemoryText } from "../extensions/task-memory-runtime.ts";
 
 function pair(index, text = "x".repeat(2000), isError = false) {
   return [{ role: "assistant", content: [{ type: "toolCall", id: "call-" + index, name: "bash", arguments: { command: "verify-" + index } }], timestamp: index },
@@ -102,14 +103,21 @@ function memoryFixture() {
   memory = checkpointTaskMemory(memory, { step: "package", accomplished: [{ summary: "Historical verification: Tests 91 passed", evidenceIds: ["source-1"] }], remaining: ["generate patch"], blockers: [], nextStep: "generate patch" });
   return { read: () => ({ status: "available", memory, applicability: "historical" }), suspend() { assert.fail("bounded memory should not pause"); } };
 }
-test("one hundred projections keep task progress while archiving oversized failure bodies", () => {
+function boundaryMessage() {
+  const view = memoryFixture().read();
+  return { role: "custom", customType: TASK_MEMORY_MESSAGE, content: taskMemoryText(view), display: false,
+    details: { summarizedToolCallIds: view.memory.observations.map(item => item.toolCallId) }, timestamp: 1 };
+}
+test("one hundred projections retain the immutable recovery summary while archiving covered failure bodies", () => {
   const state = createExtensionRuntimeState();
-  const memory = memoryFixture();
+  const memory = { read() { assert.fail("context must not refresh task memory"); }, suspend() { assert.fail("bounded memory should not pause"); } };
   const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
-  let messages = [{ role: "user", content: "finish the patch", timestamp: 0 }, ...pair(0, "old failure".repeat(6000), true), ...pair(1, "Tests 91 passed"), ...pair(2, "latest read")];
+  const summary = boundaryMessage();
+  let messages = [{ role: "user", content: "finish the patch", timestamp: 0 }, summary, ...pair(0, "old failure".repeat(6000), true), ...pair(1, "Tests 91 passed"), ...pair(2, "latest read")];
   for (let i = 0; i < 100; i++) {
     messages = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } }).messages;
-    assert.equal(messages.filter(message => message.customType === "pi-init-task-memory-view").length, 1);
+    assert.deepEqual(messages.filter(message => message.customType === TASK_MEMORY_MESSAGE), [summary]);
+    assert.ok(messages.includes(summary), "the persisted boundary message is not regenerated");
     assert.match(JSON.stringify(messages), /Tests 91 passed/);
     assert.match(JSON.stringify(messages), /generate patch/);
     assert.ok(Buffer.byteLength(JSON.stringify(messages)) <= 24000);
@@ -117,17 +125,16 @@ test("one hundred projections keep task progress while archiving oversized failu
     assert.deepEqual(calls.sort(), messages.filter(message => message.role === "toolResult").map(message => message.toolCallId).sort());
   }
 });
-test("unavailable or oversized required memory pauses through the existing boundary without dropping instructions", () => {
-  for (const unavailable of [true, false]) {
-    const state = createExtensionRuntimeState(); let pauses = 0;
-    const source = memoryFixture();
-    const memory = { read: unavailable ? () => ({ status: "unavailable", reason: "TASK_MEMORY_SOURCE_MISSING" }) : source.read, suspend() { pauses++; } };
-    const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
-    const user = { role: "user", content: "user constraints".repeat(4000), timestamp: 0 };
-    const result = recovery.context({ type: "context", messages: [user, ...pair(2)] }, { model: { contextWindow: 16000 } });
-    assert.equal(pauses, 1);
-    assert.ok(result.messages.includes(user));
-  }
+test("oversized persisted recovery memory pauses without dropping instructions or rereading history", () => {
+  const state = createExtensionRuntimeState(); let pauses = 0;
+  const memory = { read() { assert.fail("context must not refresh task memory"); }, suspend() { pauses++; } };
+  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+  const user = { role: "user", content: "user constraints".repeat(4000), timestamp: 0 };
+  const summary = boundaryMessage();
+  const result = recovery.context({ type: "context", messages: [user, summary, ...pair(2)] }, { model: { contextWindow: 16000 } });
+  assert.equal(pauses, 1);
+  assert.ok(result.messages.includes(user));
+  assert.ok(result.messages.includes(summary));
 });
 
 test("live executing task uses SDK token budget instead of repeatedly discarding its own history", () => {

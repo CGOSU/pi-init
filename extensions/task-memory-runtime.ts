@@ -219,7 +219,33 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     }
     return [...new Set(ids)];
   }
-  function reset() { failures.clear(); stopped.clear(); }
+  let lastBoundary: string | undefined;
+  function boundarySummary(ctx: ExtensionContext, compacted = false) {
+    const workflow = state.workflowState;
+    if (!workflow || !ctx.isProjectTrusted()) return;
+    const current = workflowHandoffIdentity(workflow);
+    const boundary = JSON.stringify([ctx.sessionManager.getSessionId(), current ?? [workflow.workflowId, workflow.planVersion, workflow.currentTaskId, workflow.recoveryGeneration]]);
+    if (!compacted && boundary === lastBoundary) return;
+    lastBoundary = boundary;
+    // A newly dispatched task message is not on the branch until before_agent_start finishes.
+    // It has no prior task observations to restore; do not treat that SDK ordering as corruption.
+    if (current && !workflowHandoffMessageOnBranch(ctx, current)) return;
+    const memory = read(ctx);
+    if (memory.status === "unavailable") suspend(ctx);
+    const content = taskMemoryText(memory);
+    if (content) return { customType: TASK_MEMORY_MESSAGE, content, display: false,
+      details: { summarizedToolCallIds: memory.status === "available" ? memory.memory?.observations.map(item => item.toolCallId) ?? [] : [] } };
+  }
+  pi.on("before_agent_start", (_event, ctx) => {
+    const message = boundarySummary(ctx);
+    if (message) return { message };
+  });
+  pi.on("session_compact", (_event, ctx) => {
+    const message = boundarySummary(ctx, true);
+    // The SDK appends safely after a running turn's tool results, without starting another turn.
+    if (message) pi.sendMessage(message, { triggerTurn: false });
+  });
+  function reset() { failures.clear(); stopped.clear(); lastBoundary = undefined; }
   pi.on("session_start", reset); pi.on("session_tree", reset); pi.on("session_shutdown", reset);
   return { read, checkpoint, verificationSources, suspend };
 }

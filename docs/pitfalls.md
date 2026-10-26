@@ -14,13 +14,13 @@
 
 ## 已知问题
 
-### 2026-10-26：动态任务记忆视图会截断可复用的提示前缀
+### 2026-10-26：动态任务记忆与审阅库存曾改变可复用提示前缀
 
 - 日期：2026-10-26。
 - 现象：`clash_foward_rev` 一次长会话的请求诊断中，212 个 assistant 请求有 20 次明确记录 `cacheRead=0`；另有 75 次只复用了约 19,328 个缓存 token，其中 67 次紧跟任务记忆快照变化。相同角色与模型下也观察到 system 指纹变化。SoL-Pi 配置为 `onlineContextCompact=false`，该会话无 Pi 原生压缩事件，因此不是 Online Context Compact 改写历史造成的缓存 miss。
-- 机制与判断：pi-init 的活动任务上下文投影会把随工具观察更新的 `pi-init-task-memory-view` 插入已有消息前部。离线复现确认，只改此投影视图就会改变后续消息序列，同时保留其他原始历史；这足以让按顺序缓存提示前缀的 Provider 只能复用该动态消息之前的部分，且与 67 次低缓存读取紧跟记忆变化相符，是主要嫌疑，但尚未通过真实 Provider A/B 证明因果。`before_agent_start` 的增量审阅动态 system section、角色/模型切换也会改变缓存键，可能解释部分完全 miss。
-- 修复建议（未实施）：优先做减法，取消活动任务期间每轮自动注入不断变化的任务观察；在任务/恢复边界按需读取 `task_workflow(status)`，只在确有恢复需要时注入短摘要。若仍需自动注入，应避免改写既有前缀，把动态内容放在上下文尾部，并用目标 Provider 的真实 usage 对比验证。不得删掉身份、未知副作用和恢复保护。
-- 验证：检查目标项目 `.pi/diagnostics/runtime.jsonl*`、对应 Pi session、SoL 配置和 pi-init 投影实现；执行不修改仓库的离线投影复现，确认历史消息不变而动态视图改变。未修改代码/配置，未运行真实 Provider A/B 或测试，故修复效果尚未验证。
+- 机制与判断：pi-init 的旧活动任务上下文投影会把随工具观察更新的 `pi-init-task-memory-view` 插入已有消息前部。离线复现确认，只改此投影视图就会改变后续消息序列，同时保留其他原始历史；这可能缩短可复用提示前缀，但真实 Provider A/B 尚未证明因果。旧 `before_agent_start` 增量审阅 system section 也会动态改变提示；角色/模型切换仍可能改变缓存键，不能据此归因所有 miss。
+- 处理（已实施）：活动任务期间不再逐次注入变化的任务观察；任务记忆仍保留持久化、checkpoint、来源查询及身份/恢复/停止/未知副作用保护。动态审阅库存不再进入 system，由稳定工具说明和按需 `file_review(action="list")`、`/large` 提供。没有引入 status 轮询或尾部消息动态替换。
+- 验证与边界：离线投影复现验证了旧提示序列受动态视图影响；实现后 `node --test test/file-review-runtime.test.js test/file-review.test.js` 25 项通过、`npm test` 681 项通过、`npm run typecheck` 和 `git diff --check` 通过。未连接真实 Provider A/B 或 Pi TUI，因此缓存命中、费用、时延及任务效率收益仍未验证；详见 [`docs/session-log.md`](session-log.md)。
 
 ### 2026-10-16：用例标题声称“不跟随链接”但夹具未构造链接
 

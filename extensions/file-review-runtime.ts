@@ -5,7 +5,6 @@ import {
   isPowerShellToolResult,
   isReadToolResult,
   isWriteToolResult,
-  type BeforeAgentStartEvent,
   type ExtensionAPI,
   type ExtensionContext,
   type ToolResultEvent,
@@ -31,7 +30,6 @@ import {
 import { buildReviewCandidateQueue, type ReviewCandidateQueueError } from "../src/review-candidates.ts";
 import {
   createIncrementalReviewState,
-  incrementalReviewCandidates,
   markIncrementalReviewNotified,
   observeIncrementalReviewFiles,
   refreshIncrementalReviewCandidates,
@@ -43,8 +41,7 @@ import { registerLargeCommand, type LargeReviewSnapshot } from "./large-command.
 import { hasCompleteCoverage, mergeCoverage, pathKey, type FileCoverage } from "./file-review-coverage.ts";
 import type { ActiveRole } from "./runtime-state.ts";
 
-const REVIEW_SECTION = "pi_init_large_file_review";
-const MAX_SECTION_FILES = 10;
+const DEFAULT_LIST_FILES = 10;
 const MAX_LIST_FILES = 50;
 
 function branchEntryIds(ctx: ExtensionContext) {
@@ -159,48 +156,6 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 
   function pending(current = session) {
     return candidateQueue(current)?.structuralCandidates ?? [];
-  }
-
-  function runtimeSection(ctx: ExtensionContext, queue = candidateQueue()) {
-    if (!session) return "审阅增量基线尚未建立；不得断言当前没有新变化。";
-    if (!queue) return "结构审阅候选状态无法确认；不得将其视作无候选文件。";
-    const candidates = incrementalReviewCandidates(session.incremental);
-    const lines = [
-      "[pi-init 增量审阅候选]",
-      "日常范围：当前 session/branch 基线后实际观察到的文件变化；不代表精准任务 Git diff。",
-      "完整候选库存仍由 file_review(action=\"list\", offset=...) 与 /large 承接。",
-      `结构审阅阈值：超过 ${FILE_REVIEW_THRESHOLD} 个物理行进入候选库存；这不是文件上限，不自动拆分或拒绝编辑。`,
-      STRUCTURE_REVIEW_GUIDANCE,
-    ];
-    if (session.errors.length > 0) {
-      lines.push("扫描或审阅状态不完整；下列结果可能不完整，不能据此断言没有其他待审文件：");
-      for (const error of session.errors.slice(0, MAX_SECTION_FILES)) {
-        lines.push(`- [${error.code}] ${error.path || "."}: ${error.message}`);
-      }
-    }
-    if (!queue.structuralConfirmed) {
-      const error = queue.structuralError;
-      lines.push(`结构候选状态无法确认${error ? `（${error.code}）：${error.message}` : ""}；不得推断为没有结构候选，保留上次确认的增量上下文。`);
-    }
-    lines.push(`结构增量待审：${candidates.length}${queue.structuralConfirmed ? "" : "（上次确认；当前未确认）"}`);
-    for (const candidate of candidates.slice(0, MAX_SECTION_FILES)) {
-      lines.push(`- ${candidate.file.path} · ${candidate.file.lineCount} 行 · version ${candidate.file.fingerprint}`);
-    }
-    if (candidates.length > MAX_SECTION_FILES) {
-      lines.push(`另有 ${candidates.length - MAX_SECTION_FILES} 个结构增量候选；调用 file_review(action=\"list\", offset=...) 分批读取完整库存。`);
-    }
-    const hasCandidates = candidates.length > 0 || !queue.structuralConfirmed || session.errors.length > 0;
-    if (hasCandidates) {
-      if (!deps.canReview()) {
-        lines.push("职责恢复或工具安全门尚未解除；暂不执行审阅操作，先完成当前职责恢复。");
-      } else if (deps.getActiveRole(ctx)?.role === "architect") {
-        lines.push("当前职责为 architect：不得读取或审阅代码；将审阅工作交给 developer-test 或 docs-commit。");
-      } else {
-        lines.push("确需结构审阅时：读取文件内容，判断职责是否内聚；调用 file_review(action=\"complete\") 记录有理由的 keep 或 recommend-split。拆分只是建议，不自动修改代码；若内容版本变化，旧审阅失效。");
-      }
-      if (session.readCoverage.size > 0) lines.push("只有 Pi read 工具读取覆盖当前完整文件版本后，审阅确认才会被接受；分段读取也可累积完整覆盖。");
-    }
-    return lines.join("\n");
   }
 
   function unnotifiedCandidates(current: ReviewSession, queue: ReturnType<typeof candidateQueue>) {
@@ -515,7 +470,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 
     if (input.action === "list") {
       const offset = Number(input.offset ?? 0);
-      const limit = Number(input.limit ?? MAX_SECTION_FILES);
+      const limit = Number(input.limit ?? DEFAULT_LIST_FILES);
       const items = structureListItems(offset, limit, candidates);
       const scanStatus = refreshed.ok ? "" : "扫描不完整；以下仅为已发现候选。";
       const summary = !queue.structuralConfirmed
@@ -584,6 +539,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     promptGuidelines: [
       `${FILE_REVIEW_THRESHOLD} lines identifies candidates, not a mandatory review for every edit; it is not a rule to split or reject edits.`,
       STRUCTURE_REVIEW_GUIDANCE,
+      "Query current inventory on demand with file_review(action=\"list\", offset=...) or /large; incremental notices cover observed changes since the session/branch baseline, not an exact task Git diff.",
       "list is project inventory pagination via offset/limit, not a review of the supplied path. path is used only by complete; list discloses any ignored path and still returns global candidates.",
       "Only supported code files are reviewed; Markdown is excluded. A list result is not evidence that a supplied path was reviewed.",
       "Read the full current file using read before submitting a review; use offset/limit chunks when needed.",
@@ -603,22 +559,6 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   pi.on("session_shutdown", () => {
     generation += 1;
     session = undefined;
-  });
-  pi.on("before_agent_start", (event: BeforeAgentStartEvent, ctx) => {
-    if (!event.systemPromptOptions?.sections) return;
-    const state = session;
-    if (!state) {
-      event.systemPromptOptions.sections[REVIEW_SECTION] = "审阅增量基线仍未完成；不得断言当前没有新变化。";
-      return;
-    }
-    const queue = candidateQueue(state);
-    const hasCandidates = !queue || incrementalReviewCandidates(state.incremental).length > 0
-      || !queue.structuralConfirmed || state.errors.length > 0;
-    if (hasCandidates) {
-      event.systemPromptOptions.sections[REVIEW_SECTION] = runtimeSection(ctx, queue);
-    } else {
-      delete event.systemPromptOptions.sections[REVIEW_SECTION];
-    }
   });
   pi.on("tool_result", handleToolResult);
   pi.on("agent_settled", async (_event, ctx) => {

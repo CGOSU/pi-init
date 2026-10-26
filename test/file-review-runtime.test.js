@@ -334,20 +334,24 @@ test("恢复门未解除时大文件审阅工具不执行", async () => {
   });
 });
 
-test("settled 通知只提示新候选版本且待审上下文持续保留", async () => {
+test("库存按需更新且通知按版本去重，不改变 system 前缀", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], { cwd: directory });
     await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const systemSections = async () => {
+      const event = { systemPromptOptions: { sections: { existing: "stable instructions" } } };
+      await emitExtensionEvent(harness, "before_agent_start", event);
+      return event.systemPromptOptions.sections;
+    };
+    const baseline = await systemSections();
     await writeFile(path.join(directory, "src", "new.ts"), makeFile("first-version"));
 
     await emitExtensionEvent(harness, "agent_settled", {});
     assert.equal(harness.notifications.length, 1);
     assert.match(harness.notifications[0].message, /src\/new\.ts/);
 
-    const prompt = { systemPromptOptions: { sections: {} } };
-    await emitExtensionEvent(harness, "before_agent_start", prompt);
-    assert.match(prompt.systemPromptOptions.sections.pi_init_large_file_review, /src\/new\.ts/);
-    assert.doesNotMatch(prompt.systemPromptOptions.sections.pi_init_large_file_review, /测试价值|test-value|implementationPaths/);
+    assert.deepEqual(await systemSections(), baseline);
+    assert.deepEqual(await systemSections(), baseline);
     await emitExtensionEvent(harness, "agent_settled", {});
     assert.equal(harness.notifications.length, 1);
 
@@ -355,6 +359,27 @@ test("settled 通知只提示新候选版本且待审上下文持续保留", asy
     await emitExtensionEvent(harness, "agent_settled", {});
     assert.equal(harness.notifications.length, 2);
     assert.match(harness.notifications[1].message, /src\/new\.ts/);
+    assert.deepEqual(await systemSections(), baseline);
+
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const listed = await tool.execute("list-new", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(listed.details.total, 2);
+    const candidate = listed.details.candidates.find((item) => item.path === "src/new.ts");
+    assert.equal(candidate.lineCount, lineCount);
+    await emitToolResult(harness, readEvent(candidate.path));
+    assert.equal((await completeReview(harness, candidate)).details.ok, true);
+    assert.equal((await tool.execute("list-reviewed", { action: "list" }, undefined, undefined, harness.context)).details.total, 1);
+    assert.deepEqual(await systemSections(), baseline);
+
+    await writeFile(path.join(directory, "src", "new.ts"), `${makeFile("third-version")}\nextra-line`);
+    const changed = await tool.execute("list-changed", { action: "list" }, undefined, undefined, harness.context);
+    assert.equal(changed.details.total, 2);
+    const latest = changed.details.candidates.find((item) => item.path === candidate.path);
+    assert.equal(latest.lineCount, lineCount + 1);
+    assert.notEqual(latest.fingerprint, candidate.fingerprint);
+    assert.equal((await completeReview(harness, candidate)).details.code, "STALE_VERSION");
+    assert.deepEqual(await systemSections(), baseline);
+    assert.equal(harness.notifications.length, 2);
   });
 });
 
