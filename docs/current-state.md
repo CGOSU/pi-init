@@ -38,6 +38,7 @@
 
 - 自动经济型压缩只在可信活动工作流且可核实同模型请求价格、已完成同角色任务请求量、当前 Pi 原生可移除前缀和后续同角色队列时评估；预计省下的缓存读取成本必须覆盖摘要与缓存重建成本，并考虑上一轮压缩的未偿成本。普通任务、重规划和未知历史不伪造未来请求；容量风险独立触发原生窗口保护。压缩仍由唯一 pi-init 管理器执行，Online Context Compact 独立功能未启用，也未在真实 Provider 费用上验证收益。
 - SoL-Pi `economics.ts` 与 `projection.ts` 的 MIT 改编来源见 [`THIRD-PARTY-NOTICES`](../THIRD-PARTY-NOTICES)，实现边界和估算假设见 [`docs/decisions.md`](decisions.md)。
+- 2026-10-26 对 `clash_foward_rev` 实际会话的诊断发现：活动任务记忆视图插入旧消息前部可能截断 Provider 可复用前缀；该项尚未修复，减法方案及证据记录见 [`docs/pitfalls.md`](pitfalls.md#2026-10-26动态任务记忆视图会截断可复用的提示前缀)。
 
 ## 角色交接现状
 
