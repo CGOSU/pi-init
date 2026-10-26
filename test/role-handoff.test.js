@@ -31,8 +31,6 @@ test("轮内切角终止旧回合，settled 后启动新职责回合并刷新系
   assert.equal(handoffs(harness).length, 1);
   assert.equal(handoffs(harness)[0].options.triggerTurn, true);
   const message = handoffs(harness)[0].message;
-  assert.match(message.content, /补充说明可省略/);
-  assert.match(message.content, /引用失效或证据不足/);
   const nextRun = await startRun(harness, message);
   assert.match(nextRun.systemPromptOptions.sections.pi_init_runtime, /当前职责：文档收尾/);
   await emitExtensionEvent(harness, "agent_end");

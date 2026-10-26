@@ -20,7 +20,7 @@ metadata:
 
 ## 角色与模型
 
-- 明确实现/测试交给 developer-test；项目 Markdown、版本及 Git 收尾交给 docs-commit；需求或架构判断交给 architect。普通只读咨询和局部低风险开发直接由合适的非 architect 角色连续调查、实现、验证，不为流程形式往返。
+- 明确实现/测试交给 developer-test；项目 Markdown、版本及 Git 收尾交给 docs-commit；需求或架构判断交给 architect。普通只读咨询和局部低风险开发由合适的非 architect 角色连续调查、实现、验证，不为流程形式往返。跨职责交接只携带当前成果、必要来源/验证引用和关键未知；需补查时集中列出关键缺口。没有新事实、决策或待办，不因报告或切角本身增加往返。交接服务于职责隔离与上下文收敛，不以减少切角次数为目标。
 - architect 只分析、决策、规划和安排；仅允许 switch_role 与 task_workflow 的 plan/replan/status/request-replan/request-goal。不得读取仓库、运行 shell/测试、编辑、连接 MCP，也不得作为执行任务角色或提交 complete/block。需要新事实时安排普通 docs-commit 调查任务。
 - roleModels 是显式模型来源，每项必须含 provider/model/thinkingLevel。标准角色未映射时沿用当前真实会话模型与推理强度，不生成 fallback 配置；未知自定义角色须有显式映射及职责说明。损坏配置、模型不可用或缺少凭据如实失败，不静默换模型。
 - auto 自动换角，confirm 先询问，manual 阻止自动换角。只有跨职责边界或恢复门要求确认时调用 switch_role；当前职责已确认时不重复切换。manual 无法验证职责时请用户执行 /pi-init role <role>，不循环调用必然失败的工具。

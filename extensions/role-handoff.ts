@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
-import { roleLabel } from "../src/roles.ts";
 import { textOf, type ActiveRole, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
 import { checkWorkflowRoleSwitch } from "./workflow-action-policy.ts";
@@ -117,11 +116,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
         details: identity(handoff),
         content: [
           handoffSnapshotPrompt(state, handoff.targetRole.role),
-          `职责交接已完成。当前职责：${roleLabel(handoff.targetRole.role)}（${handoff.targetRole.role}）。`,
-          "上一角色回合已结束；本回合由新职责重新构建系统提示，不沿用上一回合的职责声明。",
-          "按当前用户目标、已有工具结果和交接记录，只继续尚未完成的工作；不要重复已完成的调查或仅为确认而再次切角。",
-          "旧 workflow/request 消息中的目标角色属于其原交接，不覆盖本回合的当前职责。需要返回原职责时明确交接本次获得的事实和待办。",
-          "工作流或取证结果仍须使用当前真实身份，并由要求的角色提交；切角不等于完成、重规划或接受证据。若没有待办，直接结束，不创造新任务。",
+          "上一职责回合已结束；以当前职责继续未完成工作，历史消息中的职责不覆盖当前职责。",
         ].join("\n"),
       }, { triggerTurn: true });
       if (current(ctx, handoff)) persist(handoff, "queued");

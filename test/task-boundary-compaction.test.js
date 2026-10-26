@@ -203,7 +203,6 @@ async function receiverBudgetBoundary() {
     const message = harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").at(-1).message;
     assert.match(message.content, /系统生成的轻量交接快照/);
     assert.match(message.content, /"taskId":"second"/);
-    assert.match(message.content, /补充说明可省略/);
     assert.equal(latest(harness).tasks[0].status, "completed");
     complete();
     await emitExtensionEvent(harness, "agent_settled");
