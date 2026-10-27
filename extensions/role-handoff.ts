@@ -7,13 +7,6 @@ import { checkWorkflowRoleSwitch } from "./workflow-action-policy.ts";
 
 export const ROLE_HANDOFF_MESSAGE_TYPE = "pi-init-role-handoff";
 const ROLE_HANDOFF_ENTRY_TYPE = "pi-init-role-handoff-state";
-
-export type RoleHandoffCompaction = {
-  pendingId: (ctx: ExtensionContext) => string | undefined;
-  resumeAfterCompaction: (ctx: ExtensionContext, handoffId: string) => Promise<void>;
-  retireCompaction: (handoffId: string) => void;
-};
-
 type RoleHandoffDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   requireRecovery: (ctx: ExtensionContext, reason: string) => void;
@@ -43,7 +36,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
     };
   }
   type Scope = ReturnType<typeof capture>;
-  type Handoff = { handoffId: string; scope: Scope; targetRole: ActiveRole; roleTransitionGeneration: number; branchEntryIds: string[]; compactionRetired?: boolean };
+  type Handoff = { handoffId: string; scope: Scope; targetRole: ActiveRole; roleTransitionGeneration: number; branchEntryIds: string[] };
   let pending: Handoff | undefined;
   let sending: Handoff | undefined;
 
@@ -90,9 +83,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
     if (sending) return true;
     const handoff = pending;
     if (!handoff) return false;
-    // Retain the retired boundary until reset/new handoff so settled cannot fall
-    // through to the workflow scheduler after failed or unverified compaction.
-    if (handoff.compactionRetired) return true;
+
     if (!current(ctx, handoff)) {
       pending = undefined;
       state.traceHandoff?.(ctx, "role.handoff_discarded", identity(handoff));
@@ -139,19 +130,6 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
     return state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError || state.pendingWorkflowRecovery;
   }
 
-  function pendingId(ctx: ExtensionContext) {
-    return pending && !pending.compactionRetired && current(ctx, pending) && !recoveryBlocked() ? pending.handoffId : undefined;
-  }
-
-  async function resumeAfterCompaction(ctx: ExtensionContext, handoffId: string) {
-    if (pending?.handoffId !== handoffId) return;
-    await schedule(ctx);
-  }
-
-  function retireCompaction(handoffId: string) {
-    if (pending?.handoffId === handoffId) pending.compactionRetired = true;
-  }
-
   function reset() { pending = undefined; sending = undefined; }
-  return { capture, finishSwitch, schedule, reset, pendingId, resumeAfterCompaction, retireCompaction, checkSwitchRole: (targetRole: string) => checkWorkflowRoleSwitch(state, targetRole) };
+  return { capture, finishSwitch, schedule, reset, checkSwitchRole: (targetRole: string) => checkWorkflowRoleSwitch(state, targetRole) };
 }

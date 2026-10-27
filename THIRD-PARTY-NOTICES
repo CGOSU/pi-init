@@ -1,12 +1,12 @@
-本项目内置以下经许可改编的第三方算法源码；未内置 SoL-Pi 插件或其独立执行器。
+本项目保留以下第三方来源与许可记录；未内置 SoL-Pi 插件或其独立执行器。
 
 NVIDIA SoL-Pi — online-context-compact/economics.ts and projection.ts
 ------------------------------------------------------------------------
 Source revision: 2195680 (https://github.com/NVlabs/SoL-Pi)
 Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
-License: MIT. The adapted sources retain their SPDX attribution. The local
-implementation changes the forecasting inputs, conservative defaults, and
-integration with pi-init's existing compaction/recovery manager.
+License: MIT. Historical adaptations of economics.ts and projection.ts were
+removed when proactive compaction was retired. Attribution and the license
+remain here for the historical source and documentation record.
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),

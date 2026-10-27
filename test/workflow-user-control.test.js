@@ -159,7 +159,7 @@ test("恢复门在tool_call前置拒绝时也有界停止，不能依赖execute�
   });
 });
 
-test("完整工具组预算压缩后沿同一任务身份续做一次，不累加无结果纠偏或重派新attempt", async () => {
+test("完整工具组不触发主动压缩，原生压缩后保留任务并重新确认职责", async () => {
   await withTempDirectory(async cwd => {
     const h = await runningHarness(cwd);
     try {
@@ -172,17 +172,14 @@ test("完整工具组预算压缩后沿同一任务身份续做一次，不累�
       const before = structuredClone(latest());
       const sent = h.sentMessages.length;
       await emitExtensionEvent(h, "turn_end", { outcome: "completed", message: { role: "assistant", content: [{ type: "toolCall", id: "complete-read", name: "read", arguments: { path: "src" } }] }, toolResults: [{ role: "toolResult", toolCallId: "complete-read", toolName: "read", content: [] }], toolResultEntryIds: ["result-entry"] });
-      assert.ok(callbacks);
-      await emitExtensionEvent(h, "agent_end");
-      await emitExtensionEvent(h, "agent_settled");
+      assert.equal(callbacks, undefined);
       assert.equal(h.sentMessages.length, sent);
-      await h.completeCompaction(callbacks);
-      assert.equal(h.sentMessages.length, sent + 1);
-      assert.equal(latest().handoff.attemptId, before.handoff.attemptId);
-      assert.equal(latest().handoff.handoffId, before.handoff.handoffId);
-      assert.equal(latest().nudgeCount, before.nudgeCount);
-      assert.equal(latest().tasks[0].status, "in_progress");
-      assert.equal(latest().tasks[0].outcomeUnknown, undefined);
+      assert.deepEqual(latest(), before);
+      await h.completeCompaction({ reason: "threshold" });
+      assert.equal(h.sentMessages.length, sent);
+      assert.deepEqual(latest(), before);
+      const denied = await emitExtensionEvent(h, "tool_call", { toolName: "bash", toolCallId: "after-native-compaction", input: { command: "true" } });
+      assert.equal(denied.block, true);
     } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
 });

@@ -1,39 +1,46 @@
 import type { ExtensionCommandContext, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { } from "typebox";
-import {
-  applyWorkflowReplan,
-  createWorkflowState,
-  validateWorkflowHandoffIdentity,
-  validateWorkflowMutationIdentity,
-  validateWorkflowReplanIdentity,
-  validateWorkflowPlan,
-  workflowActionIdentity, requestWorkflowReplan, requestWorkflowGoal, createWorkflowGoalState, validateWorkflowGoalPlan, normalizeReplanPlan, assertSupportedWorkflowFeatures } from "../src/workflow.ts";
-import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
-import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowMode } from "../src/role-types.ts";
-import type { WorkflowHandoffIdentity, WorkflowResult, WorkflowTask } from "../src/workflow-types.ts";
-import { textOf, type ExtensionRuntimeState, type WorkflowActionIdentity } from "./runtime-state.ts";
-import type { RoleRuntime } from "./role-runtime.ts";
-import { type WorkflowDispatch } from "./workflow-dispatch.ts";
-import type { WorkflowReport } from "./workflow-report.ts";
-import { taskWorkflowParameters } from "./contracts.ts";
-import {
-  createWorkflowCompletionView,
-  createWorkflowTaskCompletionView,
-} from "./workflow-completion-view.ts";
-import {
-  formatWorkflowCompletionText,
-  formatWorkflowTaskCompletionText,
-} from "./workflow-completion-renderer.ts";
-import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
-import { attachWorkflowPresentation } from "./workflow-presentation.ts";
-import { workflowHandoffMessageOnBranch, workflowHandoffNotExecutingFailure, workflowHandoffIdentity } from "../src/workflow-handoff.ts";
-import { transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
+import { resolveRoleModel, shouldOrchestrateWorkflow } from "../src/roles.ts";
+import { workflowHandoffIdentity, workflowHandoffMessageOnBranch, workflowHandoffNotExecutingFailure } from "../src/workflow-handoff.ts";
 import type { WorkflowLifecycleTransition } from "../src/workflow-orchestrator.ts";
-import { runWorkflowPanelRequest } from "./workflow-panel-actions.ts";
-import { nextWorkflowAction } from "./workflow-action-policy.ts";
-import { taskMemoryText } from "./task-memory-runtime.ts";
+import { transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
+import type { WorkflowHandoffIdentity, WorkflowResult, WorkflowTask } from "../src/workflow-types.ts";
+import {
+    applyWorkflowReplan,
+    assertSupportedWorkflowFeatures,
+    createWorkflowGoalState,
+    createWorkflowState,
+    normalizeReplanPlan,
+    requestWorkflowGoal,
+    requestWorkflowReplan,
+    validateWorkflowGoalPlan,
+    validateWorkflowHandoffIdentity,
+    validateWorkflowMutationIdentity,
+    validateWorkflowPlan,
+    validateWorkflowReplanIdentity,
+    workflowActionIdentity
+} from "../src/workflow.ts";
+import { taskWorkflowParameters } from "./contracts.ts";
+import type { RoleRuntime } from "./role-runtime.ts";
+import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
 import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
+import { taskMemoryText } from "./task-memory-runtime.ts";
+import { nextWorkflowAction } from "./workflow-action-policy.ts";
+import {
+    formatWorkflowCompletionText,
+    formatWorkflowTaskCompletionText,
+} from "./workflow-completion-renderer.ts";
+import {
+    createWorkflowCompletionView,
+    createWorkflowTaskCompletionView,
+} from "./workflow-completion-view.ts";
+import { type WorkflowDispatch } from "./workflow-dispatch.ts";
+import { runWorkflowPanelRequest } from "./workflow-panel-actions.ts";
+import { attachWorkflowPresentation } from "./workflow-presentation.ts";
+import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
+import type { WorkflowReport } from "./workflow-report.ts";
+import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
@@ -73,9 +80,7 @@ export function createWorkflowActions(
 
   function commitLifecycleTransition(transition: WorkflowLifecycleTransition, ctx: ExtensionContext) {
     const persisted = deps.report.persistWorkflowState(transition.state, ctx);
-    for (const effect of transition.effects) {
-      deps.roleRuntime.retireWorkflowContinuation(effect.identity);
-    }
+
     state.workflowDispatchInFlight = false;
     return persisted;
   }
@@ -340,17 +345,10 @@ export function createWorkflowActions(
         });
         deps.report.persistWorkflowState(next, ctx);
         state.workflowRestoreError = undefined;
-        const identity: WorkflowActionIdentity = {
-          workflowId: next.workflowId,
-          planVersion: next.planVersion,
-          sessionId: next.sessionId,
-          recoveryGeneration: next.recoveryGeneration,
-        };
+
         if (next.status === "paused") {
           ctx.ui.notify("架构规划已保存，等待用户审阅。审阅后执行 /pi-init workflow resume。", "info");
-          if (state.pendingRoleCompaction) state.pendingRoleCompaction.continuation = { kind: "workflow-review", identity };
-        } else if (state.pendingRoleCompaction) {
-          state.pendingRoleCompaction.continuation = { kind: "workflow-schedule", identity };
+
         }
         return {
           content: [{ type: "text", text: `已保存架构规划。\n${deps.report.formatWorkflowState(next)}${next.status === "paused" ? "\n\n当前按用户要求暂停，审阅后再执行。" : "\n\n将自动切换到第一个任务。"}` }],

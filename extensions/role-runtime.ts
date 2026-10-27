@@ -1,54 +1,41 @@
 import {
-  THINKING_LEVELS,
-  getRoleNames,
-  normalizeModelReference,
-  normalizeRoleId,
-  resolveRoleConfig,
-  resolveRoleModel,
-  roleLabel,
-  roleModeLabel,
-  unwrapRoleResult, mergeRoleConfigData } from "../src/roles.ts";
+    CONFIG_DIR_NAME,
+    withFileMutationQueue,
+    type ExtensionAPI,
+    type ExtensionCommandContext,
+    type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import {
-  CONFIG_DIR_NAME,
-  withFileMutationQueue,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
-import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
 import type { RoleMode, WorkflowMode } from "../src/role-types.ts";
+import {
+    THINKING_LEVELS,
+    getRoleNames,
+    mergeRoleConfigData,
+    normalizeModelReference,
+    normalizeRoleId,
+    resolveRoleConfig,
+    resolveRoleModel,
+    roleLabel,
+    roleModeLabel,
+    unwrapRoleResult
+} from "../src/roles.ts";
+import type { ActivityStatusReporter } from "./activity-status.ts";
 import type { MenuSaveResult, ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import {
-  activeRoleMatches,
-  textOf,
-  type ExtensionRuntimeState,
-  type WorkflowActionIdentity,
-  type WorkflowHandoffIdentity,
-  type WorkflowReplanIdentity,
-  type WorkflowState,
-  type PendingRoleCompaction,
+    activeRoleMatches,
+    textOf,
+    type ExtensionRuntimeState,
+    type WorkflowState
 } from "./runtime-state.ts";
 import { isMenuBack, shortModelName, showMenu } from "./ui.ts";
-import { createContextBudgetChecker } from "./context-budget-monitor.ts";
-import { createCompactionPolicy } from "./compaction-policy.ts";
-import type { RoleHandoffCompaction } from "./role-handoff.ts";
-import { createWorkflowCompaction } from "./workflow-compaction.ts";
-import type { ActivityStatusReporter } from "./activity-status.ts";
+import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
+import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 
 export type RoleRuntimeDependencies = {
-  roleHandoff?: RoleHandoffCompaction;
   activityStatus: ActivityStatusReporter;
   getWorkflowState: () => WorkflowState | undefined;
-  setWorkflowDispatchInFlight: (value: boolean) => void;
-  requireRoleRecovery: (ctx: ExtensionContext, reason: string) => void;
-  sendWorkflowTaskMessage: (ctx: ExtensionContext, taskId: string, note?: string, identity?: WorkflowHandoffIdentity) => void;
-  scheduleWorkflow: (ctx: ExtensionContext, identity?: WorkflowActionIdentity, reason?: "context-budget") => Promise<void>;
-  sendWorkflowReplanMessage: (ctx: ExtensionContext, identity?: WorkflowReplanIdentity) => void;
   acknowledgeRoleRecovery: (role: string) => void;
-  finishWorkflowBoundary: (ctx: ExtensionContext, identity: WorkflowActionIdentity, failed?: boolean) => Promise<void>;
 };
 
 export function workflowModeLabel(mode: WorkflowMode) {
@@ -64,18 +51,7 @@ export function createRoleRuntime(
   deps: RoleRuntimeDependencies,
 ) {
   let internalModelSelectionDepth = 0;
-  const compactionPolicy = createCompactionPolicy(pi, state);
-  const workflowCompaction = createWorkflowCompaction(pi, state, {
-    ...deps,
-    getActiveRole: activeRoleFor,
-  });
-  const checkContextBudget = createContextBudgetChecker(pi, state, {
-    mode: async (ctx) => effectiveRoleMode(await readSessionRoleConfig(ctx)),
-    activeRole: activeRoleFor,
-    start: workflowCompaction.start,
-    decide: compactionPolicy.evaluate,
-    roleHandoff: deps.roleHandoff,
-  });
+
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return { ok: true as const, value: undefined };
 
@@ -120,14 +96,6 @@ export function createRoleRuntime(
 
   function activeRoleFor(ctx: ExtensionContext) {
     return activeRoleMatches(state, ctx, pi.getThinkingLevel()) ? state.activeRole : undefined;
-  }
-
-  async function compactionDecisionForRole(ctx: ExtensionContext, role: string) {
-    const config = await readSessionRoleConfig(ctx);
-    const target = unwrapRoleResult(resolveRoleModel(config, role, sessionDefaultModel(ctx)));
-    const model = ctx.modelRegistry.find(target.provider, target.model);
-    if (!model) return { ok: false as const, code: "COMPACTION_TARGET_UNAVAILABLE", message: "目标模型不可用，无法估算压缩收益或容量。" };
-    return compactionPolicy.evaluate(ctx, model);
   }
 
   function hasPendingRoleConfigChanges() { return Object.keys(state.sessionRoleConfigOverrides).length > 0; }
@@ -296,27 +264,6 @@ export function createRoleRuntime(
     state.roleModeStatus = mode;
     refreshRoleStatus(ctx, mode);
   }
-  function createPendingRoleCompaction(
-    ctx: ExtensionContext,
-    fromRole: string,
-    toRole: string,
-  ): PendingRoleCompaction {
-    const targetRole = activeRoleFor(ctx);
-    if (!targetRole || targetRole.role !== fromRole) {
-      throw new Error(`无法为任务边界建立压缩交接：当前活动角色不是 ${fromRole}`);
-    }
-    return {
-      fromRole,
-      toRole,
-      sessionId: ctx.sessionManager.getSessionId(),
-      contextGeneration: state.roleContextGeneration,
-      roleTransitionGeneration: state.roleTransitionGeneration,
-      targetRole: { ...targetRole },
-    };
-  }
-
-  function startPendingRoleCompaction(ctx: ExtensionContext) { workflowCompaction.start(ctx); }
-
   async function applyRole(role: string, ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig) {
     const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
@@ -446,8 +393,7 @@ export function createRoleRuntime(
   }
   return {
     activeRoleFor,
-    checkContextBudget,
-    compactionDecisionForRole,
+
     readSessionRoleConfig,
     hasPendingRoleConfigChanges,
     isRoleModelConfigPersisted,
@@ -459,10 +405,7 @@ export function createRoleRuntime(
     saveRoleConfig,
     refreshRoleStatus,
     setRoleStatus,
-    createPendingRoleCompaction,
-    startPendingRoleCompaction,
-    retireWorkflowContinuation: workflowCompaction.retireWorkflowContinuation,
-    disposeWorkflowCompaction: workflowCompaction.dispose,
+
     applyRole,
     automaticRole,
     currentRole,

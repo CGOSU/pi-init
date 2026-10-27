@@ -12,7 +12,7 @@ function flatState() { return createWorkflowState({ ...plan("目标", "child-tas
 function actionHarness(initial, options = {}) {
   const state = createExtensionRuntimeState();
   state.workflowState = initial;
-  const retired = [];
+
   const order = [];
   const ctx = {
     isProjectTrusted: () => true,
@@ -25,7 +25,7 @@ function actionHarness(initial, options = {}) {
   const actions = createWorkflowActions(state, {
     roleRuntime: {
       activeRoleFor: () => ({ role: options.role ?? "developer-test" }),
-      retireWorkflowContinuation: (identity) => { order.push("retire"); retired.push(identity); },
+
     },
     report: {
       persistWorkflowState: (next) => {
@@ -39,7 +39,7 @@ function actionHarness(initial, options = {}) {
     },
     dispatch: { scheduleWorkflow: async () => { order.push("schedule"); } },
   });
-  return { state, actions, ctx, retired, order };
+  return { state, actions, ctx, order };
 }
 
 test("扁平工作流取消写入失败不提前撤销续跑", async () => {
@@ -47,16 +47,14 @@ test("扁平工作流取消写入失败不提前撤销续跑", async () => {
   const h = actionHarness(initial, { fail: true });
   await assert.rejects(h.actions.runTaskWorkflowAction({ action: "cancel", ...workflowActionIdentity(initial) }, undefined, h.ctx), /session write failed/);
   assert.equal(h.state.workflowState, initial);
-  assert.deepEqual(h.retired, []);
   assert.deepEqual(h.order, ["persist"]);
 });
 
-test("扁平工作流取消提交后才撤销旧身份续跑，不使用递增后的身份", async () => {
+test("扁平工作流取消只提交一次终态，不启动其他副作用", async () => {
   const initial = flatState();
   const h = actionHarness(initial);
   await h.actions.runTaskWorkflowAction({ action: "cancel", ...workflowActionIdentity(initial) }, undefined, h.ctx);
-  assert.deepEqual(h.order, ["persist", "retire"]);
-  assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
+  assert.deepEqual(h.order, ["persist"]);
   assert.equal(h.state.workflowState.workflowId, initial.workflowId);
   assert.equal(h.state.workflowState.status, "cancelled");
 });
@@ -80,7 +78,7 @@ function completionParams(state) {
   return { action: "complete", ...identity, ...result };
 }
 
-test("扁平工作流完成写入失败不撤销续跑、成功后使用原身份撤销", async () => {
+test("扁平工作流完成写入失败保留原状态，成功后只提交一次终态", async () => {
   const initial = executingState();
   const failed = actionHarness(initial, { fail: true });
   await assert.rejects(failed.actions.runTaskWorkflowAction(completionParams(initial), undefined, failed.ctx), /session write failed/);
@@ -88,8 +86,7 @@ test("扁平工作流完成写入失败不撤销续跑、成功后使用原身�
   assert.deepEqual(failed.order, ["persist"]);
   const h = actionHarness(initial);
   const result = await h.actions.runTaskWorkflowAction(completionParams(initial), undefined, h.ctx);
-  assert.deepEqual(h.order, ["persist", "retire"]);
-  assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
+  assert.deepEqual(h.order, ["persist"]);
   assert.equal(h.state.workflowState.workflowId, initial.workflowId);
   assert.equal(h.state.workflowState.tasks[0].status, "completed");
   assert.match(result.content[0].text, /工作流已完成/);
@@ -105,7 +102,7 @@ test("生命周期转换确定、输入不变，完成状态单一", () => {
   assert.equal(result.taskState.workflowId, initial.workflowId);
   assert.equal(result.taskState.status, "completed");
   assert.equal(result.state.workflowId, initial.workflowId);
-  assert.deepEqual(result.effects, [{ kind: "retire-continuation", identity: workflowActionIdentity(initial) }]);
+  assert.deepEqual(result.state, result.taskState);
 });
 
 test("完成与阻塞事件校验全部 handoff 身份字段，迟到结果不能绑定父层", () => {
@@ -150,7 +147,7 @@ test("未知结果重试仍须显式确认，重试后旧事件失效", () => {
   const retried = transitionWorkflowLifecycle(recovered.value, { ...event, confirmUnknownOutcome: true }, 122);
   assert.equal(retried.state.status, "running");
   assert.equal(retried.state.tasks[0].status, "pending");
-  assert.deepEqual(retried.effects, []);
+  assert.equal(retried.state.tasks[0].status, "pending");
   assert.throws(() => transitionWorkflowLifecycle(retried.state, { ...event, confirmUnknownOutcome: true }, 123), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
 });
 
@@ -173,7 +170,7 @@ test("架构审阅恢复由生命周期事件推进，重复恢复身份被拒�
   const next = transitionWorkflowLifecycle(initial, event, 120);
   assert.equal(next.state.status, "running");
   assert.equal(next.state.continuation.reason, "resume");
-  assert.deepEqual(next.effects, []);
+  assert.equal(next.state.currentTaskId, undefined);
   assert.throws(() => transitionWorkflowLifecycle(next.state, event, 121), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
 });
 
@@ -183,8 +180,7 @@ test("命令取消与工具一致，保持单一终态", async () => {
   await h.actions.workflowCommand("cancel", undefined, h.ctx);
   assert.equal(h.state.workflowState.workflowId, initial.workflowId);
   assert.equal(h.state.workflowState.status, "cancelled");
-  assert.deepEqual(h.order, ["persist", "retire"]);
-  assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
+  assert.deepEqual(h.order, ["persist"]);
 });
 
 test("最终完成一次提交终态，提交失败不清除调度标记", async () => {
@@ -194,14 +190,12 @@ test("最终完成一次提交终态，提交失败不清除调度标记", async
   failed.state.workflowDispatchInFlight = true;
   await assert.rejects(failed.actions.runTaskWorkflowAction(completionParams(initial), undefined, failed.ctx), /session write failed/);
   assert.equal(failed.state.workflowDispatchInFlight, true);
-  assert.deepEqual(failed.retired, []);
   const h = actionHarness(initial);
   h.state.workflowDispatchInFlight = true;
   await h.actions.runTaskWorkflowAction(completionParams(initial), undefined, h.ctx);
   assert.equal(h.state.workflowState.status, "completed");
   assert.equal(h.state.workflowDispatchInFlight, false);
-  assert.deepEqual(h.order, ["persist", "retire"]);
-  assert.deepEqual(h.retired, [workflowActionIdentity(initial)]);
+  assert.deepEqual(h.order, ["persist"]);
 });
 
 test("工具重试和恢复的写入失败不报告成功或改变业务状态", async () => {
@@ -226,7 +220,7 @@ test("退役的子流程审阅事件不能改变当前扁平工作流", () => {
   await h.actions.workflowCommand("cancel-all", undefined, h.ctx);
   assert.equal(h.state.workflowState.status, "cancelled");
   assert.equal(h.state.workflowState.workflowId, initial.workflowId);
-  assert.deepEqual(h.order, ["persist", "retire"]);
+  assert.deepEqual(h.order, ["persist"]);
 });
 
 test("plain block can preserve unknown side effects without the retired clarification protocol", async () => {

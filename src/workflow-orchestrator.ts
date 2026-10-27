@@ -89,12 +89,10 @@ export type WorkflowLifecycleEvent =
   | { type: "workflow-resumed"; identity: WorkflowActionIdentity }
   | { type: "task-retried"; identity: WorkflowActionIdentity; taskId?: string; confirmUnknownOutcome: boolean }
   | { type: "workflow-cancelled"; identity: WorkflowActionIdentity };
-
-export type WorkflowLifecycleEffect = { kind: "retire-continuation"; identity: WorkflowActionIdentity };
 export type WorkflowLifecycleTransition = {
   state: WorkflowState;
   taskState: WorkflowState;
-  effects: WorkflowLifecycleEffect[];
+
 };
 
 export function transitionWorkflowLifecycle(
@@ -134,11 +132,13 @@ export function transitionWorkflowLifecycle(
     case "workflow-cancelled":
       next = cancelWorkflow(state, now);
       break;
+    default:
+      throw new Error("不支持的工作流生命周期事件");
   }
-  const terminal = next.status === "completed" || next.status === "cancelled";
+
   return {
     state: next,
     taskState: next,
-    effects: terminal ? [{ kind: "retire-continuation", identity: workflowActionIdentity(state) }] : [],
+
   };
 }

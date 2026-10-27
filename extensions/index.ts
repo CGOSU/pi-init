@@ -52,7 +52,6 @@ import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createPausedStatusGuard, createWorkflowProgressObserver, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
 import { createWorkflowDelivery } from "./workflow-delivery.ts";
 import { createWorkflowUserControl } from "./workflow-user-control.ts";
-import { registerContextBudgetMonitor } from "./context-budget-monitor.ts";
 import { createTaskMemoryRuntime } from "./task-memory-runtime.ts";
 import { registerAbnormalToolGuard } from "./abnormal-tool-guard.ts";
 
@@ -98,25 +97,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     persistWorkflowState: (next, ctx) => workflowReport.persistWorkflowState(next, ctx),
   });
   const roleRuntime = createRoleRuntime(pi, runtimeState, {
-    roleHandoff: {
-      pendingId: ctx => roleHandoff.pendingId(ctx),
-      resumeAfterCompaction: (ctx, handoffId) => roleHandoff.resumeAfterCompaction(ctx, handoffId),
-      retireCompaction: handoffId => roleHandoff.retireCompaction(handoffId),
-    },
-    activityStatus, getWorkflowState: () => runtimeState.workflowState,
-    setWorkflowDispatchInFlight: (value) => {
-      runtimeState.workflowDispatchInFlight = value;
-    },
-    requireRoleRecovery: roleRecovery.requireConfirmation,
-    sendWorkflowTaskMessage: (ctx, taskId, note, identity) => workflowMessages.sendWorkflowTaskMessage(ctx, taskId, note, identity),
-    scheduleWorkflow: (ctx, identity, reason) => workflowDispatch.scheduleWorkflow(ctx, identity, reason),
-    sendWorkflowReplanMessage: (ctx, identity) => workflowMessages.sendWorkflowReplanMessage(ctx, identity),
-    acknowledgeRoleRecovery: roleRecovery.acknowledge,
-    finishWorkflowBoundary: (ctx, identity, failed) => workflowDispatch.finishWorkflowBoundary(ctx, identity, failed),
-  });
+              activityStatus, getWorkflowState: () => runtimeState.workflowState,
+              acknowledgeRoleRecovery: roleRecovery.acknowledge,
+            });
   const roleHandoff = createRoleHandoff(pi, runtimeState, { getActiveRole: roleRuntime.activeRoleFor, requireRecovery: roleRecovery.requireConfirmation });
   const userControl = createWorkflowUserControl(pi, runtimeState, {
-    retire: () => { roleHandoff.reset(); roleRuntime.disposeWorkflowCompaction(); },
+    retire: () => roleHandoff.reset(),
     interrupt: (ctx) => {
       const current = runtimeState.workflowState;
       if (!current || current.status !== "running" || !current.currentTaskId || !["executing", "queued", "dispatching"].includes(current.handoff?.phase ?? "")) return;
@@ -130,7 +116,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (result?.block) ctx.abort();
     return result;
   });
-  registerContextBudgetMonitor(pi, runtimeState, roleRuntime);
+
   createFileReviewRuntime(pi, {
     getActiveRole: roleRuntime.activeRoleFor,
     canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
@@ -355,8 +341,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return;
     }
     settleExternalRunTiming();
-    roleRuntime.startPendingRoleCompaction(ctx);
-    if (runtimeState.roleCompactionInFlight || runtimeState.pendingRoleCompaction) return;
+
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -365,7 +350,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     workflowTaskConsumptionRunActive = false;
     runtimeState.roleContextGeneration += 1;
     runtimeState.roleTransitionGeneration += 1;
-    roleRuntime.disposeWorkflowCompaction();
+
     workflowReport.dispose(ctx);
     runtimeState.runtimeDisposed = true;
     runTimingDiagnostics.reset();

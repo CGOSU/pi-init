@@ -4,7 +4,7 @@ import { buildSessionProjection } from '@earendil-works/pi-coding-agent';
 import { createExtensionHarness, createWorkflowState, emitExtensionEvent, workflowMessageIdentity,
   withTempDirectory, mkdir, path, writeFile } from './helpers.js';
 
-test('completed task/request history drives economic boundary compaction through the real role runtime and resumes once', async () => {
+test('profitable task history does not trigger proactive compaction', async () => {
   await withTempDirectory(async cwd => {
     await mkdir(path.join(cwd, '.pi'), { recursive: true });
     await writeFile(path.join(cwd, '.pi', 'role-models.json'), JSON.stringify({ schemaVersion: 2, mode: 'auto', workflowMode: 'on', roleModels: {} }));
@@ -51,18 +51,9 @@ test('completed task/request history drives economic boundary compaction through
       implementationRationale: 'verified task boundary', verification: ['targeted checks passed'],
     }, undefined, undefined, h.context);
     await emitExtensionEvent(h, 'agent_settled');
-    assert.ok(callbacks, 'profitable boundary below 50% must reach the existing manager');
+    assert.equal(callbacks, undefined, 'profitable history never makes pi-init request compaction');
     assert.equal(latest().tasks[0].status, 'completed');
-    assert.equal(latest().tasks[1].status, 'pending');
-    assert.equal(latest().continuation.phase, 'compacting');
-    await h.completeCompaction(callbacks);
-    const deadline = Date.now() + 2000;
-    while (latest().currentTaskId !== 'task-1' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 1));
     assert.equal(latest().currentTaskId, 'task-1');
-    const attempt = latest().handoff.attemptId;
-    callbacks.onComplete({});
-    await emitExtensionEvent(h, 'agent_settled');
-    assert.equal(latest().handoff.attemptId, attempt);
     assert.equal(h.sentMessages.filter(({ message }) => message.customType === 'pi-init-workflow-task').length, 2);
     await emitExtensionEvent(h, 'session_shutdown');
   });

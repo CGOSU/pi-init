@@ -119,17 +119,16 @@ test("鼠标按面板中的实际行定位任务，标题和页脚不触发选�
 
 test("面板取消入口经过确认后复用业务命令，默认返回不写状态", async () => {
   for (const accept of [false, true]) {
-    const state = fixture(); const writes = []; const retired = [];
+    const state = fixture(); const writes = [];
     const h = createExtensionHarness([], { mode: "tui", hasUI: true, trusted: true, select: (_title, items) => items[accept ? 1 : 0], custom: async call => {
       call.component.render(80); call.component.handleInput("a"); call.component.render(80);
       call.component.handleInput("\u001b[B"); call.component.handleInput("\r");
     } });
-    const roleRuntime = { refreshRoleStatus() {}, retireWorkflowContinuation: identity => retired.push(identity) };
+    const roleRuntime = { refreshRoleStatus() {} };
     const report = createWorkflowReport(state, { pi: { appendEntry: (_type, next) => writes.push(next) }, roleRuntime });
     const actions = createWorkflowActions(state, { report, roleRuntime, dispatch: {}, coordination: { isLinkedToWorkflow: () => false } });
     await actions.workflowCommand("status", undefined, h.context);
     assert.equal(writes.length, accept ? 1 : 0);
-    assert.equal(retired.length, accept ? 1 : 0);
     assert.equal(state.workflowState.status, accept ? "cancelled" : "running");
   }
 });
