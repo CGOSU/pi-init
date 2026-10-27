@@ -61,6 +61,7 @@ function buildRuntimeSection(
     `当前模型：${model}，推理强度：${thinkingLevel}`,
     workflowSummary(state),
     recoveryGuidance(state),
+    "职责连续性：活动工作流的显式任务角色优先于模型自行判断；无活动任务时优先遵循用户明确指定的任务角色，否则按交付物选择职责。同一交付物内连续调查、实现和验证，分析 Bug、读取 API 文档本身不触发换角；仅在独立交付物或必要架构决策边界交接。architect 不执行；权限、身份、恢复、停止与未知副作用守卫始终优先。无工作流的连续性是路由指导，不代表运行时硬绑定。",
     `工作流下一步：${nextWorkflowAction(state).action}。${nextWorkflowAction(state).nextAction}`,
   ].join("\n");
 }

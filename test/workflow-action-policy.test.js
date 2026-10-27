@@ -9,8 +9,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { blockWorkflowTask } from "../src/workflow.ts";
 
-function running() {
-    const workflow = startWorkflowTask(createWorkflowState({ sessionId: 'test-session', summary: 'rust-crossfile', tasks: [{ id: 'rust-crossfile', role: 'developer-test', task: 'implement', files: ['src'], acceptanceCriteria: ['tested'] }] }), 'rust-crossfile');
+function running(role = 'developer-test') {
+    const workflow = startWorkflowTask(createWorkflowState({ sessionId: 'test-session', summary: 'rust-crossfile', tasks: [{ id: 'rust-crossfile', role, task: 'implement', files: ['src'], acceptanceCriteria: ['tested'] }] }), 'rust-crossfile');
     workflow.handoff.phase = 'executing';
     return workflow;
 }
@@ -18,18 +18,23 @@ function handoff(state) {
   return createRoleHandoff({}, state, { getActiveRole: () => undefined, requireRecovery() { throw Error('unexpected effect'); } });
 }
 test('running task retains executor authority with and without pending replan', () => {
-  for (const workflow of [running(), requestWorkflowReplan(running(), { direction: 'new direction' })]) {
-    const state = { ...createExtensionRuntimeState(), workflowState: workflow };
-    const before = JSON.stringify(state);
-    const step = nextWorkflowAction(state);
-    assert.equal(step.action, 'finish-current-task');
-    assert.equal(step.requiredRole, 'developer-test');
-    const denied = handoff(state).checkSwitchRole('architect');
-    assert.equal(denied.allowed, false);
-    assert.equal(denied.code, 'WORKFLOW_TASK_BOUNDARY_REQUIRED');
-    assert.match(denied.nextAction, /block/);
-    assert.equal(handoff(state).checkSwitchRole('developer-test').allowed, true);
-    assert.equal(JSON.stringify(state), before);
+  for (const role of ['developer-test', 'docs-commit', 'project-reviewer']) {
+    for (const workflow of [running(role), requestWorkflowReplan(running(role), { direction: 'new direction' })]) {
+      const state = { ...createExtensionRuntimeState(), workflowState: workflow,
+        activeRole: { role: 'architect', provider: 'test', model: 'test', thinkingLevel: 'high' } };
+      const before = JSON.stringify(state);
+      const step = nextWorkflowAction(state);
+      assert.equal(step.action, 'finish-current-task');
+      assert.equal(step.requiredRole, role);
+      for (const target of ['architect', 'developer-test', 'docs-commit', 'project-reviewer'].filter(target => target !== role)) {
+        const denied = handoff(state).checkSwitchRole(target);
+        assert.equal(denied.allowed, false);
+        assert.equal(denied.code, 'WORKFLOW_TASK_BOUNDARY_REQUIRED');
+        assert.equal(denied.requiredRole, role);
+      }
+      assert.equal(handoff(state).checkSwitchRole(role).allowed, true);
+      assert.equal(JSON.stringify(state), before);
+    }
   }
 });
 test('safe completion uses existing scheduler replan; ordinary switching stays valid', () => {

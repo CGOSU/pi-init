@@ -29,6 +29,14 @@
 
 - [执行记忆与上下文重设计](execution-memory-architecture.md) 的简化实现已接通：TaskMemory 与唯一管理模块保存/恢复真实工具来源，现有 task_workflow 支持 checkpoint 与 status 按来源读取，最终上下文固定携带进展。活动执行中不再随每次工具观察把变化的任务记忆投影插入既有消息前部；保留持久化、边界恢复摘要、扁平队列、唯一 dispatcher 和身份/验收/压缩保护。关键记忆不可用或超限时走原停止边界。动态审阅库存也不再注入 system，改由稳定工具说明与按需 `file_review(action="list")`、`/large` 查询。自动回归通过，但尚未部署到正在运行的 Pi，真实 Provider A/B、重复率/完成率及缓存成本收益待验证。
 
+## 职责连续性
+
+- 显式任务角色优先、同一交付物保持职责；活动工作流复用原角色守卫，无工作流仅提示指导，不新增硬绑定状态机。完整规则见[连续任务与轻量角色交接](role-continuity.md#角色选择与连续性)。
+
+## 安全原文分页
+
+- `file_review(action="read", path, offset, limit)` 提供无原生 read 时的安全原文读取：从 1 开始，默认 100/最多 200 行，每页原文最多 16 KiB，只登记完整返回行。分页职责独立在 `extensions/file-review-read.ts`，复用路径校验、稳定快照/指纹与覆盖区间；原生 read 可混用，list 保持项目库存语义，complete 保留当前版本全文校验。失败、取消、内容变化或会话/分支变化不产生错误覆盖。
+
 ## 功能收敛
 
 - 已退役正式证据、结构任务契约/澄清、旧嵌套执行和/fast；保留普通调查任务、files/acceptanceCriteria/实际verification、checkpoint及单一扁平队列。旧记录返回WORKFLOW_FEATURE_RETIRED，只在确认副作用后隔离，不自动恢复或重放。

@@ -258,7 +258,7 @@ flowchart LR
 - 同一真实身份下连续 3 个不同调用被同类业务/恢复门拒绝时，运行时停止当前重复回合及自动续跑；穿插普通读取不清空计数。它不限制合法交接次数，不自动重试或切角。
 - auto 模式在 SDK `turn_end` 完整工具组后调用统一策略：真实工作流历史足以预测时按模型价格与可移除上下文估算预期节省；预测不可用时只保留接近窗口上限的容量保护，不把累计账单 token 当窗口。manual/confirm、缺失 usage、恢复门、待派发消息、操作进行中和未知执行身份仍阻止自动压缩，并留下原因；压缩后成本未偿回或历史不可比时跳过经济性重复压缩，交接与失败恢复继续复用既有压缩操作/回调。
 - 已验证的活动任务压缩后，只有相同 session/branch/角色/任务/attempt/handoff 且宿主已结束旧回合时，才通过现有唯一 dispatcher 续做一次；不创建新 attempt、不重派初始任务，也不把这次宿主中断计作模型未提交结果的纠偏。普通无工作流任务不额外启动模型回合；如果宿主结束了当前回合，界面提示用户明确继续未完成部分。取消、未知结果、失败或过期回调均不获得重放授权。
-- `file_review(action="list")` 是全项目受支持代码文件的候选库存分页，不按 path 筛选；传入 path 时返回 `scope: "project"` 和 `ignoredPath`。path 用于 complete。Markdown 已被代码扩展名集合排除，不例行审阅文档结构。
+- `file_review(action="list")` 是全项目受支持代码文件的候选库存分页，不按 path 筛选；传入 path 时返回 `scope: "project"` 和 `ignoredPath`。path 用于 read 和 complete。Markdown 已被代码扩展名集合排除，不例行审阅文档结构。
 
 ### 控制中心与次级菜单
 
@@ -347,6 +347,10 @@ npm test
 在 Pi 中使用 `/large` 手动重扫当前项目，并报告超过 500 个物理行的结构候选。扫描完整、状态可确认且存在当前内容版本未审候选时，命令仅在 Agent 空闲且没有未结束或恢复异常的工作流、职责恢复持久化失败时，通过 Pi 用户消息入口尝试启动一次命令专属结构审阅。请求已派发不代表模型已完成审阅或已登记结论；无候选（包括同版本已审）、扫描失败/不完整、状态无法确认、Agent 忙或工作流保护触发时，不启动、排队或抢占审阅。手动扫描可在职责恢复 pending 或 architect 角色下运行，但不会确认恢复状态或解除工具守卫。结构结论仅为 `keep`/`recommend-split` 建议，不自动修改或拆分文件。该命令与扩展内结构审阅共用扫描实现，不依赖 JavaScript/TypeScript 项目。`npm run typecheck` 运行 `tsc --noEmit` 检查 TypeScript 源码；`npm test` 运行 Node 测试。扫描在会话启动时建立当前 session/branch 的观察基线，并在文件工具结果与 Agent 回合边界补扫；支持 `.js`、`.mjs`、`.cjs`、`.ts`、`.mts`、`.cts`、`.tsx`、`.jsx`、Rust `.rs`、Go `.go`、Python `.py`/`.pyi` 和 PHP `.php`/`.phtml`。候选按项目、路径、内容指纹与策略版本跟踪并随当前 session branch 恢复；登记结论前须完整读取当前版本，扫描或持久化失败不会伪装成已审。测试价值审阅功能已退役；项目通用 Test Value Gate、增量补测原则与有价值的业务回归仍然保留。`npm run typecheck` 使用 `strict`、`NodeNext` 检查 `extensions/**/*.ts` 与 `src/**/*.ts`，`allowJs` 为 `false`。本轮文档收尾验证使用 Node v26.11.1；Pi peer/lockfile 版本为 1.1.0。Node `>=22.19.0` 的最低声明版本尚未单独实测。
 
 `file_review` 仅承载大文件结构审阅。默认或显式 `reviewKind="structure"` 的结构审阅针对超过 500 个物理行的代码文件，结论为 `keep`/`recommend-split`；该阈值不是文件上限。旧的显式非结构 `reviewKind` 调用会明确失败，不会静默按结构审阅处理；不传 `reviewKind` 的既有结构调用继续有效。结构结论独立记录在 `pi-init-file-review`，必须完整读取当前内容版本并给出理由；内容变化会使旧结论失效。测试价值审阅入口、候选与状态维护已完整退役。
+
+`file_review(action="read", path, offset=1, limit=100)` 在没有原生 read 时返回可验证的 UTF-8 原文页，也可与原生 read 混合累计当前版本覆盖。offset 是从 1 开始的物理行号，limit 为 1–200 行，默认 100；每页原文最多 16 KiB（元数据另计），保留 BOM、换行与末尾无换行行，不输出半行。跟随返回的 nextOffset 直到 eof；可携带 fingerprint 拒绝版本变化。单行超限返回 LINE_TOO_LONG，不登记该行。仅成功返回的完整行计入覆盖；失败、取消、读取期间内容变化或 session/branch 变化不登记覆盖。路径复用项目边界、排除目录、禁止符号链接及快照校验。complete 仍要求当前指纹的全文覆盖和有效结论；list 仍是从 0 开始、默认 10/最多 50 项的项目候选库存，不按 path 筛选。
+
+若真实调用仍只允许 list/complete，说明宿主尚未使用新工具定义：先核实 Pi 实际加载的扩展路径，再 reload 包含新读取入口的版本，确认 read 动作可用后补齐当前文件覆盖并按原工作流恢复。工作区文件已更新或离线测试通过不等于旧 session 已完成审阅；不要直接改写 session、伪造覆盖或放松 complete。
 
 日常提示（系统提示 section、文件工具结果附加通知和 `agent_settled` 通知）只呈现当前 session/branch 观察基线之后实际观察到的结构候选变化，不代表精准的任务 Git diff 归属，也不重复提醒未变化的既有库存。`file_review(action="list", offset=...)` 与 `/large` 提供完整结构候选库存；增量基线、范围与通知水位只存在于当前 session/branch，恢复、切换 branch 或 reload 后重建，过期异步结果不会写入新上下文。候选通知按结构候选有效版本去重；未送达或受安全门阻断的通知不提前记为已消费。扫描或状态失败保持未确认，不推断未确认的删除或清空未知范围。项目通用 Test Value Gate 和增量补测原则不依赖此结构审阅工具，仍按项目规则执行。
 

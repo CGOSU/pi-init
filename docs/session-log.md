@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-27：续接职责连续性与安全原文分页任务
+
+- 来源：本项目最新更新的 Pi session `01a17719-70b8-73e3-91dc-f18368df0a5a`；原角色连续性任务已完成，分页任务因宿主旧schema暂停，文档收尾待办。本次读取真实历史后续接代码与文档，不改写原session，不把离线工具测试当成原会话完成证据。
+- 完成：核对连续性提示与角色矩阵回归，同步公共Skill、三类角色说明及角色连续性文档；分页读取实现与安全边界见[README](../README.md)。修正排除目录大小写与项目扫描不一致的读取漏洞，补充大小写目录和原生/内置分页混用且留有缺口时拒绝complete的回归。
+- 结构复核：`extensions/file-review-runtime.ts` 保留会话/分支代次、授权检查、库存及覆盖接线；原文分页、完整行选择与字节预算已独立到 `extensions/file-review-read.ts`，路径及稳定快照由 `src/file-review.ts` 负责。当前不建议为行数继续机械拆分；此为源码结构复核，不是原Pi session的持久化keep记录。
+- 验证：本轮续接前同一工作区已完成 `npm test` 696项全部通过，`node node_modules/typescript/bin/tsc --noEmit` 与 `git diff --check` 通过；相关实现/测试/配置未变，本次仅同步Markdown并复用结果；公共角色说明变更后，定向执行 `node --test test/runtime-routing-context.test.js test/workflow-action-policy.test.js test/architect-boundary.test.js test/scaffold.test.js`，30项全部通过。检查包装器的typecheck步骤因npm未知参数 `--listFiles` 失败，已用直接tsc检查确认类型通过。
+- 遗留：已确认Pi使用独立旧安装副本，具体路径与核查见[自举阻塞记录](pitfalls.md#2026-10-27新增审阅读取能力尚未加载时出现自举阻塞)；原Pi宿主须先加载新实现再reload，并通过真实分页读取完成原session的结构登记和工作流恢复；本次未部署、未改写暂停状态，未验证真实Provider/TUI；提交与推送结果以Git记录为准。
+
 ### 2026-10-26：稳定活动任务记忆与审阅提示
 
 - 实现：停止在活动执行中随工具观察变化而重复注入任务记忆视图；保留 TaskMemory 持久化、checkpoint、来源查询及身份、恢复、停止和未知副作用保护。移除动态审阅候选库存的 system 注入，保留稳定工具说明以及 `file_review(action="list")`、`/large` 按需查询与现有扫描、指纹和通知行为；不通过状态轮询或反复替换尾部消息恢复动态注入。

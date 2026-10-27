@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export const FILE_REVIEW_POLICY_VERSION = 1;
@@ -23,7 +24,7 @@ export type FileSnapshot = {
 };
 
 export type FileScanError = {
-  code: "PROJECT_ROOT_UNREADABLE" | "PROJECT_ROOT_NOT_DIRECTORY" | "DIRECTORY_UNREADABLE" | "FILE_UNREADABLE" | "FILE_NOT_FOUND" | "UNSUPPORTED_FILE" | "PATH_OUTSIDE_PROJECT" | "SYMLINK_UNSUPPORTED" | "FILE_CHANGED_DURING_READ";
+  code: "PROJECT_ROOT_UNREADABLE" | "PROJECT_ROOT_NOT_DIRECTORY" | "DIRECTORY_UNREADABLE" | "FILE_UNREADABLE" | "FILE_NOT_FOUND" | "UNSUPPORTED_FILE" | "PATH_OUTSIDE_PROJECT" | "SYMLINK_UNSUPPORTED" | "FILE_CHANGED_DURING_READ" | "UNSUPPORTED_ENCODING";
   path: string;
   message: string;
 };
@@ -81,7 +82,8 @@ export function normalizeReviewPath(rootDir: string, candidate: string):
     return { ok: false as const, code: "PATH_OUTSIDE_PROJECT", message: "文件路径必须位于当前项目内" };
   }
   const normalizedPath = pathFromRoot.split(sep).join("/");
-  if (!FILE_REVIEW_CODE_EXTENSIONS.has(extname(normalizedPath).toLowerCase())) {
+  if (!FILE_REVIEW_CODE_EXTENSIONS.has(extname(normalizedPath).toLowerCase())
+    || normalizedPath.split("/").slice(0, -1).some((segment) => FILE_REVIEW_EXCLUDED_DIRECTORIES.has(segment.toLowerCase()))) {
     return { ok: false as const, code: "UNSUPPORTED_FILE", message: "该路径不是受审阅策略覆盖的代码文件" };
   }
   return { ok: true as const, absolutePath, path: normalizedPath };
@@ -177,8 +179,13 @@ export async function scanProjectFiles(
   return { ok: true, projectRoot, files, errors };
 }
 
+function sameFileVersion(left: BigIntStats, right: BigIntStats) {
+  return left.isFile() && right.isFile() && left.dev === right.dev && left.ino === right.ino
+    && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
 export async function inspectProjectFile(rootDir: string, candidate: string): Promise<
-  | { ok: true; projectRoot: string; file: FileSnapshot }
+  | { ok: true; projectRoot: string; file: FileSnapshot; content: string }
   | { ok: false; error: FileScanError }
 > {
   let projectRoot: string;
@@ -209,15 +216,43 @@ export async function inspectProjectFile(rootDir: string, candidate: string): Pr
     if (!beforePath?.isFile()) {
       return { ok: false, error: { code: "FILE_NOT_FOUND", path: normalized.path, message: "路径不是普通文件" } };
     }
+    if (await realpath(normalized.absolutePath) !== normalized.absolutePath) {
+      return { ok: false, error: { code: "SYMLINK_UNSUPPORTED", path: normalized.path, message: "不跟随符号链接读取项目代码" } };
+    }
     const before = await lstat(normalized.absolutePath, { bigint: true });
-    const content = await readFile(normalized.absolutePath, "utf8");
+    if (!before.isFile() || before.isSymbolicLink()) {
+      return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "读取前文件类型发生变化，请重试" } };
+    }
+    // Bind returned bytes to the checked inode, not a path that can be swapped while awaiting I/O.
+    const handle = await open(normalized.absolutePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    let bytes: Buffer;
+    try {
+      const opened = await handle.stat({ bigint: true });
+      if (!sameFileVersion(before, opened)) {
+        return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "打开的文件与路径快照不符，未读取原文。" } };
+      }
+      bytes = await readFile(handle);
+      const read = await handle.stat({ bigint: true });
+      if (!sameFileVersion(opened, read)) {
+        return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "读取期间文件发生变化，请重试" } };
+      }
+    } finally {
+      await handle.close();
+    }
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      return { ok: false, error: { code: "UNSUPPORTED_ENCODING", path: normalized.path, message: "文件不是有效 UTF-8，未返回原文。" } };
+    }
     const after = await lstat(normalized.absolutePath, { bigint: true });
-    if (before.size !== after.size || before.mtimeNs !== after.mtimeNs) {
+    if (!sameFileVersion(before, after) || await realpath(normalized.absolutePath) !== normalized.absolutePath) {
       return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "读取期间文件发生变化，请重试" } };
     }
     return {
       ok: true,
       projectRoot,
+      content,
       file: {
         path: normalized.path,
         lineCount: countPhysicalLines(content),
@@ -227,7 +262,9 @@ export async function inspectProjectFile(rootDir: string, candidate: string): Pr
       },
     };
   } catch (error) {
-    return { ok: false, error: scanError("FILE_UNREADABLE", normalized.path, error) };
+    const systemCode = error instanceof Error && "code" in error ? error.code : undefined;
+    const code = systemCode === "ENOENT" ? "FILE_NOT_FOUND" : systemCode === "ELOOP" ? "SYMLINK_UNSUPPORTED" : "FILE_UNREADABLE";
+    return { ok: false, error: scanError(code, normalized.path, error) };
   }
 }
 

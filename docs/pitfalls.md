@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-10-27：新增审阅读取能力尚未加载时出现自举阻塞
+
+- 现象：工作区已实现 file_review(read)，但真实调用仍被仅支持list/complete的旧schema拒绝，无法在原session登记全文覆盖。
+- 根因：宿主仍使用旧安装副本。本机只读核查确认全局 packages 配置为 `git:github.com/CGOSU/pi-init.git`，实际副本在 `~/.pi/agent/git/github.com/CGOSU/pi-init`，不是当前开发仓库；该副本没有 `extensions/file-review-read.ts`，schema也没有read动作。代码落盘或独立runtime测试成功不证明真实session已加载新能力。
+- 处理：保留成果和暂停检查点，核实实际扩展路径后由宿主reload；确认read动作可用，再用当前版本原文页补齐覆盖并走正常恢复。禁止解析任意脚本猜测已读、直接写入覆盖或修改旧session为完成。
+- 验证边界：真实拒绝与阻塞记录见session `01a17719-70b8-73e3-91dc-f18368df0a5a`；自动测试验证新runtime分页与覆盖，不证明该宿主已reload。
+
 ### 2026-10-26：动态任务记忆与审阅库存曾改变可复用提示前缀
 
 - 日期：2026-10-26。
