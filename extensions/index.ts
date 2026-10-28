@@ -63,16 +63,17 @@ const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
   let assistantFailureScope: string | undefined;
+  let failedAssistant: object | undefined;
   function executionScope(ctx: ExtensionContext) {
     return JSON.stringify([ctx.sessionManager.getSessionId(), runtimeState.roleContextGeneration, runtimeState.roleTransitionGeneration, runtimeState.activeRole,
       workflowActionIdentity(runtimeState.workflowState), runtimeState.workflowState?.handoff?.handoffId]);
   }
-  pi.on("message_end", (event, ctx) => {
-    if (event.message.role !== "assistant") return;
-    assistantFailureScope = ["error", "aborted"].includes(event.message.stopReason) ? executionScope(ctx) : undefined;
-    if (assistantFailureScope) roleHandoff.reset();
-  });
   const workflowBinding = createWorkflowToolBinding(pi, runtimeState);
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant" || workflowBinding.isCurrentSource(event.message, ctx) === false) return;
+    assistantFailureScope = ["error", "aborted"].includes(event.message.stopReason) ? executionScope(ctx) : undefined;
+    failedAssistant = assistantFailureScope ? event.message : undefined;
+  });
   const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"));
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, { onRepeatedRead: ctx => userControl.suspend(ctx, "repeated-read") });
   const activityStatus = registerActivityStatusSources(pi);
@@ -296,6 +297,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", (_event, ctx) => {
     assistantFailureScope = undefined;
+    failedAssistant = undefined;
     runtimeState.traceHandoff?.(ctx, "agent.continuation", { internal: runtimeState.internalContinuationPending });
     runTimingDiagnostics.beforeAgentStart(runtimeState.internalContinuationPending);
     runtimeState.internalContinuationPending = false;
@@ -330,8 +332,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     if (runtimeState.userStopRequested) { settleExternalRunTiming(); userControl.settled(); return; }
     if (assistantFailureScope === executionScope(ctx) && runtimeState.workflowState
       && ["running", "replanning"].includes(runtimeState.workflowState.status)) {
+      const resumeGuard = !_event.aborted && failedAssistant ? workflowBinding.providerFailureGuard(failedAssistant, ctx) : undefined;
       assistantFailureScope = undefined;
-      userControl.suspend(ctx, "assistant-failure", true);
+      failedAssistant = undefined;
+      userControl.suspend(ctx, resumeGuard ? "provider-request-failed" : "assistant-failure", !resumeGuard, resumeGuard);
+      if (resumeGuard) ctx.ui.notify("模型请求失败，已停止自动请求；当前任务身份与已保存成果保留。处理网络、限额或凭据问题后说“继续”，无需重试整个任务。", "warning");
       settleExternalRunTiming();
       userControl.settled();
       return;
@@ -362,6 +367,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     assistantFailureScope = undefined;
+    failedAssistant = undefined;
     runtimeState.agentRunActive = false;
     roleHandoff.reset();
     try {

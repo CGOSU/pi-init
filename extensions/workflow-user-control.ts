@@ -12,11 +12,13 @@ function bounded(value: string | undefined, limit = 500) {
 }
 export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRuntimeState, deps: { retire: () => void; interrupt?: (ctx: ExtensionContext) => void }) {
   let externalTurn = false;
+  let continuationGuard: ((ctx: ExtensionContext) => boolean) | undefined;
   function persist(ctx: ExtensionContext, stopped: boolean, reason: string) {
     if (!ctx.isProjectTrusted()) throw new Error("项目尚未信任，未保存停止记录");
     pi.appendEntry(ENTRY, { version: 1, sessionId: ctx.sessionManager.getSessionId(), workflowId: state.workflowState?.workflowId ?? null, stopped, reason });
   }
-  function suspend(ctx: ExtensionContext, reason: string, interrupt = state.agentRunActive) {
+  function suspend(ctx: ExtensionContext, reason: string, interrupt = state.agentRunActive, resumeGuard?: (ctx: ExtensionContext) => boolean) {
+    if (resumeGuard || interrupt) continuationGuard = resumeGuard;
     state.userStopRequested = true;
     externalTurn = false;
     state.internalContinuationPending = false;
@@ -25,19 +27,32 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
       try { deps.interrupt?.(ctx); } catch (error) { ctx.ui.notify("执行已停止，但中断状态尚未确认持久化：" + textOf(error), "warning"); }
     }
     try { persist(ctx, true, reason); }
-    catch (error) { ctx.ui.notify("本轮已停止，但停止记录未确认持久化：" + textOf(error), "warning"); }
+    catch (error) {
+      if (resumeGuard) continuationGuard = () => false;
+      ctx.ui.notify("本轮已停止，但停止记录未确认持久化：" + textOf(error), "warning");
+    }
     state.traceHandoff?.(ctx, "workflow.user_stopped", { reason });
     if (state.agentRunActive) ctx.abort();
   }
   function resume(ctx: ExtensionContext) {
     if (!state.userStopRequested) return true;
+    if (continuationGuard) {
+      let allowed = false;
+      try { allowed = continuationGuard(ctx); } catch {}
+      if (!allowed) {
+        ctx.ui.notify("原请求的安全续接条件已失效；停止状态未解除。请重新加载后按工作流恢复流程核对，不自动重试未知副作用。", "warning");
+        return false;
+      }
+    }
     try { persist(ctx, false, "explicit-continue"); }
     catch (error) { ctx.ui.notify("停止状态未解除：" + textOf(error), "warning"); return false; }
     state.userStopRequested = false;
+    continuationGuard = undefined;
     externalTurn = true;
     return true;
   }
   function restore(ctx: ExtensionContext) {
+    continuationGuard = undefined;
     externalTurn = false;
     state.userStopRequested = false;
     if (!ctx.isProjectTrusted()) return;
