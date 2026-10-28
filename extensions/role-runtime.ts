@@ -291,7 +291,16 @@ export function createRoleRuntime(
       state.traceHandoff?.(ctx, "role.reused", { role: normalizedRole });
       return current;
     }
-    if (model) {
+    const sameModel = ctx.model?.provider === target.provider && ctx.model?.id === target.model;
+    if (model && sameModel) {
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (!auth.ok) {
+        const error = new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
+        Object.assign(error, { code: "ROLE_MODEL_AUTH_UNAVAILABLE" });
+        throw error;
+      }
+    }
+    if (model && !sameModel) {
       internalModelSelectionDepth += 1;
       try {
         if (!(await pi.setModel(model))) {
@@ -302,6 +311,8 @@ export function createRoleRuntime(
       } finally {
         internalModelSelectionDepth -= 1;
       }
+    }
+    if (model && pi.getThinkingLevel() !== target.thinkingLevel) {
       pi.setThinkingLevel(target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
     }
     const result = {

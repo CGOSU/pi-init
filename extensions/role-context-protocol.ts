@@ -58,7 +58,8 @@ export function hasCompleteToolPairs(messages: readonly ContextMessage[]) {
   return groupToolMessages(messages) !== undefined;
 }
 
-export function diagnosticMessage(code: string, reason: string): ContextMessage {
+// Request-local annotations use source time (0 if unavailable), never request wall time.
+export function diagnosticMessage(code: string, reason: string, timestamp = 0): ContextMessage {
   return {
     role: "custom",
     customType: ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE,
@@ -70,13 +71,13 @@ export function diagnosticMessage(code: string, reason: string): ContextMessage 
     ].join("\n"),
     display: false,
     details: { code },
-    timestamp: Date.now(),
+    timestamp,
   } as ContextMessage;
 }
 
 export function failOpen(messages: ContextMessage[], code: string, reason: string): ContextEventResult {
   const clean = messages.filter((message) => messageRecord(message)?.customType !== ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE);
-  return { messages: [...clean, diagnosticMessage(code, reason)] };
+  return { messages: [...clean, diagnosticMessage(code, reason, clean.at(-1)?.timestamp ?? 0)] };
 }
 export type ContextGroup = { indices: number[]; calls: { id: string; name: string; arguments: unknown }[]; failed: boolean };
 export function groupToolMessages(messages: readonly ContextMessage[], start = 0, end = messages.length): ContextGroup[] | undefined {

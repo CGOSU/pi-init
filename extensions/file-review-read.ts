@@ -17,24 +17,38 @@ type ReadPage = {
   byteLimited: boolean;
 };
 
+export function parseReviewTarget(input: Record<string, unknown>, requireFingerprint: boolean):
+  { ok: true; path: string; fingerprint: string | undefined } | ReadFailure {
+  if (input.path === undefined) return { ok: false, code: "MISSING_PATH", message: "read/complete 必须提供 path。" };
+  if (typeof input.path !== "string") return { ok: false, code: "INVALID_PATH_TYPE", message: "path 必须是字符串。" };
+  if (!input.path.trim()) return { ok: false, code: "EMPTY_PATH", message: "path 不能是空字符串或纯空白。" };
+  const fingerprint = input.fingerprint;
+  if (fingerprint === undefined) {
+    if (requireFingerprint) return { ok: false, code: "MISSING_FINGERPRINT", message: "complete 必须提供当前 fingerprint；从 read/list 结果获取，且须读全该版本原文。" };
+  } else {
+    if (typeof fingerprint !== "string") return { ok: false, code: "INVALID_FINGERPRINT_TYPE", message: "fingerprint 必须是字符串。" };
+    if (!/^[0-9a-f]{64}$/.test(fingerprint)) return { ok: false, code: "INVALID_FINGERPRINT_FORMAT", message: "fingerprint 必须是工具返回的 64 位小写十六进制 SHA-256。" };
+  }
+  return { ok: true, path: input.path, fingerprint };
+}
+
 /** Returns only complete, unmodified lines. A single oversized line is never credited. */
 export async function readReviewPage(
   projectRoot: string,
   input: Record<string, unknown>,
 ): Promise<ReadPage | ReadFailure> {
-  if (typeof input.path !== "string" || !input.path.trim()) {
-    return { ok: false, code: "INVALID_PATH", message: "read 需要非空代码文件路径。" };
-  }
+  const target = parseReviewTarget(input, false);
+  if (!target.ok) return target;
   const offset = input.offset === undefined ? 1 : input.offset;
   const limit = input.limit === undefined ? FILE_REVIEW_READ_DEFAULT_LINES : input.limit;
   if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 1
     || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > FILE_REVIEW_READ_MAX_LINES) {
     return { ok: false, code: "INVALID_PAGINATION", message: `read 的 offset 为从 1 开始的安全整数，limit 为 1-${FILE_REVIEW_READ_MAX_LINES} 的整数。` };
   }
-  const inspected = await inspectProjectFile(projectRoot, input.path);
+  const inspected = await inspectProjectFile(projectRoot, target.path);
   if (!inspected.ok) return { ok: false, ...inspected.error };
   const { file, content } = inspected;
-  if (input.fingerprint !== undefined && input.fingerprint !== file.fingerprint) {
+  if (target.fingerprint !== undefined && target.fingerprint !== file.fingerprint) {
     return { ok: false, code: "STALE_VERSION", message: "文件指纹已变化；请从最新版本重新读取。" };
   }
   if (file.lineCount === 0 && offset === 1) {

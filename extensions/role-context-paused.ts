@@ -52,7 +52,7 @@ export function pausedContextView(
     messages: [
       ...messages.filter((message) => protectedContextMessage(message)),
       {
-        ...diagnosticMessage(code, reason),
+        ...diagnosticMessage(code, reason, workflowState?.updatedAt ?? 0),
         content: `[PI-INIT 暂停恢复视图不可确认]\n错误码：${code}\n原因：${reason}\n仅保留用户指令与宿主管理的 system 消息；原始 branch 未改写。旧任务交接不是当前执行授权。暂停和职责恢复保护仍有效。${statusObserved ? "本轮已有完整只读状态查询，但恢复边界仍无法确认；不要反复查询相同状态，报告此错误码并等待安全恢复检查。" : '本轮尚无完整只读状态观察；可查询一次 task_workflow(action="status")，不得凭旧身份执行。'}`,
         details: { code, statusObserved },
       } as ContextMessage,
@@ -150,7 +150,7 @@ export function pausedContextView(
       ].join("\n"),
       details: identity,
       display: false,
-      timestamp: Date.now(),
+      timestamp: workflow.updatedAt ?? 0,
     } as ContextMessage] };
   } catch {
     return fail("ROLE_CONTEXT_VIEW_PAUSED_BOUNDARY_UNAVAILABLE", "暂停恢复状态或 branch 边界不可读取");

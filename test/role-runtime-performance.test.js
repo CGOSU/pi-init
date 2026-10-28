@@ -11,13 +11,21 @@ function fixture(cwd) {
   const counts = { model: 0, thinking: 0, recovery: 0 };
   let thinking = "high";
   const model = { provider: "test", id: "configured" };
+  const records = [];
   const ctx = { cwd, model, isProjectTrusted: () => true,
-    modelRegistry: { find: () => model }, ui: { notify() {} } };
-  const pi = { on() {}, getThinkingLevel: () => thinking, setThinkingLevel(level) { thinking = level; counts.thinking++; },
-    async setModel(value) { ctx.model = value; counts.model++; return true; } };
+    modelRegistry: { find: () => model, async getApiKeyAndHeaders() { return { ok: true }; } }, ui: { notify() {} } };
+  const pi = { on() {}, getThinkingLevel: () => thinking, setThinkingLevel(level) {
+    thinking = level; counts.thinking++; records.push({ type: "thinking", level });
+  },
+    async setModel(value) {
+      ctx.model = value; counts.model++;
+      records.push({ type: "model", provider: value.provider, model: value.id });
+      pi.setThinkingLevel("medium");
+      return true;
+    } };
   const runtime = createRoleRuntime(pi, state, { activityStatus: { setRole() {} },
     acknowledgeRoleRecovery() { state.roleRecoveryPending = false; counts.recovery++; } });
-  return { runtime, state, counts, ctx };
+  return { runtime, state, counts, ctx, records };
 }
 
 async function configure(cwd, thinkingLevel = "high") {
@@ -38,12 +46,48 @@ test("confirmed identical role is a no-op for model, thinking, recovery and tran
     assert.equal(f.state.roleTransitionGeneration, generation);
     await configure(cwd, "max");
     await f.runtime.automaticRole("developer-test", f.ctx);
-    assert.equal(f.counts.model, counts.model + 1);
+    assert.deepEqual(f.records, [{ type: "thinking", level: "max" }]);
     assert.equal(f.state.activeRole.thinkingLevel, "max");
     f.state.roleRecoveryPending = true;
     await f.runtime.automaticRole("developer-test", f.ctx);
     assert.equal(f.counts.recovery, counts.recovery + 2);
     assert.equal(f.state.roleRecoveryPending, false);
+  });
+});
+
+test("same model role transition confirms the new responsibility without rewriting session model or thinking", async () => {
+  await withTempDirectory(async cwd => {
+    await configure(cwd);
+    const f = fixture(cwd);
+    await f.runtime.automaticRole("docs-commit", f.ctx);
+    const generation = f.state.roleTransitionGeneration;
+    f.state.roleRecoveryPending = true;
+    await f.runtime.automaticRole("developer-test", f.ctx);
+    assert.deepEqual(f.records, []);
+    assert.deepEqual(f.state.activeRole, { role: "developer-test", provider: "test", model: "configured", thinkingLevel: "high" });
+    assert.equal(f.state.roleTransitionGeneration, generation + 1);
+    assert.equal(f.state.roleRecoveryPending, false);
+  });
+});
+
+test("real session model, not stale role state, determines whether a model transition is required", async () => {
+  await withTempDirectory(async cwd => {
+    await configure(cwd);
+    const f = fixture(cwd);
+    await f.runtime.automaticRole("developer-test", f.ctx);
+    f.ctx.model = { provider: "other", id: "configured" };
+    await f.runtime.automaticRole("developer-test", f.ctx);
+    assert.deepEqual(f.records, [
+      { type: "model", provider: "test", model: "configured" },
+      { type: "thinking", level: "medium" }, { type: "thinking", level: "high" },
+    ]);
+    assert.equal(f.ctx.model.provider, "test");
+    assert.equal(f.state.activeRole.thinkingLevel, "high");
+    f.records.length = 0;
+    f.state.activeRole = { ...f.state.activeRole, provider: "stale" };
+    await f.runtime.automaticRole("developer-test", f.ctx);
+    assert.deepEqual(f.records, []);
+    assert.equal(f.state.activeRole.provider, "test");
   });
 });
 

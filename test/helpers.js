@@ -237,6 +237,9 @@ function createExtensionHarness(branch = [], options = {}) {
     model: defaultModel,
     scopedModels: options.scopedModels ?? [],
     modelRegistry: {
+      async getApiKeyAndHeaders() {
+        return options.setModelResult === false ? { ok: false, error: "Missing credentials" } : { ok: true };
+      },
       find(provider, id) {
         return availableModels.find((model) => model.provider === provider && model.id === id);
       },

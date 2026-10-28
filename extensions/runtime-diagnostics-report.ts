@@ -125,9 +125,14 @@ export function formatCacheObservations(records: Data[]) {
     lines.push("请求 #" + label(row.requestNumber) + " · " + [row.profileProvider, row.profileModel, row.profileRole, row.profileThinkingLevel].map(label).join("/")
       + "：raw=" + label(row.rawUsageState) + "/" + label(row.rawReadState) + "(" + label(row.rawReadTokens) + ")"
       + "；normalized=" + label(row.normalizedReadState) + "(" + label(row.normalizedReadTokens) + ")；关联=" + label(row.correlation) + "；结束=" + label(row.cacheOutcome)
-      + "；缓存键=" + label(row.cacheKeyPresence) + "；contextGeneration=" + label(row.contextGeneration) + "；压缩=" + label(row.compactionPhase));
+      + "；缓存键=" + label(row.cacheKeyPresence) + "/" + label(row.cacheKeyChange) + "；contextGeneration=" + label(row.contextGeneration) + "；压缩=" + label(row.compactionPhase)
+      + "；变化 model/system/tools/context=" + [row.modelChange, row.systemChange, row.toolsChange, row.contextChange].map(label).join("/")
+      + "；system/context 首变区段=" + [row.systemFirstChange, row.contextFirstChange].map(label).join("/")
+      + "；context 区段=" + label(row.contextSegmentsObserved) + "/" + label(row.contextSegmentsCount) + "(" + label(row.contextSegmentsState) + ")"
+      + "；投影消息=" + label(row.projectionInputMessages) + "→" + label(row.projectionOutputMessages) + "/" + label(row.projectionState) + "/" + label(row.projectionChange));
   }
   lines.push("指纹仅对应 before_provider_request 当时选定的提示/工具/上下文字段，HMAC 只可在同一运行时比较；原始 usage 为归一化前的已解析事件，normalized 为 message_end 观察。"
+    + "区段最多观察前 32 个消息或 8K UTF-16 单元块，首变位置从 0 开始；partial 不证明全文相同。投影计数来自 role-context-view，早于后续 hook，不代表最终请求规模；计数相同不证明内容相同，缺失 tools 不代表没有工具。"
     + "公开 hook 无请求 ID，关联仅依据有序 hook 与可用响应身份；实际 transport/full-delta unavailable。字段缺失、失败或关联未知不等于零命中；显式零也不证明服务端缓存未命中原因，观测不等于最终网络请求。");
   return lines.join("\n");
 }

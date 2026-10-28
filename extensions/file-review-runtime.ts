@@ -40,7 +40,7 @@ import {
 import { registerLargeCommand, type LargeReviewSnapshot } from "./large-command.ts";
 import { hasCompleteCoverage, mergeCoverage, pathKey, type FileCoverage } from "./file-review-coverage.ts";
 import type { ActiveRole } from "./runtime-state.ts";
-import { readReviewPage, FILE_REVIEW_READ_MAX_LINES } from "./file-review-read.ts";
+import { parseReviewTarget, readReviewPage, FILE_REVIEW_READ_MAX_LINES } from "./file-review-read.ts";
 
 const DEFAULT_LIST_FILES = 10;
 const MAX_LIST_FILES = 50;
@@ -79,16 +79,16 @@ type ReviewDependencies = {
 };
 
 const reviewToolParameters = Type.Object({
-  action: Type.Union([Type.Literal("list"), Type.Literal("read"), Type.Literal("complete")], { description: "list paginates project inventory; read returns original code lines; complete records a review for path." }),
+  action: Type.Union([Type.Literal("list"), Type.Literal("read"), Type.Literal("complete")], { description: "list paginates project inventory; read returns original code lines; complete requires path, current fingerprint, conclusion and rationale to record a review." }),
   offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: zero-based candidate offset (default 0). read: one-based line offset (default 1)." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: FILE_REVIEW_READ_MAX_LINES, description: "list: 1-50 candidates (default 10). read: 1-200 lines (default 100), at most 16 KiB of complete UTF-8 lines." })),
   path: Type.Optional(Type.String({ description: "Required by read and complete. Ignored by list, which always returns project-wide candidates." })),
-  fingerprint: Type.Optional(Type.String()),
+  fingerprint: Type.Optional(Type.String({ description: "Required by complete: current 64-character lowercase SHA-256 from read/list. Optional for read to reject version changes. Ignored by list. Never substitutes for full original-text reading." })),
   conclusion: Type.Optional(Type.Union([
     Type.Literal("keep"),
     Type.Literal("recommend-split"),
-  ])),
-  rationale: Type.Optional(Type.String()),
+  ], { description: "Required by complete: keep or recommend-split." })),
+  rationale: Type.Optional(Type.String({ description: "Required by complete: reasoned structural conclusion, 12-2000 characters after trimming whitespace." })),
 });
 
 function content(text: string) {
@@ -402,19 +402,18 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     refreshed: { ok: true; added: FileSnapshot[] } | { ok: false; code: string; message: string; added: FileSnapshot[] },
   ) {
     if (!refreshed.ok) return failure(refreshed.code, `${refreshed.message}；保留队列但不能登记完成审阅。`, true);
-    const pathInput = input.path;
-    const fingerprintInput = input.fingerprint;
+    const target = parseReviewTarget(input, true);
+    if (!target.ok) return failure(target.code, target.message);
     const conclusion = input.conclusion;
-    const rationale = typeof input.rationale === "string" ? input.rationale.trim() : "";
-    if (
-      typeof pathInput !== "string" ||
-      typeof fingerprintInput !== "string" ||
-      (conclusion !== "keep" && conclusion !== "recommend-split") ||
-      rationale.length < 12 || rationale.length > 2000
-    ) {
-      return failure("INVALID_REVIEW", "结构 complete 需要路径、当前 fingerprint、keep/recommend-split 结论及 12-2000 字符理由。");
-    }
-    const normalized = normalizeReviewPath(current.projectRoot, pathInput);
+    if (conclusion === undefined) return failure("MISSING_CONCLUSION", "complete 必须提供 conclusion：keep 或 recommend-split。");
+    if (typeof conclusion !== "string") return failure("INVALID_CONCLUSION_TYPE", "conclusion 必须是字符串。");
+    if (conclusion !== "keep" && conclusion !== "recommend-split") return failure("INVALID_CONCLUSION", "conclusion 仅支持 keep 或 recommend-split。");
+    if (input.rationale === undefined) return failure("MISSING_RATIONALE", "complete 必须提供 12-2000 字符的结构审阅理由 rationale。");
+    if (typeof input.rationale !== "string") return failure("INVALID_RATIONALE_TYPE", "rationale 必须是字符串。");
+    const rationale = input.rationale.trim();
+    if (rationale.length < 12) return failure("RATIONALE_TOO_SHORT", "rationale 去除首尾空白后至少需要 12 字符。");
+    if (rationale.length > 2000) return failure("RATIONALE_TOO_LONG", "rationale 去除首尾空白后不能超过 2000 字符。");
+    const normalized = normalizeReviewPath(current.projectRoot, target.path);
     if (!normalized.ok) return failure(normalized.code, normalized.message);
 
     const latest = await scanCurrent(ctx, [normalized.path]);
@@ -425,7 +424,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     const file = session?.inventory.get(normalized.path);
     if (!file) return failure("FILE_NOT_FOUND", "文件不存在或不在当前项目的审阅范围内。");
     if (file.lineCount <= FILE_REVIEW_THRESHOLD) return failure("BELOW_THRESHOLD", "该文件当前不超过审阅阈值。");
-    if (file.fingerprint !== fingerprintInput) return failure("STALE_VERSION", "文件内容已变化；请读取最新版本并重新审阅。");
+    if (file.fingerprint !== target.fingerprint) return failure("STALE_VERSION", "文件内容已变化；请读取最新版本并重新审阅。");
     if (!candidateQueue(current)?.structuralCandidates.some((candidate) =>
       candidate.path === file.path && candidate.fingerprint === file.fingerprint,
     )) return failure("ALREADY_REVIEWED", "该内容版本已经审阅；只有内容变化后才需要重新提交结论。");
@@ -571,7 +570,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   pi.registerTool({
     name: "file_review",
     label: "Review Files",
-    description: "List paginates project-wide pending structural candidates (zero-based offset, 1-50 items); path is ignored. Read returns original code lines for path (one-based offset, default 100/max 200 lines, max 16 KiB UTF-8), credits only complete returned lines, and supplies fingerprint/nextOffset; LINE_TOO_LONG never credits a partial line. Complete requires full current-version reading and a reasoned keep/split conclusion. Markdown and symlinks are unsupported.",
+    description: "List paginates project-wide pending structural candidates (zero-based offset, 1-50 items); path is ignored. Read returns original code lines for path (one-based offset, default 100/max 200 lines, max 16 KiB UTF-8), credits only complete returned lines, and supplies fingerprint/nextOffset; LINE_TOO_LONG never credits a partial line. Complete requires path, current fingerprint, conclusion (keep/recommend-split), rationale (12-2000 trimmed characters), and full current-version original-text reading. Markdown and symlinks are unsupported.",
     promptSnippet: "Review large files without treating line count as a hard limit",
     promptGuidelines: [
       `${FILE_REVIEW_THRESHOLD} lines identifies candidates, not a mandatory review for every edit; it is not a rule to split or reject edits.`,

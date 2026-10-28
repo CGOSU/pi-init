@@ -5,6 +5,7 @@ import { createWorkflowState, requestWorkflowReplan } from "../src/workflow.ts";
 import { buildHandoffSnapshot } from "../extensions/handoff-snapshot.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createRoleHandoff } from "../extensions/role-handoff.ts";
+import { nextWorkflowAction } from "../extensions/workflow-action-policy.ts";
 
 function switchRole(harness, role, signal) {
   return harness.tools.find((tool) => tool.name === "switch_role").execute("switch-" + role, { role }, signal, undefined, harness.context);
@@ -107,7 +108,7 @@ test("轻量交接自动引用任务，缺少说明不阻塞且不复制契约�
   assert.equal(snapshot.role, "developer-test");
   assert.equal(snapshot.workflow.taskId, "next");
   assert.equal(snapshot.workflow.status, "running");
-  assert.match(snapshot.nextAction, /task_workflow/);
+  assert.equal(snapshot.nextAction, nextWorkflowAction(state).nextAction);
   assert.equal(snapshot.contract, undefined);
   assert.equal(snapshot.verification, undefined);
 });

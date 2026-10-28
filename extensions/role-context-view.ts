@@ -10,9 +10,13 @@ export function createRoleContextView(state: ExtensionRuntimeState) {
       return undefined;
     }
     if (state.runtimeDisposed) return undefined;
-    if (state.workflowState?.status === "paused") return pausedContextView(state, event.messages, ctx);
-    if (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) return undefined;
-    return activeContextView(state, event, ctx);
+    const result = state.workflowState?.status === "paused" ? pausedContextView(state, event.messages, ctx)
+      : state.roleRecoveryPending || state.roleRecoveryPersistenceFailed ? undefined : activeContextView(state, event, ctx);
+    try {
+      state.traceHandoff?.(ctx, "context.view.observed", { inputMessages: event.messages.length,
+        outputMessages: result?.messages?.length ?? event.messages.length, changed: result?.messages !== undefined && result.messages !== event.messages });
+    } catch { /* Observability must not change the projected request. */ }
+    return result;
   }
   return { context };
 }

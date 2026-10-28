@@ -167,8 +167,10 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
   }
   if (reused.retainedGroups > 0) {
     messages.splice(prefixIndices.length, 0, { role: "custom", customType: "pi-init-prior-tool-observations", display: false,
-      content: "以上为当前 branch 相邻交接窗口内的历史工具观察，供复用调查和验证；并非当前文件版本、测试结果或执行授权。来源变化、关键缺口或必要安全复核时定向补查，不复用旧角色/attempt/handoff 身份。", timestamp: Date.now() } as ContextMessage);
+      content: "以上为当前 branch 相邻交接窗口内的历史工具观察，供复用调查和验证；并非当前文件版本、测试结果或执行授权。来源变化、关键缺口或必要安全复核时定向补查，不复用旧角色/attempt/handoff 身份。", timestamp: event.messages[anchorIndex].timestamp } as ContextMessage);
   }
   state.traceHandoff?.(ctx, "context.reused", { retainedGroups: reused.retainedGroups, retainedChars: reused.retainedChars, omittedGroups: reused.omittedGroups });
+  // A no-op must not ask the host to remap its system-message history.
+  if (messages.length === event.messages.length && messages.every((message, index) => message === event.messages[index])) return undefined;
   return { messages };
 }

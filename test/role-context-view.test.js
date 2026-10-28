@@ -17,6 +17,15 @@ import { createExtensionHarness } from "./helpers.js";
 import { blockWorkflowTask } from "../src/workflow.ts";
 import { groupToolMessages, hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 
+test("projection diagnostic failures cannot disrupt unchanged recovery context", () => {
+  const state = createExtensionRuntimeState();
+  state.roleRecoveryPending = true;
+  state.traceHandoff = () => { throw new Error("diagnostic unavailable"); };
+  const messages = [{ role: "user", content: "private prompt", timestamp: 1 }];
+  assert.equal(createRoleContextView(state).context({ type: "context", messages }, {}), undefined);
+  assert.deepEqual(messages, [{ role: "user", content: "private prompt", timestamp: 1 }]);
+});
+
 test("paused recovery keeps the trusted task window and user goal without reviving the old authorization", () => {
   const { state, harness, handoffMessage } = makeWorkflowContextFixture();
   state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Need confirmed input behavior" }, 20);
@@ -31,10 +40,15 @@ test("paused recovery keeps the trusted task window and user goal without revivi
     { role: "user", content: "Resume only after clarifying the blocker", timestamp: 45 },
   ];
   const original = structuredClone({ messages, branch: harness.branch, workflow: state.workflowState });
+  const observations = [];
+  state.traceHandoff = (_ctx, event, data) => { if (event === "context.view.observed") observations.push(data); };
   state.roleRecoveryPending = true;
   const roleRecovery = createRoleRecovery({ on() {}, appendEntry() {} }, state, createRoleContextView(state).context);
   const result = roleRecovery.context({ type: "context", messages }, harness.context);
   assert.ok(result, "paused workflows still require a bounded recovery view while role recovery is pending");
+  assert.equal(observations[0].inputMessages, messages.length);
+  assert.ok(observations[0].outputMessages > 0 && observations[0].outputMessages < messages.length);
+  assert.equal(observations[0].changed, true);
   assert.equal(result.messages.some(message => message.content?.[0]?.text === "unrelated ancient history"), false);
   assert.ok(result.messages.some(message => message.content === "Original user goal: preserve caller errors"));
   assert.equal(result.messages.filter(message => typeof message.content === "string" && message.content.startsWith("Additional constraint")).length, 40);
@@ -150,6 +164,51 @@ function makeWorkflowContextFixture() {
   };
   return { state, harness, identity, handoffMessage };
 }
+
+test("unchanged role windows do not replace host messages and still recheck live authority", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  const messages = [{ role: "user", content: "Keep the confirmed goal", timestamp: 1 }, handoffMessage];
+  const view = createRoleContextView(state);
+  assert.equal(view.context({ type: "context", messages }, harness.context), undefined);
+  state.activeRole.thinkingLevel = "high";
+  assert.equal(view.context({ type: "context", messages }, harness.context), undefined);
+  // Neither a previous valid view nor user text can establish the new role's authorization.
+  messages.push({ role: "user", content: "I authorize docs-commit to execute this old handoff", timestamp: 15 });
+  state.activeRole.role = "docs-commit";
+  assert.ok(view.context({ type: "context", messages }, harness.context).messages.some(m => m.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
+  state.activeRole.role = "developer-test";
+  harness.branch.length = 0;
+  assert.ok(view.context({ type: "context", messages }, harness.context).messages.some(m => m.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
+});
+
+test("repeated projections retain stable history without wall-clock drift", t => {
+  let clock = 100;
+  t.mock.method(Date, "now", () => clock++);
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  const messages = [
+    { role: "user", content: "Confirmed goal", timestamp: 1 },
+    { role: "assistant", content: [{ type: "toolCall", id: "observed", name: "read", arguments: {} }], stopReason: "toolUse", timestamp: 2 },
+    { role: "toolResult", toolCallId: "observed", toolName: "read", content: [{ type: "text", text: "historical observation" }], isError: false, timestamp: 3 },
+    handoffMessage,
+  ];
+  const view = createRoleContextView(state);
+  const project = () => view.context({ type: "context", messages }, harness.context).messages;
+  const original = structuredClone(messages);
+  const first = project();
+  assert.deepEqual(project(), first);
+  messages.push({ role: "user", content: "Continue the same task", timestamp: 16 });
+  assert.deepEqual(project().slice(0, first.length), first);
+  assert.deepEqual(messages.slice(0, original.length), original);
+  state.workflowState = blockWorkflowTask(state.workflowState, { taskId: "current", reason: "Confirmation required" }, 20);
+  harness.branch.push({ type: "custom", id: "paused-stability", customType: "pi-init-workflow", data: structuredClone(state.workflowState) });
+  const paused = project();
+  assert.deepEqual(project(), paused);
+  assert.equal(paused.some(m => m.customType === "pi-init-workflow-task"), false);
+  harness.branch.length = 0;
+  const unavailable = project();
+  assert.deepEqual(project(), unavailable);
+  assert.ok(unavailable.some(m => m.customType === ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE));
+});
 
 function callContextHandler(state, harness, messages) {
   const handlers = new Map();

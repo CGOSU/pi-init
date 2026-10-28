@@ -69,6 +69,35 @@ test("package policy follows the active role without replacing project instructi
   assert.equal(sections.pi_init_role_policy, undefined);
   assert.equal(sections.project_owned, "Project-specific rules remain unchanged");
 });
+test("runtime sections isolate thinking changes and preserve stable policy across trusted state transitions", () => {
+  const state = createExtensionRuntimeState();
+  const h = createExtensionHarness([], { sessionId: "routing-session" });
+  state.activeRole = { role: "developer-test", provider: "test", model: "test", thinkingLevel: "high" };
+  let thinking = "high";
+  const runtime = createRuntimeRoutingContext(state, { getActiveRole: () => state.activeRole, getThinkingLevel: () => thinking });
+  const event = { systemPromptOptions: { sections: { project_owned: "unchanged" } } };
+  const snapshot = () => { runtime.beforeAgentStart(event, h.context); return structuredClone(event.systemPromptOptions.sections); };
+  const first = snapshot();
+  assert.deepEqual(snapshot(), first);
+  thinking = "max";
+  const stronger = snapshot();
+  assert.deepEqual(Object.keys(stronger).filter(key => stronger[key] !== first[key]), ["pi_init_execution"]);
+  assert.match(stronger.pi_init_execution, /max/);
+  assert.equal(event.systemPrompt, undefined, "use host section deltas, never force a replacement prompt");
+  state.activeRole.role = "docs-commit";
+  const handedOff = snapshot();
+  assert.notEqual(handedOff.pi_init_runtime, stronger.pi_init_runtime);
+  assert.notEqual(handedOff.pi_init_role_policy, stronger.pi_init_role_policy);
+  assert.equal(handedOff.pi_init_policy, first.pi_init_policy);
+  state.workflowState = createWorkflowState({ summary: "New workflow", sessionId: "routing-session", reviewRequired: true,
+    tasks: [{ id: "new", task: "Review", files: ["src/input.ts"], acceptanceCriteria: ["Done"] }] }, 1);
+  state.roleRecoveryPending = true;
+  const recovering = snapshot();
+  assert.notEqual(recovering.pi_init_runtime, handedOff.pi_init_runtime);
+  assert.equal(recovering.pi_init_policy, first.pi_init_policy);
+  assert.equal(recovering.project_owned, first.project_owned);
+});
+
 test("unknown or invalid custom role never inherits a standard role policy", () => {
   const state = createExtensionRuntimeState();
   const h = createExtensionHarness([], { sessionId: "routing-session" });

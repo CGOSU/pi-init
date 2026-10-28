@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { createCacheDiagnosticComparison } from "./cache-diagnostic-comparison.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
@@ -17,6 +18,10 @@ export const cacheDiagnosticFields = [
   "profileProvider", "profileModel", "profileRole", "profileThinkingLevel", "contextGeneration", "roleTransitionGeneration",
   "compactionPhase", "compactionInFlight", "compactionFingerprint", "handoffFingerprint", "cacheKeyPresence",
   "systemFingerprint", "contextFingerprint", "toolsFingerprint", "promptFingerprint", "responseFingerprint",
+  "cacheKeyFingerprint", "cacheKeyChange", "systemChange", "contextChange", "toolsChange", "modelChange", "comparisonScope", "comparisonState",
+  "systemSegmentsState", "systemSegmentsObserved", "systemSegmentsCount", "systemFirstChange", "systemPrefixChange",
+  "contextSegmentsState", "contextSegmentsObserved", "contextSegmentsCount", "contextFirstChange", "contextPrefixChange",
+  "projectionState", "projectionStage", "projectionInputMessages", "projectionOutputMessages", "projectionChanged", "projectionChange",
   "streamHook", "rawApi", "rawEvent", "rawUsageState", "rawReadState", "rawReadTokens", "rawWriteState", "rawWriteTokens",
   "normalizedReadState", "normalizedReadTokens", "normalizedWriteState", "normalizedWriteTokens", "readComparison",
   "correlation", "cacheConclusion", "cacheOutcome", "duplicateUsageEvents", "usageEvents", "observationError",
@@ -81,6 +86,9 @@ function createFingerprinter() {
 /** Read-only observations, not a transport interceptor or proof of a server-side cache cause. */
 export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit: (ctx: ExtensionContext, event: string, data: Data) => void) {
   const fingerprint = createFingerprinter();
+  const comparison = createCacheDiagnosticComparison(fingerprint);
+  let projection: { scope: string; input: number; output: number; changed: boolean } | undefined;
+  let previousProjection: typeof projection;
   let active: ActiveRequest | undefined;
   let streamHook = "not-observed-or-unsupported";
   const completedResponses = new Set<string>();
@@ -98,9 +106,12 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
   }
   function safe(ctx: ExtensionContext, action: () => void) {
     try {
-      if (!ctx.isProjectTrusted()) { active = undefined; return; }
+      if (!ctx.isProjectTrusted()) { active = undefined; projection = undefined; previousProjection = undefined; comparison.reset(); return; }
       action();
-    } catch { if (active) active.data.observationError = true; }
+    } catch {
+      comparison.reset(); projection = undefined; previousProjection = undefined;
+      if (active) active.data.observationError = true;
+    }
   }
   function remember(id: string | undefined) {
     if (!id) return;
@@ -127,7 +138,7 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
       cacheOutcome: outcome, usageEvents: request.usageEvents });
   }
   function boundary(ctx: ExtensionContext, reason: string) {
-    safe(ctx, () => { finish(ctx, reason); blockedUntilBoundary = false; lastAssistant = undefined; });
+    safe(ctx, () => { finish(ctx, reason); blockedUntilBoundary = false; lastAssistant = undefined; projection = undefined; });
   }
   function request(ctx: ExtensionContext, payload: unknown, requestNumber: number, thinkingLevel: string) {
     safe(ctx, () => {
@@ -142,13 +153,26 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
           compactionFingerprint: fingerprint(state.roleCompactionOperationId), handoffFingerprint: fingerprint(state.workflowState?.handoff?.handoffId ?? state.pendingRoleCompaction?.budget?.roleHandoffId),
           correlation: blockedUntilBoundary ? "unknown-overlap" : "ordered-hooks" }, streamObserved: false, usage: emptyUsage(), usageEvents: 0 };
       const fields = object(payload);
-      const system = fingerprint(fields.instructions ?? fields.system);
-      const context = fingerprint(fields.input ?? fields.messages);
-      const tools = fingerprint(fields.tools);
+      const observed = comparison.observe(JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]),
+        ctx.model?.provider && ctx.model?.id ? JSON.stringify([ctx.model.provider, ctx.model.id]) : undefined, {
+          system: fields.instructions ?? fields.system, context: fields.input ?? fields.messages,
+          tools: fields.tools, cacheKey: fields.prompt_cache_key,
+        }, blockedUntilBoundary);
+      const system = observed.systemFingerprint as string, context = observed.contextFingerprint as string, tools = observed.toolsFingerprint as string;
+      Object.assign(active.data, observed);
+      const projected = projection?.scope === scope(ctx) && !blockedUntilBoundary ? projection : undefined;
+      Object.assign(active.data, { projectionState: projected ? "observed-counts-only" : "unknown-not-associated",
+        projectionStage: "role-context-view-before-downstream-hooks",
+        projectionInputMessages: projected?.input, projectionOutputMessages: projected?.output, projectionChanged: projected?.changed,
+        projectionChange: !projected || previousProjection?.scope !== projected.scope ? "unknown-no-baseline"
+          : previousProjection.input !== projected.input || previousProjection.output !== projected.output || previousProjection.changed !== projected.changed
+            ? "changed-counts-or-mode" : "same-counts-not-content" });
+      previousProjection = projected;
+      projection = undefined;
       Object.assign(active.data, { cacheKeyPresence: payload !== null && typeof payload === "object" && !Array.isArray(payload)
         ? Object.hasOwn(fields, "prompt_cache_key") ? "present" : "absent" : "payload-unavailable",
       systemFingerprint: system, contextFingerprint: context, toolsFingerprint: tools,
-      promptFingerprint: [system, context, tools].some(value => value.startsWith("unavailable")) ? "unavailable-partial" : fingerprint([system, context, tools]) });
+      promptFingerprint: [system, context, tools].every(value => value.startsWith("hmac:")) ? fingerprint([system, context, tools]) : "unavailable-partial" });
     });
   }
   function bindResponse(request: ActiveRequest, value: unknown) {
@@ -234,6 +258,13 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
     });
   }
   return { request, stream, assistantStart, assistant, boundary,
+    projection(ctx: ExtensionContext, data: Data) { safe(ctx, () => {
+      projection = undefined;
+      if (Number.isSafeInteger(data.inputMessages) && Number(data.inputMessages) >= 0 && Number.isSafeInteger(data.outputMessages)
+        && Number(data.outputMessages) >= 0 && typeof data.changed === "boolean") {
+        projection = { scope: scope(ctx), input: Number(data.inputMessages), output: Number(data.outputMessages), changed: data.changed };
+      }
+    }); },
     streamUnavailable() { streamHook = "unavailable"; },
     response(ctx: ExtensionContext, status: number) { safe(ctx, () => { const request = current(ctx); if (request && status >= 400) request.data.correlation = "unknown-http-failure"; }); },
     settle(ctx: ExtensionContext, aborted: boolean) { boundary(ctx, aborted ? "aborted" : "settled-without-assistant"); } };

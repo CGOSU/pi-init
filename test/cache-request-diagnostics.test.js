@@ -44,6 +44,103 @@ async function withDiagnostics(fn, options = {}) {
   finally { await monitor.flush(); await rm(cwd, { recursive: true, force: true }); }
 }
 
+test("request comparisons preserve missing tools and locate bounded context changes without leaking keys", async () => {
+  await withDiagnostics(async ({ start, end, cacheRows }) => {
+    const payload = { instructions: "stable-private-system", input: Array.from({ length: 8 }, () => ({ content: "x".repeat(40000) })), prompt_cache_key: "secret-cache-key" };
+    await start(payload); await end();
+    await start({ ...payload, input: payload.input.map((v, i) => i === 3 ? { content: "changed-private" } : v), prompt_cache_key: "changed-secret-key" }); await end();
+    const [first, second] = await cacheRows();
+    assert.equal(first.systemChange, "unknown-no-baseline");
+    assert.equal(second.systemChange, "same");
+    assert.equal(second.cacheKeyChange, "changed");
+    assert.equal(second.toolsChange, "unknown-missing");
+    assert.equal(second.contextChange, "changed");
+    assert.equal(second.contextFirstChange, 3);
+    assert.equal(second.contextSegmentsObserved, 8);
+    assert.equal(second.promptFingerprint, "unavailable-partial");
+    assert.doesNotMatch(JSON.stringify([first, second]), /secret-cache-key|changed-secret-key|stable-private-system|changed-private/);
+  });
+});
+
+test("partial prefixes never prove whole equality, and known changes after an unreadable segment have no first-position claim", async () => {
+  await withDiagnostics(async ({ start, end, cacheRows }) => {
+    const input = Array.from({ length: 33 }, () => ({ content: "same" }));
+    await start({ input }); await end();
+    await start({ input: input.map((v, i) => i === 32 ? { content: "changed" } : v) }); await end();
+    const [, row] = await cacheRows();
+    assert.equal(row.contextChange, "changed", "small full payload still has a complete fingerprint");
+    assert.equal(row.contextSegmentsState, "partial");
+    assert.equal(row.contextSegmentsObserved, 32);
+    assert.equal(row.contextFirstChange, undefined);
+    assert.equal(row.contextPrefixChange, "unknown-partial");
+    const huge = [{ content: "x".repeat(300000) }, { content: "before" }];
+    await start({ input: huge }); await end();
+    await start({ input: [huge[0], { content: "after" }] }); await end();
+    const last = (await cacheRows()).at(-1);
+    assert.equal(last.contextChange, "unknown-unavailable");
+    assert.equal(last.contextFirstChange, undefined);
+    assert.equal(last.contextPrefixChange, "unknown-partial");
+    await start({ input: "same" }); await end();
+    await start({ input: ["same"] }); await end();
+    const reshaped = (await cacheRows()).at(-1);
+    assert.equal(reshaped.contextChange, "changed");
+    assert.equal(reshaped.contextPrefixChange, "unknown-shape");
+    assert.equal(reshaped.contextFirstChange, undefined);
+  });
+});
+
+test("request baselines distinguish models and sessions; overlap and missing keys cannot manufacture equality", async () => {
+  await withDiagnostics(async ({ start, end, cacheRows, ctx, emit }) => {
+    await start(); await end();
+    ctx.model = { ...ctx.model, id: "next-model" };
+    await start(); await end();
+    assert.equal((await cacheRows()).at(-1).modelChange, "changed");
+    assert.equal((await cacheRows()).at(-1).cacheKeyChange, "unknown-missing");
+    ctx.sessionManager.getSessionId = () => "next-session";
+    await start(); await end();
+    assert.equal((await cacheRows()).at(-1).systemChange, "unknown-no-baseline");
+    await start(); await start(); await end();
+    assert.equal((await cacheRows()).at(-1).comparisonState, "unknown-overlap");
+    await emit("agent_settled", { aborted: false });
+    await start(); await end();
+    assert.equal((await cacheRows()).at(-1).systemChange, "unknown-no-baseline");
+  });
+});
+
+test("bounded system sections expose stable prefix changes and distinguish missing tools from an observed empty list", async () => {
+  await withDiagnostics(async ({ start, end, cacheRows }) => {
+    const system = "私".repeat(100000);
+    await start({ instructions: system, input: [], tools: [] }); await end();
+    await start({ instructions: system.slice(0, 8192) + "变" + system.slice(8193), input: [], tools: [] }); await end();
+    const row = (await cacheRows()).at(-1);
+    assert.equal(row.systemFingerprint, "unavailable-budget");
+    assert.equal(row.systemChange, "changed");
+    assert.equal(row.systemFirstChange, 1);
+    assert.equal(row.systemSegmentsState, "complete");
+    assert.equal(row.toolsChange, "same");
+    assert.equal(row.contextSegmentsCount, 0);
+    await start({ instructions: system, input: [] }); await end();
+    assert.equal((await cacheRows()).at(-1).toolsChange, "unknown-missing");
+  });
+});
+
+test("projection observations are scoped, consumed once and never infer content equality from counts", async () => {
+  await withDiagnostics(async ({ start, end, cacheRows, state, ctx }) => {
+    const project = () => state.traceHandoff(ctx, "context.view.observed", { inputMessages: 20, outputMessages: 10, changed: true });
+    project(); await start(); await end();
+    project(); await start(); await end();
+    const [first, second] = await cacheRows();
+    assert.equal(first.projectionInputMessages, 20);
+    assert.equal(first.projectionOutputMessages, 10);
+    assert.equal(second.projectionChange, "same-counts-not-content");
+    await start(); await end();
+    assert.equal((await cacheRows()).at(-1).projectionState, "unknown-not-associated");
+    project(); state.roleContextGeneration++;
+    await start(); await end();
+    assert.equal((await cacheRows()).at(-1).projectionState, "unknown-not-associated");
+  });
+});
+
 for (const [name, original, rawState, readState, conclusion] of [
   ["usage missing", undefined, "missing", "missing", "unknown"],
   ["cache field missing", { input_tokens: 10 }, "observed", "missing", "unknown"],

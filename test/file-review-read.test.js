@@ -56,6 +56,37 @@ test('built-in pages alone return all original text and authorize exact-version 
   });
 });
 
+test('action-specific required inputs reject missing, wrong-type and malformed values without recording reviews', async () => {
+  await fixture(async directory => {
+    const { call, complete } = await reviewer(directory);
+    const inventory = await call({ action: 'list', path: '../ignored.ts' });
+    assert.equal(inventory.details.ok, true);
+    const fingerprint = inventory.details.candidates[0].fingerprint;
+    const valid = { action: 'complete', path: 'src/large.ts', fingerprint, conclusion: 'keep', rationale: '职责清晰且边界稳定，无需拆分。' };
+    for (const [field, value, code] of [
+      ['path', undefined, 'MISSING_PATH'], ['path', 42, 'INVALID_PATH_TYPE'], ['path', ' ', 'EMPTY_PATH'],
+      ['fingerprint', undefined, 'MISSING_FINGERPRINT'], ['fingerprint', 42, 'INVALID_FINGERPRINT_TYPE'],
+      ['fingerprint', '', 'INVALID_FINGERPRINT_FORMAT'], ['fingerprint', 'old', 'INVALID_FINGERPRINT_FORMAT'],
+      ['conclusion', undefined, 'MISSING_CONCLUSION'], ['conclusion', 42, 'INVALID_CONCLUSION_TYPE'],
+      ['conclusion', 'split', 'INVALID_CONCLUSION'],
+      ['rationale', undefined, 'MISSING_RATIONALE'], ['rationale', 42, 'INVALID_RATIONALE_TYPE'],
+      ['rationale', ' ', 'RATIONALE_TOO_SHORT'], ['rationale', '短理由', 'RATIONALE_TOO_SHORT'],
+      ['rationale', '理'.repeat(2001), 'RATIONALE_TOO_LONG'],
+    ]) {
+      const result = await call({ ...valid, [field]: value });
+      assert.equal(result.details.ok, false);
+      assert.equal(result.details.code, code, field);
+      assert.ok(result.details.message);
+    }
+    for (const [fingerprint, code] of [[42, 'INVALID_FINGERPRINT_TYPE'], ['', 'INVALID_FINGERPRINT_FORMAT']]) {
+      assert.equal((await call({ action: 'read', path: valid.path, fingerprint })).details.code, code);
+    }
+    assert.equal((await complete(fingerprint)).details.code, 'FILE_NOT_FULLY_READ');
+    await readAll(call, { fingerprint });
+    assert.equal((await complete(fingerprint)).details.ok, true);
+  });
+});
+
 test('page text preserves mixed physical line endings, BOM, Unicode and empty files', async () => {
   await fixture(async directory => {
     const original = '\ufeff你好\r\n\r仅CR\nfinal';
@@ -91,7 +122,7 @@ test('invalid pagination and unsafe paths never return source or read credit', a
       assert.equal((await call({ action: 'read', path: 'src/large.ts', ...input })).details.code, 'INVALID_PAGINATION');
     }
     for (const [filePath, code] of [
-      [undefined, 'INVALID_PATH'], ['', 'INVALID_PATH'], ['../outside.ts', 'PATH_OUTSIDE_PROJECT'],
+      [undefined, 'MISSING_PATH'], ['', 'EMPTY_PATH'], ['../outside.ts', 'PATH_OUTSIDE_PROJECT'],
       ['AGENTS.md', 'UNSUPPORTED_FILE'], ['node_modules/pkg.ts', 'UNSUPPORTED_FILE'], ['.git/private.ts', 'UNSUPPORTED_FILE'],
       ['src/missing.ts', 'FILE_NOT_FOUND'],
     ]) {

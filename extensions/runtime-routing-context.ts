@@ -3,11 +3,12 @@ import { getWorkflowTask } from "../src/workflow.ts";
 import { roleLabel, isValidRoleId } from "../src/roles.ts";
 import type { ActiveRole, ExtensionRuntimeState } from "./runtime-state.ts";
 
-import { nextWorkflowAction } from "./workflow-action-policy.ts";
+import { nextWorkflowAction, type WorkflowNextAction } from "./workflow-action-policy.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const SECTION_KEY = "pi_init_runtime";
+const CONTINUITY_POLICY = "职责连续性：活动工作流的显式任务角色优先于模型自行判断；无活动任务时优先遵循用户明确指定的任务角色，否则按交付物选择职责。同一交付物内连续调查、实现和验证，分析 Bug、读取 API 文档本身不触发换角；仅在独立交付物或必要架构决策边界交接。architect 不执行；权限、身份、恢复、停止与未知副作用守卫始终优先。无工作流的连续性是路由指导，不代表运行时硬绑定。";
 
 type RuntimeRoutingDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
@@ -23,21 +24,12 @@ function workflowSummary(state: ExtensionRuntimeState) {
   return `未结束工作流：${workflow.executor}/${workflow.status}，当前任务：${taskSummary}${pause}`;
 }
 
-function recoveryGuidance(state: ExtensionRuntimeState) {
-  const workflow = state.workflowState;
-  if (!state.roleRecoveryPending && workflow?.status === "paused") {
-    return '职责恢复：已确认，但工作流暂停不是当前任务执行授权。先调用 task_workflow(action="status") 读取暂停原因与当前引用；通过有效的恢复/重试/重规划转换后才能执行，不沿用旧 attempt/handoff。';
+function recoveryGuidance(state: ExtensionRuntimeState, step: WorkflowNextAction) {
+  if (step.action === "recover") {
+    const roleStatus = state.roleRecoveryPersistenceFailed ? "持久化失败" : state.roleRecoveryPending ? "pending" : "已确认";
+    return `职责恢复：${roleStatus}。恢复指引见下一步；职责确认不是工作流执行授权。`;
   }
-  if (!state.roleRecoveryPending) {
-    return "职责恢复：已确认。简单无工具问答直接回答；不要调用 task_workflow(status)，当前职责匹配时不要重复 switch_role。自动交接已确认时只继续未完成工作，不为压缩重复换角。";
-  }
-  const roleAction = state.roleModeStatus === "manual"
-    ? "当前为 manual 模式；若当前角色可验证，使用 switch_role，否则请用户执行 /pi-init role <role>，不要反复调用 switch_role。"
-    : "先按目标调用 switch_role 并等待成功。";
-  if (workflow && workflow.status !== "completed" && workflow.status !== "cancelled") {
-    return `职责恢复：pending。先调用 task_workflow(action="status")，重新确认当前任务角色；${roleAction}恢复前不要执行其他工具。`;
-  }
-  return `职责恢复：pending。无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}`;
+  return "职责恢复：已确认。简单无工具问答直接回答；不要调用 task_workflow(status)，当前职责匹配时不要重复 switch_role。自动交接已确认时只继续未完成工作，不为压缩重复换角。";
 }
 
 function buildRuntimeSection(
@@ -47,22 +39,19 @@ function buildRuntimeSection(
 ) {
   const activeRole = deps.getActiveRole(ctx);
   const role = activeRole ? roleLabel(activeRole.role) : "未确认";
-  const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "未选择";
-  const thinkingLevel = deps.getThinkingLevel();
-  if (state.userStopRequested) return [
+  const step = nextWorkflowAction(state);
+  if (step.recovery === "stop") return [
     "自动执行已暂停，本轮只允许回答新的只读问题。",
-    `当前职责：${role}；当前模型：${model}，推理强度：${thinkingLevel}`,
+    `当前职责：${role}`,
     workflowSummary(state),
-    "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。",
+    step.nextAction,
   ].join("\n");
   return [
     "当前运行状态（仅用于本轮职责路由，不改变持久状态）：",
     `当前职责：${role}`,
-    `当前模型：${model}，推理强度：${thinkingLevel}`,
     workflowSummary(state),
-    recoveryGuidance(state),
-    "职责连续性：活动工作流的显式任务角色优先于模型自行判断；无活动任务时优先遵循用户明确指定的任务角色，否则按交付物选择职责。同一交付物内连续调查、实现和验证，分析 Bug、读取 API 文档本身不触发换角；仅在独立交付物或必要架构决策边界交接。architect 不执行；权限、身份、恢复、停止与未知副作用守卫始终优先。无工作流的连续性是路由指导，不代表运行时硬绑定。",
-    `工作流下一步：${nextWorkflowAction(state).action}。${nextWorkflowAction(state).nextAction}`,
+    recoveryGuidance(state, step),
+    `工作流下一步：${step.action}。${step.nextAction}`,
   ].join("\n");
 }
 
@@ -90,12 +79,17 @@ export function createRuntimeRoutingContext(
     if (!event.systemPromptOptions?.sections) return;
     const sections = event.systemPromptOptions.sections;
     sections.pi_init_policy = "[pi-init 插件自有规范，已加载，无需重复读取SKILL.md]\n来源：" + fileURLToPath(new URL("SKILL.md", policyRoot))
-      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。\n" + commonPolicy;
+      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。\n" + commonPolicy + "\n\n" + CONTINUITY_POLICY;
+    // Keep static policy ahead of dynamic sections; let the host append section deltas.
+    // Never replace the full prompt or copy authority into a conversation message.
+    delete sections.pi_init_role_policy;
+    delete sections.pi_init_execution;
+    delete sections[SECTION_KEY];
     const active = deps.getActiveRole(ctx);
     const profile = rolePolicy(active?.role);
     if (profile) sections.pi_init_role_policy = "[当前插件角色说明，已加载]\n来源：" + fileURLToPath(new URL("roles/" + active!.role + ".md", policyRoot)) + "\n" + profile;
-    else delete sections.pi_init_role_policy;
-    delete sections[SECTION_KEY];
+    const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "未选择";
+    sections.pi_init_execution = `当前模型：${model}，推理强度：${deps.getThinkingLevel()}`;
     sections[SECTION_KEY] = buildRuntimeSection(state, ctx, deps);
   }
 

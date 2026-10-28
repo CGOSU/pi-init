@@ -89,6 +89,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
     try {
       if (mode === "off" || !ctx.isProjectTrusted()) return;
+      if (event === "context.view.observed") { cache.projection(ctx, data); return; }
       if (enabled && isGlobalDiagnosticEvent(event)) blackbox.observe(ctx, event, data);
       if (enabled && writer.failed) return;
       if (!enabled) {
