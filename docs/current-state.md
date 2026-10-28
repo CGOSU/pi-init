@@ -57,6 +57,10 @@
 - 控制中心工作流操作现含fresh与resume；fresh需确认，目标导入只重核，旧源只读；会话动作返回close-panel收口全部旧UI调用栈，命令和面板共用同一入口及恢复门。
 - 源会话先冻结，目标保存有界交接并以fresh context激活剩余任务。源锁覆盖旧branch，历史来源只读且不得冒充新验证；Pi原生压缩兜底不变。尚未验证真实宿主时延或费用收益。
 
+## 诊断现状
+
+- 项目黑匣子日志为 `<项目>/.pi/diagnostics/runtime.jsonl`，本机全局 pi-init 日志位于 SDK `getAgentDir()/diagnostics/pi-init/runtime.jsonl`；各自最多当前文件和 `.1`，项目文件超过 2 MiB 轮转，全局文件上限 1 MiB 且保留 7 天。查看、脱敏导出与确认清理可从控制中心或 `/blackbox` 完成；导出不上传，清理不涉及会话/工作流数据。详细边界见[运行黑匣子](runtime-diagnostics.md)。
+
 ## 角色交接现状
 
 - 主动预算压缩与回调续接已退役；普通角色交接仍经原调度器复核身份、停止、恢复、branch、宿主忙碌和排队状态。按请求缓存usage诊断及其限制见[运行黑匣子](runtime-diagnostics.md)。
@@ -114,6 +118,7 @@
 
 ## 最近一次更新
 
+- 2026-10-28：将fresh/resume会话交接入口接入工作流面板，并统一项目与本机全局诊断的状态、脱敏导出和确认清理入口；离线针对性测试与类型检查通过，真实Pi会话切换未验证。详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-26：取消活动执行中的重复任务记忆注入，并将动态审阅库存移出 system；自动回归通过，真实 Provider A/B 和缓存收益尚未验证。详见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-24：修复预算压缩成功后可信角色交接的受限续接，并增加按请求关联的脱敏缓存 usage 诊断；扩展观测不代表最终网络请求或服务端缓存事实，未验证真实 Pi/Provider。实现、验证与限制见 [`docs/session-log.md`](session-log.md)。
 - 2026-10-24：增加 codemode 异常空输出参数的执行前拒绝保护，并明确轻量调查路径为软约束；SDK 不提供可靠的请求专属流式取消契约，未实现生成中止。实现范围、限制和验证见 [`docs/session-log.md`](session-log.md)。

@@ -265,6 +265,10 @@ export function createRoleRuntime(
     refreshRoleStatus(ctx, mode);
   }
   async function applyRole(role: string, ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig) {
+    try { return await applyRoleModel(role, ctx, resolvedConfig); }
+    catch (error) { state.traceHandoff?.(ctx, "pi-init.role_failed"); throw error; }
+  }
+  async function applyRoleModel(role: string, ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig) {
     const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;

@@ -5,6 +5,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createRequire } from "node:module";
 import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
+import { withDiagnosticLock } from "./diagnostic-storage.ts";
+import { createGlobalDiagnostics, isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
 import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains, formatCacheObservations } from "./runtime-diagnostics-report.ts";
 
 const extensionVersion = readExtensionVersion();
@@ -17,7 +19,7 @@ const RETENTION_MS = 7 * 86400000;
 const MAX_RING_BYTES = 32 * 1024;
 const MAX_ISSUES = 24;
 const MAX_PENDING = 32;
-const fields = new Set(["toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome", "mode", "reasonCode", "inputBytes", "outputBytes", "budgetBytes", "checkpointed", "omittedMessages", "overBudget", ...cacheDiagnosticFields]);
+const fields = new Set(["diagnosticEventId", "diagnosticProjectId", "diagnosticSessionId", "toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome", "mode", "reasonCode", "inputBytes", "outputBytes", "budgetBytes", "checkpointed", "omittedMessages", "overBudget", ...cacheDiagnosticFields]);
 function metadata(data: Data): Data {
   const result: Data = {};
   for (const key of fields) {
@@ -37,7 +39,7 @@ function classify(event: string, data: Data) {
   if (event === "workflow.suspected_loop") return { category: "suspected-loop", code };
   if (event === "runtime.slow_round") return { category: "suspected-slow", code };
   if (event === "context.budget_checked" && ["failed", "error"].includes(String(data.decision))) return { category: "context-budget", code: "BUDGET_DECISION" };
-  if (event === "runtime.failure") return { category: "runtime-failure", code };
+  if (event === "runtime.failure" || event.startsWith("pi-init.") && isGlobalDiagnosticEvent(event)) return { category: "runtime-failure", code };
   if (event === "role.handoff_dispatch_unknown") return { category: "outcome-unknown", code: "HANDOFF_DISPATCH_UNKNOWN" };
   if (event === "workflow.delivery.fallback_failed") return { category: "delivery-failure", code: "FALLBACK_FAILED" };
   if (event === "compaction.long_wait") return { category: "suspected-stall", code: "COMPACTION_LONG_WAIT" };
@@ -58,21 +60,25 @@ export function createDiagnosticWriter(options: { file: string; maxBytes: number
     const write = (queues.get(path) ?? Promise.resolve()).then(async () => {
       if (failed) return;
       await mkdir(dirname(path), { recursive: true, mode: options.directoryMode });
-      let size = 0;
-      const expired = (mtimeMs: number) => options.retentionMs !== undefined && Date.now() - mtimeMs > options.retentionMs;
-      try {
-        const info = await stat(path); size = info.size;
-        if (expired(info.mtimeMs)) { await rm(path, { force: true }); size = 0; }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (options.retentionMs !== undefined) {
-        try { if (expired((await stat(path + ".1")).mtimeMs)) await rm(path + ".1", { force: true }); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      }
-      if (size + bytes > options.maxBytes) {
-        await rm(path + ".1", { force: true });
-        if (size) await rename(path, path + ".1");
-      }
-      await appendFile(path, line, { mode: 0o600 });
+      const append = async () => {
+        let size = 0;
+        const expired = (mtimeMs: number) => options.retentionMs !== undefined && Date.now() - mtimeMs > options.retentionMs;
+        try {
+          const info = await stat(path); size = info.size;
+          if (expired(info.mtimeMs)) { await rm(path, { force: true }); size = 0; }
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (options.retentionMs !== undefined) {
+          try { if (expired((await stat(path + ".1")).mtimeMs)) await rm(path + ".1", { force: true }); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        }
+        if (size + bytes > options.maxBytes) {
+          await rm(path + ".1", { force: true });
+          if (size) await rename(path, path + ".1");
+        }
+        await appendFile(path, line, { mode: 0o600 });
+      };
+      if (options.file === "diagnostics/runtime.jsonl") await withDiagnosticLock(dirname(path), append);
+      else await append();
     }).catch(() => {
       if (!failed) {
         failed = true;
@@ -86,7 +92,8 @@ export function createDiagnosticWriter(options: { file: string; maxBytes: number
   return { write, flush: () => tail, get failed() { return failed; }, get dropped() { return dropped; } };
 }
 
-export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number } = {}) {
+export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number; global?: Parameters<typeof createGlobalDiagnostics>[0] } = {}) {
+  const global = createGlobalDiagnostics(options.global);
   const maxBytes = Math.max(128 * 1024, Math.min(options.maxBytes ?? 2 * 1024 * 1024, 2 * 1024 * 1024));
   const runtimeId = randomUUID();
   const nowMs = options.now ?? (() => performance.now());
@@ -134,6 +141,8 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
     return state;
   }
   function observe(ctx: ExtensionContext, event: string, raw: Data = {}) {
+    const correlation = global.observe(ctx, event);
+    if (correlation) raw = { ...raw, ...correlation };
     try {
       if (writer.failed || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); rejectedCalls.clear(); scope = ""; return; }
       if (baselineCwd !== ctx.cwd) { baselines.clear(); baselineCwd = ctx.cwd; }
@@ -257,7 +266,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   }
   async function report(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return "运行黑匣子：未信任项目，不读取诊断。";
-    await writer.flush();
+    await Promise.all([writer.flush(), global.flush()]);
     const latest = new Map<string, Data>();
     const summaries: Data[] = [];
     const requests: Data[] = [];
@@ -289,9 +298,9 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", global.report(), ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
   }
-  return { observe, report, flush: () => writer.flush() };
+  return { observe, report, flush: async () => { await Promise.all([writer.flush(), global.flush()]); } };
 }
 function readExtensionVersion() {
   try {

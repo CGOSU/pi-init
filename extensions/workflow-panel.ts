@@ -4,12 +4,14 @@ import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import { formatWorkflowStatusText, workflowStatusActivityLabel, workflowStatusTaskItems } from "./workflow-status-renderer.ts";
 import { workflowPanelChoices, type WorkflowPanelRequest } from "./workflow-panel-actions.ts";
+import { SESSION_HANDOFF_IMPORTED, SESSION_HANDOFF_REVIEW } from "../src/session-handoff.ts";
 
 export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: ExtensionRuntimeState): Promise<WorkflowPanelRequest | undefined> {
   let timer: ReturnType<typeof setInterval> | undefined;
   try {
     return await ctx.ui.custom<WorkflowPanelRequest | undefined>((tui, theme, _bindings, done) => {
-      let page: "tasks" | "detail" | "actions" | "technical" = "tasks";
+      let page: "tasks" | "detail" | "actions" | "technical" = state.workflowState?.status === "paused"
+        && [SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_IMPORTED].includes(state.workflowState.pauseReason ?? "") ? "actions" : "tasks";
       let actionOrigin: "tasks" | "detail" = "tasks";
       let technicalOrigin: "tasks" | "detail" | "actions" = "tasks";
       let scroll = 0;
@@ -106,7 +108,7 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
           const inner = Math.max(1, width - 4);
           const height = Math.max(6, Math.min(28, (tui.terminal?.rows ?? 30) - 4));
           const footer = page === "tasks"
-            ? (width < 32 ? ["Esc关闭 · Enter", "↑↓ a操作 d技术"] : width < 55 ? ["↑↓ 浏览 · Enter 查看", "a 操作 · d 技术 · Esc 关闭"] : ["↑↓ 浏览 · Enter 查看 · Esc 关闭", "a 操作 · d 技术详情"])
+            ? (width < 32 ? ["Esc关闭 · Enter", "↑↓ a操作 d技术"] : width < 55 ? ["↑↓ 浏览 · Enter 查看", "a 继续/操作 · d 技术 · Esc 关闭"] : ["↑↓ 浏览 · Enter 查看 · Esc 关闭", "a 继续方式与操作 · d 技术详情"])
             : page === "actions"
               ? [width < 32 ? "↑↓选择 · Enter · Esc返回" : "↑↓ 选择 · Enter 执行 · Esc 返回"]
               : [width < 32 ? "↑↓滚动 · Esc返回" : width < 55 ? "↑↓ 滚动 · Esc 返回" : "↑↓ / PgUp / PgDn 滚动 · Esc 返回"];

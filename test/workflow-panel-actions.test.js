@@ -302,6 +302,59 @@ test("confirmed fresh panel action propagates closure through workflow status wi
   assert.equal(transfers, 1);
 });
 
+test("停止状态下的已导入交接不可从面板执行", async () => {
+  const state = fixture();
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "session-handoff-imported";
+  state.userStopRequested = true;
+  const { ctx } = context(async (_title, items) => items[1]);
+  let calls = 0;
+  await runWorkflowPanelRequest(request(state, "fresh"), ctx, state, async () => { calls++; });
+  assert.equal(calls, 0);
+  assert.ok(workflowPanelChoices(state).find(item => item.action === "fresh").disabledReason);
+});
+
+test("交接审阅面板直接提供继续操作，选择后复用原命令且不提前执行", async () => {
+  const state = fixture();
+  state.workflowState.tasks.unshift({ ...state.workflowState.tasks[0], id: "done", status: "completed" });
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "session-handoff-review";
+  for (const [pauseReason, action, steps] of [
+    ["session-handoff-review", "resume", 0],
+    ["session-handoff-review", "fresh", 2],
+    ["session-handoff-imported", "fresh", 2],
+  ]) {
+    state.workflowState.pauseReason = pauseReason;
+    const h = createExtensionHarness([], { mode: "tui", hasUI: true, trusted: true, custom: async call => {
+      call.component.render(80);
+      assert.notEqual(call.done, true);
+      for (let i = 0; i < steps; i++) call.component.handleInput("\u001b[B");
+      call.component.handleInput("\r");
+    } });
+    const selected = await showWorkflowPanel(h.context, state);
+    assert.equal(selected.choice.action, action);
+    const calls = [];
+    const { ctx } = context(async (_title, items) => items[1]);
+    ctx.newSession = async () => ({ cancelled: false });
+    await runWorkflowPanelRequest(selected, ctx, state, async (...args) => calls.push(args));
+    assert.deepEqual(calls, [[action, undefined, false]]);
+  }
+});
+
+test("未知结果保留不可用的当前会话入口，取消重试确认不派发", async () => {
+  const state = fixture();
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "handoff-outcome-unknown";
+  Object.assign(state.workflowState.tasks[0], { status: "blocked", outcomeUnknown: true });
+  const { ctx } = context(async (_title, items) => items[0]);
+  const calls = [];
+  for (const value of ["resume", "fresh", "retry:first"]) {
+    await runWorkflowPanelRequest(request(state, value), ctx, state, async (...args) => calls.push(args));
+  }
+  assert.deepEqual(calls, []);
+  assert.ok(workflowPanelChoices(state).find(item => item.action === "resume").disabledReason);
+});
+
 test("replacement during fresh confirmation neither transfers nor touches disposed UI", async () => {
   const state = fixture();
   state.workflowState.status = "paused";

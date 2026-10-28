@@ -45,6 +45,7 @@ import {
   type ResolvedRoleConfig,
   type RunTimingEntryData,
 } from "./contracts.ts";
+import { createDiagnosticControls } from "./diagnostic-controls.ts";
 import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
@@ -181,6 +182,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
                 advancedInit: async (targetDir, ctx) => (await loadScaffoldRuntime()).advancedInit(targetDir, ctx),
         getThinkingLevel: () => pi.getThinkingLevel(),
         workflowCommand: workflowActions.workflowCommand,
+        diagnosticsCommand: (args, ctx) => diagnosticControls.command(args, ctx),
       }),
     );
   }
@@ -419,6 +421,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             await workflowDispatch.scheduleWorkflow(ctx);
       }
     } catch (error) {
+      diagnostics.trace(ctx, "pi-init.initialization_failed");
       ctx.ui.notify(textOf(error), "error");
     }
   });
@@ -447,7 +450,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow"];
+        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow", "diagnostics"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -480,6 +483,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         }
         if (action === "role") { await (await loadControlCenter()).switchRole(tokens[0], ctx); return; }
         if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
+        if (action === "diagnostics") { await diagnosticControls.command(tokens.join(" ") || "menu", ctx); return; }
         if (action === "workflow") {
           const workflowAction = tokens.shift();
         if (workflowAction === "fresh") {
@@ -492,8 +496,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;
         }
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow] [参数]", "error");
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|diagnostics] [参数]", "error");
       } catch (error) {
+        diagnostics.trace(ctx, "pi-init.command_failed");
         ctx.ui.notify(textOf(error), "error");
       }
     },
@@ -717,8 +722,9 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const rejectionGuard = createRepeatedRejectionGuard(pi, runtimeState);
   const workflowDelivery = createWorkflowDelivery(pi, runtimeState);
   const diagnostics = createHandoffDiagnostics(pi, runtimeState);
+  const diagnosticControls = createDiagnosticControls(diagnostics);
   pi.registerCommand("blackbox", {
-    description: "查看运行黑匣子的本地问题汇总（不触发模型回合）",
-    handler: async (_args, ctx) => { ctx.ui.notify(await diagnostics.report(ctx), "info"); },
+    description: "查看运行诊断；menu 打开面板，export 受控导出，clear 确认清理（不上传）",
+    handler: async (args, ctx) => { await diagnosticControls.command(args, ctx); },
   });
 }

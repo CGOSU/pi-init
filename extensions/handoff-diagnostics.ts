@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
@@ -87,7 +88,9 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
 
   function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
     try {
-      if (mode === "off" || writer.failed || !ctx.isProjectTrusted()) return;
+      if (mode === "off" || !ctx.isProjectTrusted()) return;
+      if (enabled && isGlobalDiagnosticEvent(event)) blackbox.observe(ctx, event, data);
+      if (enabled && writer.failed) return;
       if (!enabled) {
         if (event === "session.start" || event === "session.tree") { lastLoop = undefined; lastRuntimeFailure = undefined; }
         const closing = event === "agent.settled" || event === "session.shutdown";

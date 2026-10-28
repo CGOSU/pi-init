@@ -27,6 +27,7 @@ export type ControlCenterDependencies = {
   quickInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void>;
   advancedInit: (targetDir: string, ctx: ExtensionCommandContext) => Promise<void | typeof MENU_BACK>;
   getThinkingLevel: () => string;
+  diagnosticsCommand?: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
   workflowCommand: (
     action: string | undefined,
     taskId: string | undefined,
@@ -287,6 +288,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         { value: "init", label: "初始化", description: "快速初始化或高级初始化当前项目" },
         { value: "change", label: "变更", description: "角色与模型、工作流策略、角色和会话模式" },
         { value: "workflow", label: "工作流", description: "查看、留在本会话继续、新会话交接、重试或取消任务" },
+        ...(deps.diagnosticsCommand ? [{ value: "diagnostics", label: "运行诊断", description: "项目与全局状态、脱敏导出、确认清理（仅本机）" }] : []),
         { value: "exit", label: "← 返回" },
       ], { summary, selectedValue: selectedSection, ...saveMenuOptions(ctx) });
       if (!section || isMenuBack(section) || section === "exit") return;
@@ -343,6 +345,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         continue;
       }
 
+      if (section === "diagnostics") await deps.diagnosticsCommand?.("menu", ctx);
       if (section === "workflow") {
                   if (await deps.workflowCommand("status", undefined, ctx) === "close-panel") return;
       }

@@ -269,6 +269,7 @@ export function createWorkflowActions(
       }
       ctx.ui.notify("用法：/pi-init workflow [status|acknowledge|resume|retry <taskId> [--confirm-unknown-outcome]|cancel|cancel-all|discard-recovery <entryId> --confirm-unknown-outcome]", "error");
     } catch (error) {
+      state.traceHandoff?.(ctx, "pi-init.workflow_failed");
       ctx.ui.notify(textOf(error), "error");
     }
   }
