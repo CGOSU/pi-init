@@ -14,6 +14,8 @@ export function formatWorkflowPauseStep(step: WorkflowPauseAction): string {
       return step.route === "task_workflow"
         ? "如果需求或方案已改变，请让架构师通过 task_workflow(action=\"replan\") 重规划。"
         : "如果需求或方案已改变，请让架构师重规划。";
+    case "fresh-session":
+      return "由用户执行 /pi-init workflow fresh 确认新会话交接或完成待核对导入。";
     case "resume":
       return "审阅后执行 /pi-init workflow resume。";
   }

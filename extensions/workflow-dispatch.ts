@@ -33,6 +33,8 @@ import { validateWorkflowTaskStartMessage } from "./workflow-start-evidence.ts";
 
 export type WorkflowDispatchDependencies = {
   roleRuntime: RoleRuntime;
+  offerSessionHandoff?: (ctx: ExtensionContext) => boolean;
+  guardSessionHandoff?: (ctx: ExtensionContext) => void;
   messages: WorkflowMessages;
   report: WorkflowReport;
   setCurrentContext: (ctx: ExtensionContext) => void;
@@ -194,6 +196,7 @@ export function createWorkflowDispatch(
         }
       }
     }
+    if (state.workflowState) deps.guardSessionHandoff?.(ctx);
     deps.report.updateWorkflowStatus(ctx);
   }
 
@@ -322,6 +325,7 @@ export function createWorkflowDispatch(
       return;
     }
 
+    if (deps.offerSessionHandoff?.(ctx)) return;
     const effect = selectWorkflowScheduleEffect(current);
     if (!effect) return;
     if (effect.kind === "replan") {

@@ -41,12 +41,16 @@ import { attachWorkflowPresentation } from "./workflow-presentation.ts";
 import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import { transferFrozen } from "../src/session-handoff.ts";
+import { outgoingTransfer } from "./session-handoff.ts";
 
 export type WorkflowActionDependencies = {
   roleRuntime: RoleRuntime;
   dispatch: WorkflowDispatch;
   report: WorkflowReport;
   taskMemory?: TaskMemoryRuntime;
+  freshSession?: (ctx: ExtensionCommandContext) => Promise<void>;
+  resumeExecution?: (ctx: ExtensionContext) => boolean;
 };
 
 type WorkflowActionResult = {
@@ -175,6 +179,11 @@ export function createWorkflowActions(
     ctx: ExtensionCommandContext,
     confirmUnknownOutcome = false,
   ) {
+    if (action === "fresh") {
+      if (!deps.freshSession) { ctx.ui.notify("宿主未接通安全会话交接入口。", "warning"); return; }
+      await deps.freshSession(ctx);
+      return "close-panel" as const;
+    }
     if (action === "acknowledge") {
       if (taskId !== undefined || confirmUnknownOutcome) {
         ctx.ui.notify("用法：/pi-init workflow acknowledge（只确认当前工作流告警，不接受来源参数）", "error");
@@ -207,9 +216,16 @@ export function createWorkflowActions(
     }
     if (action === undefined || action === "status") {
       const request = await deps.report.showWorkflowProgress(ctx);
-      if (request) await runWorkflowPanelRequest(request, ctx, state, (nextAction, nextTaskId, confirmed) => workflowCommand(nextAction, nextTaskId, ctx, confirmed));
+              if (request) {
+          const result = await runWorkflowPanelRequest(request, ctx, state, (nextAction, nextTaskId, confirmed) => workflowCommand(nextAction, nextTaskId, ctx, confirmed));
+          if (result === "close-panel") return result;
+        }
       const diagnostic = recoveryActions.diagnostic();
       if (diagnostic) ctx.ui.notify(diagnostic, "error");
+      return;
+    }
+    if (transferFrozen(state.workflowState) || outgoingTransfer(ctx, state.workflowState)) {
+      ctx.ui.notify("此会话队列正在交接或已转移，只读保留；请在目标会话继续，不在旧会话重试或重规划。", "warning");
       return;
     }
     if (!state.workflowState) {
@@ -224,6 +240,7 @@ export function createWorkflowActions(
     }
 
     try {
+      if ((action === "resume" || action === "retry") && deps.resumeExecution && !deps.resumeExecution(ctx)) return;
       if (action === "resume") {
         if (state.workflowState.status === "replanning") {
           await deps.dispatch.scheduleWorkflow(ctx);
@@ -263,6 +280,9 @@ export function createWorkflowActions(
   ): Promise<WorkflowActionResult> {
     if (signal?.aborted) {
       return { content: [{ type: "text", text: "本次工作流工具操作已中止；工作流状态未更改。" }], details: {} };
+    }
+    if (params.action !== "status" && (transferFrozen(state.workflowState) || outgoingTransfer(ctx, state.workflowState))) {
+      throw Object.assign(new Error("跨session交接期间当前队列只读；请在目标会话继续"), { code: "WORKFLOW_SESSION_TRANSFERRED" });
     }
     assertSupportedWorkflowFeatures(params);
     if (params.action !== "status" && !ctx.isProjectTrusted()) {

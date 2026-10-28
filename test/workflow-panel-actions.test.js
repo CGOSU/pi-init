@@ -249,3 +249,65 @@ test("Enter 打开任务详情，Esc 分层返回后才关闭", async () => {
   } });
   await createWorkflowReport(state, { pi: {}, roleRuntime: { refreshRoleStatus() {} } }).showWorkflowProgress(harness.context);
 });
+
+test("session-handoff review panel exposes fresh and staying in the current session, with safe confirmation", async () => {
+  const state = createExtensionRuntimeState();
+  state.workflowState = createWorkflowState({ sessionId: "test-session", summary: "交接选择", tasks: [
+    { id: "done", task: "已完成", files: ["src"], acceptanceCriteria: ["通过"] },
+    { id: "next", task: "继续", files: ["src"], acceptanceCriteria: ["通过"], dependsOn: ["done"] },
+  ] });
+  state.workflowState.tasks[0].status = "completed";
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "session-handoff-review";
+  const choices = workflowPanelChoices(state);
+  assert.equal(choices.find(item => item.action === "fresh")?.disabledReason, undefined);
+  assert.ok(choices.some(item => item.action === "fresh"));
+  assert.match(choices.find(item => item.action === "resume").label, /当前会话/);
+  for (const accept of [false, true]) {
+    const calls = [];
+    const { ctx } = context(async (_title, items) => items[accept ? 1 : 0]);
+    ctx.newSession = async () => ({ cancelled: false });
+    const result = await runWorkflowPanelRequest(request(state, "fresh"), ctx, state, async action => { calls.push(action); return "close-panel"; });
+    assert.deepEqual(calls, accept ? ["fresh"] : []);
+    assert.equal(result, accept ? "close-panel" : undefined);
+  }
+});
+
+test("imported target panel permits fresh recheck while source-transfer panels stay read-only", () => {
+  const state = fixture();
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "session-handoff-imported";
+  state.roleRecoveryPending = true;
+  const incoming = workflowPanelChoices(state);
+  assert.equal(incoming.find(item => item.action === "fresh").disabledReason, undefined);
+  assert.ok(incoming.filter(item => item.action !== "fresh").every(item => item.disabledReason));
+  state.workflowState.pauseReason = "session-transfer-pending";
+  assert.ok(workflowPanelChoices(state).every(item => item.disabledReason));
+  state.workflowState.pauseReason = "session-handoff-imported";
+  state.roleRecoveryPersistenceFailed = true;
+  assert.ok(workflowPanelChoices(state).every(item => item.disabledReason));
+});
+
+test("confirmed fresh panel action propagates closure through workflow status without touching old UI", async () => {
+  const state = fixture();
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "session-handoff-imported";
+  const { ctx } = context(async (_title, items) => items[1]);
+  let transfers = 0;
+  const actions = createWorkflowActions(state, { roleRuntime: {}, dispatch: {},
+    report: { async showWorkflowProgress() { return request(state, "fresh"); } },
+    async freshSession() { transfers++; state.runtimeDisposed = true; ctx.ui.notify = () => { throw Error("stale UI"); }; },
+  });
+  assert.equal(await actions.workflowCommand("status", undefined, ctx), "close-panel");
+  assert.equal(transfers, 1);
+});
+
+test("replacement during fresh confirmation neither transfers nor touches disposed UI", async () => {
+  const state = fixture();
+  state.workflowState.status = "paused";
+  state.workflowState.pauseReason = "session-handoff-imported";
+  const { ctx } = context(async (_title, items) => { state.runtimeDisposed = true; ctx.ui.notify = () => { throw Error("stale UI"); }; return items[1]; });
+  let transfers = 0;
+  await runWorkflowPanelRequest(request(state, "fresh"), ctx, state, async () => { transfers++; });
+  assert.equal(transfers, 0);
+});

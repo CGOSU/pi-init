@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-10-28：新session setup顺序与来源只读加载
+
+- SDK当前先创建runtime/发送session_start，再执行newSession.setup，最后调用withSession，不能假设session_start已看到setup队列。替换后旧pi/command ctx失效，不得继续写目标或自动解冻源。
+- 处理：setup先落交接包及user正文，最后保存待激活队列；withSession只用fresh context发送幂等核对信号，目标再走原调度器。异常保持源冻结，部分写入在目标重核，不重复新建。
+- SDK SessionManager.open会初始化空文件；历史来源改为只读快照加载到inMemory manager，核对session、项目、冻结意图及指纹。回归使用真实SDK临时实盘覆盖取消、部分写入、旧ctx失效、旧branch及空来源不改写。
+
+
 ### 2026-10-27：新增审阅读取能力尚未加载时出现自举阻塞
 
 - 现象：工作区已实现 file_review(read)，但真实调用仍被仅支持list/complete的旧schema拒绝，无法在原session登记全文覆盖。

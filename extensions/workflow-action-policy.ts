@@ -13,6 +13,10 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   const workflow = state.workflowState;
   const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
   const taskScope = workflow?.currentTaskId ? { taskId: workflow.currentTaskId, requiredRole: task?.role } : {};
+  if (!state.roleRecoveryPending && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError && workflow?.status === "paused"
+    && ["session-handoff-review", "session-transfer-pending", "session-handoff-imported"].includes(workflow.pauseReason ?? "")) {
+    return { action: "recover", nextAction: workflow.taskPauseReason ?? "等待用户确认会话交接；不自行新建session、重试任务或重规划。" };
+  }
   if (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError
     || (workflow && !["completed", "cancelled"].includes(workflow.status)
       && (workflow.status === "paused" || task?.outcomeUnknown || (workflow.currentTaskId && !task)))) {

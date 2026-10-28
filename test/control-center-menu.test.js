@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as helpers from "./helpers.js";
 import { MENU_BACK, selectRoleModel, showMenu } from "../extensions/ui.ts";
+import { createControlCenter } from "../extensions/control-center.ts";
+import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 const {
   createExtensionHarness,
@@ -311,4 +313,21 @@ test("没有保存能力的 TUI 菜单不拦截 Ctrl+S", async () => {
   ]);
 
   assert.equal(result, "item");
+});
+
+test("fresh-session action closes the entire control-center stack before captured context is reused", async () => {
+  const state = createExtensionRuntimeState();
+  let configReads = 0;
+  const h = createExtensionHarness([], { mode: "tui", custom: async call => {
+    call.component.render(120);
+    call.component.handleInput("\u001b[B");
+    call.component.handleInput("\u001b[B");
+    call.component.handleInput("\r");
+  } });
+  const center = createControlCenter({ state, roleRuntime: {
+    async readSessionRoleConfig() { assert.equal(configReads++, 0, "stale command context must not be reused"); return { mode: "auto", workflowMode: "on", roleModels: {} }; },
+    activeRoleFor() {}, workflowStateLabel: () => "交接待确认",
+  }, getThinkingLevel: () => "high", async workflowCommand(action) { assert.equal(action, "status"); return "close-panel"; } });
+  await center.showControlCenter(h.context);
+  assert.equal(configReads, 1);
 });

@@ -19,6 +19,7 @@ import {
   shortModelName,
   showMenu,
 } from "./ui.ts";
+import type { WorkflowCommandResult } from "./workflow-panel-actions.ts";
 
 export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
@@ -30,7 +31,7 @@ export type ControlCenterDependencies = {
     action: string | undefined,
     taskId: string | undefined,
     ctx: ExtensionCommandContext,
-  ) => Promise<void>;
+  ) => Promise<WorkflowCommandResult>;
 };
 
 function roleMenuItems(config: ResolvedRoleConfig, mode: string, roleNames: string[]) {
@@ -285,7 +286,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       const section = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "init", label: "初始化", description: "快速初始化或高级初始化当前项目" },
         { value: "change", label: "变更", description: "角色与模型、工作流策略、角色和会话模式" },
-        { value: "workflow", label: "工作流", description: "查看、恢复、重试或取消架构分配的任务" },
+        { value: "workflow", label: "工作流", description: "查看、留在本会话继续、新会话交接、重试或取消任务" },
         { value: "exit", label: "← 返回" },
       ], { summary, selectedValue: selectedSection, ...saveMenuOptions(ctx) });
       if (!section || isMenuBack(section) || section === "exit") return;
@@ -343,7 +344,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       }
 
       if (section === "workflow") {
-        await deps.workflowCommand("status", undefined, ctx);
+                  if (await deps.workflowCommand("status", undefined, ctx) === "close-panel") return;
       }
     }
   }

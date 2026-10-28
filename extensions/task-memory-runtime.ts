@@ -12,20 +12,20 @@ export const TASK_MEMORY_ENTRY = "pi-init-task-memory";
 export const TASK_MEMORY_MESSAGE = "pi-init-task-memory-view";
 type Entry = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>[number];
 type MemoryBinding = { source: (message: object, ctx: ExtensionContext) => WorkflowHandoffIdentity | undefined };
-export type TaskMemoryView = { status: "available" | "legacy" | "unavailable"; memory?: TaskMemory; reason?: string; applicability?: "historical" | "matches-checkpoint-files" | "changed" | "unverified"; evidence?: { id: string; text: string; truncated: boolean; sourceTaskId: string; historical: true }[] };
+export type TaskMemoryView = { status: "available" | "legacy" | "unavailable"; memory?: TaskMemory; reason?: string; applicability?: "historical" | "matches-checkpoint-files" | "changed" | "unverified"; evidence?: TaskEvidence[] };
 function bounded(text: string, maximum: number) {
   if (text.length <= maximum) return text;
   const marker = "\n[中间省略；可按来源读取]\n";
   const head = Math.floor((maximum - marker.length) / 2);
   return text.slice(0, head) + marker + text.slice(-(maximum - marker.length - head));
 }
-function contentText(content: unknown) {
+export function contentText(content: unknown) {
   return Array.isArray(content) ? content.filter(item => item && typeof item === "object" && item.type === "text" && typeof item.text === "string").map(item => item.text).join("\n") : "";
 }
 function sameIdentity(left: WorkflowHandoffIdentity, right: WorkflowHandoffIdentity) {
   return Object.keys(left).every(key => left[key as keyof WorkflowHandoffIdentity] === right[key as keyof WorkflowHandoffIdentity]);
 }
-export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntimeState, binding: MemoryBinding, onFailure?: (ctx: ExtensionContext) => void) {
+export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntimeState, binding: MemoryBinding, onFailure?: (ctx: ExtensionContext) => void, historicalEvidence?: (ctx: ExtensionContext, id: string, dependencies: string[]) => TaskEvidence | undefined) {
   const failures = new Set<string>();
   const stopped = new Set<string>();
   function suspend(ctx: ExtensionContext) {
@@ -54,34 +54,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     return undefined;
   }
   function scope(ctx: ExtensionContext, current: WorkflowHandoffIdentity) { return JSON.stringify([ctx.cwd, current]); }
-  function sourceObservation(branch: Entry[], id: string, current: WorkflowHandoffIdentity, dependency = false): TaskObservation | undefined {
-    const resultIndex = branch.findIndex(entry => entry.id === id);
-    const result = branch[resultIndex];
-    if (!result || result.type !== "message" || result.message.role !== "toolResult") return undefined;
-    const message = result.message;
-    let ownerIndex = -1;
-    for (let index = resultIndex - 1; index >= 0; index--) {
-      const entry = branch[index];
-      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "toolCall" && part.id === message.toolCallId)) { ownerIndex = index; break; }
-    }
-    if (ownerIndex < 0) return undefined;
-    const anchor = branch.slice(0, ownerIndex).findLast(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task");
-    if (!anchor || anchor.type !== "custom_message" || !anchor.details || typeof anchor.details !== "object") return undefined;
-    const details = anchor.details as WorkflowHandoffIdentity;
-    if (taskMemoryScope(details) !== taskMemoryScope(current) && !(dependency
-      && details.sessionId === current.sessionId && details.workflowId === current.workflowId && details.taskId === current.taskId
-      && Number.isSafeInteger(details.planVersion) && details.planVersion >= 0 && details.planVersion <= current.planVersion)) return undefined;
-    const owner = branch[ownerIndex];
-    if (owner.type !== "message" || owner.message.role !== "assistant") return undefined;
-    const call = owner.message.content.find(part => part.type === "toolCall" && part.id === message.toolCallId);
-    if (!call || call.type !== "toolCall" || call.name === "task_workflow" || call.name === "switch_role") return undefined;
-    const text = contentText(message.content);
-    const data = message.details && typeof message.details === "object" ? message.details as Record<string, unknown> : {};
-    const failed = message.isError || data.ok === false || typeof data.exitCode === "number" && data.exitCode !== 0;
-    return { id, messageEntryId: owner.id, toolCallId: message.toolCallId, toolName: message.toolName,
-      inputHash: fingerprint(call.arguments)!, outputHash: fingerprint(message.content)!, outcome: failed ? "tool-error" : "tool-ok",
-      summary: bounded(text, 1024), truncated: text.length > 1024 };
-  }
+  const sourceObservation = readTaskSourceObservation;
   function load(ctx: ExtensionContext, current: WorkflowHandoffIdentity) {
     const branch = ctx.sessionManager.getBranch();
     let memory = createTaskMemory(current);
@@ -153,6 +126,10 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
         const dependency = state.workflowState?.tasks.find(source => source.status === "completed" && task?.dependsOn?.includes(source.id) && source.verificationEvidenceIds?.includes(id));
         const own = sourceObservation(branch, id, current);
         const source = own ?? (dependency ? sourceObservation(branch, id, { ...current, taskId: dependency.id }, true) : undefined);
+        if (!source) {
+          const historical = historicalEvidence?.(ctx, id, task?.dependsOn ?? []);
+          if (historical) return historical;
+        }
         if (!source) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "只能读取当前任务或已完成直接依赖声明的真实验证来源；旧结果不构成当前执行授权");
         const entry = ctx.sessionManager.getBranch().find(item => item.id === id);
         if (!entry || entry.type !== "message" || entry.message.role !== "toolResult") return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "来源不可读取");
@@ -258,3 +235,32 @@ export function taskMemoryText(view: TaskMemoryView) {
     checkpoint: memory.checkpoint, observations: memory.observations, omittedObservations: memory.omittedObservations, applicability: view.applicability,
     evidence: view.evidence }) + "\n原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不必重跑。阶段完成后用checkpoint登记成果、剩余项和下一步，提交expectedMemoryRevision=" + memory.revision + "；工具成功不等于测试或需求验收。matches-checkpoint-files仅表示声明文件与登记时一致，不证明完整依赖或测试当时版本。";
 }
+export function readTaskSourceObservation(branch: Entry[], id: string, current: WorkflowHandoffIdentity, dependency = false): TaskObservation | undefined {
+    const resultIndex = branch.findIndex(entry => entry.id === id);
+    const result = branch[resultIndex];
+    if (!result || result.type !== "message" || result.message.role !== "toolResult") return undefined;
+    const message = result.message;
+    let ownerIndex = -1;
+    for (let index = resultIndex - 1; index >= 0; index--) {
+      const entry = branch[index];
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "toolCall" && part.id === message.toolCallId)) { ownerIndex = index; break; }
+    }
+    if (ownerIndex < 0) return undefined;
+    const anchor = branch.slice(0, ownerIndex).findLast(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task");
+    if (!anchor || anchor.type !== "custom_message" || !anchor.details || typeof anchor.details !== "object") return undefined;
+    const details = anchor.details as WorkflowHandoffIdentity;
+    if (taskMemoryScope(details) !== taskMemoryScope(current) && !(dependency
+      && details.sessionId === current.sessionId && details.workflowId === current.workflowId && details.taskId === current.taskId
+      && Number.isSafeInteger(details.planVersion) && details.planVersion >= 0 && details.planVersion <= current.planVersion)) return undefined;
+    const owner = branch[ownerIndex];
+    if (owner.type !== "message" || owner.message.role !== "assistant") return undefined;
+    const call = owner.message.content.find(part => part.type === "toolCall" && part.id === message.toolCallId);
+    if (!call || call.type !== "toolCall" || call.name === "task_workflow" || call.name === "switch_role") return undefined;
+    const text = contentText(message.content);
+    const data = message.details && typeof message.details === "object" ? message.details as Record<string, unknown> : {};
+    const failed = message.isError || data.ok === false || typeof data.exitCode === "number" && data.exitCode !== 0;
+    return { id, messageEntryId: owner.id, toolCallId: message.toolCallId, toolName: message.toolName,
+      inputHash: fingerprint(call.arguments)!, outputHash: fingerprint(message.content)!, outcome: failed ? "tool-error" : "tool-ok",
+      summary: bounded(text, 1024), truncated: text.length > 1024 };
+  }
+export type TaskEvidence = { id: string; text: string; truncated: boolean; sourceTaskId: string; historical: true; sourceSessionId?: string };

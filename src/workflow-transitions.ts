@@ -265,7 +265,7 @@ export function resumeWorkflow(state: WorkflowState, now = Date.now()): Workflow
     result.continuation = { ...result.continuation, phase: "pending" };
     return result;
   }
-  if (state.pauseReason !== "architecture-review") {
+  if (state.pauseReason !== "architecture-review" && state.pauseReason !== "session-handoff-review") {
     throw new Error("任务因阻塞或未完成暂停，请先使用 retry 重试任务或重新规划");
   }
 

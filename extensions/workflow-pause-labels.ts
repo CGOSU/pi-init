@@ -2,6 +2,12 @@ export function workflowPauseReasonLabel(reason: string | undefined): string {
   switch (reason) {
     case "child-result-review":
       return "子流程结果待核实；父任务不会启动，核实后 resume 返回架构审阅";
+    case "session-handoff-review":
+      return "建议新session继续；fresh确认交接，resume留在当前会话";
+    case "session-transfer-pending":
+      return "旧队列已冻结；请查看目标session或核对交接结果";
+    case "session-handoff-imported":
+      return "新session导入待核对；在此执行workflow fresh完成激活";
     case "architecture-review":
       return "等待架构师审阅；审阅后执行 /pi-init workflow resume";
     case "handoff-outcome-unknown":

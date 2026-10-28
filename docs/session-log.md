@@ -2,6 +2,21 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-28：补齐会话交接面板并精简公共Skill
+
+- 面板：确认此前resume存在但fresh缺少；新增fresh/留原会话选择、默认返回确认、目标导入重核及旧源只读状态。状态面板、命令与控制中心共用入口；fresh后用close-panel关闭旧调用栈，resume/retry共用停止恢复门，不触碰旧ctx。新增UI回归先失败后通过。
+- Skill：主文件由6317字符精简为3723字符（JavaScript字符串长度口径，不等于token/费用），具体工具细节按需引用；补充ub-mode适配原则，保留第三方署名，删除角色重复表述。不新增公开Skill或执行器，不安装度量工具，不自动push。
+- 验证：`node --test`659项全部通过，`node node_modules/typescript/bin/tsc --noEmit`通过；`git diff --check`与Skill相对引用核对通过。检查包装器的typecheck因npm未知`--listFiles`失败，已直接运行项目编译器确认通过。真实Pi TUI换会话及token/费用收益未实测；未部署、未push，提交以Git记录为准。
+
+
+### 2026-10-28：实现用户确认的阶段边界换session
+
+- 完成：新增有界交接包、fresh用户命令与完成边界建议；源队列冻结，新session只继续剩余任务。复用原规划/TaskMemory、工具配对和调度器，不调用模型总结或复制工具日志，不修改Pi/SoL配置。
+- 来源：历史验证显式标注，仅已声明且属于已完成直接依赖的真实成功来源可定向只读获取，不能充当当前任务验证；连续交接保留原来源。来源文件只读加载到inMemory SessionManager，避免SDK open初始化空文件。
+- 验证：真实SDK临时实盘及扩展事件回归覆盖提示/留原会话、确认/取消、源写失败、目标部分写入、重复激活、载荷损坏、安全门、旧branch冻结、历史来源与连续交接；新增15项交接回归；`node --test`全量654项通过，`node node_modules/typescript/bin/tsc --noEmit`及`git diff --check`通过。检查包装器的typecheck因npm未知`--listFiles`失败，已直接运行项目编译器确认通过。
+- 边界：尚未部署、未push，提交以Git记录为准；未运行真实Pi TUI换会话或Provider，未验证1–5秒估计或净token/费用收益。
+
+
 ### 2026-10-28：Provider请求失败在可信工具边界续接
 
 - 复现：新增真实扩展事件回归，原实现将纯请求失败改为handoff-outcome-unknown、清除当前交接，先观察到失败后修复。

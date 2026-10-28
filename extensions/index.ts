@@ -54,6 +54,7 @@ import { createWorkflowDelivery } from "./workflow-delivery.ts";
 import { createWorkflowUserControl } from "./workflow-user-control.ts";
 import { createTaskMemoryRuntime } from "./task-memory-runtime.ts";
 import { registerAbnormalToolGuard } from "./abnormal-tool-guard.ts";
+import { createSessionHandoff, outgoingTransfer } from "./session-handoff.ts";
 
 type ControlCenterModule = typeof import("./control-center.ts");
 type ControlCenter = ReturnType<ControlCenterModule["createControlCenter"]>;
@@ -74,7 +75,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     assistantFailureScope = ["error", "aborted"].includes(event.message.stopReason) ? executionScope(ctx) : undefined;
     failedAssistant = assistantFailureScope ? event.message : undefined;
   });
-  const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"));
+  const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"), (ctx, id, dependencies) => sessionHandoff.readEvidence(ctx, id, dependencies));
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, { onRepeatedRead: ctx => userControl.suspend(ctx, "repeated-read") });
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
@@ -149,15 +150,22 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime,
     messages: workflowMessages,
     report: workflowReport,
+    offerSessionHandoff: ctx => sessionHandoff.beforeDispatch(ctx),
+    guardSessionHandoff: ctx => { if (outgoingTransfer(ctx, runtimeState.workflowState)) sessionHandoff.beforeDispatch(ctx); },
     setCurrentContext: (ctx) => {
       runtimeState.currentContext = ctx;
     },
+  });
+  const sessionHandoff = createSessionHandoff(pi, runtimeState, {
+    persist: workflowReport.persistWorkflowState, restore: workflowDispatch.restoreWorkflowState,
+    schedule: workflowDispatch.scheduleWorkflow, toolsSettled: workflowBinding.toolsSettled,
   });
   const workflowActions = createWorkflowActions(runtimeState, {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
     taskMemory,
+    freshSession: sessionHandoff.fresh, resumeExecution: userControl.resume,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   let controlCenterPromise: Promise<ControlCenter> | undefined;
@@ -451,7 +459,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           : action === "mode"
           ? ROLE_MODES
           : action === "workflow"
-            ? ["status", "acknowledge", "resume", "retry", "cancel"]
+            ? ["status", "acknowledge", "resume", "retry", "cancel", "fresh"]
             : [];
       const partial = prefix.endsWith(" ") ? "" : tokens.at(-1) ?? "";
       const matches = values.filter((value) => value.startsWith(partial));
@@ -474,8 +482,12 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
         if (action === "workflow") {
           const workflowAction = tokens.shift();
+        if (workflowAction === "fresh") {
+          if (tokens.length) { ctx.ui.notify("用法：/pi-init workflow fresh", "error"); return; }
+          await workflowActions.workflowCommand("fresh", undefined, ctx); return;
+        }
           if (workflowAction === "stop") { userControl.suspend(ctx, "user-command"); ctx.ui.notify("自动续跑已停止；未完成、取消或重试任务。", "info"); return; }
-          if ((workflowAction === "resume" || workflowAction === "retry") && !userControl.resume(ctx)) return;
+
           await workflowActions.workflowCommand(workflowAction, tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));
           if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;

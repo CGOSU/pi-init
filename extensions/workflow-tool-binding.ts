@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { activeRoleMatches } from "./runtime-state.ts";
-import { hasCompleteToolPairs, identityMatches, isRecord } from "./role-context-protocol.ts";
+import { hasCompleteToolPairs, identityMatches, isRecord, type ContextMessage } from "./role-context-protocol.ts";
 
 type RunBinding = {
   sessionId: string;
@@ -160,13 +160,25 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     const start = branch.findIndex(entry => entry.type === "custom_message"
       && entry.customType === "pi-init-workflow-task" && identityMatches(entry.details, identity));
     const messages = branch.slice(start + 1).flatMap(entry => entry.type === "message" ? [entry.message] : []);
-    if (!hasCompleteToolPairs(messages) || messages.some(message => {
+    return persistedToolsComplete(messages);
+  }
+  function persistedToolsComplete(messages: readonly ContextMessage[]) {
+    if (activeTools.size || uncertainTools || !hasCompleteToolPairs(messages) || messages.some(message => {
       if (message.role !== "toolResult") return false;
       const nested = isRecord(message) ? message.nestedCalls : undefined;
       return message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
     })) return false;
     const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
     return [...executedRoots].every(id => results.has(id));
+  }
+  function toolsSettled(ctx: ExtensionContext) {
+    const workflow = state.workflowState;
+    if (!workflow) return false;
+    const branch = ctx.sessionManager.getBranch();
+    const start = branch.findLastIndex(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task"
+      && isRecord(entry.details) && entry.details.workflowId === workflow.workflowId
+      && entry.details.sessionId === ctx.sessionManager.getSessionId());
+    return start >= 0 && persistedToolsComplete(branch.slice(start + 1).flatMap(entry => entry.type === "message" ? [entry.message] : []));
   }
   function providerFailureGuard(message: object, ctx: ExtensionContext) {
     const binding = sourceBinding(message);
@@ -201,5 +213,5 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   pi.on("session_tree", reset);
   pi.on("session_shutdown", reset);
   pi.on("session_compact", reset);
-  return { bind, source, isCurrentSource, providerFailureGuard };
+  return { bind, source, isCurrentSource, providerFailureGuard, toolsSettled };
 }
