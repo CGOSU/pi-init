@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-29：发布稳定版 2.0.10
+
+- 完成：`npm version patch --no-git-tag-version` 将 `package.json` 与 `package-lock.json` 从 `2.0.9` 同步更新为 `2.0.10`；未创建 tag。
+- 验证：`git diff --check` 通过；版本元数据变更未运行测试。
+- 收尾：提交 `发布稳定版 2.0.10`，未 push。
+
 ### 2026-10-28：接入双层本地诊断控制面板并完成统一交付
 
 - 完成：控制中心、`/pi-init diagnostics` 与 `/blackbox menu` 共用诊断面板；`/blackbox` 无参数仍显示原报告。支持项目/本机全局状态、有限脱敏导出和交互确认清理。项目文件位于 `.pi/diagnostics`；全局文件用 SDK `getAgentDir()` 解析至 `diagnostics/pi-init`。文档补充fresh/resume面板入口及诊断路径、留存、隐私与失败限制；详见[运行黑匣子](runtime-diagnostics.md)。
