@@ -37,25 +37,47 @@ async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = fal
   h.evidenceIds = evidenceIds;
   await h.tools.find(t => t.name === "task_workflow").execute("complete-first", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "第一项完成", implementationRationale: "复用既有模块", verification: ["定向测试通过"], evidenceIds }, undefined, undefined, h.context);
   await emitExtensionEvent(h, "agent_end");
-  await emitExtensionEvent(h, "agent_settled");
+  // Expose the actual completed-task boundary before the next scheduler tick.
+  // Manual fresh tests act here; capacity must no longer pause the scheduler.
   return h;
 }
 function latest(h) { return h.branch.findLast(e => e.customType === "pi-init-workflow").data; }
 
-test("high-context completed-task boundary offers one confirmed session handoff instead of dispatching the next task", async () => {
+test("high old-model usage does not pause or replace a session at the completed-task boundary", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);
-    assert.equal(latest(h).status, "paused");
-    assert.equal(latest(h).pauseReason, "session-handoff-review");
+    h.context.newSession = () => { throw new Error("unexpected automatic replacement"); };
+    assert.equal(latest(h).status, "running");
+    assert.equal(latest(h).pauseReason, undefined);
     assert.equal(latest(h).tasks[0].status, "completed");
     assert.equal(latest(h).tasks[1].status, "pending");
     assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
     const notices = h.notifications.length;
     await emitExtensionEvent(h, "agent_settled");
     assert.equal(h.notifications.length, notices);
-    await h.commands.get("pi-init").handler("workflow resume", h.context);
     assert.equal(latest(h).currentTaskId, "second");
     assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 2);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("fresh capacity pressure reminds once and exposes manual handoff only at the safe boundary without pausing", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.newSession = () => assert.fail("automatic replacement");
+    const notices = h.notifications.length;
+    const messages = [{ role: "system", content: "x".repeat(240000) }];
+    await emitExtensionEvent(h, "context_with_system", { messages });
+    await emitExtensionEvent(h, "context_with_system", { messages });
+    assert.equal(h.notifications.length, notices + 1);
+    assert.equal(h.statusCalls.some(s => s.name === "pi-init-capacity" && s.text.includes("workflow fresh")), false);
+    await emitExtensionEvent(h, "agent_settled");
+    assert.equal(h.statusCalls.some(s => s.name === "pi-init-capacity" && s.text.includes("workflow fresh")), true);
+    assert.equal(h.notifications.length, notices + 1);
+    assert.equal(latest(h).currentTaskId, "second");
+    assert.equal(latest(h).status, "running");
+    await emitExtensionEvent(h, "context_with_system", { messages });
+    assert.equal(h.statusCalls.findLast(s => s.name === "pi-init-capacity").text.includes("workflow fresh"), false);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
@@ -63,6 +85,7 @@ test("high-context completed-task boundary offers one confirmed session handoff 
 test("small contexts continue normally without a handoff prompt", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd, { tokens: 10000 });
+    await emitExtensionEvent(h, "agent_settled");
     assert.equal(latest(h).currentTaskId, "second");
     assert.equal(h.notifications.some(n => n.message.includes("workflow fresh")), false);
     await emitExtensionEvent(h, "session_shutdown");
@@ -180,7 +203,7 @@ test("active tools, unknown outcomes, pending messages, lost trust and missing s
       h.context.newSession = async () => { calls++; return { cancelled: false }; };
       await h.commands.get("pi-init").handler("workflow fresh", h.context);
       assert.equal(calls, 0);
-      assert.equal(latest(h).pauseReason, "session-handoff-review");
+      assert.equal(latest(h).pauseReason, undefined);
       await emitExtensionEvent(h, "session_shutdown");
     });
   }
@@ -290,7 +313,7 @@ test("source file identity is verified before freezing or replacing anything", a
     h.context.newSession = async () => { calls++; return { cancelled: false }; };
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
     assert.equal(calls, 0);
-    assert.equal(latest(h).pauseReason, "session-handoff-review");
+    assert.equal(latest(h).pauseReason, undefined);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
@@ -305,8 +328,7 @@ test("successive handoffs keep the original declared evidence read-only without 
     await emitExtensionEvent(middle, "agent_start");
     await middle.tools.find(t => t.name === "task_workflow").execute("complete-second", { action: "complete", ...workflowMessageIdentity(middle), completionSummary: "第二项完成", implementationRationale: "复用原历史", verification: ["第二项定向验证通过"] }, undefined, undefined, middle.context);
     await emitExtensionEvent(middle, "agent_end");
-    await emitExtensionEvent(middle, "agent_settled");
-    assert.equal(latest(middle).pauseReason, "session-handoff-review");
+    assert.equal(latest(middle).pauseReason, undefined);
     middle.context.newSession = options => replaceSession(middle, options);
     await middle.commands.get("pi-init").handler("workflow fresh", middle.context);
     const target = middle.target;
@@ -332,7 +354,7 @@ test("missing or empty source archives are never created or rewritten by preflig
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
     assert.equal(calls, 0);
     assert.equal(await readFile(empty, "utf8"), "");
-    assert.equal(latest(h).pauseReason, "session-handoff-review");
+    assert.equal(latest(h).pauseReason, undefined);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });

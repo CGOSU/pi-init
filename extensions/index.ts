@@ -36,6 +36,7 @@ import { createFileReviewRuntime } from "./file-review-runtime.ts";
 import { shortModelName } from "./ui.ts";
 import { createRoleRecovery } from "./role-recovery.ts";
 import { createRoleContextView } from "./role-context-view.ts";
+import { registerContextCapacity } from "./role-context-capacity.ts";
 import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
 import { createRuntimeRoutingContext } from "./runtime-routing-context.ts";
 import {
@@ -80,6 +81,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, { onRepeatedRead: ctx => userControl.suspend(ctx, "repeated-read") });
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
+  registerContextCapacity(pi, runtimeState);
   const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context, (event, ctx, code) => {
     if (runtimeState.userStopRequested) { ctx.abort(); return; }
     const rejection = rejectionGuard.observe({ ...event, action: event.input?.action, role: event.input?.role, code }, ctx);

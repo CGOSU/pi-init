@@ -132,20 +132,14 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_PREVIOUS_BOUNDARY_UNAVAILABLE", "上一交接消息无法核对当前 branch；完整输入保留且不隔离");
   }
   const previousIndex = previousBoundary.index;
-  const userStart = previousIndex >= 0 ? previousIndex + 1 : 0;
+  // A task handoff is not proof that earlier user constraints were superseded.
+  const userStart = 0;
   const userIndices = new Set<number>();
   for (let index = userStart; index < anchorIndex; index += 1) {
     if (messageRecord(event.messages[index])?.role === "user") userIndices.add(index);
   }
-  if (previousIndex < 0 && userIndices.size > 1) {
-    const lastUser = [...userIndices].at(-1);
-    userIndices.clear();
-    if (lastUser !== undefined) userIndices.add(lastUser);
-  }
-
-  const failureStart = previousIndex >= 0 ? previousIndex + 1 : ([...userIndices].at(-1) ?? anchorIndex);
-  const groups = groupToolMessages(event.messages, failureStart, anchorIndex);
-  if (!groups) return failOpen(event.messages, "ROLE_CONTEXT_VIEW_REUSE_PAIR_UNSAFE", "上一窗口工具观察配对不完整，未尝试复用裁剪");
+  const groups = groupToolMessages(event.messages, 0, anchorIndex);
+  if (!groups) return failOpen(event.messages, "ROLE_CONTEXT_VIEW_REUSE_PAIR_UNSAFE", "历史前缀工具观察配对不完整，未尝试复用裁剪");
   const failures = new Set(groups.flatMap(group => {
     const failedResult = group.indices.some(index => {
       const message = messageRecord(event.messages[index]);
@@ -153,9 +147,14 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
     });
     if (failedResult) return group.indices;
     const head = messageRecord(event.messages[group.indices[0]]);
-    return head?.role === "assistant" && (head.stopReason === "error" || typeof head.errorMessage === "string" && head.errorMessage) ? [group.indices[0]] : [];
+    // Preserve custom recovery/unknown-outcome records as well as stopped work.
+    return head?.role === "custom" && !isManagedHandoffMessage(event.messages[group.indices[0]])
+      || head?.role === "assistant" && (["error", "aborted"].includes(String(head.stopReason)) || typeof head.errorMessage === "string" && head.errorMessage)
+      ? group.indices : [];
   }));
-  const reused = reusableToolContext(event.messages, groups);
+  const reuseStart = previousIndex >= 0 ? previousIndex + 1 : ([...userIndices].at(-1) ?? anchorIndex);
+  const adjacentGroups = groups.filter(group => group.indices[0] >= reuseStart);
+  const reused = reusableToolContext(event.messages, adjacentGroups);
   if (!reused) return failOpen(event.messages, "ROLE_CONTEXT_VIEW_REUSE_PAIR_UNSAFE", "上一窗口工具观察配对不完整，未尝试复用裁剪");
   const prefixIndices = [...new Set([...userIndices, ...failures, ...reused.indices])].sort((left, right) => left - right);
   const messages = [...prefixIndices.map((index) => event.messages[index]), ...suffix];

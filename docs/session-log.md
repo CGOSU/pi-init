@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-10-30：改为模型感知容量软提醒和手动新会话
+
+- 完成：容量提醒改为根据当前 context hook 可见消息的序列化字符数/4及当前可确认模型窗口估算，70%仅为软提醒线，估算含10%输出及5%安全策略余量（非实际预留）；未知窗口及虚拟路由不显示百分比，按session/模型/窗口去重并在模型变化、压缩或新session后重评。移除旧usage触发的工作流暂停；普通会话引导用户保存目标、约束及进度后手动 `/new`，不承诺任务进度自动继承。工作流只在既有安全边界显示手动 `/pi-init workflow fresh` 指引，队列不因提醒暂停，既有fresh确认、源冻结及停止/恢复/未知结果保护不变。
+- 上下文保护：托管工作流只在任务、branch及工具组边界可核实时形成请求局部视图，不改写原session；保留用户约束、失败/恢复/未知记录、完整工具调用结果配对和当前活动任务后缀，无法安全确认时保留完整输入。普通会话不做语义历史裁剪，Pi宿主管理的system状态不由扩展改写。更新README、公共Skill及当前状态/决策记忆。
+- 验证：`node --test test/role-context-capacity.test.js test/session-handoff.test.js test/role-context-budget.test.js test/role-context-view.test.js` — 58/58通过；`npm run typecheck` — 通过；`git diff --check` — 通过。未运行全量测试。
+- 边界：本地 `npm ls` 显示Pi SDK peer包为1.3.0；`package.json` peer范围为`^1.3.0`，当前lock根元数据仍为`^1.1.0`；Pi宿主文档路径标识1.4.0。未在真实Pi宿主或Provider请求上验证事件/窗口估算，未做当前开发会话session replacement实验；交接替换仅由隔离测试harness覆盖。未验证新session临时模型覆盖承接或实际token/费用收益。
+
 ### 2026-10-29：发布稳定版 2.0.10
 
 - 完成：`npm version patch --no-git-tag-version` 将 `package.json` 与 `package-lock.json` 从 `2.0.9` 同步更新为 `2.0.10`；未创建 tag。

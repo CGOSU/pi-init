@@ -9,6 +9,7 @@ import { isRecord } from "./role-context-protocol.ts";
 import { readTaskSourceObservation, contentText } from "./task-memory-runtime.ts";
 import { parseTaskMemoryIdentity } from "../src/task-memory.ts";
 import type { TaskEvidence } from "./task-memory-runtime.ts";
+import { showCapacityHandoffHint } from "./role-context-capacity.ts";
 
 function readArchive(file: string, root: string, sessionId: string) {
   const stats = statSync(file);
@@ -84,22 +85,10 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       }
       return true;
     }
-    const usage = ctx.getContextUsage();
-    const window = usage?.contextWindow ?? ctx.model?.contextWindow;
-    if (state.roleModeStatus !== "auto" || !ready(ctx) || !current || current.status !== "running" || current.continuation?.kind !== "schedule"
-      || current.continuation.phase !== "pending" || current.continuation.reason !== "task-completed"
-      || typeof usage?.tokens !== "number" || !Number.isFinite(usage.tokens) || !window || !Number.isFinite(window) || window <= 0 || usage.tokens < window * 0.7
-      || !ctx.sessionManager.getSessionFile?.()) return false;
-    try {
-      const packet = buildSessionHandoff(current, ctx.sessionManager.getBranch());
-      if (Buffer.byteLength(JSON.stringify(packet.context), "utf8") >= usage.tokens) return false;
-    } catch { return false; }
-    const next = cloneState(current);
-    next.status = "paused"; next.pauseReason = SESSION_HANDOFF_REVIEW;
-    next.taskPauseReason = "已完成阶段且上下文较重：执行 /pi-init workflow fresh 确认新会话继续，或 /pi-init workflow resume 留在当前会话。不会自动新建或调用模型总结。";
-    deps.persist(next, ctx);
-    ctx.ui.notify(next.taskPauseReason, "info");
-    return true;
+    // Capacity is advisory: never pause the queue or consult stale usage.
+    // Only this existing safety gate may expose the manual workflow entry.
+    if (ready(ctx) && ctx.sessionManager.getSessionFile?.()) showCapacityHandoffHint(ctx, state);
+    return false;
   }
   async function activate(ctx: ExtensionContext, id: string, hash: string) {
     if (activating) return;

@@ -17,6 +17,24 @@ import { createExtensionHarness } from "./helpers.js";
 import { blockWorkflowTask } from "../src/workflow.ts";
 import { groupToolMessages, hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 
+test("active projection retains earlier constraints and stopped work without clearing live task history", () => {
+  const { state, harness, handoffMessage } = makeWorkflowContextFixture();
+  const messages = [
+    { role: "user", content: "Never change production data", timestamp: 1 },
+    { role: "assistant", content: [], stopReason: "aborted", timestamp: 2 },
+    { role: "user", content: "Continue local implementation", timestamp: 3 },
+    handoffMessage,
+    { role: "assistant", content: [{ type: "text", text: "x".repeat(100000) }], timestamp: 20 },
+  ];
+  const original = structuredClone(messages);
+  const project = () => createRoleContextView(state).context({ type: "context", messages }, harness.context)?.messages ?? messages;
+  assert.ok(project().includes(messages[0]));
+  assert.ok(project().includes(messages[1]));
+  assert.ok(project().includes(messages.at(-1)));
+  assert.deepEqual(project(), project());
+  assert.deepEqual(messages, original);
+});
+
 test("projection diagnostic failures cannot disrupt unchanged recovery context", () => {
   const state = createExtensionRuntimeState();
   state.roleRecoveryPending = true;
@@ -238,6 +256,10 @@ test("public context callback isolates the current role window while retaining n
   harness.branch.unshift({ type: "custom_message", customType: previousMarker.customType, details: previousIdentity });
   const messages = [
     { role: "user", content: "old unrelated request", timestamp: 0 },
+    { role: "assistant", content: [{ type: "text", text: "obsolete successful discussion".repeat(1000) }], timestamp: 0 },
+    { role: "assistant", content: [{ type: "toolCall", id: "ancient-error", name: "read", arguments: {} }], timestamp: 0 },
+    { role: "toolResult", toolCallId: "ancient-error", toolName: "read", content: [{ type: "text", text: "unresolved failure" }], isError: true, timestamp: 0 },
+    { role: "custom", customType: "unknown-outcome", content: "Do not replay pending write", timestamp: 0 },
     previousMarker,
     { role: "user", content: "new instruction before handoff: preserve the caller error", timestamp: 2 },
     {
@@ -266,7 +288,12 @@ test("public context callback isolates the current role window while retaining n
   const result = handlers.get("context")({ type: "context", messages }, harness.context);
 
   assert.ok(result);
-  assert.equal(result.messages.some((message) => message.content === "old unrelated request"), false);
+  assert.equal(result.messages.some((message) => message.content === "old unrelated request"), true,
+    "without a semantic checkpoint an older user request may still contain active constraints");
+  assert.ok(result.messages.some(message => message.toolCallId === "ancient-error"));
+  assert.ok(result.messages.some(message => message.customType === "unknown-outcome"));
+  assert.ok(hasCompleteToolPairs(result.messages));
+  assert.ok(JSON.stringify(result.messages).length < JSON.stringify(messages).length);
   assert.ok(result.messages.some((message) => message.content === "new instruction before handoff: preserve the caller error"));
   assert.ok(result.messages.some((message) => message.content === "new instruction during current execution"));
   assert.ok(result.messages.some((message) => message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && part.id === "previous-failed-call")));
