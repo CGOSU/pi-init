@@ -106,7 +106,7 @@ function cacheCountsText(read: number, write: number) {
 
 function roleSegments(role: ActivityStatusRole | undefined): ActivityStatusSegment[] {
   if (!role) return [];
-  return [role.role, role.mode, role.model]
+  return [role.role, role.mode]
     .filter((text): text is string => Boolean(text))
     .map((text) => ({ text, tone: "muted", auxiliary: true }));
 }
