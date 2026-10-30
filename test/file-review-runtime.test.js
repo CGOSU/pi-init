@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -81,6 +81,34 @@ test("list path is ignored for project inventory pagination and Markdown is neve
     });
     assert.equal(completed.details.code, "UNSUPPORTED_FILE");
     assert.deepEqual((await list({})).details, inventory.details);
+  });
+});
+
+test("扫描告警保留不可读路径和原因，缓存目录不可读不影响扫描", {
+  skip: process.platform === "win32" || process.getuid?.() === 0,
+}, async () => {
+  await withTempDirectory(async (directory) => {
+    const cache = path.join(directory, ".pi", "diagnostics");
+    const blocked = path.join(directory, "blocked-source");
+    await mkdir(cache, { recursive: true });
+    await mkdir(blocked);
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    try {
+      await chmod(cache, 0);
+      await emitExtensionEvent(harness, "agent_settled", {});
+      assert.equal(harness.notifications.some((entry) => entry.message.includes("无法扫描")), false);
+      await chmod(blocked, 0);
+      await emitExtensionEvent(harness, "agent_settled", {});
+      const warning = harness.notifications.find((entry) => entry.message.includes("无法扫描"));
+      assert.ok(warning);
+      assert.match(warning.message, /blocked-source/);
+      assert.match(warning.message, /DIRECTORY_UNREADABLE/);
+      assert.match(warning.message, /EACCES/);
+    } finally {
+      await chmod(cache, 0o700);
+      await chmod(blocked, 0o700);
+    }
   });
 });
 

@@ -234,7 +234,12 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     const added = pending(current).filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
     return result.errors.length === 0
       ? { ok: true, added }
-      : { ok: false, code: "PARTIAL_SCAN", message: `${result.errors.length} 个路径无法扫描`, added };
+      : {
+        ok: false, code: "PARTIAL_SCAN",
+        message: `${result.errors.length} 个路径无法扫描：\n${result.errors.slice(0, 3)
+          .map((error) => `${error.path || "."} [${error.code}] ${error.message}`).join("\n")}${result.errors.length > 3 ? `\n另有 ${result.errors.length - 3} 个错误，可通过 /large 查看。` : ""}`,
+        added,
+      };
   }
 
   async function restore(ctx: ExtensionContext) {

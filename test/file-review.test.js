@@ -61,6 +61,27 @@ test("会话扫描发现原本已超限文件，不跟随链接并排除依赖�
   });
 });
 
+test("扫描与单文件检查排除工具缓存，但保留 .pi 扩展代码", async () => {
+  await withTempDirectory(async (directory) => {
+    const ignored = [".pi-graph/cache.ts", ".pi/diagnostics/generated.js", "nested/.pi/diagnostics/cache.ts"];
+    const included = [".pi/extensions/plugin.ts", ".pi/diagnostics-helper.ts", "src/main.ts"];
+    for (const filePath of [...ignored, ...included]) {
+      await mkdir(path.dirname(path.join(directory, filePath)), { recursive: true });
+      await writeFile(path.join(directory, filePath), makeLines(501));
+    }
+    const result = await scanProjectFiles(directory);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.files.map((file) => file.path).sort(), included.sort());
+    for (const filePath of ignored) {
+      const inspected = await inspectProjectFile(directory, filePath);
+      assert.equal(inspected.ok, false);
+      assert.equal(inspected.error.code, "UNSUPPORTED_FILE");
+    }
+    assert.equal((await inspectProjectFile(directory, ".pi/extensions/plugin.ts")).ok, true);
+  });
+});
+
 test("扫描和单文件检查覆盖 Rust、Go、Python 与 PHP 源文件", async () => {
   await withTempDirectory(async (directory) => {
     const paths = [

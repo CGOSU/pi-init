@@ -12,8 +12,14 @@ export const FILE_REVIEW_CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".rs", ".go", ".py", ".pyi", ".php", ".phtml",
 ]);
 export const FILE_REVIEW_EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set([
-  ".git", "node_modules", "dist", "coverage", ".next", "out", "target", "vendor", ".venv", "venv", "__pycache__", ".tox",
+  ".git", "node_modules", "dist", "coverage", ".next", "out", "target", "vendor", ".venv", "venv", "__pycache__", ".tox", ".pi-graph",
 ]);
+
+function isExcludedReviewDirectory(segments: readonly string[]): boolean {
+  return segments.some((segment, index) =>
+    FILE_REVIEW_EXCLUDED_DIRECTORIES.has(segment.toLowerCase())
+    || (segment.toLowerCase() === "diagnostics" && segments[index - 1]?.toLowerCase() === ".pi"));
+}
 
 export type FileSnapshot = {
   path: string;
@@ -83,7 +89,7 @@ export function normalizeReviewPath(rootDir: string, candidate: string):
   }
   const normalizedPath = pathFromRoot.split(sep).join("/");
   if (!FILE_REVIEW_CODE_EXTENSIONS.has(extname(normalizedPath).toLowerCase())
-    || normalizedPath.split("/").slice(0, -1).some((segment) => FILE_REVIEW_EXCLUDED_DIRECTORIES.has(segment.toLowerCase()))) {
+    || isExcludedReviewDirectory(normalizedPath.split("/").slice(0, -1))) {
     return { ok: false as const, code: "UNSUPPORTED_FILE", message: "该路径不是受审阅策略覆盖的代码文件" };
   }
   return { ok: true as const, absolutePath, path: normalizedPath };
@@ -138,7 +144,7 @@ export async function scanProjectFiles(
       const absolutePath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (!FILE_REVIEW_EXCLUDED_DIRECTORIES.has(entry.name.toLowerCase())) await visit(absolutePath);
+        if (!isExcludedReviewDirectory(relative(projectRoot, absolutePath).split(sep))) await visit(absolutePath);
         continue;
       }
       if (!entry.isFile() || !FILE_REVIEW_CODE_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
