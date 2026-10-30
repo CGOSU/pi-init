@@ -58,7 +58,9 @@ export function registerContextCapacity(pi: ExtensionAPI, state: ExtensionRuntim
         scope: workflow ? "workflow" : "ordinary" });
     } catch { /* Trace availability must not suppress the reminder. */ }
     try {
-      ctx.ui.setStatus("pi-init-capacity", capacity.percent === null ? "容量：未知（宿主用量暂不可用）" : `容量：${capacity.percent.toFixed(1)}%（与状态栏同源）`);
+      ctx.ui.setStatus("pi-init-capacity", pressured && capacity.percent !== null
+        ? `容量：${capacity.percent.toFixed(1)}% · ${capacity.status === "estimated-overflow" ? "超出窗口" : "压力偏高"}`
+        : undefined);
       if (pressured && !notified) {
         ctx.ui.notify("宿主上下文用量已达70%软提醒线（与状态栏同源），不代表请求一定超限。"
           + (workflow

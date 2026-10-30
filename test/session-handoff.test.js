@@ -70,14 +70,14 @@ test("fresh capacity pressure reminds once and exposes manual handoff only at th
     await emitExtensionEvent(h, "context_with_system", { messages });
     await emitExtensionEvent(h, "context_with_system", { messages });
     assert.equal(h.notifications.length, notices + 1);
-    assert.equal(h.statusCalls.some(s => s.name === "pi-init-capacity" && s.text.includes("workflow fresh")), false);
+    assert.equal(h.statusCalls.some(s => s.name === "pi-init-capacity" && s.text?.includes("workflow fresh")), false);
     await emitExtensionEvent(h, "agent_settled");
-    assert.equal(h.statusCalls.some(s => s.name === "pi-init-capacity" && s.text.includes("workflow fresh")), true);
+    assert.equal(h.statusCalls.some(s => s.name === "pi-init-capacity" && s.text?.includes("workflow fresh")), true);
     assert.equal(h.notifications.length, notices + 1);
     assert.equal(latest(h).currentTaskId, "second");
     assert.equal(latest(h).status, "running");
     await emitExtensionEvent(h, "context_with_system", { messages });
-    assert.equal(h.statusCalls.findLast(s => s.name === "pi-init-capacity").text.includes("workflow fresh"), false);
+    assert.equal(h.statusCalls.findLast(s => s.name === "pi-init-capacity").text?.includes("workflow fresh") ?? false, false);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
