@@ -43,7 +43,7 @@ async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = fal
 }
 function latest(h) { return h.branch.findLast(e => e.customType === "pi-init-workflow").data; }
 
-test("high old-model usage does not pause or replace a session at the completed-task boundary", async () => {
+test("high host usage only reminds and does not pause or replace a session at the completed-task boundary", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);
     h.context.newSession = () => { throw new Error("unexpected automatic replacement"); };
@@ -54,7 +54,7 @@ test("high old-model usage does not pause or replace a session at the completed-
     assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
     const notices = h.notifications.length;
     await emitExtensionEvent(h, "agent_settled");
-    assert.equal(h.notifications.length, notices);
+    assert.equal(h.notifications.length, notices + 1);
     assert.equal(latest(h).currentTaskId, "second");
     assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 2);
     await emitExtensionEvent(h, "session_shutdown");

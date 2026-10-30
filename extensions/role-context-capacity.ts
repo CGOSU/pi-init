@@ -4,26 +4,22 @@ import type { ExtensionRuntimeState } from "./runtime-state.ts";
 type CapacityModel = { provider: string; id: string; api?: string; contextWindow?: number };
 const positive = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
 
-// No tokenizer or provider output settings are exposed by this hook. This is a
-// text-size heuristic, never a hard-fit decision or a provider payload counter.
-export function estimateContextCapacity(messages: readonly unknown[] | undefined, model: CapacityModel | undefined) {
+type CapacityUsage = ReturnType<ExtensionContext["getContextUsage"]>;
+
+// Use the same host observation as the footer; never tokenize serialized messages.
+export function evaluateContextCapacity(usage: CapacityUsage, model: CapacityModel | undefined) {
   const window = model?.api !== "pi-virtual" && positive(model?.contextWindow) ? model.contextWindow : null;
-  let serializedChars: number | null = null;
-  try { if (messages) serializedChars = JSON.stringify(messages).length; } catch { /* Unknown, not zero. */ }
-  const estimatedInputTokens = serializedChars === null ? null : Math.ceil(serializedChars / 4);
-  const policyOutputReserve = window === null ? null : Math.ceil(window * 0.1);
-  const policySafetyMargin = window === null ? null : Math.ceil(window * 0.05);
-  const estimatedTotal = estimatedInputTokens === null || policyOutputReserve === null || policySafetyMargin === null
-    ? null : estimatedInputTokens + policyOutputReserve + policySafetyMargin;
+  const valid = window !== null && usage?.contextWindow === window
+    && typeof usage.percent === "number" && Number.isFinite(usage.percent) && usage.percent >= 0;
+  const percent = valid ? usage!.percent! : null;
   return {
     model: model ? `${model.provider}/${model.id}` : null,
-    contextWindow: window, serializedChars, estimatedInputTokens,
-    method: "serialized-hook-messages-chars/4", accuracy: "heuristic-no-tokenizer-or-multimodal-accounting",
-    policyOutputReserve, policySafetyMargin, actualOutputReserve: null,
-    hardLimit: "unknown", // An estimate cannot establish a hard overflow or guarantee fit.
-    status: window === null || estimatedTotal === null ? "unknown"
-      : estimatedTotal > window ? "estimated-overflow" : estimatedTotal >= window * 0.7 ? "soft-pressure" : "below-soft-threshold-estimate",
-    reason: model?.api === "pi-virtual" ? "next-physical-route-unknown" : window === null ? "model-window-unknown" : messages ? "hook-estimate-only" : "projection-unavailable",
+    contextWindow: window, percent,
+    method: "host-getContextUsage", hardLimit: "unknown",
+    status: percent === null ? "unknown"
+      : percent > 100 ? "estimated-overflow" : percent >= 70 ? "soft-pressure" : "below-soft-threshold-estimate",
+    reason: model?.api === "pi-virtual" ? "next-physical-route-unknown" : window === null ? "model-window-unknown"
+      : usage && usage.contextWindow !== window ? "usage-window-mismatch" : percent === null ? "host-usage-unavailable" : "host-context-usage",
   };
 }
 
@@ -47,24 +43,24 @@ export function registerContextCapacity(pi: ExtensionAPI, state: ExtensionRuntim
       } catch { /* A hint cannot block scheduling. */ }
     }
   });
-  function observe(ctx: ExtensionContext, messages: readonly unknown[] | undefined, stage: string, model = ctx.model) {
+  function observe(ctx: ExtensionContext, readUsage: boolean, stage: string, model = ctx.model) {
     if (state.runtimeDisposed) return;
-    const capacity = estimateContextCapacity(messages, model);
+    let usage: CapacityUsage;
+    try { if (readUsage) usage = ctx.getContextUsage(); } catch { /* Unavailable is not zero. */ }
+    const capacity = evaluateContextCapacity(usage, model);
     const nextIdentity = key(ctx, model);
     if (identity !== nextIdentity) { identity = nextIdentity; notified = false; }
     pressured = capacity.status === "soft-pressure" || capacity.status === "estimated-overflow";
     const workflow = state.workflowState?.sessionId === ctx.sessionManager.getSessionId()
       && state.workflowState.status !== "completed" && state.workflowState.status !== "cancelled";
-    // Usage is intentionally not used: it may refer to the old model or a
-    // pre-projection transcript, and becomes null after native compaction.
     try {
       state.traceHandoff?.(ctx, "context.capacity", { ...capacity, stage,
         scope: workflow ? "workflow" : "ordinary" });
     } catch { /* Trace availability must not suppress the reminder. */ }
     try {
-      ctx.ui.setStatus("pi-init-capacity", `容量${capacity.status === "unknown" ? "未知" : "估算"}: ${capacity.status}`);
+      ctx.ui.setStatus("pi-init-capacity", capacity.percent === null ? "容量：未知（宿主用量暂不可用）" : `容量：${capacity.percent.toFixed(1)}%（与状态栏同源）`);
       if (pressured && !notified) {
-        ctx.ui.notify("当前模型窗口的启发式容量估算（含10%输出、5%安全策略余量，非实际预留）已达70%软提醒线，不代表精确用量或硬上限。"
+        ctx.ui.notify("宿主上下文用量已达70%软提醒线（与状态栏同源），不代表请求一定超限。"
           + (workflow
             ? "当前任务继续；先保存必要进度，仅在完成交付物且满足安全交接条件时手动换会话。本提醒不授权恢复或重放。"
             : "先保存目标、约束、完成情况和未完成事项，待当前执行结束后可手动 /new；新会话不会自动继承任务进度或全部历史。"), "info");
@@ -72,10 +68,10 @@ export function registerContextCapacity(pi: ExtensionAPI, state: ExtensionRuntim
       }
     } catch { /* Diagnostics must not block, mutate, or retry a request. */ }
   }
-  pi.on("context_with_system", (event, ctx) => { observe(ctx, event.messages, "context-with-system-observed"); });
-  // No previous-model percentage or cached transcript is valid for this target.
-  // The next request hook supplies the fresh projection, including role switches.
-  pi.on("model_select", (event, ctx) => { observe(ctx, undefined, "model-selection-preflight", event.model); });
-  pi.on("session_compact", (_event, ctx) => { notified = false; observe(ctx, undefined, "post-compaction"); });
-  pi.on("session_start", (_event, ctx) => { notified = false; observe(ctx, undefined, "session-start"); });
+  pi.on("context_with_system", (_event, ctx) => { observe(ctx, true, "context-with-system-observed"); });
+  pi.on("agent_settled", (_event, ctx) => { observe(ctx, true, "agent-settled"); });
+  // Transition callbacks may still expose old-model/pre-compaction usage.
+  pi.on("model_select", (event, ctx) => { observe(ctx, false, "model-selection-preflight", event.model); });
+  pi.on("session_compact", (_event, ctx) => { notified = false; observe(ctx, false, "post-compaction"); });
+  pi.on("session_start", (_event, ctx) => { notified = false; observe(ctx, false, "session-start"); });
 }

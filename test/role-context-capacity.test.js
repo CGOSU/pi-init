@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { estimateContextCapacity, registerContextCapacity } from "../extensions/role-context-capacity.ts";
+import { evaluateContextCapacity, registerContextCapacity } from "../extensions/role-context-capacity.ts";
 import { createSessionHandoff } from "../extensions/session-handoff.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 
@@ -14,26 +14,29 @@ function reminderHarness(workflow = false) {
   const state = { traceHandoff: (_ctx, _event, value) => traces.push(value),
     workflowState: workflow ? { sessionId: session } : undefined };
   const ctx = { model: model(1000), sessionManager: { getSessionId: () => session },
-    getContextUsage() { throw new Error("old usage read"); },
+    usage: { tokens: 700, contextWindow: 1000, percent: 70 },
+    getContextUsage() { return this.usage; },
     ui: { setStatus() {}, notify: (...args) => notices.push(args) } };
   registerContextCapacity({ on: (name, handler) => handlers.set(name, handler) }, state);
   const emit = (name, event = {}) => handlers.get(name)(event, ctx);
-  // JSON array/string overhead is four characters: 549 and 550 input tokens.
-  const request = (characters = 2196) => emit("context_with_system", { messages: ["x".repeat(characters)] });
+  const request = (percent = 70) => {
+    ctx.usage = { tokens: percent * 10, contextWindow: 1000, percent };
+    return emit("context_with_system", { messages: ["x".repeat(2000000)] });
+  };
   return { ctx, state, notices, traces, emit, request, session: value => { session = value; } };
 }
 
 for (const workflow of [false, true]) {
   test(`${workflow ? "workflow" : "ordinary"} reminder crosses 70% once without returning a request mutation`, () => {
     const h = reminderHarness(workflow);
-    assert.equal(h.request(2192), undefined);
+    assert.equal(h.request(69.9), undefined);
     assert.equal(h.notices.length, 0);
     assert.equal(h.traces.at(-1).status, "below-soft-threshold-estimate");
     assert.equal(h.request(), undefined);
     assert.equal(h.traces.at(-1).status, "soft-pressure");
     assert.equal(h.notices.length, 1);
-    h.request(5000);
-    h.request(2192);
+    h.request(101);
+    h.request(69.9);
     h.request();
     assert.equal(h.notices.length, 1);
   });
@@ -69,6 +72,7 @@ test("compaction and session changes require a fresh projection and rearm a sing
   h.request();
   for (const event of ["session_compact", "session_start"]) {
     const count = h.notices.length;
+    h.ctx.usage = { tokens: null, contextWindow: 1000, percent: null };
     h.emit(event);
     assert.equal(h.traces.at(-1).status, "unknown");
     assert.equal(h.notices.length, count);
@@ -136,42 +140,39 @@ test("manual entry hints retain the existing safety gate and never pause schedul
   }
 });
 
-test("fresh projection is evaluated against the selected window, not old usage", () => {
-  const messages = [{ role: "system", content: "x".repeat(3000) }];
-  const large = estimateContextCapacity(messages, model(10000));
-  const small = estimateContextCapacity(messages, model(800));
-  assert.equal(large.status, "below-soft-threshold-estimate");
-  assert.equal(small.status, "estimated-overflow");
-  assert.equal(estimateContextCapacity(messages, model(1000)).status, "soft-pressure");
-  assert.equal(small.hardLimit, "unknown");
-  assert.equal(small.actualOutputReserve, null);
-  assert.equal(small.policyOutputReserve, 80);
-  assert.equal(small.policySafetyMargin, 40);
-});
-
-test("unknown models, invalid windows, virtual routes and unavailable projections never imply fit", () => {
-  for (const target of [undefined, model(0), model(NaN), model(Infinity), model(100000, "pi-virtual")]) {
-    const result = estimateContextCapacity([], target);
-    assert.equal(result.status, "unknown");
-    assert.equal(result.contextWindow, null);
+test("host percentage determines thresholds without additional reserves", () => {
+  for (const [percent, status] of [[0, "below-soft-threshold-estimate"], [19.1, "below-soft-threshold-estimate"], [69.99, "below-soft-threshold-estimate"], [70, "soft-pressure"], [100, "soft-pressure"], [100.1, "estimated-overflow"]]) {
+    const result = evaluateContextCapacity({ tokens: percent * 5000, percent, contextWindow: 500000 }, model(500000));
+    assert.equal(result.percent, percent);
+    assert.equal(result.status, status);
   }
-  assert.equal(estimateContextCapacity(undefined, model(1000)).status, "unknown");
-  const cyclic = []; cyclic.push(cyclic);
-  assert.equal(estimateContextCapacity(cyclic, model(1000)).estimatedInputTokens, null);
 });
 
-test("ordinary and workflow hooks observe system projection without mutating input or reading stale usage", () => {
+test("unavailable usage, invalid percentages and mismatched windows never imply fit", () => {
+  for (const target of [undefined, model(0), model(NaN), model(Infinity), model(100000, "pi-virtual")]) {
+    assert.equal(evaluateContextCapacity(undefined, target).status, "unknown");
+  }
+  for (const percent of [null, undefined, NaN, Infinity, -1]) {
+    assert.equal(evaluateContextCapacity({ tokens: null, contextWindow: 1000, percent }, model(1000)).status, "unknown");
+  }
+  assert.equal(evaluateContextCapacity({ tokens: 900, contextWindow: 1000, percent: 90 }, model(2000)).status, "unknown");
+});
+
+test("large image/signature payloads never override 19.1% host usage; transitions clear observations", () => {
   const handlers = new Map();
   const traces = [];
   const state = { traceHandoff: (_ctx, _event, data) => traces.push(data) };
   const ctx = { model: model(10000), sessionManager: { getSessionId: () => "session" },
-    getContextUsage: () => { throw new Error("stale usage must not determine target capacity"); }, ui: { setStatus() {} } };
+    getContextUsage: () => ({ tokens: 1910, contextWindow: 10000, percent: 19.1 }), ui: { setStatus() {} } };
   registerContextCapacity({ on: (event, handler) => handlers.set(event, handler) }, state);
-  const messages = [{ role: "system", content: "rules" }, { role: "user", content: "x".repeat(3000) }];
+  const messages = [{ role: "toolResult", content: [{ type: "image", data: "x".repeat(2000000) }] },
+    { role: "assistant", content: [{ type: "thinking", thinkingSignature: "y".repeat(2000000) }] }];
   const original = structuredClone(messages);
   const request = () => handlers.get("context_with_system")({ messages }, ctx);
   assert.equal(request(), undefined);
   assert.equal(traces.at(-1).scope, "ordinary");
+  assert.equal(traces.at(-1).percent, 19.1);
+  assert.equal(traces.at(-1).status, "below-soft-threshold-estimate");
   state.workflowState = { sessionId: "session" };
   request();
   assert.equal(traces.at(-1).scope, "workflow");
@@ -184,15 +185,23 @@ test("ordinary and workflow hooks observe system projection without mutating inp
   assert.equal(traces.at(-1).contextWindow, 800);
   assert.equal(traces.at(-1).status, "unknown");
   ctx.model = model(800);
+  ctx.getContextUsage = () => ({ tokens: 880, contextWindow: 800, percent: 110 });
   request();
   assert.equal(traces.at(-1).status, "estimated-overflow");
   handlers.get("session_compact")({}, ctx);
   assert.equal(traces.at(-1).status, "unknown");
-  assert.equal(traces.at(-1).estimatedInputTokens, null);
+  assert.equal(traces.at(-1).percent, null);
   request();
   assert.equal(traces.at(-1).status, "estimated-overflow");
+  ctx.getContextUsage = () => undefined;
   handlers.get("session_start")({}, ctx);
   assert.equal(traces.at(-1).status, "unknown");
+  ctx.getContextUsage = () => { throw new Error("usage unavailable"); };
+  assert.doesNotThrow(request);
+  assert.equal(traces.at(-1).status, "unknown");
+  ctx.getContextUsage = () => ({ tokens: 80, contextWindow: 800, percent: 10 });
+  handlers.get("agent_settled")({}, ctx);
+  assert.equal(traces.at(-1).percent, 10);
   assert.deepEqual(messages, original);
   state.traceHandoff = () => { throw new Error("diagnostic unavailable"); };
   assert.doesNotThrow(request);
