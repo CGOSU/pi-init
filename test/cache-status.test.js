@@ -118,7 +118,8 @@ test("缓存状态共享唯一的 pi-init 活动状态出口", async () => {
   assert.match(latestActivityStatus(harness), /自动/);
   assert.doesNotMatch(latestActivityStatus(harness), /缓存 · 等待请求/);
   assert.ok(activityCalls(harness).length > 0);
-  assert.ok(harness.statusCalls.every((call) => call.name === "pi-init-activity"));
+  assert.ok(harness.statusCalls.filter((call) => call.text !== undefined)
+    .every((call) => call.name === "pi-init-activity"));
 });
 
 test("TUI 将职责、Provider 阶段和累计时长合并到唯一活动 widget", async () => {
@@ -131,7 +132,7 @@ test("TUI 将职责、Provider 阶段和累计时长合并到唯一活动 widget
   await wait(70);
 
   assert.deepEqual([...harness.widgets.keys()], ["pi-init-activity"]);
-  assert.equal(harness.statusCalls.length, 0);
+  assert.equal(activityCalls(harness).length, 0);
   const widget = harness.widgets.get("pi-init-activity");
   const component = widget.content({}, harness.context.ui.theme);
   const lines = component.render(48);
@@ -148,7 +149,7 @@ test("TUI 将职责、Provider 阶段和累计时长合并到唯一活动 widget
   assert.match(completedLines[0], /累计/);
 });
 
-test("请求中将旧 usage 明确标为上次，结束后只显示本次最终结果", async () => {
+test("请求中隐藏旧 usage，结束后只显示本次最终结果", async () => {
   const harness = createExtensionHarness();
   useMarkedTheme(harness);
 
@@ -157,7 +158,7 @@ test("请求中将旧 usage 明确标为上次，结束后只显示本次最终�
   assert.match(latestActivityStatus(harness), /本次 R2k/);
 
   await beginRequest(harness);
-  assert.match(latestActivityStatus(harness), /上次 R2k/);
+  assert.doesNotMatch(latestActivityStatus(harness), /上次 R2k/);
   assert.doesNotMatch(latestActivityStatus(harness), /本次 R2k/);
 
   await finishRequest(harness, 0, 1024);
@@ -330,7 +331,7 @@ test("本次缺失、零值、无效、失败、中止或缺少结束事件不�
     await beginRequest(harness);
     await finishRequest(harness, 4096, 0);
     await beginRequest(harness);
-    assert.match(latestActivityStatus(harness), /上次 R4\.1k/);
+    assert.doesNotMatch(latestActivityStatus(harness), /上次 R4\.1k/);
 
     await finishCurrent(harness);
 

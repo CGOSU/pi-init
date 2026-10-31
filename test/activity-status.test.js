@@ -52,7 +52,7 @@ test("压缩长等待保持进行状态，真实异常和活动优先于辅助�
     operation: { kind: "agent", startedAt: 0 },
   }, 2_000);
   assert.match(agentDuringCompaction[0].text, /压缩仍在进行/);
-  assert.ok(agentDuringCompaction.some(({ text }) => /Agent 正在运行/.test(text)));
+  assert.ok(!agentDuringCompaction.some(({ text }) => /Agent 正在运行/.test(text)));
   const lines = renderActivityStatus(snapshot, 14, theme, 2_000);
 
   assert.equal(lines.length, 1);
@@ -111,6 +111,27 @@ test("未确认工作流告警优先，确认后收为简短标记且不隐藏�
   }, 2_000);
   assert.ok(withHostCompaction.some(({ text }) => text === "◌ 压缩仍在进行 · 2s"));
   assert.ok(withHostCompaction.some(({ tone }) => tone === "accent"));
+});
+
+test("活动结束后恢复缓存与耗时，运行中仍保留异常结果", () => {
+  const idle = {
+    role: { mode: "自动", role: "开发测试" },
+    cache: { phase: "result", current: { kind: "reported", read: 4096, write: 0 } },
+    workTimeMilliseconds: 60_000,
+  };
+  const idleSegments = activityStatusSegments(idle, 2_000);
+  const active = { ...idle, operation: { kind: "tool", label: "工具执行", count: 2, startedAt: 0 } };
+  const activeSegments = activityStatusSegments(active, 2_000);
+  const cacheText = idleSegments.find(({ tone }) => tone === "success").text;
+  const timeText = idleSegments.at(-1).text;
+  assert.ok(!activeSegments.some(({ text }) => text === cacheText || text === timeText));
+  assert.deepEqual(activityStatusSegments({ ...active, operation: undefined }, 2_000), idleSegments);
+  const failed = activityStatusSegments({
+    ...active, cache: { phase: "result", current: { kind: "request-error" } },
+  }, 2_000);
+  assert.ok(failed.some(({ tone }) => tone === "error"));
+  const requesting = activityStatusSegments({ ...idle, cache: { phase: "requesting", previous: idle.cache.current } }, 2_000);
+  assert.ok(!requesting.some(({ tone }) => tone === "success"));
 });
 
 test("活动持续时间按秒更新，清除活动后停止刷新", async () => {
@@ -187,7 +208,7 @@ test("RPC 共用同一活动状态 key，清除后不留旧 status", () => {
   assert.equal(harness.statusCalls.at(-1).text, undefined);
 });
 
-test("TUI 与 RPC 按活动、工作流、缓存、本地辅助信息的统一顺序投影", () => {
+test("TUI 与 RPC 统一投影运行状态并隐藏历史缓存", () => {
   const snapshot = {
     operation: { kind: "provider", phase: "streaming", startedAt: 0 },
     workflow: { text: "⏳ 执行任务 B · 2/4", color: "accent" },
@@ -198,13 +219,12 @@ test("TUI 与 RPC 按活动、工作流、缓存、本地辅助信息的统一�
   const rpc = formatActivityStatusText(snapshot, 120, 2_000);
   assert.equal(tui, rpc);
   assert.ok(tui.indexOf("模型响应") < tui.indexOf("执行任务 B"));
-  assert.ok(tui.indexOf("执行任务 B") < tui.indexOf("上次 R4.1k"));
-  assert.ok(tui.indexOf("上次 R4.1k") < tui.indexOf("开发测试"));
+  assert.ok(tui.indexOf("执行任务 B") < tui.indexOf("开发测试"));
 
   const normalWidth = renderActivityStatus(snapshot, 80, theme, 2_000).join("");
   assert.match(normalWidth, /模型响应/);
   assert.match(normalWidth, /执行任务 B/);
-  assert.match(normalWidth, /上次 R4.1k/);
+  assert.doesNotMatch(normalWidth, /上次 R4.1k/);
   assert.doesNotMatch(normalWidth, /long-model-name/);
 
   const narrow = renderActivityStatus({
@@ -213,7 +233,7 @@ test("TUI 与 RPC 按活动、工作流、缓存、本地辅助信息的统一�
     role: { mode: "自动", model: "auxiliary-model" },
   }, 22, theme, 2_000).join("");
   assert.match(narrow, /模型响应/);
-  assert.doesNotMatch(narrow, /缓存|auxiliary-model|自动/);
+  assert.doesNotMatch(narrow, /缓存|auxiliary-model/);
 });
 
 test("规范化零值标记来源未确认，不当作未报告或命中", () => {

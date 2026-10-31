@@ -106,9 +106,12 @@ function cacheCountsText(read: number, write: number) {
 
 function roleSegments(role: ActivityStatusRole | undefined): ActivityStatusSegment[] {
   if (!role) return [];
-  return [role.role, role.mode]
-    .filter((text): text is string => Boolean(text))
-    .map((text) => ({ text, tone: "muted", auxiliary: true }));
+  const segments: ActivityStatusSegment[] = [];
+  if (role.role) segments.push({ text: role.role, tone: "muted", auxiliary: true });
+  if (role.mode && (role.mode !== "自动" || !role.role)) {
+    segments.push({ text: role.mode, tone: role.mode === "自动" ? "muted" : "warning", auxiliary: true });
+  }
+  return segments;
 }
 
 function cacheResultSegment(cache: ActivityStatusCache | undefined): ActivityStatusSegment | undefined {
@@ -203,19 +206,22 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
         ?? urgentCurrentCache
         ?? compaction
         ?? workflow
-        ?? agentOperation
-        ?? cacheResult;
+        ?? agentOperation;
 
   const segments: ActivityStatusSegment[] = [];
   if (primary) segments.push(primary);
-  if (workflow && primary !== workflow) segments.push(workflow);
+  if (alert && primary !== alert) segments.push(alert);
   if (specificOperation && primary !== specificOperation) segments.push(specificOperation);
   if (compaction && primary !== compaction) segments.push(compaction);
-  if (agentOperation && primary !== agentOperation) segments.push(agentOperation);
-  if (cacheResult && primary !== cacheResult) segments.push(cacheResult);
+  if (workflow && primary !== workflow) segments.push(workflow);
+  if (agentOperation && primary !== agentOperation && !compaction && !workflow) segments.push(agentOperation);
+  if (urgentCurrentCache && primary !== urgentCurrentCache) segments.push(urgentCurrentCache);
   segments.push(...roleSegments(state.role));
 
-  if (state.workTimeMilliseconds !== undefined && Number.isFinite(state.workTimeMilliseconds)) {
+  const busy = Boolean(state.operation || state.compaction || state.cache?.phase === "requesting"
+    || (state.workflow && state.workflow.color === "accent"));
+  if (!busy && cacheResult && primary !== cacheResult && cacheResult !== urgentCurrentCache) segments.push(cacheResult);
+  if (!busy && state.workTimeMilliseconds !== undefined && Number.isFinite(state.workTimeMilliseconds)) {
     segments.push({ text: `⏱ 累计 ${formatSessionWorkTime(state.workTimeMilliseconds)}`, tone: "muted", auxiliary: true });
   }
 
