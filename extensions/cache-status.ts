@@ -1,3 +1,4 @@
+import { createCacheMissReminder } from "./cache-miss-reminder.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
@@ -73,6 +74,7 @@ export function parseCacheUsage(usage: unknown): Result<CacheUsageValue, CacheUs
 }
 
 export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStatusReporter) {
+  const reminder = createCacheMissReminder(pi, activityStatus.setCacheReminderCount);
   let contextGeneration = 0;
   let activeRequest: ActiveCacheRequest | undefined;
   let lastResult: CacheResult | undefined;
@@ -174,6 +176,7 @@ export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStat
     }
     if (!sameMessage(request.assistantMessage, messageIdentity(message))) return;
 
+    try { reminder.observe(ctx, message); } catch { /* Advisory UI must not interrupt cache reporting or task execution. */ }
     activeRequest = undefined;
     if (message.stopReason === "aborted") {
       lastResult = { kind: "aborted" };

@@ -76,6 +76,7 @@ export type ActivityStatusSnapshot = {
   operation?: ActivityStatusOperation;
   alert?: ActivityStatusAlert;
   cache?: ActivityStatusCache;
+  cacheReminderCount?: number;
   workTimeMilliseconds?: number;
 };
 
@@ -216,6 +217,9 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
   if (workflow && primary !== workflow) segments.push(workflow);
   if (agentOperation && primary !== agentOperation && !compaction && !workflow) segments.push(agentOperation);
   if (urgentCurrentCache && primary !== urgentCurrentCache) segments.push(urgentCurrentCache);
+  if (state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0) {
+    segments.push({ text: `缓存提醒 ${state.cacheReminderCount} 次`, tone: "warning" });
+  }
   segments.push(...roleSegments(state.role));
 
   const busy = Boolean(state.operation || state.compaction || state.cache?.phase === "requesting"
@@ -352,6 +356,7 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     setOperation: (ctx: ExtensionContext, value: ActivityStatusOperation | undefined) => update(ctx, "operation", value),
     setAlert: (ctx: ExtensionContext, value: ActivityStatusAlert | undefined) => update(ctx, "alert", value),
     setCache: (ctx: ExtensionContext, value: ActivityStatusCache | undefined) => update(ctx, "cache", value),
+    setCacheReminderCount: (ctx: ExtensionContext, value: number | undefined) => update(ctx, "cacheReminderCount", value),
     setWorkTime: (ctx: ExtensionContext, value: number | undefined) => update(ctx, "workTimeMilliseconds", value),
     clear: (ctx: ExtensionContext) => {
       if (Object.keys(snapshot).length === 0) return;

@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-01：达到成本阈值的缓存失配提示与状态栏计数
+
+- 完成：Pi Init基于有效assistant usage与模型价格估算单次cache miss的额外成本；达到$0.50时，在有可见UI且同session此前报告过缓存使用的情况下提醒一次。成功通知后状态栏显示“缓存提醒 1 次”；重开同session恢复抑制/计数，新session另计。没有自动生成快照、换session、暂停或停止执行。
+- 验证：`node --test test/cache-miss-reminder.test.js test/cache-status.test.js test/activity-status.test.js` 31/31通过；补齐无UI不占提醒额度测试后 `npm run typecheck` 通过，`npm test` 全量731/731通过，`git diff --check` 通过。用约220k partial-cache样本验证估算会达到提醒阈值。
+- 限制：额外成本是按Pi暴露的模型价目和usage估算，不是Provider账单；算法不比较真实完整提示前缀。未做真实Provider A/B、账户账单对照或部署/reload。
+
 ### 2026-11-01：普通会话短交接及统一fresh入口
 
 - 完成：新增普通会话 `session_handoff` 快照准备能力，并将 `/pi-init fresh` 作为普通会话与托管工作流的用户确认入口；`/pi-init workflow fresh` 保留兼容。普通快照不要求工作流，不创建task/attempt身份；由已确认执行角色保存目标、约束、完成/待办、历史验证与来源、未知项和下一步。预览确认前重核源session/branch；目标只接收选定背景并等待用户，不自动续跑。快照过期、结果未知或目标未核对时fail-closed，来源保持冻结并在目标幂等核对。

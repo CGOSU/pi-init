@@ -15,6 +15,7 @@
 - status(evidenceIds)可定向读取真实来源；memoryFiles最多16个项目相对文件，只记内容hash。历史引用、指纹和工具成功不代表当前验收通过。
 - `/pi-init fresh` 是普通会话与托管工作流共用的用户命令，预览并确认后才进入安全换session流程；活动工作流仍走原有受保护交接路径。`/pi-init workflow fresh` 保留为兼容入口，`resume` 留在原会话。这些命令不是新的task_workflow工具动作。
 - 普通会话无需工作流：当前已确认的非architect执行角色在现场稳定、当前执行结束后调用 `session_handoff`，显式填写 `goal`、`constraints`、`completed`、`remaining`、`verification`、`unknowns`、`nextStep`、`sources`；无内容的数组使用 `[]`。用户可先说“请用 `session_handoff` 准备短交接，记录目标、约束、已完成/待办、历史验证及来源、未知项和下一步”，等待工具返回后直接执行 `/pi-init fresh`。验证项必须引用历史来源；来源只能是当前session条目ID或文件位置，不能使用旧 `obs_recall` ID。工具只持久化所选背景，不创建session或续跑。32 KiB 是完整存储上限，不是token数；超限拒绝，不截断。新输入、其他工具活动或branch变化会让快照失效，因此准备后不要插入其他输入或工具操作。
+- cache miss提示：同一session曾报告缓存使用后，单次估算的额外成本达到$0.50且有UI时提醒一次；状态栏显示已发提醒次数，重开同一session可恢复该计数。估算基于Pi暴露的usage和模型价格，不是Provider账单或完整提示前缀比较；数据不完整、错误/中止或没有可确认价格时不猜、不提醒。此提示不自动准备快照、不换session、不暂停任务；无UI的运行不占提醒次数。
 - `fresh` 会展示预览并等待用户确认，确认前重新核对session、branch和快照。目标只包含选定的历史背景，不继承完整历史/旧执行身份，也不自动继续任务。若交接结果未知，来源保持冻结；先检查是否已有目标，不要从来源再次创建。已有待核对包时，在目标运行 `/pi-init fresh` 只做核对，不创建第二个session。旧冻结工作流不能用普通会话路径绕过，也不能通过 `resume`/`retry`/`replan` 清除未知结果。
 
 ## 结果获取与退役数据

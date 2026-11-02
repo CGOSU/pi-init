@@ -39,7 +39,7 @@
 - 普通会话交接不要求建立工作流或伪造task/attempt/handoff身份。当前已确认的非architect执行角色可用 `session_handoff` 准备显式短背景；未结束工作流不能借普通路径绕过既有交接和恢复门。`/pi-init fresh` 是两类会话共用的用户入口，`/pi-init workflow fresh` 保留兼容。
 - 普通快照绑定运行时核对的来源session、项目和branch，内容记录目标、约束、完成/待办、带来源的历史验证、未知项、下一步及其他必要来源。它仅是用户确认的历史声明，不是新验证、工作流检查点、旧角色身份或执行授权；不搬运全部工具历史或思考签名。新输入、非准备工具活动或branch变化会使快照失效，应在当前执行结束、现场稳定时准备后直接fresh。
 - 用户命令会预览完整交接背景并等待确认，再重核现场与持久化；目标经既有session替换生命周期创建，只写入选定背景和来源，不自动续跑，用户需在新会话自行继续。若发生未知结果，来源继续冻结，不重复创建；先核对目标，目标已有待核对记录时可在目标再fresh作幂等核对。活动工作流仍复用原有交接包及源/目标安全门。
-- 70%容量提醒不自动切session；也不把cache miss当作已确认的新会话收益信号。手动交接不保证Provider cache hit或费用下降，真实Provider A/B仍未验证。操作细节见[README](../README.md#容量提醒与手动新会话)及公共[运行时操作参考](../skills/pi-init-role-routing/references/runtime-operations.md)。
+- 70%容量提醒不自动切session；单次cache miss估算额外成本达到$0.50且UI可见时，每session仅给一次建议，状态栏显示已发次数。该估算不是账单或缓存前缀一致性证明；提示不自动准备交接或换会话。手动交接仍不保证Provider cache hit或费用下降，真实Provider A/B未验证。操作细节见[README](../README.md#容量提醒与手动新会话)及公共[运行时操作参考](../skills/pi-init-role-routing/references/runtime-operations.md)。
 
 ## 验证边界
 
