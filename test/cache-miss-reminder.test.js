@@ -16,7 +16,7 @@ function fixture(entries = []) {
     sessionManager: { getSessionId: () => sessionId, getEntries: () => entries, getBranch: () => entries },
     ui: { notify(text) { notices.push(text); }, setStatus(key, text) { statuses.push({ key, text }); } },
   };
-  const reminder = createCacheMissReminder(pi, (_ctx, count) => statuses.push({ count }));
+  const reminder = createCacheMissReminder(pi, (_ctx, count, totalUsd) => statuses.push({ count, totalUsd }));
   handlers.get("session_start")({}, ctx);
   return { pi, ctx, entries, notices, statuses, reminder, handlers, session(value) { sessionId = value; handlers.get("session_start")({}, ctx); } };
 }
@@ -42,6 +42,27 @@ test("threshold is inclusive, estimates partial misses, and persists one deliver
   h.reminder.observe(h.ctx, message(0, 200000));
   h.reminder.observe(h.ctx, message(200000, 0));
   assert.equal(h.notices.length, 2);
+});
+
+test("cumulative extra cost includes below-threshold misses, continues after notification and restores per session", () => {
+  const h = fixture();
+  h.reminder.observe(h.ctx, message(0, 100000));
+  h.reminder.observe(h.ctx, message(100000, 0, 0.3)); // $0.20, no notice
+  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.2) < 1e-12);
+  assert.equal(h.notices.length, 0);
+  h.reminder.observe(h.ctx, message(100000, 0, 0.7)); // $0.60
+  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.8) < 1e-12);
+  assert.ok(h.notices[0].includes("$0.80"));
+  h.reminder.observe(h.ctx, message(100000, 0, 0.7));
+  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 1.4) < 1e-12);
+  assert.equal(h.notices.length, 1);
+  const restored = fixture(h.entries);
+  assert.ok(Math.abs(restored.statuses.at(-1).totalUsd - 1.4) < 1e-12);
+  restored.handlers.get("session_compact")({}, restored.ctx);
+  restored.reminder.observe(restored.ctx, message(100000, 0));
+  assert.ok(Math.abs(restored.statuses.at(-1).totalUsd - 1.4) < 1e-12);
+  restored.session("s2");
+  assert.equal(restored.statuses.at(-1).totalUsd, undefined);
 });
 
 test("the observed 220k partial miss reaches the threshold without requiring cacheRead=0", () => {
@@ -97,6 +118,7 @@ test("UI or persistence failure cannot inflate delivered counts or replay an unc
   h.reminder.observe(h.ctx, message(200000, 0));
   assert.equal(h.entries.at(-1).data.phase, "notifying");
   assert.equal(h.statuses.at(-1).count, undefined);
+  assert.equal(h.statuses.at(-1).totalUsd, 1.8);
   const resumed = fixture(h.entries);
   resumed.reminder.observe(resumed.ctx, message(0, 200000));
   resumed.reminder.observe(resumed.ctx, message(200000, 0));
@@ -107,5 +129,5 @@ test("UI or persistence failure cannot inflate delivered counts or replay an unc
   failedStorage.reminder.observe(failedStorage.ctx, message(200000, 0));
   assert.equal(failedStorage.notices.length, 0);
   assert.equal(failedStorage.statuses.at(-1).count, undefined);
-  assert.equal(h.entries[0].customType, CACHE_MISS_NOTICE);
+  assert.equal(h.entries.find(e => e.customType === CACHE_MISS_NOTICE).data.phase, "notifying");
 });

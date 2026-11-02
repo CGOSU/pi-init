@@ -77,6 +77,7 @@ export type ActivityStatusSnapshot = {
   alert?: ActivityStatusAlert;
   cache?: ActivityStatusCache;
   cacheReminderCount?: number;
+  cacheMissTotalUsd?: number;
   workTimeMilliseconds?: number;
 };
 
@@ -217,7 +218,9 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
   if (workflow && primary !== workflow) segments.push(workflow);
   if (agentOperation && primary !== agentOperation && !compaction && !workflow) segments.push(agentOperation);
   if (urgentCurrentCache && primary !== urgentCurrentCache) segments.push(urgentCurrentCache);
-  if (state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0) {
+  if (typeof state.cacheMissTotalUsd === "number" && Number.isFinite(state.cacheMissTotalUsd) && state.cacheMissTotalUsd > 0) {
+    segments.push({ text: `Miss ≈$${state.cacheMissTotalUsd.toFixed(2)}`, tone: "warning" });
+  } else if (state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0) {
     segments.push({ text: `Miss ${state.cacheReminderCount} 次`, tone: "warning" });
   }
   segments.push(...roleSegments(state.role));
@@ -356,7 +359,10 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     setOperation: (ctx: ExtensionContext, value: ActivityStatusOperation | undefined) => update(ctx, "operation", value),
     setAlert: (ctx: ExtensionContext, value: ActivityStatusAlert | undefined) => update(ctx, "alert", value),
     setCache: (ctx: ExtensionContext, value: ActivityStatusCache | undefined) => update(ctx, "cache", value),
-    setCacheReminderCount: (ctx: ExtensionContext, value: number | undefined) => update(ctx, "cacheReminderCount", value),
+    setCacheReminderCount: (ctx: ExtensionContext, value: number | undefined, totalUsd?: number) => {
+      snapshot = { ...snapshot, cacheReminderCount: value, cacheMissTotalUsd: totalUsd };
+      render(ctx);
+    },
     setWorkTime: (ctx: ExtensionContext, value: number | undefined) => update(ctx, "workTimeMilliseconds", value),
     clear: (ctx: ExtensionContext) => {
       if (Object.keys(snapshot).length === 0) return;

@@ -8,6 +8,11 @@
 - 验证：新增历史错误、缺失配对、嵌套回执和安全门原因码回归；最终 `npm test` 734/734通过，`npm run typecheck` 与 `git diff --check` 通过。
 - 边界：旧运行副本显示的合并提示未记录具体命中的条件，不能确认本次用户现场拒绝由哪一门禁触发。修复尚未部署/reload到宿主；应加载新版本后按原因码核验，未执行真实会话迁移。
 
+### 2026-11-02：Miss 提醒展示会话累计额外成本估算
+
+- 完成：通知现在显示触发样本额外成本及本session累计额外成本估算；状态栏以 `Miss ≈$…` 显示累计值。沿用每次失配$0.50触发、每session最多提醒一次；新session重置，已有历史不回溯。金额为按Pi暴露usage和模型价目估算，不是账单；未部署/reload到宿主安装副本。
+- 验证：`node --test test/cache-miss-reminder.test.js test/activity-status.test.js test/cache-status.test.js` 33/33通过；`git diff --check`通过。未运行全量测试或typecheck。
+
 ### 2026-11-01：达到成本阈值的缓存失配提示与状态栏计数
 
 - 完成：Pi Init基于有效assistant usage与模型价格估算单次cache miss的额外成本；达到$0.50时，在有可见UI且同session此前报告过缓存使用的情况下提醒一次。成功通知后状态栏显示“缓存提醒 1 次”；重开同session恢复抑制/计数，新session另计。没有自动生成快照、换session、暂停或停止执行。
