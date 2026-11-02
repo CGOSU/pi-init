@@ -41,7 +41,7 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     previous = undefined;
     const entries = ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch();
     const entry = entries.findLast(e => e.type === "custom" && e.customType === CACHE_MISS_NOTICE && record(e.data) && e.data.sessionId === sessionId);
-    const total = entries.findLast(e => e.type === "custom" && e.customType === CACHE_MISS_TOTAL && record(e.data) && e.data.sessionId === sessionId);
+    const total = entries.findLast(e => e.type === "custom" && e.customType === CACHE_MISS_TOTAL && record(e.data) && e.data.sessionId === sessionId && e.data.thresholdUsd === CACHE_MISS_THRESHOLD_USD);
     totalUsd = total?.type === "custom" && record(total.data) && typeof total.data.totalUsd === "number" && Number.isFinite(total.data.totalUsd) && total.data.totalUsd >= 0 ? total.data.totalUsd : 0;
     suppressed = entry?.type === "custom";
     count = entry?.type === "custom" && record(entry.data) && entry.data.phase === "sent" ? 1 : 0;
@@ -59,12 +59,12 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     if (!prior.reportedCache && !sample.value.reportedCache) return;
     const missed = Math.min(prior.prompt, sample.value.prompt) - sample.value.read;
     const extra = missed * Math.max(0, sample.value.paidRate - sample.value.readRate);
-    if (missed <= 1024 || !Number.isFinite(extra) || extra <= 0 || !Number.isFinite(totalUsd + extra)) return;
-    try { pi.appendEntry(CACHE_MISS_TOTAL, { sessionId, totalUsd: totalUsd + extra }); }
+    if (missed <= 1024 || !Number.isFinite(extra) || extra <= CACHE_MISS_THRESHOLD_USD || !Number.isFinite(totalUsd + extra)) return;
+    try { pi.appendEntry(CACHE_MISS_TOTAL, { sessionId, totalUsd: totalUsd + extra, thresholdUsd: CACHE_MISS_THRESHOLD_USD }); }
     catch { return; }
     totalUsd += extra;
     publish(ctx);
-    if (suppressed || extra < CACHE_MISS_THRESHOLD_USD) return;
+    if (suppressed) return;
     // Persist suppression first. An interrupted notification must not be replayed after reload.
     const data = { sessionId, thresholdUsd: CACHE_MISS_THRESHOLD_USD };
     try { pi.appendEntry(CACHE_MISS_NOTICE, { ...data, phase: "notifying" }); }

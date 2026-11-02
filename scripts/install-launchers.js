@@ -12,6 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readPackageGitHead } from "./pi-usage/version.js";
 
 function isInside(directory, candidate, platform) {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
@@ -68,6 +69,7 @@ function readPackageVersion(sourceDir) {
 function copyPiUsageSupport(sourceDir, targetDir, version) {
   const sourceSupportDir = path.join(sourceDir, "pi-usage");
   const targetSupportDir = path.join(targetDir, "pi-usage-lib");
+  const gitHead = readPackageGitHead(path.resolve(sourceDir, ".."));
   mkdirSync(targetSupportDir, { recursive: true });
   for (const entry of readdirSync(sourceSupportDir, { withFileTypes: true })) {
     const sourcePath = path.join(sourceSupportDir, entry.name);
@@ -78,10 +80,12 @@ function copyPiUsageSupport(sourceDir, targetDir, version) {
     if (entry.name === "version.js") {
       const source = readFileSync(sourcePath, "utf8");
       const marker = 'const EMBEDDED_PACKAGE_VERSION = "__PI_INIT_VERSION__";';
-      if (!source.includes(marker)) throw new Error("pi-usage/version.js 缺少版本号占位符");
+      const gitMarker = 'const EMBEDDED_GIT_HEAD = "__PI_INIT_GIT_HEAD__";';
+      if (!source.includes(marker) || !source.includes(gitMarker)) throw new Error("pi-usage/version.js 缺少版本标识占位符");
       writeFileSync(
         targetPath,
-        source.replace(marker, () => `const EMBEDDED_PACKAGE_VERSION = ${JSON.stringify(version)};`),
+        source.replace(marker, () => `const EMBEDDED_PACKAGE_VERSION = ${JSON.stringify(version)};`)
+          .replace(gitMarker, () => `const EMBEDDED_GIT_HEAD = ${JSON.stringify(gitHead.ok ? gitHead.value : null)};`),
       );
     } else {
       copyFileSync(sourcePath, targetPath);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCacheMissReminder, cacheMissSample, CACHE_MISS_NOTICE } from "../extensions/cache-miss-reminder.ts";
+import { createCacheMissReminder, cacheMissSample, CACHE_MISS_NOTICE, CACHE_MISS_TOTAL } from "../extensions/cache-miss-reminder.ts";
 
 function message(input, read, inputCost = input * 10 / 1_000_000) {
   return { role: "assistant", provider: "test", model: "model", timestamp: 1, stopReason: "toolUse", content: [], usage: { input, cacheRead: read, cacheWrite: 0, output: 1, cost: { input: inputCost, cacheRead: read / 1_000_000, cacheWrite: 0, output: 0 } } };
@@ -21,12 +21,15 @@ function fixture(entries = []) {
   return { pi, ctx, entries, notices, statuses, reminder, handlers, session(value) { sessionId = value; handlers.get("session_start")({}, ctx); } };
 }
 
-test("threshold is inclusive, estimates partial misses, and persists one delivered notice per session", () => {
+test("threshold is exclusive, estimates partial misses, and persists one delivered notice per session", () => {
   const h = fixture();
   h.reminder.observe(h.ctx, message(0, 100000));
   h.reminder.observe(h.ctx, message(100000, 0, 0.599)); // $0.499 differential
   assert.equal(h.notices.length, 0);
   h.reminder.observe(h.ctx, message(100000, 0, 0.6)); // $0.50 differential
+  assert.equal(h.notices.length, 0);
+  assert.equal(h.statuses.at(-1).totalUsd, undefined);
+  h.reminder.observe(h.ctx, message(100000, 0, 0.601)); // $0.501 differential
   assert.equal(h.notices.length, 1);
   assert.equal(h.entries.at(-1).data.phase, "sent");
   h.reminder.observe(h.ctx, message(200000, 0));
@@ -44,25 +47,34 @@ test("threshold is inclusive, estimates partial misses, and persists one deliver
   assert.equal(h.notices.length, 2);
 });
 
-test("cumulative extra cost includes below-threshold misses, continues after notification and restores per session", () => {
+test("cumulative extra cost excludes small misses, continues after notification and restores per session", () => {
   const h = fixture();
   h.reminder.observe(h.ctx, message(0, 100000));
   h.reminder.observe(h.ctx, message(100000, 0, 0.3)); // $0.20, no notice
-  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.2) < 1e-12);
+  assert.equal(h.statuses.at(-1).totalUsd, undefined);
   assert.equal(h.notices.length, 0);
   h.reminder.observe(h.ctx, message(100000, 0, 0.7)); // $0.60
-  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.8) < 1e-12);
-  assert.ok(h.notices[0].includes("$0.80"));
+  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.6) < 1e-12);
+  assert.ok(h.notices[0].includes("$0.60"));
   h.reminder.observe(h.ctx, message(100000, 0, 0.7));
-  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 1.4) < 1e-12);
+  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 1.2) < 1e-12);
   assert.equal(h.notices.length, 1);
   const restored = fixture(h.entries);
-  assert.ok(Math.abs(restored.statuses.at(-1).totalUsd - 1.4) < 1e-12);
+  assert.ok(Math.abs(restored.statuses.at(-1).totalUsd - 1.2) < 1e-12);
   restored.handlers.get("session_compact")({}, restored.ctx);
   restored.reminder.observe(restored.ctx, message(100000, 0));
-  assert.ok(Math.abs(restored.statuses.at(-1).totalUsd - 1.4) < 1e-12);
+  assert.ok(Math.abs(restored.statuses.at(-1).totalUsd - 1.2) < 1e-12);
   restored.session("s2");
   assert.equal(restored.statuses.at(-1).totalUsd, undefined);
+});
+
+test("legacy totals without a threshold are not restored as qualified costs", () => {
+  const h = fixture([{ type: "custom", customType: CACHE_MISS_TOTAL, data: { sessionId: "s1", totalUsd: 3 } }]);
+  assert.equal(h.statuses.at(-1).totalUsd, undefined);
+  h.reminder.observe(h.ctx, message(0, 100000));
+  h.reminder.observe(h.ctx, message(100000, 0, 0.7));
+  assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.6) < 1e-12);
+  assert.ok(Math.abs(fixture(h.entries).statuses.at(-1).totalUsd - 0.6) < 1e-12);
 });
 
 test("the observed 220k partial miss reaches the threshold without requiring cacheRead=0", () => {

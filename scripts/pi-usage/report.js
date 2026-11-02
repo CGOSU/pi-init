@@ -1,4 +1,4 @@
-import { PI_USAGE_VERSION } from "./version.js";
+import { PI_USAGE_BUILD } from "./version.js";
 import { FIELDS, MODEL_BAR_RESOLUTION, MODEL_BAR_SEGMENTS, MODEL_BAR_WIDTH } from "./core.js";
 
 function emptyUsage() {
@@ -197,7 +197,7 @@ export function formatReport(summary, options = {}) {
     sessionSpanSeconds: 0,
   };
   return [
-    paint(`Pi usage · ${summary.date} · v${PI_USAGE_VERSION}`, "36;1", color),
+    paint(`Pi usage · ${summary.date} · v${PI_USAGE_BUILD}`, "36;1", color),
     paint(`Cache updated: ${formatDateMinute(summary.updatedAt)}`, "90", color),
     "",
     paint("Overview", "33;1", color),
