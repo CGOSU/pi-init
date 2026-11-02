@@ -90,6 +90,32 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
   });
 });
 
+test("ordinary handoff accepts a resolved historical edit rejection", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    h.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "old-edit", name: "edit", arguments: {} }], api: "test", provider: "test", model: "test", timestamp: Date.now(), stopReason: "toolUse", usage: {} });
+    h.manager.appendMessage({ role: "toolResult", toolCallId: "old-edit", toolName: "edit", isError: true, content: [{ type: "text", text: "exact replacement rejected" }], timestamp: Date.now() });
+    await h.save();
+    await h.api.fresh(h.ctx);
+    assert.equal(h.calls, 1);
+    assert.equal(h.target.notices.at(-1).level, "info");
+  });
+});
+
+test("ordinary readiness identifies the blocking safety gate without changing it", async () => {
+  for (const [change, code] of [
+    [h => { h.state.roleRecoveryPending = true; }, "ROLE_RECOVERY"],
+    [h => { h.state.sessionModeOverride = "auto"; }, "UNSAVED_CONFIG"],
+    [h => h.setSettled(false), "TOOLS_NOT_SETTLED"],
+    [h => { h.state.userStopRequested = true; }, "USER_STOPPED"],
+  ]) await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    await h.save(); change(h); await h.api.fresh(h.ctx);
+    assert.equal(h.calls, undefined);
+    assert.ok(h.notices.at(-1).message.includes(`[${code}]`));
+  });
+});
+
 test("missing, stale, unsafe, mismatched role, active nested tools and unfinished workflows do not migrate", async () => {
   const changes = [
     h => { h.state.userStopRequested = true; }, h => { h.state.roleRecoveryPending = true; },

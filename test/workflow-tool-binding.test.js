@@ -115,5 +115,20 @@ test("ordinary sessions share root and nested tool convergence without a workflo
   assert.equal(f.binding.toolsSettled(f.ctx), false);
   result.message.nestedCalls.complete = true;
   result.message.isError = true;
+  f.handlers.get("tool_result")({ toolCallId: "root", isError: true });
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+});
+
+test("completed historical error results do not permanently block ordinary handoff", () => {
+  const f = fixture();
+  f.state.workflowState = undefined;
+  const call = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "old-edit", name: "edit", arguments: {} }] } };
+  const failure = { type: "message", message: { role: "toolResult", toolCallId: "old-edit", isError: true, content: [] } };
+  f.setBranch([call, failure]);
+  assert.equal(f.binding.toolsSettled(f.ctx), true);
+  failure.message.nestedCalls = { complete: false };
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+  delete failure.message.nestedCalls;
+  f.setBranch([call]);
   assert.equal(f.binding.toolsSettled(f.ctx), false);
 });

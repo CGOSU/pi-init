@@ -162,11 +162,11 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     const messages = branch.slice(start + 1).flatMap(entry => entry.type === "message" ? [entry.message] : []);
     return persistedToolsComplete(messages);
   }
-  function persistedToolsComplete(messages: readonly ContextMessage[]) {
+  function persistedToolsComplete(messages: readonly ContextMessage[], allowHistoricalErrors = false) {
     if (activeTools.size || uncertainTools || !hasCompleteToolPairs(messages) || messages.some(message => {
       if (message.role !== "toolResult") return false;
       const nested = isRecord(message) ? message.nestedCalls : undefined;
-      return message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
+      return !allowHistoricalErrors && message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
     })) return false;
     const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
     return [...executedRoots].every(id => results.has(id));
@@ -175,7 +175,10 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     const workflow = state.workflowState;
     const branch = ctx.sessionManager.getBranch();
     if (!workflow || ["completed", "cancelled"].includes(workflow.status)) {
-      return persistedToolsComplete(branch.flatMap(entry => entry.type === "message" ? [entry.message] : []));
+      // A paired historical error alone does not mean a tool is still running.
+      // This does not prove success or no side effects: retain failures/unknowns in handoff.
+      // Live uncertainty, missing pairs and incomplete nested receipts remain blocking.
+      return persistedToolsComplete(branch.flatMap(entry => entry.type === "message" ? [entry.message] : []), true);
     }
     const start = branch.findLastIndex(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task"
       && isRecord(entry.details) && entry.details.workflowId === workflow.workflowId

@@ -31,16 +31,25 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
 }) {
   let switching = false;
   let storageUncertain = false;
-  function ready(ctx: ExtensionContext) {
-    return ctx.isProjectTrusted() && ctx.isIdle() && !ctx.hasPendingMessages() && !ctx.signal?.aborted
-      && !state.agentRunActive && !state.runtimeDisposed && !state.userStopRequested && !state.roleRecoveryPending
-      && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError && !state.pendingWorkflowRecovery
-      && !state.roleCompactionInFlight && !state.pendingRoleCompaction && !state.activeRoleCompaction
-      && !state.workflowDispatchInFlight && !state.internalContinuationPending
-      && state.sessionModeOverride === undefined && Object.keys(state.sessionRoleConfigOverrides).length === 0
-      && (!state.workflowState || ["completed", "cancelled"].includes(state.workflowState.status))
-      && !!state.activeRole && activeRoleMatches(state, ctx, pi.getThinkingLevel()) && deps.toolsSettled(ctx);
+  function checkReady(ctx: ExtensionContext): HandoffResult<true> {
+    const fail = (code: string, message: string): HandoffResult<never> => ({ ok: false, code, message });
+    if (!ctx.isProjectTrusted()) return fail("PROJECT_UNTRUSTED", "当前项目尚未受信任，不能交接。");
+    if (!ctx.isIdle() || state.agentRunActive) return fail("AGENT_BUSY", "Agent仍在运行，请等待本轮结束。");
+    if (ctx.hasPendingMessages()) return fail("MESSAGES_PENDING", "仍有排队消息，请先处理后重新准备快照。");
+    if (ctx.signal?.aborted || state.runtimeDisposed) return fail("CONTEXT_INACTIVE", "当前运行已中止或上下文失效，先核对会话状态。");
+    if (state.userStopRequested) return fail("USER_STOPPED", "用户停止保护仍生效，请先核对停止原因；交接不能解除停止。");
+    if (state.roleRecoveryPersistenceFailed) return fail("ROLE_STORAGE", "职责恢复记录保存失败，请先修复持久化问题。");
+    if (state.roleRecoveryPending) return fail("ROLE_RECOVERY", "当前职责尚未确认，请先用 /pi-init role <职责> 确认，再重新准备交接。");
+    if (state.workflowRestoreError || state.pendingWorkflowRecovery) return fail("WORKFLOW_RECOVERY", "工作流恢复尚未确认，不能通过普通交接绕过。");
+    if (state.roleCompactionInFlight || state.pendingRoleCompaction || state.activeRoleCompaction) return fail("COMPACTION_PENDING", "压缩或其恢复尚未结束，请先核对结果。");
+    if (state.workflowDispatchInFlight || state.internalContinuationPending) return fail("CONTINUATION_PENDING", "派发或内部续接尚未结束，请先等待执行收敛。");
+    if (state.sessionModeOverride !== undefined || Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型/模式配置；请保存所需配置或撤销覆盖后再准备交接。");
+    if (state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status)) return fail("WORKFLOW_ACTIVE", "未结束工作流必须沿工作流安全边界交接。");
+    if (!state.activeRole || !activeRoleMatches(state, ctx, pi.getThinkingLevel())) return fail("ROLE_MODEL_MISMATCH", "职责与当前模型/推理级别不匹配；请先确认职责，再重新准备交接。");
+    if (!deps.toolsSettled(ctx)) return fail("TOOLS_NOT_SETTLED", "工具执行或结果尚未确认，或历史工具配对/嵌套回执不完整；请先核对真实结果，勿重复执行未知操作。");
+    return { ok: true, value: true };
   }
+  const ready = (ctx: ExtensionContext) => checkReady(ctx).ok;
   function blocked(ctx: ExtensionContext) {
     return storageUncertain || !!generalOutgoingTransfer(ctx);
   }
@@ -95,8 +104,9 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
   }
   async function activate(ctx: ExtensionContext) {
     const entry = incomingEntry(ctx);
-    const result: HandoffResult<GeneralHandoffSnapshot> = !ready(ctx)
-      ? { ok: false, code: "SAFETY_GATE", message: "目标信任、角色或停止/恢复/工具守卫尚未确认" }
+    const readiness = checkReady(ctx);
+    const result: HandoffResult<GeneralHandoffSnapshot> = !readiness.ok
+      ? readiness
       : verify(entry?.type === "custom" ? entry.data : undefined, ctx);
     if (!result.ok) {
       ctx.ui.notify("目标交接未确认；修复后在当前目标执行 /pi-init fresh 重新核对，不创建第二个会话：[" + result.code + "] " + result.message, "warning");
@@ -114,8 +124,10 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
   async function fresh(ctx: ExtensionCommandContext) {
     if (incomingEntry(ctx)) { await activate(ctx); return; }
     if (switching || blocked(ctx)) { ctx.ui.notify("来源已冻结或交接结果未知；请检查目标，不重试创建。", "warning"); return; }
-    if (!ready(ctx) || typeof ctx.newSession !== "function" || !ctx.hasUI) {
-      ctx.ui.notify("当前停止、恢复、角色、临时模型配置、工具或宿主确认状态不允许交接；保持原会话。", "warning"); return;
+    const readiness = checkReady(ctx);
+    if (!readiness.ok) { ctx.ui.notify(`[${readiness.code}] ${readiness.message} 保持原会话。`, "warning"); return; }
+    if (typeof ctx.newSession !== "function" || !ctx.hasUI) {
+      ctx.ui.notify("[HOST_CONFIRMATION] 宿主缺少新会话接口或交互确认UI，保持原会话。", "warning"); return;
     }
     const prepared = deps.read(ctx);
     if (!prepared.ok) { ctx.ui.notify(prepared.message + "。请让当前执行角色用 session_handoff 准备/更新目标、约束、进度、来源和下一步，再执行 /pi-init fresh。", "warning"); return; }
