@@ -124,7 +124,7 @@ test("manual entry hints retain the existing safety gate and never pause schedul
     h.ctx.sessionManager.getSessionFile = () => "/saved-session";
     h.ctx.sessionManager.getBranch = () => [];
     h.settled = true;
-    const handoff = createSessionHandoff({ on() {} }, h.state, {
+    const handoff = createSessionHandoff({ on() {}, registerTool() {} }, h.state, {
       persist: () => assert.fail("capacity paused or mutated workflow"),
       restore: () => assert.fail("capacity restored workflow"),
       schedule: () => assert.fail("capacity scheduled workflow"),

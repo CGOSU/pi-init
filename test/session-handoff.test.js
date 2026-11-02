@@ -22,9 +22,11 @@ async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = fal
     beforeSendMessagePersist: message => manager.appendCustomMessageEntry(message.customType, message.content, message.display ?? false, message.details),
   });
   h.context.sessionManager.getSessionFile = () => manager.getSessionFile();
+  h.context.sessionManager.getLeafId = () => manager.getLeafId();
   h.context.sessionManager.getEntries = () => manager.getEntries();
   h.context.getContextUsage = () => ({ tokens, contextWindow: 100000, percent: tokens / 1000 });
   h.manager = manager;
+  h.context.ui.confirm = async () => true;
   await emitExtensionEvent(h, "session_start");
   await emitExtensionEvent(h, "agent_start");
   let evidenceIds;
@@ -105,7 +107,9 @@ async function replaceSession(source, options, { failSetup = false, cancel = fal
     beforeSendMessagePersist: message => manager.appendCustomMessageEntry(message.customType, message.content, message.display ?? false, message.details),
   });
   target.manager = manager;
+  target.context.ui.confirm = async () => true;
   target.context.sessionManager.getSessionFile = () => manager.getSessionFile();
+  target.context.sessionManager.getLeafId = () => manager.getLeafId();
   target.context.sessionManager.getEntries = () => manager.getEntries();
   await emitExtensionEvent(target, "session_start", { reason: "new" });
   source.target = target;
@@ -134,8 +138,8 @@ test("confirmed fresh session imports only remaining execution, preserves histor
     const h = await fixture(cwd, { evidence: true });
     let replacements = 0;
     h.context.newSession = async options => { replacements++; return replaceSession(h, options); };
-    await h.commands.get("pi-init").handler("workflow fresh", h.context);
-    assert.equal(replacements, 1);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(replacements, 1, JSON.stringify(h.notifications));
     const target = h.target;
     assert.ok(target);
     assert.equal(latest(target).sessionId, target.manager.getSessionId());
@@ -355,6 +359,22 @@ test("missing or empty source archives are never created or rewritten by preflig
     assert.equal(calls, 0);
     assert.equal(await readFile(empty, "utf8"), "");
     assert.equal(latest(h).pauseReason, undefined);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("workflow preview cancellation or changing source state cannot freeze or replace the session", async () => {
+  for (const mode of ["cancel", "stop", "branch"]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.ui.confirm = async () => {
+      if (mode === "branch") h.manager.appendMessage({ role: "user", content: "new requirement", timestamp: Date.now() });
+      if (mode === "stop") h.context.isProjectTrusted = () => false;
+      return mode !== "cancel";
+    };
+    h.context.newSession = () => { throw new Error("must not replace changed source"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(latest(h).pauseReason, undefined);
+    assert.equal(h.manager.getEntries().some(e => e.customType === "pi-init-session-handoff"), false);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });

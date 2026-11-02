@@ -452,7 +452,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow", "diagnostics"];
+        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow", "fresh", "diagnostics"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -475,6 +475,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const action = tokens.shift();
       try {
         if (!action) { await (await loadControlCenter()).showControlCenter(ctx); return; }
+        if (action === "fresh") {
+          if (tokens.length) { ctx.ui.notify("用法：/pi-init fresh", "error"); return; }
+          await sessionHandoff.fresh(ctx); return;
+        }
         if (action === "init") { await (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx); return; }
         if (action === "advanced") { await (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx); return; }
         if (action === "config") { await (await loadControlCenter()).configureRole(tokens[0], ctx); return; }
@@ -498,7 +502,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;
         }
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|diagnostics] [参数]", "error");
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|fresh|diagnostics] [参数]", "error");
       } catch (error) {
         diagnostics.trace(ctx, "pi-init.command_failed");
         ctx.ui.notify(textOf(error), "error");

@@ -173,8 +173,10 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   }
   function toolsSettled(ctx: ExtensionContext) {
     const workflow = state.workflowState;
-    if (!workflow) return false;
     const branch = ctx.sessionManager.getBranch();
+    if (!workflow || ["completed", "cancelled"].includes(workflow.status)) {
+      return persistedToolsComplete(branch.flatMap(entry => entry.type === "message" ? [entry.message] : []));
+    }
     const start = branch.findLastIndex(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task"
       && isRecord(entry.details) && entry.details.workflowId === workflow.workflowId
       && entry.details.sessionId === ctx.sessionManager.getSessionId());

@@ -289,7 +289,7 @@ test("Pi 自动压缩仍要求职责恢复，普通角色切换不自动确认�
 test("扩展注册工作流工具、命令和生命周期处理器", async () => {
   const harness = createExtensionHarness();
   const toolNames = harness.tools.map((tool) => tool.name).sort();
-  assert.deepEqual(toolNames, ["edit", "file_review", "init_project", "switch_role", "task_workflow"]);
+  assert.deepEqual(toolNames, ["edit", "file_review", "init_project", "session_handoff", "switch_role", "task_workflow"]);
   assert.ok(harness.commands.has("pi-init"));
   assert.ok(harness.commands.has("large"));
   assert.equal(harness.commands.has("agents"), false);

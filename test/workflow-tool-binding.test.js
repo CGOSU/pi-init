@@ -96,3 +96,24 @@ test("source lookup is non-consuming and refuses a message after its task or bra
   f.setBranch([{ id: "other" }]);
   assert.equal(f.binding.source(message, f.ctx), undefined);
 });
+
+test("ordinary sessions share root and nested tool convergence without a workflow identity", () => {
+  const f = fixture();
+  f.state.workflowState = undefined;
+  const assistant = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }] } };
+  const result = { type: "message", message: { role: "toolResult", toolCallId: "root", isError: false, content: [], nestedCalls: { complete: true } } };
+  f.setBranch([assistant]);
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+  f.handlers.get("tool_execution_start")({ toolCallId: "root" });
+  f.handlers.get("tool_execution_start")({ toolCallId: "root/nested", parentToolCallId: "root" });
+  f.setBranch([assistant, result]);
+  f.handlers.get("tool_execution_end")({ toolCallId: "root", isError: false });
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+  f.handlers.get("tool_execution_end")({ toolCallId: "root/nested", isError: false });
+  assert.equal(f.binding.toolsSettled(f.ctx), true);
+  result.message.nestedCalls.complete = false;
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+  result.message.nestedCalls.complete = true;
+  result.message.isError = true;
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+});

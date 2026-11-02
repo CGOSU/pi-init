@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync, readFileSync, statSync } from "node:fs";
-import { SessionManager, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { registerGeneralSessionHandoff } from "./general-session-handoff.ts";
+import { realpathSync } from "node:fs";
+import { createGeneralSessionTransfer, generalOutgoingTransfer } from "./general-session-transfer.ts";
+import { readHandoffArchive as readArchive, replaceHandoffSession } from "./session-replacement.ts";
+import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cloneState } from "../src/workflow.ts";
 import type { WorkflowState } from "../src/workflow-types.ts";
 import { buildSessionHandoff, handoffBoundary, handoffHash, importedWorkflow, workflowContentHash, SESSION_HANDOFF_ENTRY, SESSION_HANDOFF_ACTIVATE, SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_PENDING, SESSION_HANDOFF_IMPORTED, type SessionHandoffPacket } from "../src/session-handoff.ts";
@@ -11,21 +14,12 @@ import { parseTaskMemoryIdentity } from "../src/task-memory.ts";
 import type { TaskEvidence } from "./task-memory-runtime.ts";
 import { showCapacityHandoffHint } from "./role-context-capacity.ts";
 
-function readArchive(file: string, root: string, sessionId: string) {
-  const stats = statSync(file);
-  if (!stats.isFile() || stats.size === 0) throw new Error("来源不是已保存的session文件");
-  const entries = readFileSync(file, "utf8").split("\n").filter(line => line.trim()).map(line => JSON.parse(line));
-  const header = entries[0];
-  if (!isRecord(header) || header.type !== "session" || header.id !== sessionId
-    || typeof header.cwd !== "string" || realpathSync(header.cwd) !== root) throw new Error("来源session或项目不匹配");
-  return SessionManager.inMemory(root, undefined, entries);
-}
-
-
 type Outgoing = { version: 1; kind: "outgoing"; id: string; workflowId: string; sourceSessionId: string; phase: "prepared" | "cancelled"; contentHash: string; packetHash: string };
 type Incoming = { version: 1; kind: "incoming"; id: string; workflowId: string; sourceSessionId: string; targetSessionId: string; sourceFile: string; projectRoot: string; contentHash: string; packetHash: string; packet: SessionHandoffPacket };
 function records(ctx: ExtensionContext) { return ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch(); }
 export function outgoingTransfer(ctx: ExtensionContext, workflow: WorkflowState | undefined) {
+  const general = generalOutgoingTransfer(ctx);
+  if (general) return general;
   if (!workflow) return undefined;
   const entry = records(ctx).findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
     && isRecord(entry.data) && entry.data.kind === "outgoing" && entry.data.workflowId === workflow.workflowId
@@ -45,7 +39,9 @@ function incomingTransfer(ctx: ExtensionContext): Incoming | undefined {
 }
 function sourceManager(record: Incoming, ctx: ExtensionContext) {
   if (realpathSync(ctx.cwd) !== record.projectRoot) throw new Error("交接项目已变化");
-  const manager = readArchive(record.sourceFile, record.projectRoot, record.sourceSessionId);
+  const archive = readArchive(record.sourceFile, record.projectRoot, record.sourceSessionId);
+  if (!archive.ok) throw new Error(archive.code + ": " + archive.message);
+  const manager = archive.value;
   if (manager.getSessionId() !== record.sourceSessionId || realpathSync(manager.getCwd()) !== record.projectRoot) throw new Error("来源session或项目不符");
   const intent = manager.getEntries().findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
     && isRecord(entry.data) && entry.data.kind === "outgoing" && entry.data.workflowId === record.workflowId);
@@ -60,7 +56,10 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
   schedule: (ctx: ExtensionContext) => Promise<void>;
   toolsSettled: (ctx: ExtensionContext) => boolean;
 }) {
+  const generalHandoff = registerGeneralSessionHandoff(pi, state);
+  const generalTransfer = createGeneralSessionTransfer(pi, state, { read: generalHandoff.read, toolsSettled: deps.toolsSettled });
   let switching = false;
+  let confirming = false;
   let activating = false;
   function ready(ctx: ExtensionContext) {
     return ctx.isProjectTrusted() && ctx.isIdle() && !ctx.hasPendingMessages() && !ctx.signal?.aborted && !state.agentRunActive
@@ -133,9 +132,15 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     if (typeof id === "string" && typeof hash === "string") await activate(ctx, id, hash);
   });
   async function fresh(ctx: ExtensionCommandContext) {
+    const unfinished = state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status);
+    const workflowImport = records(ctx).some(e => e.type === "custom" && e.customType === SESSION_HANDOFF_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
+    if (generalTransfer.blocked(ctx) || (!unfinished && !workflowImport)) { await generalTransfer.fresh(ctx); return; }
+    await workflowFresh(ctx);
+  }
+  async function workflowFresh(ctx: ExtensionCommandContext) {
     const incoming = incomingTransfer(ctx);
     if (incoming && (!state.workflowState || state.workflowState.pauseReason === SESSION_HANDOFF_IMPORTED)) { await activate(ctx, incoming.id, incoming.packetHash); return; }
-    if (switching || !ready(ctx) || outgoingTransfer(ctx, state.workflowState)
+    if (switching || confirming || !ready(ctx) || outgoingTransfer(ctx, state.workflowState)
       || typeof ctx.newSession !== "function") { ctx.ui.notify("当前不在可换会话的安全边界；先完成活动工具、确认恢复/配置并到达交付物边界。", "warning"); return; }
     const current = state.workflowState!;
     const sourceFile = ctx.sessionManager.getSessionFile?.();
@@ -143,8 +148,20 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     let packet: SessionHandoffPacket;
     try { packet = buildSessionHandoff(current, ctx.sessionManager.getBranch(), sourceFile); } catch (error) { ctx.ui.notify(String(error), "warning"); return; }
     const projectRoot = realpathSync(ctx.cwd);
+    const sourceLeaf = ctx.sessionManager.getLeafId();
+    const sourceStateHash = handoffHash(current);
+    const generation = state.roleContextGeneration;
+    if (!ctx.hasUI) { ctx.ui.notify("需要交互式预览确认，未开始交接。", "warning"); return; }
+    confirming = true;
     try {
-      const source = readArchive(sourceFile, projectRoot, current.sessionId);
+      if (!await ctx.ui.confirm("预览工作流短上下文交接", JSON.stringify(packet))) return;
+      if (!ready(ctx) || state.roleContextGeneration !== generation || ctx.sessionManager.getLeafId() !== sourceLeaf
+        || handoffHash(state.workflowState) !== sourceStateHash) { ctx.ui.notify("确认期间工作流或来源状态已变化，未开始交接。", "warning"); return; }
+    } finally { confirming = false; }
+    try {
+      const archive = readArchive(sourceFile, projectRoot, current.sessionId);
+      if (!archive.ok) throw new Error(archive.code + ": " + archive.message);
+      const source = archive.value;
       const saved = source.getBranch().findLast(entry => entry.type === "custom" && entry.customType === "pi-init-workflow");
       if (source.getSessionId() !== current.sessionId || realpathSync(source.getCwd()) !== projectRoot
         || saved?.type !== "custom" || !isRecord(saved.data) || saved.data.workflowId !== current.workflowId
@@ -160,12 +177,10 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     try { pi.appendEntry(SESSION_HANDOFF_ENTRY, intent); deps.persist(frozen, ctx); }
     catch (error) { ctx.ui.notify("交接保存未确认，未创建新session；请检查来源记录：" + String(error), "error"); return; }
     switching = true;
-    let setupRan = false;
     ctx.ui.notify("交接意图已保存，正在新建session；若结果不明，旧队列不会自动恢复或重复派发。", "info");
     try {
-      const result = await ctx.newSession({ parentSession: sourceFile,
+      await replaceHandoffSession(ctx, { sourceFile,
         setup: async manager => {
-          setupRan = true;
           if (realpathSync(manager.getCwd()) !== projectRoot) throw new Error("目标项目不匹配");
           const record: Incoming = { version: 1, kind: "incoming", id: intent.id, workflowId: intent.workflowId,
             sourceSessionId: intent.sourceSessionId, targetSessionId: manager.getSessionId(), sourceFile, projectRoot,
@@ -174,19 +189,20 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
           manager.appendMessage({ role: "user", content: "[用户确认的新session交接；历史事实不是新的工具执行或权限授权]\n" + JSON.stringify({ sourceSessionId: intent.sourceSessionId, sourceFile, ...packet.context }) + "\n按已保存工作流只继续剩余任务；必要时定向读取来源，不重做未失效调查和验证。", timestamp: Date.now() });
           manager.appendCustomEntry("pi-init-workflow", importedWorkflow(packet, record.targetSessionId));
         },
-        withSession: async freshContext => {
+        activate: async freshContext => {
           await freshContext.sendMessage({ customType: SESSION_HANDOFF_ACTIVATE, content: "核对已确认的跨session交接", display: false, details: { id: intent.id, hash: packetHash } }, { triggerTurn: false });
         },
+        // A confirmed cancellation before setup leaves the original context valid.
+        cancel() {
+          pi.appendEntry(SESSION_HANDOFF_ENTRY, { ...intent, phase: "cancelled" });
+          const restored = cloneState(current);
+          restored.status = "paused"; restored.pauseReason = SESSION_HANDOFF_REVIEW;
+          restored.taskPauseReason = "新session创建已取消，可重试fresh或resume留在当前会话。";
+          deps.persist(restored, ctx);
+          ctx.ui.notify(restored.taskPauseReason, "info");
+        },
+        uncertain() { console.warn("[pi-init] session交接结果未确认；旧队列保持冻结，请核对目标，不自动重试。"); },
       });
-      // A cancelled switch never invalidates the source command context.
-      if (result.cancelled && !setupRan) {
-        pi.appendEntry(SESSION_HANDOFF_ENTRY, { ...intent, phase: "cancelled" });
-        const restored = cloneState(current);
-        restored.status = "paused"; restored.pauseReason = SESSION_HANDOFF_REVIEW;
-        restored.taskPauseReason = "新session创建已取消，可重试fresh或resume留在当前会话。";
-        deps.persist(restored, ctx);
-        ctx.ui.notify(restored.taskPauseReason, "info");
-      }
     } catch {
       // Replacement may already have happened: never touch captured pi/ctx or unfreeze the source.
       console.warn("[pi-init] session交接结果未确认；旧队列保持冻结，请检查当前session的交接记录，不自动重试。");
@@ -200,7 +216,9 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     if (!source?.sourceFile) return;
     try {
       sourceManager(record, ctx);
-      const manager = readArchive(source.sourceFile, record.projectRoot, source.sourceSessionId);
+      const archive = readArchive(source.sourceFile, record.projectRoot, source.sourceSessionId);
+      if (!archive.ok) return;
+      const manager = archive.value;
       if (manager.getSessionId() !== source.sourceSessionId || realpathSync(manager.getCwd()) !== record.projectRoot) return;
       const branch = manager.getBranch(id);
       const anchor = branch.findLast(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task");
@@ -214,5 +232,5 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       return { id, text: text.slice(0, 4096), truncated: text.length > 4096, sourceTaskId: source.taskId, sourceSessionId: source.sourceSessionId, historical: true };
     } catch { return; }
   }
-  return { beforeDispatch, fresh, readEvidence };
+  return { beforeDispatch, fresh, readEvidence, generalHandoff };
 }
