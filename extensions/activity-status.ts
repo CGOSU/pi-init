@@ -218,7 +218,7 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
   if (agentOperation && primary !== agentOperation && !compaction && !workflow) segments.push(agentOperation);
   if (urgentCurrentCache && primary !== urgentCurrentCache) segments.push(urgentCurrentCache);
   if (state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0) {
-    segments.push({ text: `缓存提醒 ${state.cacheReminderCount} 次`, tone: "warning" });
+    segments.push({ text: `Miss ${state.cacheReminderCount} 次`, tone: "warning" });
   }
   segments.push(...roleSegments(state.role));
 

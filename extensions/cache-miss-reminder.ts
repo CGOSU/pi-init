@@ -62,7 +62,7 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     catch { return; }
     suppressed = true;
     try {
-      ctx.ui.notify(`缓存失配估算额外成本约 $${extra.toFixed(2)}（非账单金额）。建议在当前执行结束后让执行角色用 session_handoff 准备短交接，再运行 /pi-init fresh 预览确认。不会自动准备、切换或暂停任务；本会话仅提醒一次。`, "warning");
+      ctx.ui.notify(`Miss：估算额外成本约 $${extra.toFixed(2)}（非账单金额）。建议在当前执行结束后让执行角色用 session_handoff 准备短交接，再运行 /pi-init fresh 预览确认。不会自动准备、切换或暂停任务；本会话仅提醒一次。`, "warning");
     } catch { return; }
     count = 1;
     try { pi.appendEntry(CACHE_MISS_NOTICE, { ...data, phase: "sent" }); }
