@@ -68,6 +68,23 @@ test("cumulative extra cost excludes small misses, continues after notification 
   assert.equal(restored.statuses.at(-1).totalUsd, undefined);
 });
 
+test("provider-reported totals do not change counterfactual cache estimates or notice policy", () => {
+  for (const totalFromProvider of [undefined, false, true]) {
+    const h = fixture();
+    h.reminder.observe(h.ctx, message(0, 100000));
+    const sample = message(100000, 0, 0.7);
+    sample.usage.cost.total = 99; // A reported total need not equal catalog components.
+    sample.usage.cost.totalFromProvider = totalFromProvider;
+    h.reminder.observe(h.ctx, sample);
+    assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 0.6) < 1e-12);
+    assert.equal(h.statuses.at(-1).count, 1);
+    assert.match(h.notices[0], /估算.*非账单金额/);
+    h.reminder.observe(h.ctx, sample);
+    assert.ok(Math.abs(h.statuses.at(-1).totalUsd - 1.2) < 1e-12);
+    assert.equal(h.statuses.at(-1).count, 1);
+  }
+});
+
 test("legacy totals without a threshold are not restored as qualified costs", () => {
   const h = fixture([{ type: "custom", customType: CACHE_MISS_TOTAL, data: { sessionId: "s1", totalUsd: 3 } }]);
   assert.equal(h.statuses.at(-1).totalUsd, undefined);

@@ -332,7 +332,7 @@ async function selectModelWithSearch(
         tui.requestRender();
       },
     };
-  });
+  }, { blocked: { kind: "question", message: `选择 ${roleLabel(role)} 模型` } });
 
   if (!result) return undefined;
   if (isMenuBack(result)) return MENU_BACK;
@@ -492,7 +492,7 @@ export async function input(
         tui.requestRender();
       },
     };
-  });
+  }, { blocked: { kind: "question", message: title } });
 
   return result === null || result === undefined ? undefined : result.trim();
 }

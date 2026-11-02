@@ -1,4 +1,5 @@
-import { calculateCacheRatio, formatNumber } from "./report.js";
+import { summarizeCostSource } from "./core.js";
+import { calculateCacheRatio, formatCostSource, formatNumber } from "./report.js";
 
 const BILL_WIDTH = 750;
 const SIDE_PADDING = 54;
@@ -192,7 +193,7 @@ export function createBillSvg(summary, options = {}) {
     line(305),
     text("API 总费用", BILL_WIDTH / 2, 371, 'class="section" text-anchor="middle"'),
     text(formatTotalCost(total.cost), BILL_WIDTH / 2, 462, 'class="amount" text-anchor="middle"'),
-    text("API 等值估算 · 非实际账单", BILL_WIDTH / 2, 501, 'class="note" text-anchor="middle"'),
+    text(`${formatCostSource(summarizeCostSource(rows))} · 未经账单核对`, BILL_WIDTH / 2, 501, 'class="note" text-anchor="middle"'),
     line(552),
     text("客户端 / 模型", SIDE_PADDING, 598, 'class="column"'),
     text("费用", RIGHT_EDGE, 598, 'class="column" text-anchor="end"'),

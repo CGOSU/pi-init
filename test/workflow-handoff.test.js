@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import * as helpers from "./helpers.js";
 
 const {
@@ -514,7 +515,13 @@ test("结果未知恢复不接受模型自签确认，用户重试命令仍可�
     const workflow = harness.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
     assert.equal(workflow.tasks[0].outcomeUnknown, true);
     const params = { action: "retry", workflowId: workflow.workflowId, planVersion: workflow.planVersion, sessionId: workflow.sessionId, recoveryGeneration: workflow.recoveryGeneration, taskId: "first", confirmUnknownOutcome: true };
-    await assert.rejects(harness.tools.find(tool => tool.name === "task_workflow").execute("self-authorized", params, undefined, undefined, harness.context), /模型布尔值不构成用户授权/);
+    const tool = harness.tools.find(tool => tool.name === "task_workflow");
+    for (const confirmUnknownOutcome of [true, "true"]) {
+      const validated = validateToolArguments(tool, { name: tool.name, arguments: { ...params, confirmUnknownOutcome } });
+      assert.equal(validated.confirmUnknownOutcome, true);
+      await assert.rejects(tool.execute("self-authorized", validated, undefined, undefined, harness.context), /模型布尔值不构成用户授权/);
+      assert.equal(harness.branch.findLast(entry => entry.customType === "pi-init-workflow").data.tasks[0].outcomeUnknown, true);
+    }
     await harness.commands.get("pi-init").handler("workflow retry first --confirm-unknown-outcome", harness.context);
     const retried = harness.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
     assert.equal(retried.status, "running");

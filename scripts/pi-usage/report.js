@@ -1,5 +1,5 @@
 import { PI_USAGE_BUILD } from "./version.js";
-import { FIELDS, MODEL_BAR_RESOLUTION, MODEL_BAR_SEGMENTS, MODEL_BAR_WIDTH } from "./core.js";
+import { FIELDS, MODEL_BAR_RESOLUTION, MODEL_BAR_SEGMENTS, MODEL_BAR_WIDTH, summarizeCostSource } from "./core.js";
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
@@ -24,6 +24,12 @@ export function formatDateMinute(value) {
   const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate()]
     .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")));
   return `${parts.join("-")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+export function formatCostSource(source) {
+  if (source === "provider") return "Provider 上报";
+  if (source === "mixed") return "混合（含估算）";
+  return "估算（含历史未知）";
 }
 
 function formatCost(value) {
@@ -134,10 +140,11 @@ function formatUsageTable(rows, color) {
         formatNumber(row.tokens),
         formatPercentage(cache.ratio),
         formatCost(row.cost),
+        formatCostSource(row.costSource),
         formatTps(row.avgTps),
       ];
     }),
-    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cache %", "Cost", "Avg TPS"],
+    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cache %", "Cost", "Cost source", "Avg TPS"],
     [],
     { color, highlightLast: true },
   );
@@ -187,7 +194,7 @@ export function formatReport(summary, options = {}) {
   const totalSpeed = summary.speed ?? { outputTokens: 0, generationSeconds: 0 };
   const usage = summary.rows.length
     ? formatUsageTable(
-        [...summary.rows, { model: "Total", ...total, avgTps: averageTps(totalSpeed) }],
+        [...summary.rows, { model: "Total", ...total, costSource: summarizeCostSource(summary.rows), avgTps: averageTps(totalSpeed) }],
         color,
       )
     : "No usage recorded. Run `pi-usage --update` to import session JSONL.";
@@ -205,6 +212,7 @@ export function formatReport(summary, options = {}) {
     "",
     paint("Models", "34;1", color),
     usage,
+    "费用来源仅表示数据来源，未经账单核对；分项费用与缓存额外成本仍为估算。",
     "",
     paint("Model usage (tokens)", "34;1", color),
     formatModelUsageChart(summary.rows, color),

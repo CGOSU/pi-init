@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { loadDuckDb, localDateString } from "./core.js";
 
-export const USAGE_SCHEMA_VERSION = 3;
+export const USAGE_SCHEMA_VERSION = 4;
 const APPENDER_BATCH_SIZE = 1024;
 
 function numberValue(value) {
@@ -66,8 +66,12 @@ export async function initializeDatabase(connection) {
       total_tokens BIGINT,
       cost DOUBLE,
       cwd VARCHAR,
+      cost_from_provider BOOLEAN DEFAULT FALSE,
       PRIMARY KEY (source_file, entry_key)
     )
+  `);
+  await connection.run(`
+    ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_from_provider BOOLEAN DEFAULT FALSE
   `);
   await connection.run(`
     CREATE TABLE IF NOT EXISTS duration_summaries (
@@ -210,6 +214,7 @@ export async function insertUsageEvents(connection, events) {
     appendBigInt(appender, event.tokens);
     appender.appendDouble(event.cost);
     appender.appendVarchar(event.cwd);
+    appender.appendBoolean(event.costFromProvider === true);
   });
 }
 

@@ -20,6 +20,13 @@ const CHECKPOINT_TAIL_BYTES = 64 * 1024;
 const APPENDER_BATCH_SIZE = 1024;
 
 
+export function summarizeCostSource(rows) {
+  if (rows.length === 0) return "estimated";
+  if (rows.every(row => row.costSource === "provider")) return "provider";
+  return rows.some(row => row.costSource === "provider" || row.costSource === "mixed")
+    ? "mixed" : "estimated";
+}
+
 export function localDateString(date) {
   return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
     .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")))
@@ -180,6 +187,8 @@ function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
     ...fields,
     tokens: FIELDS.reduce((total, field) => total + fields[field], 0),
     cost: Number(usage.cost?.total) || 0,
+    costFromProvider: usage.cost?.totalFromProvider === true &&
+      typeof usage.cost.total === "number" && Number.isFinite(usage.cost.total) && usage.cost.total >= 0,
     cwd,
   };
 }

@@ -15,7 +15,7 @@
 pi install https://github.com/CGOSU/pi-init
 ```
 
-安装后重启 Pi，在项目中运行 `/pi-init` 打开控制中心。也可以直接在本仓库试用：
+安装后重启 Pi，在项目中运行 `/pi-init` 打开控制中心。Pi 1.5.0 及以上版本会在此扩展更新后的下次新启动时，显示 `CHANGELOG.md` 中比上次已见版本更新的条目；首次安装只记录版本，不显示历史更新。也可以直接在本仓库试用：
 
 ```bash
 pi --no-extensions -e ./extensions/index.ts
@@ -46,7 +46,7 @@ pi --no-extensions -e ./extensions/index.ts
 | `/pi-init diagnostics`、`/blackbox` | 打开运行诊断 |
 | `/large` | 扫描大型代码文件的结构审阅候选 |
 
-标准职责包括 `architect`（规划）、`developer-test`（实现与验证）和 `docs-commit`（文档与交付）；项目也可以配置自定义角色。角色切换方式为 `auto`（自动）、`confirm`（确认后切换）或 `manual`（手动切换）。
+标准职责包括 `architect`（规划）、`developer-test`（实现与验证）和 `docs-commit`（文档与交付）；项目也可以配置自定义角色。角色切换方式为 `auto`（自动）、`confirm`（确认后切换）或 `manual`（手动切换）。内联模型选择和文本输入等待用户时，会向 Pi 声明 question 阻塞状态；支持 Program Status 的终端可以显示 Pi 正在等待用户。
 
 ## 容量提醒与手动新会话
 
@@ -73,4 +73,4 @@ pi-usage 7d
 pi-usage 2026-08-01 2026-08-25 --output usage.svg
 ```
 
-`pi-usage --update` 可立即更新统计数据。统计输出同时显示插件版本和来源 Git HEAD（例如 `v2.0.10 (git: a1b2c3d)`）；独立启动器记录安装时的来源 HEAD，非 Git 安装只显示版本号。详细诊断说明见[运行诊断文档](docs/runtime-diagnostics.md)。
+`pi-usage --update` 可立即更新统计数据。统计输出同时显示插件版本和来源 Git HEAD（例如 `v2.0.11 (git: a1b2c3d)`）；独立启动器记录安装时的来源 HEAD，非 Git 安装只显示版本号。CLI 与 SVG 报告会标明总费用是 Provider 上报、价目估算或混合来源；Provider 上报不等同于账单核对，明细成本及缓存失配额外成本仍按原有估算口径计算。详细诊断说明见[运行诊断文档](docs/runtime-diagnostics.md)。

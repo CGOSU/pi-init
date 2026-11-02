@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import { taskWorkflowParameters } from "../extensions/contracts.ts";
+import { validateWorkflowMutationIdentity } from "../src/workflow-handoff.ts";
 import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
@@ -20,6 +23,23 @@ function fixture() {
   }
   return { state, ctx, identity, binding, handlers, issue, setBranch: value => { branch = value; } };
 }
+
+test("host coercion does not authorize missing or stale workflow identities", () => {
+  const f = fixture();
+  const tool = { name: "task_workflow", parameters: taskWorkflowParameters };
+  const validate = args => validateToolArguments(tool, { name: tool.name, arguments: args });
+  const normalized = validate({ ...f.identity, action: "complete", planVersion: "0", recoveryGeneration: "1" });
+  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, normalized, f.ctx).ok, true);
+  const stale = validate({ ...normalized, recoveryGeneration: "0" });
+  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, stale, f.ctx).code, "WORKFLOW_ACTION_IDENTITY_STALE");
+  const wrongSession = validate({ ...normalized, sessionId: "another-session" });
+  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, wrongSession, f.ctx).code, "WORKFLOW_SESSION_MISMATCH");
+  const missing = validate({ action: "complete", planVersion: null });
+  assert.throws(() => f.binding.bind("unissued", missing, f.ctx), error => error.code === "WORKFLOW_RUN_BINDING_MISSING");
+  f.issue("stale-call");
+  f.state.workflowState.recoveryGeneration++;
+  assert.throws(() => f.binding.bind("stale-call", normalized, f.ctx), error => error.code === "WORKFLOW_RUN_BINDING_STALE");
+});
 
 test("模型只提交完成结果，运行时绑定真实派发身份且不改写参数", () => {
   const f = fixture(); f.issue();

@@ -1,6 +1,6 @@
 {
   "name": "pi-init",
-  "version": "2.0.10",
+  "version": "2.0.11",
   "private": true,
   "description": "为项目生成 AI Coding 协作规则、项目记忆和自动模型切换 Skill",
   "type": "module",
@@ -13,6 +13,7 @@
     "templates",
     "skills",
     "scripts",
+    "CHANGELOG.md",
     "README.md",
     "THIRD-PARTY-NOTICES"
   ],
@@ -43,6 +44,9 @@
   },
   "license": "UNLICENSED",
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
     "@types/node": "^22.20.5",
     "typescript": "^5.9.3"
   }

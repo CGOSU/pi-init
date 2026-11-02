@@ -2,7 +2,7 @@ export { USAGE_SCHEMA_VERSION } from "./database.js";
 import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, parseUsageRange, readByte, scanSessionFile, shouldRefreshUsage } from "./core.js";
+import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, parseUsageRange, readByte, scanSessionFile, shouldRefreshUsage, summarizeCostSource } from "./core.js";
 import { USAGE_SCHEMA_VERSION, clearDerivedData, insertActivityEvents, insertSpeedEvents, insertUsageEvents, markUsageChecked, readEventDates, readUsageSchemaVersion, readUsageState, withDatabase, withTransaction } from "./database.js";
 
 function emitRefreshProgress(options, event) {
@@ -326,7 +326,7 @@ async function readSummary(connection, range) {
     `
       WITH unique_events AS (
         SELECT model, input_tokens, output_tokens, cache_read_tokens,
-          cache_write_tokens, total_tokens, cost, entry_key, event_date,
+          cache_write_tokens, total_tokens, cost, cost_from_provider, entry_key, event_date,
           ROW_NUMBER() OVER (PARTITION BY entry_key ORDER BY source_file) AS occurrence
         FROM usage_events
       )
@@ -336,7 +336,10 @@ async function readSummary(connection, range) {
         COALESCE(SUM(cache_read_tokens), 0) AS cacheRead,
         COALESCE(SUM(cache_write_tokens), 0) AS cacheWrite,
         COALESCE(SUM(total_tokens), 0) AS tokens,
-        COALESCE(SUM(cost), 0) AS cost
+        COALESCE(SUM(cost), 0) AS cost,
+        CASE WHEN BOOL_AND(COALESCE(cost_from_provider, FALSE)) THEN 'provider'
+          WHEN BOOL_OR(COALESCE(cost_from_provider, FALSE)) THEN 'mixed'
+          ELSE 'estimated' END AS cost_source
       FROM unique_events
       WHERE occurrence = 1 AND event_date >= $start_date AND event_date <= $end_date
       GROUP BY model
@@ -402,6 +405,7 @@ async function readSummary(connection, range) {
     cacheWrite: numberValue(row.cacheWrite),
     tokens: numberValue(row.tokens),
     cost: numberValue(row.cost),
+    costSource: row.cost_source,
     avgTps: averageTps(speedByModel.get(row.model)),
   }));
   const speed = [...speedByModel.values()].reduce(
@@ -423,6 +427,7 @@ async function readSummary(connection, range) {
     date: range.date,
     sessions: numberValue(sessionsReader.getRowObjects()[0]?.sessions),
     rows,
+    costSource: summarizeCostSource(rows),
     speed: { ...speed, avgTps: averageTps(speed) },
     duration,
     updatedAt: Number.isFinite(usageState?.checkedMs)
