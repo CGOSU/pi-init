@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：普通会话交接保留可选跨角色决策依据
+
+- 变更：新增可选 `decisions` 正文，按已确认/建议/未验证区分结论效力，并记录关键理由及可选的否决方案、适用边界。无决策可省略，依据不明可留空；完整性检查不阻止准备。旧快照兼容，原32 KiB、安全及来源校验不变；摘要不自动扫描或补齐历史架构分析，引用也不会自动展开。详细边界见[设计决策](decisions.md)。
+- 验证：`node --test test/general-session-handoff.test.js test/general-session-transfer.test.js`，26/26通过；覆盖可选/空决策、状态与理由的结构校验、32 KiB拒绝、持久化及预览/目标背景传递。`npm run typecheck`通过；`git diff --check`通过。
+- 边界：未执行全量测试；未在真实Pi UI中准备或创建会话，未部署或push。
+
 ### 2026-11-03：修复已接收普通交接session无法连续fresh
 
 - 复核：pi-mcp-adapter日志确认来源session `01a19f8f-7a8d-72d2-a152-83da3b8cc2cc` 在 `2026-11-03T08:01:14Z` 写入 `outgoing/prepared`，transfer ID `82a03b51-b7a6-46d1-bb62-f257b982cf27`；不同session `01a1a06d-359a-72d2-a152-83ef9b3bd93b` 的session文件以来源为parent并持有同ID的incoming记录。故首次A→B已经创建并持久化目标。目标B在 `11:23:04Z` 又保存普通handoff快照，但 `11:23:37Z` 的新输入和之后的工具活动将它失效，分支没有后续outgoing记录。

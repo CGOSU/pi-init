@@ -105,6 +105,27 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
   });
 });
 
+test("decision context reaches preview and the persisted target background without status changes", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const decisions = [
+      { status: "confirmed", conclusion: "不扩大交接授权", rationale: "历史背景不能恢复执行身份；排除自动续跑" },
+      { status: "proposed", conclusion: "按需改进摘要" },
+      { status: "unverified", conclusion: "依据尚待确认", rationale: "" },
+    ];
+    const snapshot = await h.save({ decisions });
+    await h.api.fresh(h.ctx);
+    assert.equal(h.calls, 1);
+    assert.ok(h.confirmations[0].content.includes(JSON.stringify(snapshot)));
+    const reopened = SessionManager.open(h.target.manager.getSessionFile(), cwd);
+    const background = reopened.getBranch().find(e => e.type === "message" && e.message.role === "user").message.content;
+    assert.ok(background.includes(JSON.stringify(snapshot)));
+    const incoming = reopened.getEntries().find(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY).data;
+    assert.deepEqual(incoming.snapshot.context.decisions, decisions);
+    assert.equal(h.target.state.workflowState, undefined);
+  });
+});
+
 test("received sessions can prepare another handoff and create a distinct successor, including after reload", async () => {
   for (const reload of [false, true]) await withTempDirectory(async cwd => {
     const a = fixture(cwd);

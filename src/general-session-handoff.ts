@@ -7,10 +7,16 @@ export const GENERAL_HANDOFF_INVALIDATED = "pi-init-general-handoff-invalidated"
 export const GENERAL_HANDOFF_TOOL = "session_handoff";
 export type HandoffResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
 export type HandoffSource = { kind: "session-entry" | "file"; location: string; description: string };
+export type HandoffDecision = {
+  status: "confirmed" | "proposed" | "unverified";
+  conclusion: string;
+  rationale?: string;
+};
 export type GeneralHandoffContext = {
   goal: string; constraints: string[]; completed: string[]; remaining: string[];
   verification: { summary: string; sources: HandoffSource[] }[];
   unknowns: string[]; nextStep: string; sources: HandoffSource[];
+  decisions?: HandoffDecision[];
 };
 export type GeneralHandoffSnapshot = {
   version: 1; historical: true; context: GeneralHandoffContext;
@@ -26,7 +32,7 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
   if (!record(input)) return fail("TYPE", "交接正文必须是对象");
   const fields = ["goal", "constraints", "completed", "remaining", "verification", "unknowns", "nextStep", "sources"];
   if (fields.some(key => !(key in input))) return fail("MISSING", "交接正文缺少必填字段（无内容请显式使用空数组）");
-  if (Object.keys(input).some(key => !fields.includes(key))) return fail("FIELD", "交接正文含未知字段，不能提交来源身份或执行授权");
+  if (Object.keys(input).some(key => !fields.includes(key) && key !== "decisions")) return fail("FIELD", "交接正文含未知字段，不能提交来源身份或执行授权");
   for (const key of ["goal", "nextStep"]) {
     if (typeof input[key] !== "string") return fail("TYPE", `${key}必须是字符串`);
     if (!nonempty(input[key])) return fail("EMPTY", `${key}不能为空`);
@@ -45,6 +51,18 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
     }
     return { ok: true, value: value as HandoffSource[] };
   };
+  // Optional for old inputs and snapshots; completeness is guidance, not a save gate.
+  if ("decisions" in input) {
+    if (!Array.isArray(input.decisions)) return fail("TYPE", "decisions必须是数组；无决策可省略或使用空数组");
+    for (const decision of input.decisions) {
+      if (!record(decision)) return fail("TYPE", "决策必须是对象");
+      if (Object.keys(decision).some(key => !["status", "conclusion", "rationale"].includes(key))) return fail("FIELD", "决策含未知字段");
+      if (!["confirmed", "proposed", "unverified"].includes(decision.status as string)) return fail("DECISION_STATUS", "决策status必须为confirmed、proposed或unverified");
+      if (typeof decision.conclusion !== "string") return fail("TYPE", "决策conclusion必须是字符串");
+      if (!nonempty(decision.conclusion)) return fail("EMPTY", "决策conclusion不能为空");
+      if ("rationale" in decision && typeof decision.rationale !== "string") return fail("TYPE", "决策rationale必须是字符串；依据不明可省略或标记待确认");
+    }
+  }
   const parsedSources = sources(input.sources);
   if (!parsedSources.ok) return parsedSources;
   if (!Array.isArray(input.verification)) return fail("TYPE", "verification必须是数组；未验证使用空数组");
@@ -59,6 +77,10 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
   context.goal = context.goal.trim();
   context.nextStep = context.nextStep.trim();
   for (const key of ["constraints", "completed", "remaining", "unknowns"] as const) context[key] = context[key].map(item => item.trim());
+  for (const decision of context.decisions ?? []) {
+    decision.conclusion = decision.conclusion.trim();
+    if (decision.rationale !== undefined) decision.rationale = decision.rationale.trim();
+  }
   for (const check of context.verification) check.summary = check.summary.trim();
   for (const source of [...context.sources, ...context.verification.flatMap(check => check.sources)]) {
     source.location = source.location.trim();

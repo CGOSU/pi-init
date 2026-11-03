@@ -41,6 +41,46 @@ test("complete bounded input distinguishes missing, invalid and oversized data w
   assert.deepEqual(parseGeneralHandoff(body()), { ok: true, value: body() });
 });
 
+test("decision context is optional, distinguishes status and permits unknown rationale", () => {
+  for (const decisions of [[], [
+    { status: "confirmed", conclusion: "  保留身份校验  ", rationale: "  防止错误续接；排除绕过校验，限普通交接  " },
+    { status: "proposed", conclusion: "后续按需优化" },
+    { status: "unverified", conclusion: "历史假设", rationale: "" },
+  ]]) {
+    const result = parseGeneralHandoff({ ...body(), decisions });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.decisions, decisions.map(d => ({ ...d, conclusion: d.conclusion.trim(), ...(d.rationale !== undefined ? { rationale: d.rationale.trim() } : {}) })));
+  }
+  for (const [decisions, code] of [
+    [null, "TYPE"], [[null], "TYPE"], [[{ status: "approved", conclusion: "a" }], "DECISION_STATUS"],
+    [[{ status: "confirmed", conclusion: " " }], "EMPTY"], [[{ status: "proposed", conclusion: 1 }], "TYPE"],
+    [[{ status: "unverified", conclusion: "a", rationale: 1 }], "TYPE"],
+    [[{ status: "confirmed", conclusion: "a", authorized: true }], "FIELD"],
+    [[{ status: "confirmed", conclusion: "a", rationale: "中".repeat(SESSION_HANDOFF_MAX_BYTES) }], "TOO_LARGE"],
+  ]) {
+    const result = parseGeneralHandoff({ ...body(), decisions });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, code);
+  }
+});
+
+test("decision context survives persistence without upgrading suggestions or assumptions", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const decisions = [
+      { status: "confirmed", conclusion: "保留32 KiB限制", rationale: "限制交接体积，完整拒绝而非截断" },
+      { status: "proposed", conclusion: "后续优化提示" },
+      { status: "unverified", conclusion: "尚未证实的判断", rationale: "待确认" },
+    ];
+    const saved = await h.save({ ...body(), decisions });
+    assert.equal(saved.ok, true);
+    const reopened = SessionManager.open(h.manager.getSessionFile(), cwd);
+    const read = readGeneralHandoff(reopened.getBranch(), saved.value.source);
+    assert.equal(read.ok, true);
+    assert.deepEqual(read.value.context.decisions, decisions);
+  });
+});
+
 test("preparation persists source-bound historical background without migration or workflow", async () => {
   await withTempDirectory(async cwd => {
     const h = fixture(cwd);

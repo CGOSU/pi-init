@@ -39,11 +39,16 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
   pi.registerTool({
     name: GENERAL_HANDOFF_TOOL,
     label: "准备短上下文交接",
-    description: "仅为普通会话准备并持久化短交接背景，不创建会话或工作流、不解除暂停、不自动续跑。必须显式填写全部字段，无内容用空数组。验证与来源均为历史声明，不是本轮验证或执行授权。后续用户通过 /pi-init fresh 预览确认。保存后避免业务工具或新需求，否则需重新准备。",
+    description: "仅为普通会话准备并持久化短交接背景，不创建会话或工作流、不解除暂停、不自动续跑。除可选decisions外须显式填写全部字段，无内容用空数组。准备时检查各角色仍有效且影响下一步的关键结论是否遗漏；decisions区分已确认、建议和未验证判断，正文保留结论及关键理由、必要的否决方案与边界，详细论证留sources引用，引用不会自动展开。无决策可省略或为空，依据不明可标记待确认，不补造理由；完整性检查仅为指导，不阻止保存。验证与来源均为历史声明，不是本轮验证或执行授权。后续用户通过 /pi-init fresh 预览确认。保存后避免业务工具或新需求，否则需重新准备。",
     parameters: Type.Object({
       goal: Type.String(), constraints: strings, completed: strings, remaining: strings,
       verification: Type.Array(Type.Object({ summary: Type.String(), sources: Type.Array(sourceSchema) }, { additionalProperties: false })),
       unknowns: strings, nextStep: Type.String(), sources: Type.Array(sourceSchema),
+      decisions: Type.Optional(Type.Array(Type.Object({
+        status: Type.Union([Type.Literal("confirmed"), Type.Literal("proposed"), Type.Literal("unverified")], { description: "confirmed=已获用户确认或既定契约；proposed=建议；unverified=未验证假设。交接不升级其效力。" }),
+        conclusion: Type.String({ description: "影响下一步的关键结论，直接写入正文，不仅提供引用。" }),
+        rationale: Type.Optional(Type.String({ description: "关键理由、必要的否决方案及适用边界；依据不明可省略、留空或标记待确认，不要求补造。" })),
+      }, { additionalProperties: false }))),
     }, { additionalProperties: false }),
     async execute(toolCallId, input, signal, _update, ctx) {
       const result = (value: HandoffResult<GeneralHandoffSnapshot>) => ({
