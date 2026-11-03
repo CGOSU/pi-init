@@ -134,7 +134,7 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
     const prepared = deps.read(ctx);
     if (!prepared.ok) { ctx.ui.notify(prepared.message + "。请让当前执行角色用 session_handoff 准备/更新目标、约束、进度、来源和下一步，再执行 /pi-init fresh。", "warning"); return; }
     const snapshot = prepared.value;
-    const sourceLeaf = ctx.sessionManager.getLeafId();
+    let sourceLeaf = ctx.sessionManager.getLeafId();
     const sourceFile = snapshot.source.sessionFile;
     const hash = handoffHash(snapshot);
     const generation = handoffHash([state.roleContextGeneration, state.roleTransitionGeneration, state.activeRole, state.workflowState]);
@@ -147,8 +147,15 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       const confirmed = await ctx.ui.confirm("预览短上下文交接（不自动执行）", background(snapshot));
       if (!confirmed) return;
       const current = deps.read(ctx);
-      if (!ready(ctx) || handoffHash([state.roleContextGeneration, state.roleTransitionGeneration, state.activeRole, state.workflowState]) !== generation || ctx.sessionManager.getLeafId() !== sourceLeaf
-        || !current.ok || handoffHash(current.value) !== hash) { ctx.ui.notify("确认期间来源状态已变化，请重新准备并确认。", "warning"); return; }
+      const confirmedLeaf = ctx.sessionManager.getLeafId();
+      const sameBranch = ctx.sessionManager.getBranch().some(entry => entry.id === sourceLeaf);
+      if (!ready(ctx) || handoffHash([state.roleContextGeneration, state.roleTransitionGeneration, state.activeRole, state.workflowState]) !== generation
+        || !confirmedLeaf || !sameBranch || !current.ok || handoffHash(current.value) !== hash) { ctx.ui.notify("确认期间来源状态已变化，请重新准备并确认。", "warning"); return; }
+      // Safe bookkeeping/recovery may extend the branch during preview; pin the checked descendant, not a stale raw leaf.
+      sourceLeaf = confirmedLeaf;
+      intent.sourceLeaf = confirmedLeaf;
+      packet.sourceLeaf = confirmedLeaf;
+      if (Buffer.byteLength(JSON.stringify(packet), "utf8") > SESSION_HANDOFF_MAX_BYTES) { ctx.ui.notify("完整交接包超限，不截断迁移。", "warning"); return; }
       try {
         const archive = readHandoffArchive(sourceFile, snapshot.source.projectRoot, snapshot.source.sessionId);
         if (!archive.ok) throw new Error(archive.code + ": " + archive.message);

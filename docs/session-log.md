@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：按SDK调度生命周期核对普通交接历史
+
+- 根因：pi-mcp-adapter最新session的分支内930个Assistant tool proposal对应929个toolResult；唯一缺回执的是 `2026-11-03T06:04:12Z` 的codemode调用，所在assistant以 `stopReason: error`、`errorMessage: terminated`结束，并被Pi以null `context_edit`隐藏。Pi SDK 1.5.0 `agent-loop`在error/aborted终态直接结束回合，代码路径先于 `executeToolCalls`，所以这次提案从未交给宿主执行。把原始toolCall一律当成已执行任务要求结果，是 `TOOL_PAIRS_INCOMPLETE` 的实际根因；这与先前SDK参数回执`complete:false`是不同问题。
+- 修复：新增共享执行历史归一化器，将仅存在于error/aborted终态中的toolCall从普通会话配对校验副本中剔除；任何关联toolResult或实时已执行根调用都构成矛盾并拒绝。正常toolUse、Pi对length终态生成的失败回执仍按完整配对验证。普通准备、fresh和快照完整性使用同一分类；已结束工作流的历史incoming记录不再抢占普通fresh入口。确认预览后，只有原来源leaf仍是最新经核验分支的祖先且快照/身份不变时才接受安全非业务后缀，并把源leaf固定到该已验证后代。
+- 验证：用实际 `@earendil-works/pi-agent-core` Agent + 确定性本地stream测试error/aborted不执行隔离marker写入，toolUse会执行，length返回错误toolResult且不执行。覆盖相反toolResult、真实执行证据、重复ID及普通user/调用遗漏仍拒绝。交接生命周期、嵌套参数省略、已结束workflow导入/reload/预览连续测试 `node --experimental-strip-types --test test/handoff-execution-history.test.js test/general-tool-settlement.test.js test/general-session-handoff.test.js test/general-session-transfer.test.js test/workflow-tool-binding.test.js test/session-handoff.test.js test/role-context-view.test.js test/provider-request-recovery.test.js` 97/97；`npm run typecheck` 通过。
+- 只读核对：pi-mcp-adapter来源原始配对检查失败、按SDK生命周期归一化后通过（识别1条未调度失败提案）；context-mode此前20条参数省略回执仍通过收敛检查。两份session JSONL在核验前后hash不变（adapter `5c369860422c4e05315dc02c4660223089b9d95d5e7e459029b9d49ce9914b43`；context-mode `e6274592976972bcc2f2e7856fbf68eafd5a12aee5cf473c613b9246138b47f3`）。
+- 边界：验证使用真实SDK Agent loop及临时隔离session/side effect marker，并只读解析用户session；未在真实pi-mcp-adapter会话执行fresh、未创建真实目标session、未修改源日志、未部署/更新安装副本、未push。模拟的确认及会话替换不是实时Pi UI验证。设计与复发风险见[决策](decisions.md)和[踩坑](pitfalls.md)。
+
 ### 2026-11-03：修复普通 fresh 嵌套回执误判并累计 Miss 样本数
 
 - 根因：用户更新并 reload 后仍遇到 `TOOLS_NOT_SETTLED`。只读检查 context-mode 原 session 确认真正原因是 Pi SDK 1.5.0 `NestedCallRecorder` 的 `complete:false` 也用于标记因参数正文过大而省略记录，并不总表示子调用未完成；此前遥测 allowlist 与空白错误 `context_edit` 两项修复虽各自有效，但不是这次工具未收敛阻断点。指定日志含20条 `complete:false` 回执，497个子调用均有终态，175条参数正文被省略；415组外层工具配对的收敛检查通过。只读核验前后源日志 SHA-256 均为 `581b4a36b3b7cc1894b0d5452ea5ce13fb38b24e653648a3430bd16c204c0840`，未改写或重放真实会话。

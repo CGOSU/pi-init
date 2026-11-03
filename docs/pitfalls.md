@@ -29,12 +29,13 @@
 - 修复：计数按当前session中有效且阈值匹配的样本记录重建；只在事件记录写入成功后增加。通知送达与事件计数分离，失败的事件保存不得虚增。
 - 验证：连续样本、低额/等额门槛、session往返、历史恢复、`notifying`/`sent`通知故障和事件存储失败均由 cache-miss 定向回归覆盖，见[会话记录](session-log.md#2026-11-03修复普通-fresh-嵌套回执误判并累计-miss-样本数)。
 
-### 2026-11-03：Pi 隐藏空白失败回复的 context_edit 会使交接快照过期
+### 2026-11-03：普通交接必须按Pi SDK执行生命周期解释历史记录
 
-- Pi 遇到连接中断等模型错误时，可能留下 `stopReason: error`、空 content 的 assistant entry，再追加 `context_edit` 以从后续模型上下文隐藏它。普通 session handoff 若只检查 entry ID，就会把这类非业务恢复记录识别成来源变化，导致预览/确认失败。
-- 当前 branch hash 仅忽略位于快照之后且 `content.length === 0`、`stopReason === "error"` 的 assistant entry，以及对其 `replacement: null` 的 omission edit。不要忽略所有 context_edit：它可能替换真实用户/助手上下文。仅 null omission 可作为例外；非空 replacement、错误以外终态、快照前 target、非空或工具调用回复仍须使来源 fingerprint 变化。
-- 回归须覆盖可忽略的连接失败空回复、非空错误回复、工具调用、正常 stop/aborted、replacement edit，以及快照前目标；还须验证真实普通 fresh 能继续执行 setup/切换流程。
-- 根因修复与离线日志核验见[会话日志](session-log.md)；精确例外策略见[设计决策](decisions.md)。
+- 现象：长session的 `/pi-init fresh` 可能因一条助手toolCall没有toolResult而报 `TOOL_PAIRS_INCOMPLETE`。Pi遇到provider错误/中止时仍可持久化失败assistant消息中的工具提案，并以 `context_edit` 隐藏该回复；这不表示宿主调度或执行了提案。反过来，SDK对 `complete:false` 的嵌套回执也可能仅省略超长参数正文，不必然表示执行未结束。
+- 根因：原始消息/branch只记录模型提案、执行回执及恢复投影，不是同一语义的执行账本；直接要求每个toolCall一一对应toolResult，或只看context_edit/null edit，都会混淆SDK状态。Pi SDK 1.5.0 Agent loop对`error/aborted`在`executeToolCalls`前直接结束；普通交接需用同一生命周期判定准备/fresh/快照，不靠回忆某种固定日志形状。
+- 修复：`normalizeToolProposals`仅在assistant终态为`error/aborted`时把该消息的toolCall移出配对校验副本；若同ID有toolResult或真实已执行证据则报矛盾。其对应的null omission仅在同一分类确认后对快照校验豁免。正常`toolUse`、`length`产生的失败回执、普通完整结果缺失、重复ID、活动/不确定工具和未知副作用仍阻断；真实业务消息替换和branch变化仍使快照失效。工作流执行证据仍保持严格。
+- 回归/排查：必须用实际Pi SDK Agent loop和隔离工具副作用验证提案是否执行，而非只手写stopReason；覆盖error/aborted、toolUse、length及与真实结果相矛盾的日志。准备、reload、预览/确认和来源保存应在隔离会话中连续验证；真实session只读核对、禁止补造结果或重放。
+- 完整根因、hash核验、验证命令及未验证宿主边界见[会话记录](session-log.md#2026-11-03按sdk调度生命周期核对普通交接历史)；安全决定见[设计决策](decisions.md)。
 
 ### 2026-11-03：普通交接快照可能被计时遥测立即标为过期
 

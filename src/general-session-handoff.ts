@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "./session-handoff.ts";
+import { normalizeToolProposals } from "./handoff-execution-history.ts";
 
 export const GENERAL_HANDOFF_ENTRY = "pi-init-general-handoff";
 export const GENERAL_HANDOFF_INVALIDATED = "pi-init-general-handoff-invalidated";
@@ -69,18 +70,23 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
 // These records describe timing only; unknown custom entries still invalidate the snapshot.
 const HANDOFF_TIMING_ENTRIES = new Set(["pi-token-speed", "pi-init-session-work-time", "pi-init-run-timing"]);
 
-/** Normal completion, known timing and omissions of empty post-snapshot failures are non-business activity. */
+/** Normal completion, timing and host recovery of undispatched post-snapshot proposals are non-business activity. */
 export function generalHandoffBranchHash(branch: readonly SessionEntry[], toolCallId: string) {
   const snapshotIndex = branch.findLastIndex(entry => entry.type === "custom" && entry.customType === GENERAL_HANDOFF_ENTRY
     && record(entry.data) && record(entry.data.source) && entry.data.source.toolCallId === toolCallId);
-  const emptyFailures = new Set<string>();
+  const history = normalizeToolProposals(branch.flatMap(entry => entry.type === "message" ? [entry.message] : []));
+  const recoveryTargets = new Set<string>();
   return handoffHash(branch.filter((entry, index) => {
     if (entry.type === "custom" && (entry.customType === GENERAL_HANDOFF_ENTRY || HANDOFF_TIMING_ENTRIES.has(entry.customType))) return false;
-    // Only a null edit of an earlier empty error after this snapshot is safe. Replacements and older targets remain significant.
-    if (entry.type === "context_edit") return entry.replacement !== null || !emptyFailures.has(entry.targetId);
+    // Context edits never establish execution safety; only the shared SDK lifecycle classifier can do so.
+    if (entry.type === "context_edit") return entry.replacement !== null || !recoveryTargets.has(entry.targetId);
     if (entry.type !== "message") return true;
     const m = entry.message;
-    if (snapshotIndex >= 0 && index > snapshotIndex && m.role === "assistant" && m.stopReason === "error" && m.content.length === 0) emptyFailures.add(entry.id);
+    if (snapshotIndex >= 0 && index > snapshotIndex && m.role === "assistant" && history.ok
+      && history.value.undispatched.has(m) && m.content.every(block => block.type === "toolCall" || block.type === "thinking")) {
+      recoveryTargets.add(entry.id);
+      return false;
+    }
     if (m.role === "toolResult") return m.toolCallId !== toolCallId;
     if (m.role === "assistant") return m.content.some(block => block.type === "toolCall" && (block.id !== toolCallId || block.name !== GENERAL_HANDOFF_TOOL));
     return true;

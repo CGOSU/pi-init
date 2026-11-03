@@ -7,6 +7,8 @@ import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createSessionHandoff } from "../extensions/session-handoff.ts";
 import { GENERAL_TRANSFER_ENTRY } from "../extensions/general-session-transfer.ts";
 import { sdkReceipt } from "./support/nested-receipt.js";
+import { sdkAssistantTurn } from "./support/sdk-assistant-turn.js";
+import { SESSION_HANDOFF_ENTRY } from "../src/session-handoff.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 
 const body = () => ({ goal: "继续普通会话", constraints: ["不部署"], completed: ["已调查"], remaining: ["实现后续"], verification: [], unknowns: ["未验证费用"], nextStep: "等待用户继续", sources: [] });
@@ -96,6 +98,46 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
     await recovered.api.fresh(recovered.ctx);
     assert.ok(recovered.notices.some(n => n.level === "info"));
     assert.equal(reopened.getEntries().filter(e => e.type === "message").length, 1);
+  });
+});
+
+test("SDK recovery, parameter omissions and completed imports survive reload and preview in one handoff", async () => {
+  for (const status of ["completed", "cancelled"]) for (const stop of ["error", "aborted"]) await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const completed = { status, workflowId: "old-workflow", tasks: [] };
+    h.state.workflowState = completed;
+    h.manager.appendCustomEntry(SESSION_HANDOFF_ENTRY, { kind: "incoming", workflowId: "old-workflow" });
+    const addRecovery = async (manager, id) => {
+      const { messages } = await sdkAssistantTurn(stop, `${cwd}/never-executed`, id);
+      const failed = manager.appendMessage(messages.find(m => m.role === "assistant"));
+      manager.appendContextEdit(failed, null);
+    };
+    await addRecovery(h.manager, "before-snapshot");
+    h.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
+    h.manager.appendMessage({ role: "toolResult", toolCallId: "root", toolName: "codemode", content: [], isError: false, nestedCalls: sdkReceipt(), timestamp: Date.now() });
+    const snapshot = await h.save();
+    await addRecovery(h.manager, "after-snapshot");
+    h.manager.appendCustomEntry("pi-init-run-timing", { completedAt: Date.now() });
+    const loaded = fixture(cwd, SessionManager.open(h.manager.getSessionFile(), cwd));
+    loaded.state.workflowState = completed;
+    await loaded.emit("session_start");
+    loaded.ctx.ui.confirm = async () => {
+      await addRecovery(loaded.manager, "during-preview");
+      loaded.manager.appendCustomEntry("pi-token-speed", { elapsedMs: 1 });
+      return true;
+    };
+    await loaded.api.fresh(loaded.ctx);
+    assert.equal(loaded.calls, 1, JSON.stringify(loaded.notices));
+    assert.equal(loaded.target.notices.at(-1).level, "info");
+    const messages = loaded.target.manager.getBranch().filter(e => e.type === "message");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].message.role, "user");
+    assert.ok(messages[0].message.content.includes(JSON.stringify(snapshot)));
+    await loaded.target.api.fresh(loaded.target.ctx);
+    assert.equal(loaded.target.calls ?? 0, 0);
+    const source = await readFile(h.manager.getSessionFile(), "utf8");
+    assert.ok(source.includes("before-snapshot"));
+    assert.ok(source.includes("during-preview"));
   });
 });
 

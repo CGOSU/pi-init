@@ -1,5 +1,6 @@
 import type { ContextMessage } from "./role-context-protocol.ts";
-import { hasCompleteToolPairs, isRecord } from "./role-context-protocol.ts";
+import { isRecord } from "./role-context-protocol.ts";
+import { normalizeToolProposals, settleToolPairs } from "../src/handoff-execution-history.ts";
 
 export type ToolSettlement = { ok: true } | { ok: false; code: string; message: string };
 const fail = (code: string, root = "", child = ""): ToolSettlement => ({
@@ -44,10 +45,12 @@ export function nestedToolSettlement(value: unknown, root: string): ToolSettleme
 }
 
 /** Only the currently executing, model-issued session_handoff call may lack its own result. */
-export function generalToolSettlement(messages: readonly ContextMessage[], preparingId?: string): ToolSettlement {
+export function generalToolSettlement(messages: readonly ContextMessage[], preparingId?: string, executed?: ReadonlySet<string>): ToolSettlement {
+  const history = normalizeToolProposals(messages, executed);
+  if (!history.ok) return history;
   const filtered: ContextMessage[] = [];
   let preparingCalls = 0;
-  for (const message of messages) {
+  for (const message of history.value.messages) {
     if (message.role === "system") continue;
     if (preparingId && message.role === "assistant" && Array.isArray(message.content)) {
       const content = message.content.filter(part => {
@@ -60,7 +63,8 @@ export function generalToolSettlement(messages: readonly ContextMessage[], prepa
     } else filtered.push(message);
   }
   if (preparingId && preparingCalls !== 1) return fail("PREPARING_CALL_IDENTITY", preparingId);
-  if (!hasCompleteToolPairs(filtered)) return fail("TOOL_PAIRS_INCOMPLETE");
+  const pairs = settleToolPairs(filtered);
+  if (!pairs.ok) return pairs;
   for (const message of filtered) {
     if (message.role !== "toolResult" || !isRecord(message) || message.nestedCalls === undefined) continue;
     const result = nestedToolSettlement(message.nestedCalls, message.toolCallId as string);

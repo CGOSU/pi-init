@@ -81,13 +81,14 @@ test("omitting an empty failed assistant after preparation preserves the persist
   });
 });
 
-test("context edits outside empty post-snapshot failure omissions still invalidate", async () => {
+test("context edits outside undispatched post-snapshot failure omissions still invalidate", async () => {
   for (const scenario of [
     { before: true, content: [], stopReason: "error", replacement: null },
     { content: [{ type: "text", text: "partial answer" }], stopReason: "error", replacement: null },
-    { content: [{ type: "toolCall", id: "business", name: "bash", arguments: {} }], stopReason: "error", replacement: null },
+    { content: [{ type: "toolCall", id: "business", name: "bash", arguments: {} }], stopReason: "toolUse", replacement: null },
+    { content: [{ type: "text", text: "partial" }, { type: "toolCall", id: "business", name: "bash", arguments: {} }], stopReason: "error", replacement: null },
     { content: [], stopReason: "stop", replacement: null },
-    { content: [], stopReason: "aborted", replacement: null },
+    { content: [{ type: "text", text: "partial" }], stopReason: "aborted", replacement: null },
     { content: [], stopReason: "error", replacement: { content: "replacement answer" } },
     { role: "user", content: "changed requirement", replacement: null },
     { role: "toolResult", toolCallId: "business", toolName: "bash", content: [], replacement: null },

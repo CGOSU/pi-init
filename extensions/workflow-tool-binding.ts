@@ -177,7 +177,7 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   function generalToolsSettled(ctx: ExtensionContext, preparingId?: string): ToolSettlement {
     if ([...activeTools].some(id => id !== preparingId) || uncertainTools) return { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "仍有活动工具或本轮工具结果未确认；请核对真实结果，不要重试未知操作。" };
     const messages = ctx.sessionManager.getBranch().flatMap(entry => entry.type === "message" ? [entry.message] : []);
-    const persisted = generalToolSettlement(messages, preparingId);
+    const persisted = generalToolSettlement(messages, preparingId, executedRoots);
     if (!persisted.ok) return persisted;
     const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
     if ([...executedRoots].some(id => id !== preparingId && !results.has(id))) return { ok: false, code: "TOOL_RESULT_MISSING", message: "本轮已执行工具缺少持久化结果。" };

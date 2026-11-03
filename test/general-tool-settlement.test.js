@@ -52,10 +52,10 @@ test("only the identified preparation call can lack a result; all outer pairs re
   const messages = pair(sdkReceipt());
   messages.push({ role: "assistant", content: [{ type: "toolCall", id: "prepare", name: "session_handoff", arguments: {} }] });
   assert.equal(generalToolSettlement(messages, "prepare").ok, true);
-  assert.equal(generalToolSettlement(messages).code, "TOOL_PAIRS_INCOMPLETE");
-  assert.equal(generalToolSettlement(messages.slice(0, 1).concat(messages[2]), "prepare").code, "TOOL_PAIRS_INCOMPLETE");
-  assert.equal(generalToolSettlement([...messages, messages[1]], "prepare").code, "TOOL_PAIRS_INCOMPLETE");
+  assert.equal(generalToolSettlement(messages).code, "TOOL_RESULT_MISSING");
+  assert.equal(generalToolSettlement(messages.slice(0, 1).concat(messages[2]), "prepare").code, "TOOL_RESULT_MISSING");
+  assert.equal(generalToolSettlement([...messages, messages[1]], "prepare").code, "TOOL_RESULT_DUPLICATE");
   assert.equal(generalToolSettlement(messages, "root").code, "PREPARING_CALL_IDENTITY");
   messages[2].content.push({ type: "toolCall", id: "other", name: "bash", arguments: {} });
-  assert.equal(generalToolSettlement(messages, "prepare").code, "TOOL_PAIRS_INCOMPLETE");
+  assert.equal(generalToolSettlement(messages, "prepare").code, "TOOL_RESULT_MISSING");
 });

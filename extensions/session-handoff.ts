@@ -135,7 +135,8 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
   });
   async function fresh(ctx: ExtensionCommandContext) {
     const unfinished = state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status);
-    const workflowImport = records(ctx).some(e => e.type === "custom" && e.customType === SESSION_HANDOFF_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
+    // A historical import does not own future ordinary handoffs after that workflow has ended.
+    const workflowImport = !state.workflowState && records(ctx).some(e => e.type === "custom" && e.customType === SESSION_HANDOFF_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
     if (generalTransfer.blocked(ctx) || (!unfinished && !workflowImport)) { await generalTransfer.fresh(ctx); return; }
     await workflowFresh(ctx);
   }
