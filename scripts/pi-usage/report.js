@@ -140,11 +140,10 @@ function formatUsageTable(rows, color) {
         formatNumber(row.tokens),
         formatPercentage(cache.ratio),
         formatCost(row.cost),
-        formatCostSource(row.costSource),
         formatTps(row.avgTps),
       ];
     }),
-    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cache %", "Cost", "Cost source", "Avg TPS"],
+    ["Model", "Calls", "Input", "Output", "Cache R", "Cache W", "Total", "Cache %", "Cost", "Avg TPS"],
     [],
     { color, highlightLast: true },
   );

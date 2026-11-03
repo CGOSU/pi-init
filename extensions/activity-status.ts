@@ -218,10 +218,13 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
   if (workflow && primary !== workflow) segments.push(workflow);
   if (agentOperation && primary !== agentOperation && !compaction && !workflow) segments.push(agentOperation);
   if (urgentCurrentCache && primary !== urgentCurrentCache) segments.push(urgentCurrentCache);
+  const reminderCount = state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0
+    ? `${state.cacheReminderCount} 次`
+    : undefined;
   if (typeof state.cacheMissTotalUsd === "number" && Number.isFinite(state.cacheMissTotalUsd) && state.cacheMissTotalUsd > 0) {
-    segments.push({ text: `Miss ≈$${state.cacheMissTotalUsd.toFixed(2)}`, tone: "warning" });
-  } else if (state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0) {
-    segments.push({ text: `Miss ${state.cacheReminderCount} 次`, tone: "warning" });
+    segments.push({ text: `Miss ${reminderCount ? `${reminderCount} ` : ""}≈$${state.cacheMissTotalUsd.toFixed(2)}`, tone: "warning" });
+  } else if (reminderCount) {
+    segments.push({ text: `Miss ${reminderCount}`, tone: "warning" });
   }
   segments.push(...roleSegments(state.role));
 

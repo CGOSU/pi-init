@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：精简 pi-usage 表格并显示 Miss 提醒次数
+
+- 完成：pi-usage 终端模型表移除 `Cost source` 列，节省横向空间；`costSource` 数据和费用来源计算保持不变，账单 SVG 的来源/核对说明保留。活动状态栏在累计金额可用时同时显示成功提醒次数和金额，例如 `Miss 1 次 ≈$1.85`；只有次数或金额时仍只显示已知值。次数仍表示成功发出的提醒，不表示缓存失配样本数。
+- 验证：`node --test test/activity-status.test.js test/cache-miss-reminder.test.js test/pi-usage-report.test.js test/pi-usage-cost-source.test.js` 26/26 通过；`git diff --check` 无诊断。回归先复现了“有金额时次数消失”，修复后通过。
+- 未验证：未执行全量测试、类型检查或真实 Pi/Provider UI 验证；终端表格列已通过输出样例确认。
+
 ### 2026-11-03：落实扩展、用量查询及测试辅助结构拆分
 
 - 完成：扩展入口中的命令/工具适配提取至 `extension-command.ts`、`project-tool.ts`、`role-tool.ts`、`workflow-revision-input.ts` 和 `workflow-tool.ts`，生命周期和唯一共享运行时状态仍由入口持有；`pi-usage` 的查询 SQL、映射及速度聚合移至 `scripts/pi-usage/query.js`。测试辅助拆至 `test/support/extension-harness.js`、`temp-directory.js` 和 `workflow-fixtures.js`，迁移静态/动态调用方及子进程诊断入口后删除 `test/helpers.js`；用量测试拆分到 CLI、报告主题文件。保留既有行为契约和断言，无新增低收益测试、依赖或生产 API 改动。
