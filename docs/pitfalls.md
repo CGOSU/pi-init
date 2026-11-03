@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-11-03：普通incoming历史不能永久抢占fresh的新转出
+
+- 现象：A→B成功后，B已有incoming transfer记录。B执行`session_handoff`准备去C再运行`/pi-init fresh`，若路由一看见incoming就先activate并return，只会重复“历史交接已核对”提示，不会尝试创建C。
+- 根因：incoming证明当前session是一次既有交接的目标，不代表它不能作为下一次交接的来源；incoming恢复和新的outgoing是连续但不同的操作。新准备过期时也不能回退成对旧incoming的成功提示。
+- 修复：先查冻结/结果未知门；再按incoming之后是否有本branch新的prepare/tool调用区分幂等重核与转出。新转出之前仍验证incoming完整性/source lock及新快照；失效/损坏准备直接失败。source已冻结永远优先，不因旧incoming存在解锁或再次调用newSession。提示明确区分新session已创建与仅重核当前session。
+- 回归：用真实`SessionManager`隔离fixture验证A→B→C、reload后B→C、无新准备只核对、失败/过期/错branch准备、损坏incoming、outgoing未知后的重复fresh及取消恢复；原pi-mcp-adapter真实日志只读确认第一次A→B创建和后续准备被invalidated，不能把fixture的C当真实宿主创建。
+- 完整事实、验证及限制见[会话记录](session-log.md#2026-11-03修复已接收普通交接session无法连续fresh)；安全决策见[设计决策](decisions.md)。
+
 ### 2026-11-03：SDK complete:false 不一定代表嵌套工具未结束
 
 - 现象：Pi SDK 1.5.0 的嵌套回执可在子调用实际成功结束时报告 `complete:false`，普通 `/pi-init fresh` 若直接照搬此布尔值会返回 `TOOLS_NOT_SETTLED`。

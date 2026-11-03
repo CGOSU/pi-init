@@ -6,6 +6,7 @@ import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.t
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createSessionHandoff } from "../extensions/session-handoff.ts";
 import { GENERAL_TRANSFER_ENTRY } from "../extensions/general-session-transfer.ts";
+import { GENERAL_HANDOFF_ENTRY } from "../src/general-session-handoff.ts";
 import { sdkReceipt } from "./support/nested-receipt.js";
 import { sdkAssistantTurn } from "./support/sdk-assistant-turn.js";
 import { SESSION_HANDOFF_ENTRY } from "../src/session-handoff.ts";
@@ -14,7 +15,7 @@ import { withTempDirectory } from "./support/temp-directory.js";
 const body = () => ({ goal: "继续普通会话", constraints: ["不部署"], completed: ["已调查"], remaining: ["实现后续"], verification: [], unknowns: ["未验证费用"], nextStep: "等待用户继续", sources: [] });
 function fixture(cwd, manager = SessionManager.create(cwd, cwd)) {
   const handlers = new Map(), tools = [], notices = [], confirmations = [];
-  let settled = true, disposed = false;
+  let settled = true, disposed = false, preparation = 0;
   const state = createExtensionRuntimeState();
   state.activeRole = { role: "developer-test", provider: "test", model: "test", thinkingLevel: "medium" };
   const pi = {
@@ -32,14 +33,15 @@ function fixture(cwd, manager = SessionManager.create(cwd, cwd)) {
   };
   const binding = createWorkflowToolBinding(pi, state);
   const api = createSessionHandoff(pi, state, { generalToolsSettled: (current, preparingId) => settled ? binding.generalToolsSettled(current, preparingId) : { ok: false, code: "TOOLS_NOT_SETTLED", message: "test runtime uncertainty" }, toolsSettled: current => settled && binding.toolsSettled(current), persist() { throw new Error("ordinary handoff must not create workflow"); }, restore() {}, schedule() { throw new Error("must not schedule"); } });
-  const save = async () => {
+  const save = async (overrides = {}) => {
     manager.appendMessage({ role: "user", content: "准备交接", timestamp: Date.now() });
-    const input = body();
+    const input = { ...body(), ...overrides };
+    const preparingId = `prepare-${++preparation}-${manager.getLeafId()}`;
     input.sources = [{ kind: "session-entry", location: manager.getLeafId(), description: "原始需求" }];
-    manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "prepare", name: "session_handoff", arguments: input }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
-    const result = await tools.find(t => t.name === "session_handoff").execute("prepare", input, undefined, undefined, ctx);
+    manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: preparingId, name: "session_handoff", arguments: input }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
+    const result = await tools.find(t => t.name === "session_handoff").execute(preparingId, input, undefined, undefined, ctx);
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    manager.appendMessage({ role: "toolResult", toolCallId: "prepare", toolName: "session_handoff", content: result.content, isError: false, timestamp: Date.now() });
+    manager.appendMessage({ role: "toolResult", toolCallId: preparingId, toolName: "session_handoff", content: result.content, isError: false, timestamp: Date.now() });
     return result.details.value;
   };
   const h = { api, state, manager, ctx, notices, confirmations, tools, save, setSettled(v) { settled = v; }, dispose() { disposed = true; state.runtimeDisposed = true; } };
@@ -84,6 +86,7 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
     const target = h.target;
     assert.equal(target.state.workflowState, undefined);
     assert.equal(target.notices.at(-1).level, "info");
+    assert.ok(target.notices.at(-1).message.includes(target.manager.getSessionId()));
     const messages = target.manager.getBranch().filter(e => e.type === "message");
     assert.equal(messages.length, 1);
     assert.equal(messages[0].message.role, "user");
@@ -97,7 +100,137 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
     recovered.ctx.newSession = () => { throw new Error("must not create a second target"); };
     await recovered.api.fresh(recovered.ctx);
     assert.ok(recovered.notices.some(n => n.level === "info"));
+    assert.ok(recovered.notices.at(-1).message.includes("本次未新建会话"));
     assert.equal(reopened.getEntries().filter(e => e.type === "message").length, 1);
+  });
+});
+
+test("received sessions can prepare another handoff and create a distinct successor, including after reload", async () => {
+  for (const reload of [false, true]) await withTempDirectory(async cwd => {
+    const a = fixture(cwd);
+    await a.save({ goal: "background selected for B" });
+    await a.api.fresh(a.ctx);
+    const b = reload ? fixture(cwd, SessionManager.open(a.target.manager.getSessionFile(), cwd)) : a.target;
+    await b.save({ goal: "new background selected for C" });
+    await b.api.fresh(b.ctx);
+    assert.equal(b.calls, 1, JSON.stringify(b.notices));
+    const c = b.target;
+    assert.equal(new Set([a, b, c].map(h => h.manager.getSessionId())).size, 3);
+    const records = h => h.manager.getEntries().filter(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY).map(e => e.data);
+    const outgoing = records(b).find(e => e.kind === "outgoing");
+    const incoming = records(c).find(e => e.kind === "incoming");
+    assert.equal(incoming.id, outgoing.id);
+    assert.equal(incoming.hash, outgoing.hash);
+    assert.equal(incoming.snapshot.source.sessionId, b.manager.getSessionId());
+    assert.equal(incoming.targetSessionId, c.manager.getSessionId());
+    const messages = c.manager.getBranch().filter(e => e.type === "message");
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].message.role, "user");
+    assert.ok(messages[0].message.content.includes("new background selected for C"));
+    assert.ok(!messages[0].message.content.includes("background selected for B"));
+  });
+});
+
+test("new stale, corrupt or off-branch preparations cannot fall back to old import success", async () => {
+  for (const change of [
+    b => b.emit("input", { text: "new goal" }),
+    b => b.manager.appendCustomEntry(GENERAL_HANDOFF_ENTRY, {}),
+    (b, oldLeaf) => b.manager.branch(oldLeaf),
+  ]) await withTempDirectory(async cwd => {
+    const a = fixture(cwd); await a.save(); await a.api.fresh(a.ctx);
+    const b = a.target;
+    const oldLeaf = b.manager.getLeafId();
+    await b.save({ goal: "new selection" });
+    await change(b, oldLeaf);
+    const before = b.notices.length;
+    await b.api.fresh(b.ctx);
+    assert.equal(b.calls ?? 0, 0);
+    assert.ok(b.notices.length > before);
+    assert.equal(b.notices.at(-1).level, "warning");
+    assert.equal(b.manager.getEntries().some(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY && e.data.kind === "outgoing"), false);
+  });
+});
+
+test("a failed preparation attempt reports the missing current snapshot, not old import success", async () => {
+  for (const previousPreparation of [false, true]) await withTempDirectory(async cwd => {
+    const a = fixture(cwd); await a.save(); await a.api.fresh(a.ctx);
+    const b = a.target;
+    if (previousPreparation) await b.save();
+    const input = { ...body(), goal: "" };
+    b.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "failed-preparation", name: "session_handoff", arguments: input }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
+    const result = await b.tools.find(t => t.name === "session_handoff").execute("failed-preparation", input, undefined, undefined, b.ctx);
+    assert.equal(result.details.ok, false);
+    b.manager.appendMessage({ role: "toolResult", toolCallId: "failed-preparation", toolName: "session_handoff", content: result.content, isError: false, timestamp: Date.now() });
+    const before = b.notices.length;
+    await b.api.fresh(b.ctx);
+    assert.equal(b.calls ?? 0, 0);
+    assert.ok(b.notices.length > before);
+    assert.equal(b.notices.at(-1).level, "warning");
+  });
+});
+
+test("new preparation never bypasses a damaged historical import", async () => {
+  await withTempDirectory(async cwd => {
+    const a = fixture(cwd); await a.save(); await a.api.fresh(a.ctx);
+    const b = a.target;
+    b.manager.getBranch().find(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY).data.snapshot.context.goal = "tampered";
+    await b.save();
+    await b.api.fresh(b.ctx);
+    assert.equal(b.calls ?? 0, 0);
+    assert.equal(b.notices.at(-1).level, "warning");
+  });
+});
+
+test("a previous incoming never unlocks a source with an uncertain outgoing, even after reload and branch change", async () => {
+  await withTempDirectory(async cwd => {
+    const a = fixture(cwd); await a.save(); await a.api.fresh(a.ctx);
+    const b = a.target; await b.save();
+    const beforeOutgoing = b.manager.getLeafId();
+    let attempts = 0;
+    b.ctx.newSession = async () => { attempts++; return { cancelled: false }; };
+    await b.api.fresh(b.ctx);
+    await b.api.fresh(b.ctx);
+    assert.equal(attempts, 1);
+    assert.equal(b.notices.at(-1).level, "warning");
+    const reopened = SessionManager.open(b.manager.getSessionFile(), cwd);
+    reopened.branch(beforeOutgoing);
+    const recovered = fixture(cwd, reopened);
+    recovered.ctx.newSession = async () => { attempts++; throw new Error("must not create again"); };
+    await recovered.api.fresh(recovered.ctx);
+    assert.equal(attempts, 1);
+    assert.equal(recovered.notices.at(-1).level, "warning");
+    assert.ok((await recovered.emit("tool_call")).some(result => result?.block));
+    assert.ok((await recovered.emit("input")).some(result => result?.action === "handled"));
+  });
+});
+
+test("successive handoff cancellation needs a fresh preparation; partial targets recover without a duplicate", async () => {
+  for (const partial of [false, true]) await withTempDirectory(async cwd => {
+    const a = fixture(cwd); await a.save(); await a.api.fresh(a.ctx);
+    const b = a.target; await b.save();
+    if (partial) b.ctx.newSession = options => b.replace(options, { failAfterSetup: true });
+    else b.ctx.newSession = async () => ({ cancelled: true });
+    await b.api.fresh(b.ctx);
+    if (partial) {
+      const c = b.target;
+      c.ctx.newSession = async () => { throw new Error("must not duplicate partial target"); };
+      await c.api.fresh(c.ctx);
+      assert.equal(c.notices.at(-1).level, "info");
+      assert.equal(b.calls, 1);
+      const recoveredB = fixture(cwd, SessionManager.open(b.manager.getSessionFile(), cwd));
+      await recoveredB.api.fresh(recoveredB.ctx);
+      assert.equal(recoveredB.calls ?? 0, 0);
+      assert.equal(recoveredB.notices.at(-1).level, "warning");
+    } else {
+      b.ctx.newSession = options => b.replace(options);
+      await b.api.fresh(b.ctx);
+      assert.equal(b.calls ?? 0, 0);
+      assert.equal(b.notices.at(-1).level, "warning");
+      await b.save({ goal: "selected after cancellation" });
+      await b.api.fresh(b.ctx);
+      assert.equal(b.calls, 1);
+      assert.equal(b.target.notices.at(-1).level, "info");
+    }
   });
 });
 

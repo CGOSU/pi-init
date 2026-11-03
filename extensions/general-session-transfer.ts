@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeRoleMatches, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
-import { readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
+import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_TOOL, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
 import { isRecord } from "./role-context-protocol.ts";
 import { readHandoffArchive, replaceHandoffSession } from "./session-replacement.ts";
 
@@ -104,7 +104,7 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       return checked;
     } catch (error) { return fail("PERSISTENCE", "来源或目标文件核对失败：" + String(error)); }
   }
-  async function activate(ctx: ExtensionContext) {
+  async function activate(ctx: ExtensionContext, created = false) {
     const entry = incomingEntry(ctx);
     const readiness = checkReady(ctx);
     const result: HandoffResult<GeneralHandoffSnapshot> = !readiness.ok
@@ -115,24 +115,45 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       return;
     }
     // No scheduling, sendUserMessage, role restoration or old execution identity.
-    ctx.ui.notify("已核对历史交接背景；请在此新会话输入继续或新需求。未自动执行任何任务。", "info");
+    ctx.ui.notify(created
+      ? `已建立并核对新会话 ${ctx.sessionManager.getSessionId()}；请在此输入继续或新需求。未自动执行任何任务。`
+      : "已核对当前会话接收的历史交接背景；本次未新建会话。再次交接请先用 session_handoff 准备新的交接背景。未自动执行任何任务。", "info");
   }
   pi.on("message_end", async (event, ctx) => {
-    if (event.message.role !== "custom" || event.message.customType !== GENERAL_TRANSFER_ACTIVATE || !isRecord(event.message.details)) return;
+    if (blocked(ctx) || event.message.role !== "custom" || event.message.customType !== GENERAL_TRANSFER_ACTIVATE || !isRecord(event.message.details)) return;
     const entry = incomingEntry(ctx);
     if (entry?.type !== "custom" || !isRecord(entry.data) || event.message.details.id !== entry.data.id || event.message.details.hash !== entry.data.hash) return;
-    await activate(ctx);
+    await activate(ctx, true);
   });
   async function fresh(ctx: ExtensionCommandContext) {
-    if (incomingEntry(ctx)) { await activate(ctx); return; }
     if (switching || blocked(ctx)) { ctx.ui.notify("来源已冻结或交接结果未知；请检查目标，不重试创建。", "warning"); return; }
+    const incoming = incomingEntry(ctx);
+    const history = entries(ctx);
+    const preparation = history.findLast(e => e.type === "custom" && e.customType === GENERAL_HANDOFF_ENTRY);
+    const attempt = history.findLast(e => e.type === "message" && (e.message.role === "toolResult" && e.message.toolName === GENERAL_HANDOFF_TOOL
+      || e.message.role === "assistant" && Array.isArray(e.message.content) && e.message.content.some(part => part?.type === "toolCall" && part.name === GENERAL_HANDOFF_TOOL)));
+    const attemptMessage = attempt?.type === "message" ? attempt.message : undefined;
+    const attemptCall = attemptMessage?.role === "assistant" && Array.isArray(attemptMessage.content)
+      ? attemptMessage.content.findLast(part => part?.type === "toolCall" && part.name === GENERAL_HANDOFF_TOOL) : undefined;
+    const attemptId = attemptMessage?.role === "toolResult" ? attemptMessage.toolCallId : attemptCall?.type === "toolCall" ? attemptCall.id : undefined;
+    const importIndex = incoming ? history.findIndex(e => e.id === incoming.id) : -1;
+    const newAttempt = !!attempt && history.indexOf(attempt) > importIndex;
+    const newPreparation = !!preparation && history.indexOf(preparation) > importIndex;
+    if (incoming && !newPreparation && !newAttempt) { await activate(ctx); return; }
     const readiness = checkReady(ctx);
     if (!readiness.ok) { ctx.ui.notify(`[${readiness.code}] ${readiness.message} 保持原会话。`, "warning"); return; }
     if (typeof ctx.newSession !== "function" || !ctx.hasUI) {
       ctx.ui.notify("[HOST_CONFIRMATION] 宿主缺少新会话接口或交互确认UI，保持原会话。", "warning"); return;
     }
+    if (incoming) {
+      const imported = verify(incoming.type === "custom" ? incoming.data : undefined, ctx);
+      if (!imported.ok) { ctx.ui.notify(`新交接未开始：历史导入尚未核对通过。[${imported.code}] ${imported.message}`, "warning"); return; }
+      const branch = ctx.sessionManager.getBranch();
+      if (preparation && !branch.some(e => e.id === preparation.id) || newAttempt && !branch.some(e => e.id === attempt?.id)) { ctx.ui.notify("新交接准备不属于当前branch，请重新准备；未创建会话。", "warning"); return; }
+    }
     const prepared = deps.read(ctx);
     if (!prepared.ok) { ctx.ui.notify(prepared.message + "。请让当前执行角色用 session_handoff 准备/更新目标、约束、进度、来源和下一步，再执行 /pi-init fresh。", "warning"); return; }
+    if (newAttempt && prepared.value.source.toolCallId !== attemptId) { ctx.ui.notify("最近一次交接准备未成功保存匹配的快照，请重新准备；未创建会话。", "warning"); return; }
     const snapshot = prepared.value;
     let sourceLeaf = ctx.sessionManager.getLeafId();
     const sourceFile = snapshot.source.sessionFile;

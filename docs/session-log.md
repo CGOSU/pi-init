@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：修复已接收普通交接session无法连续fresh
+
+- 复核：pi-mcp-adapter日志确认来源session `01a19f8f-7a8d-72d2-a152-83da3b8cc2cc` 在 `2026-11-03T08:01:14Z` 写入 `outgoing/prepared`，transfer ID `82a03b51-b7a6-46d1-bb62-f257b982cf27`；不同session `01a1a06d-359a-72d2-a152-83ef9b3bd93b` 的session文件以来源为parent并持有同ID的incoming记录。故首次A→B已经创建并持久化目标。目标B在 `11:23:04Z` 又保存普通handoff快照，但 `11:23:37Z` 的新输入和之后的工具活动将它失效，分支没有后续outgoing记录。
+- 根因：B再次执行 `/pi-init fresh` 时，`generalTransfer.fresh()`原先在入口无条件优先核对旧incoming并return，尚未判断是否有B新准备的交接背景。因此提示“已核对历史交接背景”对应目标session的幂等恢复，而不是又创建一个下一目标；同时新准备失效也可能退回旧成功提示。
+- 修复：无较新准备/调用的incoming目标只做幂等核对，提示本次没有创建session；有新准备的incoming目标先核验旧导入和source lock，再把当前准备视为新的转出；新准备缺失/过期/损坏不回退旧成功提示。源冻结/未知结果始终优先，target确认提示现在包含创建session ID，重核提示明确表示没有新建。
+- 验证：`node --experimental-strip-types --test test/general-session-transfer.test.js`，16/16通过；覆盖A→B→C、B reload后再转出、仅重核不创建、prepare失败/过期/off-branch、损坏导入、outgoing未知后分支/reload、防重复目标及取消后重新准备。`npm run typecheck`通过，最终`git diff --check`无诊断。测试使用Pi SDK `SessionManager`隔离fixture和host替身，未触碰用户真实session。
+- 边界：从source B到C的新target没有在pi-mcp-adapter真实UI执行；已有A→B日志证明该一次真实创建成功，不代表后续B→C运行环境验证成功。未改写日志、未部署/reload安装副本、未发布或push。决策与复发检查见[设计决策](decisions.md)和[踩坑记录](pitfalls.md)。
+
 ### 2026-11-03：按SDK调度生命周期核对普通交接历史
 
 - 根因：pi-mcp-adapter最新session的分支内930个Assistant tool proposal对应929个toolResult；唯一缺回执的是 `2026-11-03T06:04:12Z` 的codemode调用，所在assistant以 `stopReason: error`、`errorMessage: terminated`结束，并被Pi以null `context_edit`隐藏。Pi SDK 1.5.0 `agent-loop`在error/aborted终态直接结束回合，代码路径先于 `executeToolCalls`，所以这次提案从未交给宿主执行。把原始toolCall一律当成已执行任务要求结果，是 `TOOL_PAIRS_INCOMPLETE` 的实际根因；这与先前SDK参数回执`complete:false`是不同问题。
