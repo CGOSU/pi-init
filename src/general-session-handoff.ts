@@ -66,10 +66,13 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
   return { ok: true, value: context };
 }
 
-/** Only the preparing call's own pair and normal assistant completion may follow a snapshot. */
+// These records describe timing only; unknown custom entries still invalidate the snapshot.
+const HANDOFF_TIMING_ENTRIES = new Set(["pi-token-speed", "pi-init-session-work-time", "pi-init-run-timing"]);
+
+/** The preparing call's pair, normal completion and known timing records may follow a snapshot. */
 export function generalHandoffBranchHash(branch: readonly SessionEntry[], toolCallId: string) {
   return handoffHash(branch.filter(entry => {
-    if (entry.type === "custom" && entry.customType === GENERAL_HANDOFF_ENTRY) return false;
+    if (entry.type === "custom" && (entry.customType === GENERAL_HANDOFF_ENTRY || HANDOFF_TIMING_ENTRIES.has(entry.customType))) return false;
     if (entry.type !== "message") return true;
     const m = entry.message;
     if (m.role === "toolResult") return m.toolCallId !== toolCallId;

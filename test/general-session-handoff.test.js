@@ -54,7 +54,10 @@ test("preparation persists source-bound historical background without migration 
     assert.equal(h.state.workflowState, undefined);
     await h.emit("tool_execution_end", { toolCallId: "prepare" });
     h.manager.appendMessage({ role: "toolResult", toolCallId: "prepare", toolName: "session_handoff", content: [{ type: "text", text: "saved" }], isError: false, timestamp: Date.now() });
+    h.manager.appendCustomEntry("pi-token-speed", { version: 1, outputTokens: 42, elapsedMs: 1000 });
     h.manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "已准备" }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "stop", timestamp: Date.now() });
+    h.manager.appendCustomEntry("pi-init-session-work-time", { totalMilliseconds: 1000 });
+    h.manager.appendCustomEntry("pi-init-run-timing", { source: "interactive", completedAt: Date.now() });
     await h.emit("agent_end");
     assert.equal(h.api.read(h.ctx).ok, true);
     const reopened = SessionManager.open(h.manager.getSessionFile(), cwd);
@@ -69,6 +72,8 @@ test("business activity, input and branch changes invalidate; save's own result 
     h => h.emit("tool_execution_start", { toolCallId: "next", toolName: "bash" }),
     h => h.emit("input", { text: "新增需求" }),
     h => h.emit("session_tree", {}),
+    h => h.manager.appendCustomEntry("pi-init-role-recovery", { status: "pending", reason: "reload" }),
+    h => h.manager.appendCustomEntry("unknown-extension-state", { changed: true }),
     h => h.manager.appendMessage({ role: "user", content: "new goal", timestamp: Date.now() }),
     h => h.manager.appendMessage({ role: "toolResult", toolCallId: "business", toolName: "bash", content: [], isError: true, timestamp: Date.now() }),
   ]) await withTempDirectory(async cwd => {

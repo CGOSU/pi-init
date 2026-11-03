@@ -67,6 +67,9 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
   await withTempDirectory(async cwd => {
     const h = fixture(cwd);
     const snapshot = await h.save();
+    h.manager.appendCustomEntry("pi-token-speed", { version: 1, outputTokens: 42, elapsedMs: 1000 });
+    h.manager.appendCustomEntry("pi-init-session-work-time", { totalMilliseconds: 1000 });
+    h.manager.appendCustomEntry("pi-init-run-timing", { source: "interactive", completedAt: Date.now() });
     const oldFile = h.manager.getSessionFile();
     await h.api.fresh(h.ctx);
     assert.equal(h.calls, 1);

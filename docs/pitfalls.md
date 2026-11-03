@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-11-03：普通交接快照可能被计时遥测立即标为过期
+
+- `readGeneralHandoff()` 的 branch hash 用于发现快照准备后的新业务活动；Pi 每轮完成后也可能追加 `pi-token-speed`，pi-init 会追加 `pi-init-session-work-time` 与 `pi-init-run-timing`。若这些 custom entries 被一概当作 branch 变化，刚确认保存的快照也会变为 `STALE`，`/pi-init fresh` 无法继续。
+- 当前修复在 `generalHandoffBranchHash()` 中仅排除以上三个已知遥测类型；不要改成忽略所有 custom entries。未知记录、职责恢复记录、输入、业务工具和 branch 变化都应继续使快照失效。
+- 回归场景：成功保存快照后追加三种遥测并重开 branch 应仍有效；追加职责恢复或未知 custom entry仍应返回 `STALE`。完整 fresh 替换也需覆盖统计记录已追加的情况。
+- 实现和验证记录见[会话日志](session-log.md)；allowlist 设计见[决策记录](decisions.md)。
+
 ### 2026-11-03：Pi system 更新消息会误挡普通 fresh 的工具收敛检查
 
 - 现象：普通 `/pi-init fresh` 返回 `TOOLS_NOT_SETTLED`，尽管可见工具调用均有结果。

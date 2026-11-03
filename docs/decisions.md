@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-11-03：普通交接 branch hash 只排除明确已知的遥测条目
+
+- 选择：快照指纹忽略 `pi-token-speed`、`pi-init-session-work-time`、`pi-init-run-timing` 三类非业务计时/用量记录；不忽略所有 custom entries。
+- 原因：这些遥测会在正常完成后写入并使刚保存的 `session_handoff` 立即 stale；开放式忽略扩展条目则会削弱来源变化检测。新增遥测类型时先判断其是否影响业务现场，再显式更新 allowlist 和回归测试。
+- 关联：[踩坑记录](pitfalls.md)、[会话验证](session-log.md)。
+
 ### 2026-11-02：费用来源与 Pi 1.5.0 更新提示保持可追溯且保守
 
 - 决定：开发/测试 Pi SDK 基线锁定 1.5.0，但保留既有 `^1.3.0` peer 下限；仅当 `usage.cost.totalFromProvider === true` 且总额有效时标注 Provider 上报，缺失来源保守算估算，聚合仅在全部纳入金额均来自 Provider 时标为 Provider，否则标为混合或估算。扩展使用根目录版本化 `CHANGELOG.md` 和 Pi 默认路径，不改变原费用、缓存提醒口径。

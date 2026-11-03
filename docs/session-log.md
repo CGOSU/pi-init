@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：修复 fresh 交接快照被运行统计记录误判为过期
+
+- 现象与复核：context-mode session 的 `session_handoff` 成功后，Pi 追加 `pi-token-speed`，以及插件写入 `pi-init-session-work-time`、`pi-init-run-timing` 后，快照读取由 `OK` 变为 `STALE`；随后职责恢复记录也处于失效后的 branch。代码只排除准备快照自身条目和助手工具回执/完成消息，误把运行统计 custom entries 当作业务现场变化。
+- 修复：branch hash 仅忽略上述三种明确的计时/用量遥测记录；新输入、业务工具活动、branch 变化、职责恢复和未知 custom entries 仍使快照失效。Pi SDK `system` 更新处理未改变。
+- 验证：先增加回归并确认针对性测试失败，再执行 `node --experimental-strip-types --test test/general-session-handoff.test.js test/general-session-transfer.test.js test/session-handoff.test.js`，30/30 通过；`git diff --check` 通过。真实 Pi 宿主的确认/会话替换未重新执行。
+- 限制：改动仍需在安装运行副本更新/reload 后生效；既有快照在来源 branch 已有后续活动时不会被追认有效，需在更新后的运行副本重新准备快照。根因与 allowlist 约束见[踩坑记录](pitfalls.md)和[设计决策](decisions.md)。
+
 ### 2026-11-03：修复普通 fresh 将 SDK system 消息误判为工具未收敛
 
 - 现象与复核：用户报告 `context-mode` 项目的普通 `/pi-init fresh` 被 `TOOLS_NOT_SETTLED` 拒绝，后来手动新建 session 并读取旧 session 背景才继续。只读核对指定源 session：持久化分支含 414 个工具调用和 414 个结果、39 个完整嵌套回执；源码按原 branch 判断未收敛，只排除 Pi 添加的9条 `system` 消息后通过。源 JSONL SHA-256 前后相同；未重复执行 fresh、未迁移或改写原会话。
