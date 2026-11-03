@@ -123,6 +123,7 @@
 
 ## 最近一次更新
 
+- 2026-11-03：普通 `session_handoff` 快照还会被 Pi 对空白连接错误回复追加的 `context_edit` 隐藏记录误判为过期；现在仅忽略快照之后空内容、`stopReason: error` 的助手回复及其 null omission。其他上下文编辑仍失效。修复后32项交接回归通过，旧 session 离线节点校验恢复 `OK`；真实 Pi 会话替换未执行。详见[会话记录](session-log.md)、[踩坑记录](pitfalls.md)及[设计决策](decisions.md)。
 - 2026-11-03：普通 `session_handoff` 快照不再被 Pi token-speed 和 pi-init 会话耗时/运行计时记录误判为过期；只忽略显式列出的遥测条目，未知扩展记录和业务活动仍失效。定向回归 30/30 通过，真实 Pi 会话替换未重新执行；安装运行副本需更新/reload。详见[会话记录](session-log.md)、[踩坑记录](pitfalls.md)和[设计决策](decisions.md)。
 - 2026-11-03：普通 fresh 的工具收敛检查忽略合法 SDK system 更新消息进行配对判断，但保留原始branch；未配对结果和不完整嵌套回执仍阻止迁移。详见[会话记录](session-log.md)与[踩坑记录](pitfalls.md)。
 - 2026-11-03：pi-usage 终端模型表移除占宽的费用来源列，来源数据仍保留；活动状态栏的 Miss 同时显示成功提醒次数和累计金额。详见[会话记录](session-log.md)。

@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-11-03：仅忽略快照之后被隐藏的空白模型失败回复
+
+- 选择：快照指纹仅忽略保存快照之后产生、`stopReason: error` 且内容为空的 assistant entry，及 Pi 对该 entry 的 `replacement: null` context edit。其余 context edit 保持可见并使快照过期。
+- 原因：Pi 连接中断后的失败恢复只隐藏一个无上下文内容的空回复，不代表用户任务/约束发生变化；一般 context edit 可改写上下文，不能整体豁免。身份判断使用当前 branch 中快照与目标消息的先后关系，避免放过快照前既有内容被隐藏的情况。
+- 新的 Pi 错误恢复形式不自动加入豁免；须先核对其目标是否确为无内容、非业务恢复记录，再加窄范围回归。
+- 关联：[踩坑记录](pitfalls.md)、[会话日志](session-log.md)。
+
 ### 2026-11-03：普通交接 branch hash 只排除明确已知的遥测条目
 
 - 选择：快照指纹忽略 `pi-token-speed`、`pi-init-session-work-time`、`pi-init-run-timing` 三类非业务计时/用量记录；不忽略所有 custom entries。

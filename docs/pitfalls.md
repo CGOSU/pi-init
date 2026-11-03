@@ -14,6 +14,13 @@
 
 ## 已知问题
 
+### 2026-11-03：Pi 隐藏空白失败回复的 context_edit 会使交接快照过期
+
+- Pi 遇到连接中断等模型错误时，可能留下 `stopReason: error`、空 content 的 assistant entry，再追加 `context_edit` 以从后续模型上下文隐藏它。普通 session handoff 若只检查 entry ID，就会把这类非业务恢复记录识别成来源变化，导致预览/确认失败。
+- 当前 branch hash 仅忽略位于快照之后且 `content.length === 0`、`stopReason === "error"` 的 assistant entry，以及对其 `replacement: null` 的 omission edit。不要忽略所有 context_edit：它可能替换真实用户/助手上下文。仅 null omission 可作为例外；非空 replacement、错误以外终态、快照前 target、非空或工具调用回复仍须使来源 fingerprint 变化。
+- 回归须覆盖可忽略的连接失败空回复、非空错误回复、工具调用、正常 stop/aborted、replacement edit，以及快照前目标；还须验证真实普通 fresh 能继续执行 setup/切换流程。
+- 根因修复与离线日志核验见[会话日志](session-log.md)；精确例外策略见[设计决策](decisions.md)。
+
 ### 2026-11-03：普通交接快照可能被计时遥测立即标为过期
 
 - `readGeneralHandoff()` 的 branch hash 用于发现快照准备后的新业务活动；Pi 每轮完成后也可能追加 `pi-token-speed`，pi-init 会追加 `pi-init-session-work-time` 与 `pi-init-run-timing`。若这些 custom entries 被一概当作 branch 变化，刚确认保存的快照也会变为 `STALE`，`/pi-init fresh` 无法继续。

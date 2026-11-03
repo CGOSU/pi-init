@@ -67,6 +67,40 @@ test("preparation persists source-bound historical background without migration 
   });
 });
 
+test("omitting an empty failed assistant after preparation preserves the persisted snapshot", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const saved = await h.save();
+    const failed = h.manager.appendMessage({ role: "assistant", content: [], api: "test", provider: "test", model: "test", usage: {}, stopReason: "error", errorMessage: "connection termination", timestamp: Date.now() });
+    h.manager.appendContextEdit(failed, null);
+    assert.equal(h.api.read(h.ctx).ok, true);
+    const reopened = SessionManager.open(h.manager.getSessionFile(), cwd);
+    assert.equal(readGeneralHandoff(reopened.getBranch(), saved.value.source).ok, true);
+  });
+});
+
+test("context edits outside empty post-snapshot failure omissions still invalidate", async () => {
+  for (const scenario of [
+    { before: true, content: [], stopReason: "error", replacement: null },
+    { content: [{ type: "text", text: "partial answer" }], stopReason: "error", replacement: null },
+    { content: [{ type: "toolCall", id: "business", name: "bash", arguments: {} }], stopReason: "error", replacement: null },
+    { content: [], stopReason: "stop", replacement: null },
+    { content: [], stopReason: "aborted", replacement: null },
+    { content: [], stopReason: "error", replacement: { content: "replacement answer" } },
+    { role: "user", content: "changed requirement", replacement: null },
+    { role: "toolResult", toolCallId: "business", toolName: "bash", content: [], replacement: null },
+  ]) await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const { before, replacement, ...message } = scenario;
+    const append = () => h.manager.appendMessage({ role: "assistant", api: "test", provider: "test", model: "test", usage: {}, timestamp: Date.now(), ...message });
+    const earlier = before ? append() : undefined;
+    assert.equal((await h.save()).ok, true);
+    const target = earlier ?? append();
+    h.manager.appendContextEdit(target, replacement);
+    assert.equal(h.api.read(h.ctx).code, "STALE", JSON.stringify(scenario));
+  });
+});
+
 test("business activity, input and branch changes invalidate; save's own result does not", async () => {
   for (const mutate of [
     h => h.emit("tool_execution_start", { toolCallId: "next", toolName: "bash" }),

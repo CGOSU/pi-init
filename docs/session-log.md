@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：修复交接快照被 Pi 失败恢复 context_edit 误判为过期
+
+- 现象与复核：运行副本更新后重新准备的 `session_handoff` 在 `2026-11-03T06:53:02Z` 成功（快照 `OK`）。模型在 `2026-11-03T06:54:27Z` 遇到 `upstream connect error ... connection termination`，Pi 为隐藏其空内容失败回复追加 `context_edit(replacement: null)`；当前源码逐 branch 核验从该记录起变为 `STALE`。故障记录时间为 UTC；不涉及之前已排除的统计遥测。
+- 修复：仅忽略快照之后 `stopReason: error` 且 `content` 为空的 assistant 记录，以及对该记录的 null omission。替换内容、快照之前的隐藏目标、非错误终态、含部分内容/工具调用的消息和其他 branch 变化仍参与指纹校验。
+- 验证：新回归先复现失败；随后 `node --experimental-strip-types --test test/general-session-handoff.test.js test/general-session-transfer.test.js test/session-handoff.test.js`，32/32 通过；`git diff --check` 通过。采用修复后的源码离线重核 context-mode session，`context_edit` 节点和之后的末尾节点均从 `STALE` 恢复为 `OK`。未在真实 Pi 宿主再次确认/替换 session。
+- 边界：Pi 出现其他错误恢复或非空/工具调用回复时仍会让快照过期，需在上下文稳定后重新准备；真实模型连接中断本身不由此修复。实现细节与回归边界见[踩坑记录](pitfalls.md)和[决策记录](decisions.md)。
+
 ### 2026-11-03：修复 fresh 交接快照被运行统计记录误判为过期
 
 - 现象与复核：context-mode session 的 `session_handoff` 成功后，Pi 追加 `pi-token-speed`，以及插件写入 `pi-init-session-work-time`、`pi-init-run-timing` 后，快照读取由 `OK` 变为 `STALE`；随后职责恢复记录也处于失效后的 branch。代码只排除准备快照自身条目和助手工具回执/完成消息，误把运行统计 custom entries 当作业务现场变化。

@@ -69,12 +69,18 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
 // These records describe timing only; unknown custom entries still invalidate the snapshot.
 const HANDOFF_TIMING_ENTRIES = new Set(["pi-token-speed", "pi-init-session-work-time", "pi-init-run-timing"]);
 
-/** The preparing call's pair, normal completion and known timing records may follow a snapshot. */
+/** Normal completion, known timing and omissions of empty post-snapshot failures are non-business activity. */
 export function generalHandoffBranchHash(branch: readonly SessionEntry[], toolCallId: string) {
-  return handoffHash(branch.filter(entry => {
+  const snapshotIndex = branch.findLastIndex(entry => entry.type === "custom" && entry.customType === GENERAL_HANDOFF_ENTRY
+    && record(entry.data) && record(entry.data.source) && entry.data.source.toolCallId === toolCallId);
+  const emptyFailures = new Set<string>();
+  return handoffHash(branch.filter((entry, index) => {
     if (entry.type === "custom" && (entry.customType === GENERAL_HANDOFF_ENTRY || HANDOFF_TIMING_ENTRIES.has(entry.customType))) return false;
+    // Only a null edit of an earlier empty error after this snapshot is safe. Replacements and older targets remain significant.
+    if (entry.type === "context_edit") return entry.replacement !== null || !emptyFailures.has(entry.targetId);
     if (entry.type !== "message") return true;
     const m = entry.message;
+    if (snapshotIndex >= 0 && index > snapshotIndex && m.role === "assistant" && m.stopReason === "error" && m.content.length === 0) emptyFailures.add(entry.id);
     if (m.role === "toolResult") return m.toolCallId !== toolCallId;
     if (m.role === "assistant") return m.content.some(block => block.type === "toolCall" && (block.id !== toolCallId || block.name !== GENERAL_HANDOFF_TOOL));
     return true;
