@@ -14,6 +14,14 @@
 
 ## 已知问题
 
+### 2026-11-03：Pi system 更新消息会误挡普通 fresh 的工具收敛检查
+
+- 现象：普通 `/pi-init fresh` 返回 `TOOLS_NOT_SETTLED`，尽管可见工具调用均有结果。
+- 根因：Pi SDK会把运行时 `system` 更新消息作为 message entry 持久化到 branch；`groupToolMessages` 只接受 `assistant`、`user`、`toolResult`、`custom`，把 `system` 判成无效消息，令配对检查失败。这与历史 `toolResult.isError` 是不同根因。
+- 修复：在工具配对校验输入中排除 `system` role；保留源 branch 原文。不要顺带放宽真实工具调用缺失配对、重复结果或不完整 `nestedCalls` 检查，`toolsSettled` 也不能单凭持久化 branch 证明当前无运行中的工具。
+- 验证：Pi 1.5.0 临时branch fixture含 `system` 消息并完整配对工具时可通过；缺失结果与嵌套未完成仍保持拒绝。定向交接/恢复回归和类型检查通过，见[会话记录](session-log.md#2026-11-03修复普通-fresh-将-sdk-system-消息误判为工具未收敛)。
+- 边界：指定用户 session 的持久化 branch 排除 `system` 后可通过当前配对检查，但离线无法恢复当时内存中的 active/uncertain tool registry；未重放或迁移该 session，运行副本仍需 reload 才生效。
+
 ### 2026-11-02：长普通会话的历史工具失败可能误挡fresh
 
 - 现象：普通会话执行 `/pi-init fresh` 时出现合并的安全门拒绝提示。旧提示没有说明实际失败条件；本次用户运行副本命中的具体门禁未被记录，不能断言该次拒绝一定由历史错误导致。

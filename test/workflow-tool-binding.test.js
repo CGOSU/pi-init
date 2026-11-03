@@ -120,13 +120,14 @@ test("source lookup is non-consuming and refuses a message after its task or bra
 test("ordinary sessions share root and nested tool convergence without a workflow identity", () => {
   const f = fixture();
   f.state.workflowState = undefined;
+  const system = { type: "message", message: { role: "system", content: "Pi runtime system update", timestamp: 1 } };
   const assistant = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }] } };
   const result = { type: "message", message: { role: "toolResult", toolCallId: "root", isError: false, content: [], nestedCalls: { complete: true } } };
-  f.setBranch([assistant]);
+  f.setBranch([system, assistant]);
   assert.equal(f.binding.toolsSettled(f.ctx), false);
   f.handlers.get("tool_execution_start")({ toolCallId: "root" });
   f.handlers.get("tool_execution_start")({ toolCallId: "root/nested", parentToolCallId: "root" });
-  f.setBranch([assistant, result]);
+  f.setBranch([assistant, system, result]);
   f.handlers.get("tool_execution_end")({ toolCallId: "root", isError: false });
   assert.equal(f.binding.toolsSettled(f.ctx), false);
   f.handlers.get("tool_execution_end")({ toolCallId: "root/nested", isError: false });

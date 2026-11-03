@@ -90,9 +90,10 @@ test("ordinary handoff uses setup then fresh context, persists only background, 
   });
 });
 
-test("ordinary handoff accepts a resolved historical edit rejection", async () => {
+test("ordinary handoff accepts system updates and a resolved historical edit rejection", async () => {
   await withTempDirectory(async cwd => {
     const h = fixture(cwd);
+    h.manager.appendMessage({ role: "system", content: "Pi runtime system update", timestamp: Date.now() });
     h.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "old-edit", name: "edit", arguments: {} }], api: "test", provider: "test", model: "test", timestamp: Date.now(), stopReason: "toolUse", usage: {} });
     h.manager.appendMessage({ role: "toolResult", toolCallId: "old-edit", toolName: "edit", isError: true, content: [{ type: "text", text: "exact replacement rejected" }], timestamp: Date.now() });
     await h.save();

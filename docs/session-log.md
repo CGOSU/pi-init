@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：修复普通 fresh 将 SDK system 消息误判为工具未收敛
+
+- 现象与复核：用户报告 `context-mode` 项目的普通 `/pi-init fresh` 被 `TOOLS_NOT_SETTLED` 拒绝，后来手动新建 session 并读取旧 session 背景才继续。只读核对指定源 session：持久化分支含 414 个工具调用和 414 个结果、39 个完整嵌套回执；源码按原 branch 判断未收敛，只排除 Pi 添加的9条 `system` 消息后通过。源 JSONL SHA-256 前后相同；未重复执行 fresh、未迁移或改写原会话。
+- 修复：工具配对校验前忽略 SDK `system` 消息，但原始消息历史不被修改。活动/不确定工具、真正缺失配对、重复结果和不完整嵌套回执仍 fail-closed；保存结果未知时仍不得自动重试或重放。
+- 验证：新增 system 更新与工具配对同在branch的回归。修复前两项针对性用例复现失败；随后 `node --test test/workflow-tool-binding.test.js test/general-session-transfer.test.js test/general-session-handoff.test.js test/provider-request-recovery.test.js test/session-handoff.test.js` 61/61 通过；`npm run typecheck` 与 `git diff --check` 通过。指定源 session 的离线内存历史经修复后的判断为可收敛；未运行目标会话中的真实迁移。
+- 限制：当前安装/运行的扩展仍需部署或 reload 后才包含修复；源 session 保持原样。根因和安全边界见[踩坑记录](pitfalls.md)。
+
 ### 2026-11-03：精简 pi-usage 表格并显示 Miss 提醒次数
 
 - 完成：pi-usage 终端模型表移除 `Cost source` 列，节省横向空间；`costSource` 数据和费用来源计算保持不变，账单 SVG 的来源/核对说明保留。活动状态栏在累计金额可用时同时显示成功提醒次数和金额，例如 `Miss 1 次 ≈$1.85`；只有次数或金额时仍只显示已知值。次数仍表示成功发出的提醒，不表示缓存失配样本数。

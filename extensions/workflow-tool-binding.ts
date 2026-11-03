@@ -163,7 +163,9 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     return persistedToolsComplete(messages);
   }
   function persistedToolsComplete(messages: readonly ContextMessage[], allowHistoricalErrors = false) {
-    if (activeTools.size || uncertainTools || !hasCompleteToolPairs(messages) || messages.some(message => {
+    // Pi system updates carry no tool calls; retain them in history, outside pair validation.
+    const toolMessages = messages.filter(message => message.role !== "system");
+    if (activeTools.size || uncertainTools || !hasCompleteToolPairs(toolMessages) || messages.some(message => {
       if (message.role !== "toolResult") return false;
       const nested = isRecord(message) ? message.nestedCalls : undefined;
       return !allowHistoricalErrors && message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
