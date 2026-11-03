@@ -20,9 +20,11 @@ import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { createWorkflowPauseView, type WorkflowPauseView } from "./workflow-pause-view.ts";
 import { workflowGoalProgress } from "../src/workflow-goals.ts";
+import { nextWorkflowAction } from "./workflow-action-policy.ts";
 
 export type WorkflowStatusActivity =
   | "awaiting-replan"
+  | "execution-blocked"
   | "paused"
   | "completed"
   | "cancelled"
@@ -66,6 +68,7 @@ export type WorkflowStatusView =
       pauseCode?: string;
       taskPauseReason?: string;
       pendingRevision?: { revisionId: string; direction: string };
+      recovery?: { code: string; message: string; nextAction: string };
       progressDiagnosis?: WorkflowProgressObservation;
       tasks: WorkflowStatusTaskView[];
     };
@@ -76,8 +79,19 @@ export type WorkflowStatusRuntime = Pick<
 > & Partial<Pick<
   ExtensionRuntimeState,
   "roleCompactionOperationId" | "roleContextGeneration" | "roleTransitionGeneration" | "activeRoleCompaction"
-  | "workflowProgressObservation"
+  | "workflowProgressObservation" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed"
+  | "pendingWorkflowRecovery" | "userStopRequested" | "roleModeStatus"
 >>;
+
+function recoveryFor(state: WorkflowState, runtime: WorkflowStatusRuntime) {
+  const step = nextWorkflowAction({ ...runtime, workflowState: state,
+    roleRecoveryPending: runtime.roleRecoveryPending ?? false,
+    roleRecoveryPersistenceFailed: runtime.roleRecoveryPersistenceFailed ?? false,
+    userStopRequested: runtime.userStopRequested ?? false });
+  return step.action === "recover" && step.code && step.message
+    ? { code: step.code, message: step.message, nextAction: step.nextAction }
+    : undefined;
+}
 
 function currentTask(state: WorkflowState): { task: WorkflowTask; index: number } | undefined {
   if (state.status !== "running" || !state.currentTaskId) return undefined;
@@ -143,8 +157,10 @@ function activityFor(
   runtime: WorkflowStatusRuntime,
   activeTask: WorkflowTask | undefined,
   handoff: WorkflowHandoff | undefined,
+  recovery: ReturnType<typeof recoveryFor>,
 ): WorkflowStatusActivity {
   if (state.status === "running" || state.status === "replanning") {
+    if (recovery) return "execution-blocked";
     const transition = runtime.activeRoleCompaction?.transition ?? runtime.pendingRoleCompaction;
     const continuation = transition?.continuation;
     if (continuation?.kind === "workflow-boundary"
@@ -214,10 +230,11 @@ export function createWorkflowStatusView(
   const handoffPhase = handoff ? currentTaskHandoff?.phase : undefined;
   const replan = workflowReplanIdentity(workflowState);
   const pause = createWorkflowPauseView(workflowState);
+  const recovery = recoveryFor(workflowState, runtime);
   return {
     kind: "workflow",
     status: workflowState.status,
-    activity: activityFor(workflowState, runtime, active?.task, currentTaskHandoff),
+    activity: activityFor(workflowState, runtime, active?.task, currentTaskHandoff, recovery),
     progress: {
       completed: progress.completed,
       total: progress.total,
@@ -235,6 +252,7 @@ export function createWorkflowStatusView(
       handoffUnavailable: Boolean(workflowState.status === "running" && workflowState.currentTaskId && !currentTaskHandoff),
     },
     pause,
+    ...(recovery ? { recovery } : {}),
     ...(workflowState.pauseReason ? { pauseCode: workflowState.pauseReason } : {}),
     ...(workflowState.taskPauseReason ? { taskPauseReason: workflowState.taskPauseReason } : {}),
     ...(workflowState.pendingRevision ? {
@@ -273,6 +291,11 @@ export function workflowStatusRuntimeFromState(state: ExtensionRuntimeState): Wo
     roleTransitionGeneration: state.roleTransitionGeneration,
     workflowDispatchInFlight: state.workflowDispatchInFlight,
     workflowProgressObservation: state.workflowProgressObservation,
+    roleRecoveryPending: state.roleRecoveryPending,
+    roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed,
+    pendingWorkflowRecovery: state.pendingWorkflowRecovery,
+    userStopRequested: state.userStopRequested,
+    roleModeStatus: state.roleModeStatus,
   };
 }
 

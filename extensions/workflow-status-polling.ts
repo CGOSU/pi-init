@@ -4,6 +4,7 @@ import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
 import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
 import { workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
+import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 
 export function createWorkflowProgressObserver(pi: ExtensionAPI, state: ExtensionRuntimeState,
   options: { onRepeatedRead?: (ctx: ExtensionContext) => void | Promise<void> } = {}) {
@@ -128,18 +129,27 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
   return { observe, reset };
 }
 
-export function createPausedStatusGuard(pi: ExtensionAPI, state: ExtensionRuntimeState) {
+export function createWorkflowStatusPollingGuard(pi: ExtensionAPI, state: ExtensionRuntimeState) {
   let previousKey: string | undefined;
   let previousCallId: string | undefined;
   let stopped = false;
   function reset() { previousKey = undefined; previousCallId = undefined; stopped = false; }
   function observe(toolCallId: string, ctx: ExtensionContext) {
-    if (state.runtimeDisposed || state.workflowState?.status !== "paused") { reset(); return { stop: false as const }; }
+    const view = createCurrentWorkflowStatusView(state);
+    const waiting = view.kind === "restore-error" || view.kind === "workflow"
+      && ["paused", "execution-blocked", "waiting-dispatch", "waiting-task", "compaction-stalled"].includes(view.activity);
+    if (state.runtimeDisposed || !waiting
+      || state.workflowState && state.workflowState.sessionId !== ctx.sessionManager.getSessionId()) {
+      reset(); return { stop: false as const };
+    }
     const key = fingerprint({ sessionId: ctx.sessionManager.getSessionId(), workflow: state.workflowState,
- role: state.activeRole, contextGeneration: state.roleContextGeneration,
+ role: state.activeRole, roleModeStatus: state.roleModeStatus, contextGeneration: state.roleContextGeneration,
       roleTransitionGeneration: state.roleTransitionGeneration, roleRecoveryPending: state.roleRecoveryPending,
       roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: state.pendingWorkflowRecovery,
-      workflowRestoreError: state.workflowRestoreError });
+      workflowRestoreError: state.workflowRestoreError, userStopRequested: state.userStopRequested,
+      workflowDispatchInFlight: state.workflowDispatchInFlight, internalContinuationPending: state.internalContinuationPending,
+      roleCompactionPhase: state.roleCompactionPhase, pendingRoleCompaction: state.pendingRoleCompaction,
+      activeRoleCompaction: state.activeRoleCompaction });
     if (!key) { reset(); return { stop: false as const }; }
     if (key !== previousKey) { previousKey = key; previousCallId = toolCallId; stopped = false; return { stop: false as const }; }
     if (previousCallId === toolCallId && !stopped) return { stop: false as const };

@@ -11,6 +11,7 @@ const TASK_DURATION_UNAVAILABLE = "不可用（历史任务未记录有效的开
 export function workflowStatusActivityLabel(activity: WorkflowStatusActivity) {
   switch (activity) {
     case "awaiting-replan": return "等待架构师重规划";
+    case "execution-blocked": return "执行受阻";
     case "paused": return "已暂停";
     case "completed": return "已完成";
     case "cancelled": return "已取消";
@@ -74,6 +75,7 @@ export function formatWorkflowStatusText(view: WorkflowStatusView) {
   const lines = [
     `状态：${view.status} · workflowId：${view.identity.action.workflowId} · planVersion：${view.identity.action.planVersion} · recoveryGeneration：${view.identity.action.recoveryGeneration} · sessionId：${view.identity.action.sessionId}`,
     `阶段：${workflowStatusActivityLabel(view.activity)}`,
+    ...(view.recovery ? [`执行阻断：${view.recovery.code} · ${view.recovery.message}`, `下一步：${view.recovery.nextAction}`] : []),
     `已完成任务（completed/total）：${view.progress.completed}/${view.progress.total}`,
     `总任务开始时间：${formatWorkflowTimestamp(view.startedAt, ELAPSED_UNAVAILABLE)}`,
     `总任务已运行时间：${elapsedText(view)}`,
@@ -120,6 +122,7 @@ export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
   const lines = [
     `${workflowStatusActivityLabel(view.activity)} · 已完成 ${view.progress.completed}/${view.progress.total}`,
     `目标：${view.planSummary}`,
+    ...(view.recovery ? [`执行阻断：${view.recovery.message}`, `下一步：${view.recovery.nextAction}`] : []),
     ...(view.progressDiagnosis?.status === "suspected-loop"
       ? [`进展诊断：疑似无进展循环 · ${view.progressDiagnosis.summary}`]
       : []),

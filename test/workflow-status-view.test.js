@@ -53,6 +53,26 @@ function createRunningWorkflow() {
   return markWorkflowTaskStarted(queued, "task-a", 120);
 }
 
+test("恢复阻断覆盖持久 running 状态，保留原任务身份且给出既有恢复策略", () => {
+  const state = createRunningWorkflow();
+  const before = structuredClone(state);
+  for (const [flags, code] of [
+    [{ roleRecoveryPending: true }, "ROLE_RECOVERY_PENDING"],
+    [{ roleRecoveryPersistenceFailed: true }, "ROLE_RECOVERY_PERSIST_FAILED"],
+    [{ workflowRestoreError: { code: "RESTORE_FAILED", message: "invalid saved state" } }, "RESTORE_FAILED"],
+    [{ pendingWorkflowRecovery: state }, "WORKFLOW_RECOVERY_PENDING"],
+    [{ userStopRequested: true }, "WORKFLOW_USER_STOPPED"],
+  ]) {
+    const view = createWorkflowStatusView(state, { ...idleRuntime, roleModeStatus: "auto", ...flags });
+    assert.equal(view.status, "running");
+    assert.equal(view.activity, "execution-blocked");
+    assert.equal(view.recovery.code, code);
+    assert.ok(view.recovery.nextAction);
+    assert.deepEqual(view.identity.handoff, workflowHandoffIdentity(state));
+  }
+  assert.deepEqual(state, before);
+});
+
 test("状态视图复用活动身份、当前阶段和单一时间快照而不修改工作流", () => {
   const state = createRunningWorkflow();
   const before = structuredClone(state);

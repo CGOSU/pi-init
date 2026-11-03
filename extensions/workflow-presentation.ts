@@ -3,7 +3,7 @@ import type { WorkflowStatusView } from "./workflow-status-view.ts";
 
 const WORKFLOW_STATUS_VALUES: ReadonlySet<string> = new Set(["running", "paused", "replanning", "completed", "cancelled"]);
 const WORKFLOW_ACTIVITY_VALUES: ReadonlySet<string> = new Set([
-  "awaiting-replan", "paused", "completed", "cancelled", "waiting-dispatch", "compaction-stalled", "compacting", "dispatching", "waiting-task", "executing",
+  "awaiting-replan", "execution-blocked", "paused", "completed", "cancelled", "waiting-dispatch", "compaction-stalled", "compacting", "dispatching", "waiting-task", "executing",
 ]);
 
 export type WorkflowPresentation =
@@ -89,6 +89,10 @@ function isWorkflowStatusView(value: unknown): value is WorkflowStatusView {
     && typeof action.recoveryGeneration === "number"
     && Number.isFinite(action.recoveryGeneration)
     && typeof value.planSummary === "string"
+    && (value.recovery === undefined || (isRecord(value.recovery)
+      && typeof value.recovery.code === "string"
+      && typeof value.recovery.message === "string"
+      && typeof value.recovery.nextAction === "string"))
     && isRecord(elapsed)
     && (elapsed.kind === "unavailable"
       || (elapsed.kind === "available" && typeof elapsed.milliseconds === "number" && Number.isFinite(elapsed.milliseconds)))

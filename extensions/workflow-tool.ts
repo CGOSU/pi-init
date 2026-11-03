@@ -8,7 +8,7 @@ import type { createWorkflowActions } from "./workflow-actions.ts";
 import type { createRoleRecovery } from "./role-recovery.ts";
 import type { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
 import type { createWorkflowUserControl } from "./workflow-user-control.ts";
-import type { createPausedStatusGuard, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
+import type { createWorkflowStatusPollingGuard, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
 import type { createWorkflowDelivery } from "./workflow-delivery.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { renderWorkflowPauseResult } from "./workflow-pause-renderer.ts";
@@ -23,11 +23,11 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
   roleRecovery: Pick<ReturnType<typeof createRoleRecovery>, "guardToolCall">;
   workflowBinding: Pick<ReturnType<typeof createWorkflowToolBinding>, "bind">;
   userControl: Pick<ReturnType<typeof createWorkflowUserControl>, "guardToolCall" | "suspend">;
-  observePausedStatus: ReturnType<typeof createPausedStatusGuard>["observe"];
+  observeStatusPolling: ReturnType<typeof createWorkflowStatusPollingGuard>["observe"];
   observeRejection: ReturnType<typeof createRepeatedRejectionGuard>["observe"];
   prepareDelivery: ReturnType<typeof createWorkflowDelivery>["prepare"];
 }) {
-  const { workflowActions, roleRecovery, workflowBinding, userControl, observePausedStatus, observeRejection, prepareDelivery } = dependencies;
+  const { workflowActions, roleRecovery, workflowBinding, userControl, observeStatusPolling, observeRejection, prepareDelivery } = dependencies;
   pi.registerTool<typeof taskWorkflowParameters>({
     name: "task_workflow",
     label: "Task Workflow",
@@ -84,9 +84,9 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
       function finish(result: Awaited<ReturnType<typeof workflowActions.runTaskWorkflowAction>>) {
         if (params.action === "complete" && !result.terminate) prepareDelivery(_toolCallId);
         if (params.action !== "status" || signal?.aborted) return result;
-        const polling = observePausedStatus(_toolCallId, ctx);
+        const polling = observeStatusPolling(_toolCallId, ctx);
         if (!polling.stop) return result;
-        const text = "暂停状态未发生变化，已结束本回合的重复状态轮询。工作流仍暂停，未恢复、完成或重试任务；请按已有状态说明处理阻塞或恢复问题。";
+        const text = "等待状态未发生变化，已结束本回合的重复状态轮询。工作流状态保持不变，未恢复、完成或重试任务；请按已有状态说明处理阻塞或恢复问题。";
         if (polling.firstStop) {
           runtimeState.traceHandoff?.(ctx, "workflow.status_polling_stopped", { toolCallId: _toolCallId, code: polling.code });
           try { ctx.ui.notify(text, "warning"); } catch {}

@@ -1,9 +1,11 @@
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
-type PolicyState = Pick<ExtensionRuntimeState, "workflowState" | "pendingWorkflowRecovery" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "workflowRestoreError" | "roleModeStatus" | "userStopRequested">;
+type PolicyState = Pick<ExtensionRuntimeState, "workflowState" | "pendingWorkflowRecovery" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "workflowRestoreError" | "userStopRequested"> & Partial<Pick<ExtensionRuntimeState, "roleModeStatus">>;
 export type WorkflowNextAction = {
   action: "none" | "recover" | "finish-current-task" | "schedule-replan";
   recovery?: "role" | "workflow" | "wait" | "stop";
+  code?: string;
+  message?: string;
   nextAction: string;
   requiredRole?: string;
   taskId?: string;
@@ -14,23 +16,36 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   const workflow = state.workflowState;
   const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
   const taskScope = workflow?.currentTaskId ? { taskId: workflow.currentTaskId, requiredRole: task?.role } : {};
-  if (state.userStopRequested) return { action: "recover", recovery: "stop", nextAction: "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。" };
+  if (state.userStopRequested) return { action: "recover", recovery: "stop", code: "WORKFLOW_USER_STOPPED", message: "自动执行已停止，等待用户明确继续或恢复。", nextAction: "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。" };
   const activeWorkflow = workflow && !["completed", "cancelled"].includes(workflow.status);
   const roleAction = state.roleModeStatus === "manual"
     ? "当前为 manual 模式；若当前角色可验证，使用 switch_role，否则请用户执行 /pi-init role <role>，不要反复调用 switch_role。"
-    : "先按目标调用 switch_role 并等待成功。";
-  if (state.roleRecoveryPending && !activeWorkflow && !state.pendingWorkflowRecovery
-    && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError) {
-    return { action: "recover", recovery: "role", nextAction: `无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}` };
+    : state.roleModeStatus === undefined
+      ? "当前职责模式尚未确认；先核对当前模式和职责，不得猜测执行授权。"
+      : "先按目标调用 switch_role 并等待成功。";
+  const recoveryStatus = '核对已返回的 task_workflow(action="status")（尚未获取时只读一次），不要重复轮询。';
+  if (state.roleRecoveryPersistenceFailed) return { action: "recover", recovery: "workflow", ...taskScope,
+    code: "ROLE_RECOVERY_PERSIST_FAILED", message: "职责恢复记录持久化失败，执行仍被阻断。",
+    nextAction: recoveryStatus + "职责恢复记录持久化失败；保持停止，先处理持久化错误，再按既有恢复流程核对职责与身份，不重复查询或自动派发任务。" };
+  if (state.workflowRestoreError) return { action: "recover", recovery: "workflow", ...taskScope,
+    code: state.workflowRestoreError.code, message: state.workflowRestoreError.message,
+    nextAction: recoveryStatus + "工作流恢复失败；按当前错误码和既有恢复流程核对原记录及可能副作用，不自行重试、重规划或派发任务。" };
+  if (state.pendingWorkflowRecovery) return { action: "recover", recovery: "workflow", ...taskScope,
+    code: "WORKFLOW_RECOVERY_PENDING", message: "工作流恢复状态尚未持久化。",
+    nextAction: recoveryStatus + "工作流恢复状态尚未持久化；结束当前轮询，按既有恢复流程处理持久化问题，未确认前不得派发或重放任务。" };
+  if (state.roleRecoveryPending && !activeWorkflow) {
+    return { action: "recover", recovery: "role", code: "ROLE_RECOVERY_PENDING", message: "职责恢复尚未确认。", nextAction: `无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}` };
   }
   if (!state.roleRecoveryPending && !state.pendingWorkflowRecovery && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError && workflow?.status === "paused"
     && ["session-handoff-review", "session-transfer-pending", "session-handoff-imported"].includes(workflow.pauseReason ?? "")) {
     return { action: "recover", recovery: "wait", nextAction: workflow.taskPauseReason ?? "等待用户确认会话交接；不自行新建session、重试任务或重规划。" };
   }
-  if (state.roleRecoveryPending || state.pendingWorkflowRecovery || state.roleRecoveryPersistenceFailed || state.workflowRestoreError
+  if (state.roleRecoveryPending
     || (workflow && !["completed", "cancelled"].includes(workflow.status)
       && (workflow.status === "paused" || task?.outcomeUnknown || (workflow.currentTaskId && !task)))) {
-    return { action: "recover", recovery: "workflow", ...taskScope, nextAction: '先读取 task_workflow(action="status") 并按现有恢复守卫核对当前身份和未知结果；不得自动重放副作用或沿用旧 attempt/handoff。' + (state.roleRecoveryPending ? `重新确认当前任务角色；${roleAction}恢复前不要执行其他工具。` : "") };
+    return { action: "recover", recovery: "workflow", ...taskScope,
+      ...(state.roleRecoveryPending ? { code: "ROLE_RECOVERY_PENDING", message: "职责恢复尚未确认。" } : {}),
+      nextAction: recoveryStatus + '按现有恢复守卫核对当前身份和未知结果；不得自动重放副作用或沿用旧 attempt/handoff。' + (state.roleRecoveryPending ? `重新确认当前任务角色；${roleAction}恢复前不要执行其他工具。` : "") };
   }
   if (!workflow || ["completed", "cancelled"].includes(workflow.status)) return { action: "none", nextAction: "按当前用户目标和明确指定的任务角色继续尚未完成的工作；没有待办就结束，不创造新任务。同一交付物内保持职责，独立交付物或必要架构决策才换角。无活动工作流任务角色绑定，不豁免其他职责与安全守卫。" };
   if (workflow.currentTaskId) {

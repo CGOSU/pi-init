@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-04：收敛压缩恢复期间的等待态status轮询
+
+- 完成：确认恢复门来自Pi原生阈值压缩后的职责重新确认；角色交接在恢复门处丢弃是预期的 fail-closed 行为。问题是status轮询保护只覆盖 paused，而运行中等待调度的工作流没有当前任务，连续status查询可留在同一Agent回合。扩展轮询守卫覆盖恢复/等待/恢复错误状态并有界终止；状态视图派生阻断原因和策略下一步；调度入口在恢复确认失败时拒绝派发。旧交接不自动重放，status不具恢复副作用。
+- 验证：先补回归并观察旧实现失败；`node --test test/workflow-status-polling.test.js test/workflow-status-view.test.js test/workflow-action-policy.test.js test/role-handoff.test.js test/role-recovery.test.js test/workflow-start-lifecycle.test.js test/workflow-user-control.test.js`（79/79通过）；`npm test`（781/781通过）；`npm run typecheck`、`git diff --check`通过。
+- 边界：没有reload宿主扩展、没有真实Pi会话/模型验证、没有部署到安装副本；因此已运行的会话不会自动获得修复。未接触pi-mcp-adapter工作区或活动任务，未push。
+
 ### 2026-11-03：普通会话交接保留可选跨角色决策依据
 
 - 变更：新增可选 `decisions` 正文，按已确认/建议/未验证区分结论效力，并记录关键理由及可选的否决方案、适用边界。无决策可省略，依据不明可留空；完整性检查不阻止准备。旧快照兼容，原32 KiB、安全及来源校验不变；摘要不自动扫描或补齐历史架构分析，引用也不会自动展开。详细边界见[设计决策](decisions.md)。

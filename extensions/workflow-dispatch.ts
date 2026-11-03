@@ -291,7 +291,7 @@ export function createWorkflowDispatch(
 
   async function scheduleWorkflow(ctx: ExtensionContext, expectedIdentity?: WorkflowActionIdentity) {
     state.traceHandoff?.(ctx, "workflow.schedule", { localScheduleInFlight });
-    if (state.userStopRequested) return;
+    if (state.userStopRequested || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) return;
     if (state.pendingWorkflowRecovery) {
       try {
         deps.report.persistWorkflowState(state.pendingWorkflowRecovery, ctx);

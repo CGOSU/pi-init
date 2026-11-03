@@ -34,7 +34,7 @@ import { createDiagnosticControls } from "./diagnostic-controls.ts";
 import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
 import { createRoleHandoff } from "./role-handoff.ts";
 import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
-import { createPausedStatusGuard, createWorkflowProgressObserver, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
+import { createWorkflowStatusPollingGuard, createWorkflowProgressObserver, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
 import { createWorkflowDelivery } from "./workflow-delivery.ts";
 import { createWorkflowUserControl } from "./workflow-user-control.ts";
 import { createTaskMemoryRuntime } from "./task-memory-runtime.ts";
@@ -346,7 +346,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   registerWorkflowTool(pi, runtimeState, {
     workflowActions, roleRecovery, workflowBinding, userControl,
-    observePausedStatus: (id, ctx) => pausedStatusGuard.observe(id, ctx),
+    observeStatusPolling: (id, ctx) => statusPollingGuard.observe(id, ctx),
     observeRejection: (event, ctx) => rejectionGuard.observe(event, ctx),
     prepareDelivery: id => workflowDelivery.prepare(id),
   });
@@ -355,7 +355,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime, roleHandoff, userControl,
     observeRejection: (event, ctx) => rejectionGuard.observe(event, ctx),
   });
-  const pausedStatusGuard = createPausedStatusGuard(pi, runtimeState);
+  const statusPollingGuard = createWorkflowStatusPollingGuard(pi, runtimeState);
   const rejectionGuard = createRepeatedRejectionGuard(pi, runtimeState);
   const workflowDelivery = createWorkflowDelivery(pi, runtimeState);
   const diagnostics = createHandoffDiagnostics(pi, runtimeState);
