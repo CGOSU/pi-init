@@ -5,6 +5,7 @@
 ## 测试组织
 
 - 回归覆盖角色、扁平工作流、任务记忆、恢复/未知结果和诊断；退役功能的专属测试随实现删除，核心安全回归保留，完整结果以本轮实际验证为准。
+- 扩展入口 `extensions/index.ts` 只保留生命周期与共享运行时状态，命令和工具适配拆至独立模块；`pi-usage` 的查询聚合位于 `scripts/pi-usage/query.js`。测试辅助已拆至 `test/support/`，用量测试按 CLI、报告及原有主题分组，旧 `test/helpers.js` 已删除，调用方直接导入具体辅助/生产模块。
 
 ## 项目描述与插件规范所有权
 
@@ -117,11 +118,12 @@
 
 ## 待处理
 
-- `extensions/index.ts`、`test/pi-usage.test.js`、`extensions/coordination-runtime.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-dispatch.ts`、`src/coordination-validation.ts`、`src/workflow-model.ts`、`src/workflow-hydration.ts`、`test/coordination-runtime.test.js`、`test/coordination-simplification.test.js`、`test/extension-lifecycle.test.js` 与 `test/helpers.js` 的当前内容版本均已通过 `file_review` 完成结构审阅并建议保留；`extensions/file-review-runtime.ts` 和 `test/file-review-runtime.test.js` 已对移除功能后的当前内容完整读取并登记结构 `keep`。运行中的旧 Pi 工具 schema/提示尚未通过 reload 核实，需 reload 或重启后更新。
+- `extensions/coordination-runtime.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-dispatch.ts`、`src/coordination-validation.ts`、`src/workflow-model.ts`、`src/workflow-hydration.ts`、`test/coordination-runtime.test.js` 与 `test/coordination-simplification.test.js` 的当前内容版本已通过 `file_review` 完成结构审阅并建议保留；`extensions/file-review-runtime.ts` 已对移除功能后的当前内容完整读取并登记结构 `keep`。此后修改过的 `extensions/index.ts`、`test/pi-usage.test.js`、`test/extension-lifecycle.test.js` 和 `test/file-review-runtime.test.js` 不沿用旧 fingerprint 结论；旧 `test/helpers.js` 已删除。运行中的旧 Pi 工具 schema/提示尚未通过 reload 核实，需 reload 或重启后更新。
 - Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；pi-usage 的 PATH 遮蔽用例已在 macOS 宿主验证，但未在真实 Windows 宿主执行。第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
 
 ## 最近一次更新
 
+- 2026-11-03：落实四项结构拆分：扩展入口提取命令/工具适配模块，`pi-usage` 查询聚合移至 `query.js`，用量测试按主题分组，测试辅助迁至 `test/support/` 并删除旧聚合文件。全量测试 749 项、类型检查和差异检查通过；未做真实 Pi 宿主/Provider 验证。详见[会话记录](session-log.md)。
 - 2026-11-02：包版本元数据更新为 `2.0.11`，根目录 `CHANGELOG.md` 纳入分发清单；Pi 1.5.0+ 在包加载扩展且新启动发现高于已见版本时展示更新，首次安装只记录版本。`pi-usage` 区分 Provider 上报/估算/混合费用来源，内联输入等待声明 question 阻塞状态。开发/测试 SDK 基线为 1.5.0，peer 下限仍是 `^1.3.0`，旧运行时未重新验证；尚未发布或部署。详情见[会话记录](session-log.md)和[设计决策](decisions.md)。
 - 2026-11-02：缓存失配提醒标题和状态栏标为 `Miss`，并展示本session累计额外成本估算；累计仅覆盖成功观测并持久化的样本，非账单金额。源码尚未部署到宿主安装副本。详见[会话记录](session-log.md)。
 - 2026-11-01：新增单次session缓存失配估算提醒及状态栏计数；另有普通会话 `session_handoff` 快照和统一 `/pi-init fresh`。没有自动切换或已验证的Provider节费结论，尚未部署安装副本。详见[会话记录](session-log.md)。

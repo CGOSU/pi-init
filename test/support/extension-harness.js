@@ -1,87 +1,4 @@
-import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import test from "node:test";
-
-import initProjectExtension from "../extensions/index.ts";
-import { installLaunchers } from "../scripts/install-launchers.js";
-import {
-  createBillSvg,
-  dateRange,
-  formatDateMinute,
-  formatReport,
-  parseArguments,
-  PI_USAGE_VERSION,
-  queryUsage,
-  shouldRefreshUsage,
-  summarizeUsage,
-} from "../scripts/pi-usage.js";
-import { createScaffold, formatEnvironmentInstructions } from "../src/scaffold.ts";
-import {
-  DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_NAMES,
-  DEFAULT_WORKFLOW_EXECUTOR,
-  DEFAULT_WORKFLOW_MODE,
-  ROLE_LABELS,
-  ROLE_MODE_LABELS,
-  THINKING_LEVELS,
-  filterRoleModels,
-  findMatchingRole,
-  getRoleNames,
-  normalizeModelReference,
-  resolveRoleConfig,
-  resolveRoleMode,
-  resolveWorkflowExecutor,
-  resolveWorkflowMode,
-  resolveRoleModel,
-  shouldOrchestrateWorkflow,
-  unwrapRoleResult,
-} from "../src/roles.ts";
-import {
-  WORKFLOW_MAX_NUDGES,
-  blockWorkflowTask,
-  cancelWorkflow,
-  completeWorkflowTask,
-  createWorkflowState as createWorkflowStateRaw,
-  getNextWorkflowTask,
-  getWorkflowTask,
-  getWorkflowTaskDuration,
-  getWorkflowExecutionBounds,
-  getWorkflowExecutionDuration,
-  hydrateWorkflowState,
-  markWorkflowTaskStarted as markWorkflowTaskStartedRaw,
-  setWorkflowHandoffPhase,
-  recordWorkflowNudge,
-  requestWorkflowReplan,
-  appendWorkflowReplanDirection,
-  applyWorkflowReplan,
-  resumeWorkflow,
-  retryWorkflowTask,
-  startWorkflowTask,
-  validateWorkflowPlan,
-  workflowProgress,
-} from "../src/workflow.ts";
-import {
-  completeRunTiming,
-  createRunTiming,
-  getRunTimingDuration,
-  isExternalRunSource,
-} from "../src/run-timing.ts";
-
-const createWorkflowState = (input, now) => createWorkflowStateRaw({ sessionId: "test-session", ...input }, now);
-const markWorkflowTaskStarted = (state, taskId, now) => markWorkflowTaskStartedRaw(state.handoff?.phase === "executing" ? state : setWorkflowHandoffPhase(state, "queued"), taskId, now);
-
-async function withTempDirectory(run) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pi-init-"));
-  try {
-    await run(directory);
-  } finally {
-    // 交接诊断日志（PI_INIT_HANDOFF_LOG=1 时启用）异步写入 .pi/logs；
-    // maxRetries 让清理等待仍在进行的写入，避免 ENOTEMPTY 误报。
-    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-  }
-}
+import initProjectExtension from "../../extensions/index.ts";
 
 function createExtensionHarness(branch = [], options = {}) {
   const handlers = new Map();
@@ -422,8 +339,6 @@ async function emitExtensionEvent(harness, name, event = {}) {
   return result;
 }
 
-const workflowMessageIdentity = (harness, customType = "pi-init-workflow-task") => harness.sentMessages.findLast(({ message }) => message.customType === customType)?.message.details;
-
 async function runExternalAgent(harness, source, options = {}) {
   await emitExtensionEvent(harness, "input", { source });
   await emitExtensionEvent(harness, "before_agent_start");
@@ -465,65 +380,4 @@ async function runExternalAgent(harness, source, options = {}) {
   await emitExtensionEvent(harness, "agent_settled");
 }
 
-export {
-  mkdtemp, mkdir, readFile, rm, writeFile,
-  os, path,
-  initProjectExtension, installLaunchers,
-  createBillSvg, dateRange, formatDateMinute,
-  formatReport, parseArguments,
-  PI_USAGE_VERSION,
-  queryUsage,
-  shouldRefreshUsage,
-  summarizeUsage,
-  createScaffold,
-  formatEnvironmentInstructions,
-  DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_NAMES,
-  DEFAULT_WORKFLOW_EXECUTOR,
-  DEFAULT_WORKFLOW_MODE,
-  ROLE_LABELS,
-  ROLE_MODE_LABELS,
-  THINKING_LEVELS,
-  filterRoleModels,
-  findMatchingRole,
-  getRoleNames,
-  normalizeModelReference,
-  resolveRoleConfig,
-  resolveRoleMode,
-  resolveWorkflowExecutor,
-  resolveWorkflowMode,
-  resolveRoleModel,
-  shouldOrchestrateWorkflow,
-  unwrapRoleResult,
-  WORKFLOW_MAX_NUDGES,
-  blockWorkflowTask,
-  cancelWorkflow,
-  completeWorkflowTask,
-  createWorkflowState,
-  getNextWorkflowTask,
-  getWorkflowTask,
-  getWorkflowTaskDuration,
-  getWorkflowExecutionBounds,
-  getWorkflowExecutionDuration,
-  hydrateWorkflowState,
-  markWorkflowTaskStarted,
-  recordWorkflowNudge,
-  requestWorkflowReplan,
-  appendWorkflowReplanDirection,
-  applyWorkflowReplan,
-  resumeWorkflow,
-  retryWorkflowTask,
-  startWorkflowTask,
-  validateWorkflowPlan,
-  workflowProgress,
-  completeRunTiming,
-  createRunTiming,
-  getRunTimingDuration,
-  isExternalRunSource,
-  withTempDirectory,
-  createExtensionHarness,
-  workflowMessageIdentity,
-  emitExtensionEvent,
-  emitToolResult,
-  runExternalAgent,
-};
+export { createExtensionHarness, emitExtensionEvent, emitToolResult, runExternalAgent };

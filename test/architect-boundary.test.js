@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  createExtensionHarness,
-  emitExtensionEvent,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import {
   ARCHITECT_ALLOWED_ACTIONS_TEXT,
   ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS,

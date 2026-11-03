@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 import { createWorkflowErrorView } from "../extensions/workflow-error-view.ts";
 import { renderWorkflowOperationFailure } from "../extensions/workflow-result-renderer.ts";
 

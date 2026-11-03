@@ -4,7 +4,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { assessCodemodeRepetition, registerAbnormalToolGuard } from "../extensions/abnormal-tool-guard.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { createExtensionHarness, emitExtensionEvent, withTempDirectory } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 const blankLines = (count, line = 'text(" ");', separator = "\n") => Array(count).fill(line).join(separator);
 

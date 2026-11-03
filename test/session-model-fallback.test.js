@@ -1,15 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createExtensionHarness,
-  DEFAULT_ROLE_NAMES,
-  emitExtensionEvent,
-  mkdir,
-  path,
-  readFile,
-  withTempDirectory,
-  writeFile,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { DEFAULT_ROLE_NAMES } from "../src/roles.ts";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { resolveRoleConfig, unwrapRoleResult } from "../src/roles.ts";
 
 test("无角色配置时标准职责只切换身份并沿用会话模型与推理", async () => {

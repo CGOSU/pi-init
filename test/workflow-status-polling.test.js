@@ -3,7 +3,7 @@ import test from "node:test";
 import { createPausedStatusGuard } from "../extensions/workflow-status-polling.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { createExtensionHarness, emitExtensionEvent } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 function fixture() {
   const state = createExtensionRuntimeState();

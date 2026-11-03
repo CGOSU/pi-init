@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { startWorkflowTask } from "../src/workflow.ts";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { WORKFLOW_RECOVERY_DISPOSITION_TYPE } from "../src/workflow-recovery-disposition.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-
-const { createExtensionHarness, createWorkflowState, emitExtensionEvent, workflowMessageIdentity, startWorkflowTask, withTempDirectory, mkdir, path, writeFile } = helpers;
 
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
 

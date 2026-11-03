@@ -8,7 +8,7 @@ import { createDiagnosticControls } from "../extensions/diagnostic-controls.ts";
 import { createDiagnosticWriter } from "../extensions/runtime-diagnostics.ts";
 import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
 import { withDiagnosticLock } from "../extensions/diagnostic-storage.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 
 async function fixture(run) {
   const root = await fs.mkdtemp(join(tmpdir(), "pi-controls-"));

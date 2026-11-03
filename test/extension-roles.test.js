@@ -1,25 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { completeWorkflowTask, startWorkflowTask } from "../src/workflow.ts";
+import { createWorkflowState, markWorkflowTaskStarted } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { filterRoleModels, findMatchingRole } from "../src/roles.ts";
 import { advancedInit, runScaffold } from "../extensions/scaffold-runtime.ts";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { collectRoleModels, input, MENU_BACK, showMenu } from "../extensions/ui.ts";
-
-const {
-  mkdir,
-  readFile,
-  writeFile,
-  path,
-  completeWorkflowTask,
-  createWorkflowState,
-  markWorkflowTaskStarted,
-  startWorkflowTask,
-  withTempDirectory,
-  createExtensionHarness,
-  emitExtensionEvent,
-  filterRoleModels,
-  findMatchingRole,
-} = helpers;
 
 test("TUI 菜单按 Esc 返回上一级而不是取消", async () => {
   const harness = createExtensionHarness([], {

@@ -3,10 +3,7 @@ import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { parseCacheUsage } from "../extensions/cache-status.ts";
 
-import {
-  createExtensionHarness,
-  emitExtensionEvent,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 function usage(cacheRead = 0, cacheWrite = 0) {
   return {

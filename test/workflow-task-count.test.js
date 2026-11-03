@@ -2,24 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Check } from "typebox/value";
 import { taskWorkflowParameters } from "../extensions/contracts.ts";
-import * as helpers from "./helpers.js";
-
-const {
-  applyWorkflowReplan,
-  completeWorkflowTask,
-  createExtensionHarness,
-  createWorkflowState,
-  emitExtensionEvent,
-  hydrateWorkflowState,
-  markWorkflowTaskStarted,
-  mkdir,
-  path,
-  requestWorkflowReplan,
-  startWorkflowTask,
-  validateWorkflowPlan,
-  withTempDirectory,
-  writeFile,
-} = helpers;
+import { applyWorkflowReplan, completeWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask, validateWorkflowPlan } from "../src/workflow.ts";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState, markWorkflowTaskStarted } from "./support/workflow-fixtures.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };

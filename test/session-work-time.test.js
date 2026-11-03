@@ -8,9 +8,7 @@ import {
 } from "../src/session-work-time.ts";
 import { createSessionWorkTimeTracker } from "../extensions/session-work-time.ts";
 import { createActivityStatus } from "../extensions/activity-status.ts";
-import * as helpers from "./helpers.js";
-
-const { createExtensionHarness, emitExtensionEvent } = helpers;
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 test("session 工作时间累计多个 Agent 工作区间，不包含闲置时间", () => {
   let state = createSessionWorkTime();

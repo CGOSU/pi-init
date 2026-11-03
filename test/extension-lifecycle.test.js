@@ -1,74 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { DEFAULT_ROLE_CONFIG, DEFAULT_ROLE_NAMES, DEFAULT_WORKFLOW_EXECUTOR, DEFAULT_WORKFLOW_MODE, getRoleNames, normalizeModelReference, resolveRoleConfig, resolveRoleMode, resolveWorkflowExecutor, resolveWorkflowMode, resolveRoleModel, unwrapRoleResult, shouldOrchestrateWorkflow } from "../src/roles.ts";
+import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { normalizeRoleId } from "../src/roles.ts";
-
-const {
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  writeFile,
-  os,
-  path,
-  initProjectExtension,
-  installLaunchers,
-  dateRange,
-  formatReport,
-  PI_USAGE_VERSION,
-  queryUsage,
-  shouldRefreshUsage,
-  summarizeUsage,
-  createScaffold,
-  formatEnvironmentInstructions,
-  DEFAULT_ROLE_CONFIG,
-  DEFAULT_ROLE_NAMES,
-  DEFAULT_WORKFLOW_EXECUTOR,
-  DEFAULT_WORKFLOW_MODE,
-  ROLE_LABELS,
-  ROLE_MODE_LABELS,
-  THINKING_LEVELS,
-  filterRoleModels,
-  findMatchingRole,
-  getRoleNames,
-  normalizeModelReference,
-  resolveRoleConfig,
-  resolveRoleMode,
-  resolveWorkflowExecutor,
-  resolveWorkflowMode,
-  resolveRoleModel,
-  unwrapRoleResult,
-  shouldOrchestrateWorkflow,
-  WORKFLOW_MAX_NUDGES,
-  blockWorkflowTask,
-  cancelWorkflow,
-  completeWorkflowTask,
-  createWorkflowState,
-  workflowMessageIdentity,
-  getNextWorkflowTask,
-  getWorkflowTask,
-  getWorkflowTaskDuration,
-  getWorkflowExecutionBounds,
-  getWorkflowExecutionDuration,
-  hydrateWorkflowState,
-  markWorkflowTaskStarted,
-  recordWorkflowNudge,
-  requestWorkflowReplan,
-  applyWorkflowReplan,
-  resumeWorkflow,
-  retryWorkflowTask,
-  startWorkflowTask,
-  validateWorkflowPlan,
-  workflowProgress,
-  completeRunTiming,
-  createRunTiming,
-  getRunTimingDuration,
-  isExternalRunSource,
-  withTempDirectory,
-  createExtensionHarness,
-  emitExtensionEvent,
-  runExternalAgent,
-} = helpers;
 
 test("角色配置先写会话，显式保存才落盘", async () => {
   await withTempDirectory(async (directory) => {

@@ -5,7 +5,7 @@ import { buildHandoffSnapshot } from "../extensions/handoff-snapshot.ts";
 import { createRuntimeRoutingContext } from "../extensions/runtime-routing-context.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 
 function workflow() {
   return createWorkflowState({ summary: "Recovery", sessionId: "recovery", tasks: [

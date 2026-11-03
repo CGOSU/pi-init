@@ -6,7 +6,7 @@ import { registerGeneralSessionHandoff } from "../extensions/general-session-han
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { GENERAL_HANDOFF_ENTRY, parseGeneralHandoff, readGeneralHandoff } from "../src/general-session-handoff.ts";
 import { SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
-import { withTempDirectory } from "./helpers.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 const body = () => ({ goal: "继续实现交接", constraints: ["不得部署"], completed: ["已调查"], remaining: ["实现fresh"], verification: [], unknowns: ["未验证真实Provider费用"], nextStep: "预览快照", sources: [] });
 function fixture(cwd) {

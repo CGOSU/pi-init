@@ -2,15 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
 import { validateWorkflowTaskStartMessage } from "../extensions/workflow-start-evidence.ts";
-import {
-  createExtensionHarness,
-  createWorkflowState,
-  emitExtensionEvent,
-  withTempDirectory,
-  mkdir,
-  path,
-  writeFile,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { branchContainsExactlyOneAnchor } from "../extensions/role-context-protocol.ts";
 import { workflowHandoffIdentity } from "../src/workflow.ts";
 

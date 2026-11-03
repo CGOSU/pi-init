@@ -37,33 +37,36 @@ function createDispatchState(workflowState) {
   };
 }
 
-function runnableWorkflow(helpers, role = "developer-test") {
-  const planned = helpers.createWorkflowState({
+function runnableWorkflow(createWorkflowState, startWorkflowTask, role = "developer-test") {
+  const planned = createWorkflowState({
     workflowId: "dispatch-regression",
     sessionId: "isolated-session",
     summary: "dispatch guard regression",
     tasks: [{ id: "task", task: "dispatch", role, files: ["src"], acceptanceCriteria: ["valid"] }],
   }, 100);
-  return helpers.startWorkflowTask(planned, "task", 101);
+  return startWorkflowTask(planned, "task", 101);
 }
 
 test("Pi's Jiti loader rejects stale workflow identity and forbidden execution roles", async () => {
-  const helpers = await jiti.import(path.join(testDirectory, "helpers.js"));
+  const { createWorkflowState } = await jiti.import(path.join(testDirectory, "support/workflow-fixtures.js"));
+  const { startWorkflowTask } = await jiti.import(path.resolve(testDirectory, "../src/workflow.ts"));
+  const { createExtensionHarness, emitExtensionEvent } = await jiti.import(path.join(testDirectory, "support/extension-harness.js"));
+  const { withTempDirectory } = await jiti.import(path.join(testDirectory, "support/temp-directory.js"));
   const { createWorkflowDispatch } = await jiti.import(path.resolve(testDirectory, "../extensions/workflow-dispatch.ts"));
 
-  await helpers.withTempDirectory(async (cwd) => {
-    const pausedWorkflow = helpers.createWorkflowState({
+  await withTempDirectory(async (cwd) => {
+    const pausedWorkflow = createWorkflowState({
       workflowId: "loader-smoke",
       sessionId: "isolated-session",
       summary: "loader integration",
       reviewRequired: true,
       tasks: [{ id: "task", task: "smoke", role: "developer-test", files: ["src"], acceptanceCriteria: ["valid"] }],
     });
-    const harness = helpers.createExtensionHarness([
+    const harness = createExtensionHarness([
       { type: "custom", customType: "pi-init-workflow", data: pausedWorkflow },
     ], { cwd, sessionId: "isolated-session" });
 
-    await helpers.emitExtensionEvent(harness, "session_start", { reason: "new" });
+    await emitExtensionEvent(harness, "session_start", { reason: "new" });
 
     assert.equal(harness.branch.at(-1).data.status, "paused");
     assert.equal(harness.sentMessages.length, 0);
@@ -84,7 +87,7 @@ test("Pi's Jiti loader rejects stale workflow identity and forbidden execution r
       setCurrentContext: () => {},
     });
 
-    const validState = createDispatchState(runnableWorkflow(helpers));
+    const validState = createDispatchState(runnableWorkflow(createWorkflowState, startWorkflowTask));
     const dispatch = createWorkflowDispatch(validState, makeDependencies(validState, sentTaskMessages));
     const currentIdentity = {
       workflowId: validState.workflowState.workflowId,
@@ -107,7 +110,7 @@ test("Pi's Jiti loader rejects stale workflow identity and forbidden execution r
     assert.equal(sentTaskMessages[0].identity.workflowId, currentIdentity.workflowId);
     assert.equal(sentTaskMessages[0].identity.handoffId, validState.workflowState.handoff.handoffId);
 
-    const invalidState = createDispatchState(runnableWorkflow(helpers));
+    const invalidState = createDispatchState(runnableWorkflow(createWorkflowState, startWorkflowTask));
     invalidState.workflowState.tasks[0].role = "architect";
     const invalidMessages = [];
     const invalidDispatch = createWorkflowDispatch(invalidState, makeDependencies(invalidState, invalidMessages));

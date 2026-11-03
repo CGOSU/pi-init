@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createExtensionHarness,
-  emitExtensionEvent,
-  mkdir,
-  path,
-  readFile,
-  withTempDirectory,
-  writeFile,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { mergeRoleConfigData, resolveRoleConfig } from "../src/roles.ts";
 
 test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", async () => {

@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ROLE_RECOVERY_ENTRY_TYPE } from "../extensions/role-recovery.ts";
-import {
-  DEFAULT_ROLE_CONFIG,
-  createExtensionHarness,
-  createWorkflowState,
-  emitExtensionEvent,
-  mkdir,
-  path,
-  withTempDirectory,
-  writeFile,
-} from "./helpers.js";
+import { DEFAULT_ROLE_CONFIG } from "../src/roles.ts";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 function getHandler(harness, name) {
   const handler = harness.handlers.get(name)?.[0];

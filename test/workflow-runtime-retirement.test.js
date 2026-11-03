@@ -3,11 +3,8 @@ import test from "node:test";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowDispatch } from "../extensions/workflow-dispatch.ts";
 import { cancelWorkflow, createWorkflowState, hydrateWorkflowState } from "../src/workflow.ts";
-import {
-    createExtensionHarness,
-    emitExtensionEvent,
-    withTempDirectory,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 function localWorkflow() {
   return createWorkflowState({

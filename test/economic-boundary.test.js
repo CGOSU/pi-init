@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildSessionProjection } from '@earendil-works/pi-coding-agent';
-import { createExtensionHarness, createWorkflowState, emitExtensionEvent, workflowMessageIdentity,
-  withTempDirectory, mkdir, path, writeFile } from './helpers.js';
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 test('profitable task history does not trigger proactive compaction', async () => {
   await withTempDirectory(async cwd => {

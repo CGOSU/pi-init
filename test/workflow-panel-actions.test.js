@@ -5,7 +5,7 @@ import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { workflowPanelChoices, runWorkflowPanelRequest } from "../extensions/workflow-panel-actions.ts";
 import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 import { createWorkflowActions } from "../extensions/workflow-actions.ts";
 import { showWorkflowPanel } from "../extensions/workflow-panel.ts";
 

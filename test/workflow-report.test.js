@@ -13,7 +13,9 @@ import { createWorkflowReport } from "../extensions/workflow-report.ts";
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
 import { formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
 import { attachWorkflowPresentation } from "../extensions/workflow-presentation.ts";
-import { createExtensionHarness, emitExtensionEvent, workflowMessageIdentity, withTempDirectory } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 function createCompletedWorkflow() {
   const plan = createWorkflowState({

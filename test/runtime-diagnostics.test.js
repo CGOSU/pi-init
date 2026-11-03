@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createExtensionHarness, emitExtensionEvent } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
 import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
 import { createWorkflowState } from "../src/workflow.ts";

@@ -8,7 +8,7 @@ import {
   formatActivityStatusText,
   renderActivityStatus,
 } from "../extensions/activity-status.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 
 const theme = { fg: (_color, text) => text };
 

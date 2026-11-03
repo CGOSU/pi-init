@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createExtensionHarness, emitExtensionEvent } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { createWorkflowState, requestWorkflowReplan } from "../src/workflow.ts";
 import { buildHandoffSnapshot } from "../extensions/handoff-snapshot.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";

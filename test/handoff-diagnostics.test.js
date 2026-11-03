@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createExtensionHarness, emitExtensionEvent } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 async function withMonitor(run, options = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "pi-init-handoff-"));

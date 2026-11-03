@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { listSessionFiles, scanSessionFile } from "../scripts/pi-usage/core.js";
-import * as helpers from "./helpers.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { parseUsageRange, summarizeUsage } from "../scripts/pi-usage.js";
-
-const { mkdir, path, withTempDirectory, writeFile } = helpers;
 
 test("pi-usage 不扫描 SoL-Pi 内部归档 JSONL", async () => {
   await withTempDirectory(async (directory) => {

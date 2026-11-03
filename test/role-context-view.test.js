@@ -13,7 +13,7 @@ import {
   requestWorkflowReplan,
   ensureWorkflowReplanHandoff,
 } from "../src/workflow.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 import { blockWorkflowTask } from "../src/workflow.ts";
 import { groupToolMessages, hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 

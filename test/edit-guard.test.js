@@ -2,14 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createEditToolDefinition } from "@earendil-works/pi-coding-agent";
-import {
-  createExtensionHarness,
-  emitExtensionEvent,
-  path,
-  readFile,
-  writeFile,
-  withTempDirectory,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import path from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { withTempDirectory } from "./support/temp-directory.js";
 import {
   EDIT_GUARD_CODES,
   classifyEditArguments,

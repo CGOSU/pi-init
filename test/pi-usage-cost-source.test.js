@@ -4,7 +4,7 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { summarizeUsage, queryUsage } from "../scripts/pi-usage/refresh.js";
 import { withDatabase } from "../scripts/pi-usage/database.js";
-import { withTempDirectory } from "./helpers.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 const day = "2026-08-09";
 const event = (id, model, total, marker, date = day) => ({

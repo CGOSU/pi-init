@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { createExtensionHarness, createWorkflowState, emitExtensionEvent, workflowMessageIdentity, withTempDirectory, mkdir, path, writeFile } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { buildSessionHandoff, importedWorkflow, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
 import { readFile } from "node:fs/promises";
 

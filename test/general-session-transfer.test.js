@@ -6,7 +6,7 @@ import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.t
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createSessionHandoff } from "../extensions/session-handoff.ts";
 import { GENERAL_TRANSFER_ENTRY } from "../extensions/general-session-transfer.ts";
-import { withTempDirectory } from "./helpers.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 const body = () => ({ goal: "继续普通会话", constraints: ["不部署"], completed: ["已调查"], remaining: ["实现后续"], verification: [], unknowns: ["未验证费用"], nextStep: "等待用户继续", sources: [] });
 function fixture(cwd, manager = SessionManager.create(cwd, cwd)) {

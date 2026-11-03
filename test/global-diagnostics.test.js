@@ -126,7 +126,7 @@ test("项目写入失败不阻止全局诊断，未信任项目不写入", async
 
 test("真实命令故障保持原失败提示，自动和详细模式都接入全局层", async () => fixture(async ({ root }) => {
   // Separate processes keep SDK environment and diagnostic modes out of other tests.
-  const helper = new URL("./helpers.js", import.meta.url).href;
+  const helper = new URL("./support/extension-harness.js", import.meta.url).href;
   for (const mode of ["", "1", "blocked"]) {
     const agent = join(root, "agent-" + mode);
     const source = `import {createExtensionHarness,emitExtensionEvent} from ${JSON.stringify(helper)};

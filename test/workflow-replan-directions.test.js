@@ -1,21 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
+import { appendWorkflowReplanDirection, applyWorkflowReplan, completeWorkflowTask, getNextWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask } from "../src/workflow.ts";
+import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { } from "../src/workflow.ts";
-
-const {
-  appendWorkflowReplanDirection,
-  applyWorkflowReplan,
-  completeWorkflowTask,
-  createWorkflowState,
-  createExtensionHarness,
-  emitExtensionEvent,
-  getNextWorkflowTask,
-  hydrateWorkflowState,
-  requestWorkflowReplan,
-  startWorkflowTask,
-  withTempDirectory,
-} = helpers;
 
 const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };

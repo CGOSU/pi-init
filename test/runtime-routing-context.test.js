@@ -3,7 +3,7 @@ import test from "node:test";
 import { createRuntimeRoutingContext } from "../extensions/runtime-routing-context.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 
 function routingSection(state) {
   const harness = createExtensionHarness([], { sessionId: "routing-session" });

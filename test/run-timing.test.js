@@ -1,18 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
+import { completeRunTiming, createRunTiming, getRunTimingDuration, isExternalRunSource } from "../src/run-timing.ts";
+import { createExtensionHarness, runExternalAgent } from "./support/extension-harness.js";
 import { createRunTimingView } from "../extensions/run-timing-view.ts";
 import { formatRunTimingText } from "../extensions/run-timing-renderer.ts";
 import { createRunTimingDiagnostics } from "../extensions/run-timing-diagnostics.ts";
-
-const {
-  completeRunTiming,
-  createRunTiming,
-  getRunTimingDuration,
-  isExternalRunSource,
-  createExtensionHarness,
-  runExternalAgent,
-} = helpers;
 
 test("普通执行计时限定外部来源并拒绝无效时间边界", () => {
   assert.equal(isExternalRunSource("interactive"), true);

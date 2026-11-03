@@ -3,7 +3,10 @@ import test from 'node:test';
 import { nextWorkflowAction } from '../extensions/workflow-action-policy.ts';
 import { createExtensionRuntimeState } from '../extensions/runtime-state.ts';
 import { createRoleHandoff } from '../extensions/role-handoff.ts';
-import { createWorkflowState, startWorkflowTask, requestWorkflowReplan, completeWorkflowTask, createExtensionHarness, emitExtensionEvent, withTempDirectory } from './helpers.js';
+import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { startWorkflowTask, requestWorkflowReplan, completeWorkflowTask } from "../src/workflow.ts";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { createRuntimeRoutingContext } from '../extensions/runtime-routing-context.ts';
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -63,7 +66,6 @@ test('runtime section uses same boundary guidance rather than architect ping-pon
 
 test('request and application reject premature replan with stable executor guidance', async () => {
   const { createWorkflowActions } = await import('../extensions/workflow-actions.ts');
-  const { createExtensionHarness } = await import('./helpers.js');
   const { workflowActionIdentity } = await import('../src/workflow.ts');
   const harness = createExtensionHarness([], { trusted: true });
   const workflow = requestWorkflowReplan(running(), { direction: 'new direction' });

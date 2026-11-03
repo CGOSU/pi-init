@@ -1,18 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
-
-const {
-  mkdir,
-  readFile,
-  path,
-  createScaffold,
-  DEFAULT_ROLE_CONFIG,
-  resolveRoleConfig,
-  unwrapRoleResult,
-  withTempDirectory,
-  writeFile,
-} = helpers;
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { createScaffold } from "../src/scaffold.ts";
+import { DEFAULT_ROLE_CONFIG, resolveRoleConfig, unwrapRoleResult } from "../src/roles.ts";
+import { withTempDirectory } from "./support/temp-directory.js";
 
 test("默认脚手架生成约定文件并替换项目变量", async () => {
   await withTempDirectory(async (directory) => {

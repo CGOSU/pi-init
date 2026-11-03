@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createActivityLifecycle } from "../extensions/activity-lifecycle.ts";
 import { ACTIVITY_STATUS_KEY, createActivityStatus } from "../extensions/activity-status.ts";
-import { createExtensionHarness } from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
 
 function createLifecycleHarness(options = {}) {
   const harness = createExtensionHarness([], { mode: "rpc" });

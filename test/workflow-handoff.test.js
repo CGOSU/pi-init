@@ -1,20 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import * as helpers from "./helpers.js";
-
-const {
-  createExtensionHarness,
-  createWorkflowState,
-  emitExtensionEvent,
-  workflowMessageIdentity,
-  startWorkflowTask,
-  markWorkflowTaskStarted,
-  withTempDirectory,
-  mkdir,
-  path,
-  writeFile,
-} = helpers;
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState, workflowMessageIdentity, markWorkflowTaskStarted } from "./support/workflow-fixtures.js";
+import { startWorkflowTask, requestWorkflowReplan } from "../src/workflow.ts";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
 const architectModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
@@ -430,7 +422,6 @@ test("forked session 的旧 workflow 状态 fail-closed", async () => {
 test("新用户方向使旧 revision handoff 失效，只有最新身份能应用计划", async () => {
   await withTempDirectory(async (directory) => {
     const initial = createWorkflowState({ summary: "待重规划", tasks: tasks() }, 100);
-    const { requestWorkflowReplan } = helpers;
     const replanning = requestWorkflowReplan(initial, { revisionId: "revision-1", direction: "第一条方向" }, 110);
     const harness = await taskHarness(directory, { state: replanning, model: architectModel, role: "architect" });
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");

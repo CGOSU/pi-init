@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { readReviewPage, FILE_REVIEW_READ_MAX_BYTES } from '../extensions/file-review-read.ts';
-import { createExtensionHarness, emitExtensionEvent } from './helpers.js';
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 async function fixture(run) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-review-read-'));

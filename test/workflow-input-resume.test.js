@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  createExtensionHarness,
-  emitExtensionEvent,
-  mkdir,
-  path,
-  withTempDirectory,
-  writeFile,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput } from "../src/workflow-input-intent.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };

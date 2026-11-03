@@ -7,7 +7,8 @@ import { createWorkflowUserControl } from "../extensions/workflow-user-control.t
 import { createRepeatedRejectionGuard } from "../extensions/workflow-status-polling.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { withTempDirectory, createExtensionHarness, emitExtensionEvent } from "./helpers.js";
+import { withTempDirectory } from "./support/temp-directory.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 function fixture(cwd) {
   const state = createExtensionRuntimeState();
   state.workflowState = createWorkflowState({ sessionId: "s", workflowId: "w", summary: "整体运行时收敛", tasks: [{ id: "one", task: "收敛生命周期", role: "developer-test", files: ["src"], acceptanceCriteria: ["安全停止"] }, { id: "two", task: "补齐预算", role: "developer-test", files: ["src"], acceptanceCriteria: ["预算可达"] }] }, 1);

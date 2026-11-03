@@ -1,18 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import * as helpers from "./helpers.js";
+import { createExtensionHarness } from "./support/extension-harness.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { withTempDirectory } from "./support/temp-directory.js";
+import path from "node:path";
 import { MENU_BACK, selectRoleModel, showMenu } from "../extensions/ui.ts";
 import { createControlCenter } from "../extensions/control-center.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-
-const {
-  createExtensionHarness,
-  mkdir,
-  readFile,
-  withTempDirectory,
-  writeFile,
-  path,
-} = helpers;
 
 async function waitForRoleModelConfig(directory, expected) {
   const configPath = path.join(directory, ".pi", "role-models.json");

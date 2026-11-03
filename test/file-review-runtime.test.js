@@ -3,12 +3,8 @@ import test from "node:test";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createExtensionHarness,
-  createWorkflowState,
-  emitExtensionEvent,
-  emitToolResult,
-} from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent, emitToolResult } from "./support/extension-harness.js";
+import { createWorkflowState } from "./support/workflow-fixtures.js";
 
 const lineCount = 501;
 

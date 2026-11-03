@@ -9,7 +9,9 @@ import { createRoleContextView } from "../extensions/role-context-view.ts";
 import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowActions } from "../extensions/workflow-actions.ts";
-import { createExtensionHarness, createWorkflowState, emitExtensionEvent, withTempDirectory } from "./helpers.js";
+import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 import { hydrateWorkflowState } from "../src/workflow.ts";
 
 function fixture() {

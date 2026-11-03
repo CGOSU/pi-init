@@ -2,6 +2,12 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：落实扩展、用量查询及测试辅助结构拆分
+
+- 完成：扩展入口中的命令/工具适配提取至 `extension-command.ts`、`project-tool.ts`、`role-tool.ts`、`workflow-revision-input.ts` 和 `workflow-tool.ts`，生命周期和唯一共享运行时状态仍由入口持有；`pi-usage` 的查询 SQL、映射及速度聚合移至 `scripts/pi-usage/query.js`。测试辅助拆至 `test/support/extension-harness.js`、`temp-directory.js` 和 `workflow-fixtures.js`，迁移静态/动态调用方及子进程诊断入口后删除 `test/helpers.js`；用量测试拆分到 CLI、报告主题文件。保留既有行为契约和断言，无新增低收益测试、依赖或生产 API 改动。
+- 验证：全部改动完成后执行 `npm test`，749/749 通过；`npm run typecheck`（`tsc --noEmit`）通过；`git diff --check` 无诊断。静态核对确认抽取的测试辅助和查询实现与原实现一致，受影响的 52 个既有测试文件中的 assert 调用主体未变；支持模块没有相互依赖。测试、类型检查和依赖配置此后未变，收尾复用上述结果。
+- 限制：未在真实 Pi 宿主或 Provider 环境验证；本次未改业务行为，不做部署或 push。
+
 ### 2026-11-02：适配 Pi 1.5.0 并准备版本 2.0.11 更新说明
 
 - 完成：开发/测试 SDK 基线锁定 Pi 1.5.0，保留 `^1.3.0` peer 下限；`pi-usage` 标注 Provider 上报、估算或混合总费用来源，费用/缓存计算口径不变；内联模型选择和文本输入等待时标记 question 阻塞状态。新增根目录 `CHANGELOG.md`、纳入包分发清单并将版本元数据更新为 2.0.11；README 补充更新提示、状态和费用来源说明。决策及边界见[设计决策](decisions.md)。
