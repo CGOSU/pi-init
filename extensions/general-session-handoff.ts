@@ -4,12 +4,14 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { activeRoleMatches, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_INVALIDATED, GENERAL_HANDOFF_TOOL, generalHandoffBranchHash, parseGeneralHandoff, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
 import { SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
+import type { ToolSettlement } from "./general-tool-settlement.ts";
 
 const sourceSchema = Type.Object({ kind: Type.Union([Type.Literal("session-entry"), Type.Literal("file")]), location: Type.String(), description: Type.String() }, { additionalProperties: false });
 const strings = Type.Array(Type.String());
 
 /** Preparation only: no provider requests, workflow creation, migration or resumption. */
-export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState) {
+export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState,
+  checkTools: (ctx: ExtensionContext, preparingId: string) => ToolSettlement) {
   const activeTools = new Set<string>();
   function invalidate(reason: string, ctx: ExtensionContext) {
     if (ctx.sessionManager.getBranch().some(e => e.type === "custom" && e.customType === GENERAL_HANDOFF_ENTRY)) {
@@ -55,6 +57,8 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
       if (!state.activeRole || state.activeRole.role === "architect" || !activeRoleMatches(state, ctx, pi.getThinkingLevel())) return fail("ROLE", "仅当前已确认且模型匹配的执行角色可准备交接");
       if (state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status)) return fail("WORKFLOW_ACTIVE", "未结束工作流必须使用已有工作流交接路径");
       if ([...activeTools].some(id => id !== toolCallId)) return fail("TOOLS_ACTIVE", "仍有其他工具执行，不能保存现场快照");
+      const settlement = checkTools(ctx, toolCallId);
+      if (!settlement.ok) return fail(settlement.code, settlement.message);
       const parsed = parseGeneralHandoff(input);
       if (!parsed.ok) return result(parsed);
       try {

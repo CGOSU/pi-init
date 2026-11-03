@@ -12,10 +12,10 @@ import { createExtensionHarness } from "./support/extension-harness.js";
 
 const theme = { fg: (_color, text) => text };
 
-test("Miss 金额和成功提醒次数同时展示，缺失数据不推断", () => {
-  const combined = formatActivityStatusText({ cacheReminderCount: 1, cacheMissTotalUsd: 1.85 });
-  assert.match(combined, /Miss 1 次 ≈\$1\.85/);
-  assert.match(formatActivityStatusText({ cacheReminderCount: 1 }), /Miss 1 次/);
+test("Miss 金额和已持久化事件次数同时展示，缺失数据不推断", () => {
+  const combined = formatActivityStatusText({ cacheMissCount: 2, cacheMissTotalUsd: 1.85 });
+  assert.match(combined, /Miss 2 次 ≈\$1\.85/);
+  assert.match(formatActivityStatusText({ cacheMissCount: 1 }), /Miss 1 次/);
   const amountOnly = formatActivityStatusText({ cacheMissTotalUsd: 1.85 });
   assert.match(amountOnly, /Miss ≈\$1\.85/);
   assert.doesNotMatch(amountOnly, /次/);

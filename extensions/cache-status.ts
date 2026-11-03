@@ -74,7 +74,7 @@ export function parseCacheUsage(usage: unknown): Result<CacheUsageValue, CacheUs
 }
 
 export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStatusReporter) {
-  const reminder = createCacheMissReminder(pi, activityStatus.setCacheReminderCount);
+  const reminder = createCacheMissReminder(pi, activityStatus.setCacheMissCount);
   let contextGeneration = 0;
   let activeRequest: ActiveCacheRequest | undefined;
   let lastResult: CacheResult | undefined;

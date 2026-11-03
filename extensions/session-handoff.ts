@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ToolSettlement } from "./general-tool-settlement.ts";
 import { registerGeneralSessionHandoff } from "./general-session-handoff.ts";
 import { realpathSync } from "node:fs";
 import { createGeneralSessionTransfer, generalOutgoingTransfer } from "./general-session-transfer.ts";
@@ -55,9 +56,10 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
   restore: (ctx: ExtensionContext) => void;
   schedule: (ctx: ExtensionContext) => Promise<void>;
   toolsSettled: (ctx: ExtensionContext) => boolean;
+  generalToolsSettled: (ctx: ExtensionContext, preparingId?: string) => ToolSettlement;
 }) {
-  const generalHandoff = registerGeneralSessionHandoff(pi, state);
-  const generalTransfer = createGeneralSessionTransfer(pi, state, { read: generalHandoff.read, toolsSettled: deps.toolsSettled });
+  const generalHandoff = registerGeneralSessionHandoff(pi, state, deps.generalToolsSettled);
+  const generalTransfer = createGeneralSessionTransfer(pi, state, { read: generalHandoff.read, toolsSettled: deps.generalToolsSettled });
   let switching = false;
   let confirming = false;
   let activating = false;

@@ -142,6 +142,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const sessionHandoff = createSessionHandoff(pi, runtimeState, {
     persist: workflowReport.persistWorkflowState, restore: workflowDispatch.restoreWorkflowState,
     schedule: workflowDispatch.scheduleWorkflow, toolsSettled: workflowBinding.toolsSettled,
+    generalToolsSettled: workflowBinding.generalToolsSettled,
   });
   const workflowActions = createWorkflowActions(runtimeState, {
     roleRuntime,

@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { generalToolSettlement, type ToolSettlement } from "./general-tool-settlement.ts";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { activeRoleMatches } from "./runtime-state.ts";
@@ -162,16 +163,25 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     const messages = branch.slice(start + 1).flatMap(entry => entry.type === "message" ? [entry.message] : []);
     return persistedToolsComplete(messages);
   }
-  function persistedToolsComplete(messages: readonly ContextMessage[], allowHistoricalErrors = false) {
+  function persistedToolsComplete(messages: readonly ContextMessage[]) {
     // Pi system updates carry no tool calls; retain them in history, outside pair validation.
     const toolMessages = messages.filter(message => message.role !== "system");
     if (activeTools.size || uncertainTools || !hasCompleteToolPairs(toolMessages) || messages.some(message => {
       if (message.role !== "toolResult") return false;
       const nested = isRecord(message) ? message.nestedCalls : undefined;
-      return !allowHistoricalErrors && message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
+      return message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
     })) return false;
     const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
     return [...executedRoots].every(id => results.has(id));
+  }
+  function generalToolsSettled(ctx: ExtensionContext, preparingId?: string): ToolSettlement {
+    if ([...activeTools].some(id => id !== preparingId) || uncertainTools) return { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "仍有活动工具或本轮工具结果未确认；请核对真实结果，不要重试未知操作。" };
+    const messages = ctx.sessionManager.getBranch().flatMap(entry => entry.type === "message" ? [entry.message] : []);
+    const persisted = generalToolSettlement(messages, preparingId);
+    if (!persisted.ok) return persisted;
+    const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
+    if ([...executedRoots].some(id => id !== preparingId && !results.has(id))) return { ok: false, code: "TOOL_RESULT_MISSING", message: "本轮已执行工具缺少持久化结果。" };
+    return { ok: true };
   }
   function toolsSettled(ctx: ExtensionContext) {
     const workflow = state.workflowState;
@@ -179,8 +189,8 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     if (!workflow || ["completed", "cancelled"].includes(workflow.status)) {
       // A paired historical error alone does not mean a tool is still running.
       // This does not prove success or no side effects: retain failures/unknowns in handoff.
-      // Live uncertainty, missing pairs and incomplete nested receipts remain blocking.
-      return persistedToolsComplete(branch.flatMap(entry => entry.type === "message" ? [entry.message] : []), true);
+      // Live uncertainty, missing pairs and unexplained incomplete nested receipts remain blocking.
+      return generalToolsSettled(ctx).ok;
     }
     const start = branch.findLastIndex(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task"
       && isRecord(entry.details) && entry.details.workflowId === workflow.workflowId
@@ -220,5 +230,5 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   pi.on("session_tree", reset);
   pi.on("session_shutdown", reset);
   pi.on("session_compact", reset);
-  return { bind, source, isCurrentSource, providerFailureGuard, toolsSettled };
+  return { bind, source, isCurrentSource, providerFailureGuard, toolsSettled, generalToolsSettled };
 }

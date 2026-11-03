@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ToolSettlement } from "./general-tool-settlement.ts";
 import { realpathSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeRoleMatches, type ExtensionRuntimeState } from "./runtime-state.ts";
@@ -27,7 +28,7 @@ function background(snapshot: GeneralHandoffSnapshot) {
 
 export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionRuntimeState, deps: {
   read: (ctx: ExtensionContext) => HandoffResult<GeneralHandoffSnapshot>;
-  toolsSettled: (ctx: ExtensionContext) => boolean;
+  toolsSettled: (ctx: ExtensionContext) => ToolSettlement;
 }) {
   let switching = false;
   let storageUncertain = false;
@@ -46,7 +47,8 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
     if (state.sessionModeOverride !== undefined || Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型/模式配置；请保存所需配置或撤销覆盖后再准备交接。");
     if (state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status)) return fail("WORKFLOW_ACTIVE", "未结束工作流必须沿工作流安全边界交接。");
     if (!state.activeRole || !activeRoleMatches(state, ctx, pi.getThinkingLevel())) return fail("ROLE_MODEL_MISMATCH", "职责与当前模型/推理级别不匹配；请先确认职责，再重新准备交接。");
-    if (!deps.toolsSettled(ctx)) return fail("TOOLS_NOT_SETTLED", "工具执行或结果尚未确认，或历史工具配对/嵌套回执不完整；请先核对真实结果，勿重复执行未知操作。");
+    const settlement = deps.toolsSettled(ctx);
+    if (!settlement.ok) return fail(settlement.code, settlement.message);
     return { ok: true, value: true };
   }
   const ready = (ctx: ExtensionContext) => checkReady(ctx).ok;

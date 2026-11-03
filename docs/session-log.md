@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-03：修复普通 fresh 嵌套回执误判并累计 Miss 样本数
+
+- 根因：用户更新并 reload 后仍遇到 `TOOLS_NOT_SETTLED`。只读检查 context-mode 原 session 确认真正原因是 Pi SDK 1.5.0 `NestedCallRecorder` 的 `complete:false` 也用于标记因参数正文过大而省略记录，并不总表示子调用未完成；此前遥测 allowlist 与空白错误 `context_edit` 两项修复虽各自有效，但不是这次工具未收敛阻断点。指定日志含20条 `complete:false` 回执，497个子调用均有终态，175条参数正文被省略；415组外层工具配对的收敛检查通过。只读核验前后源日志 SHA-256 均为 `581b4a36b3b7cc1894b0d5452ea5ce13fb38b24e653648a3430bd16c204c0840`，未改写或重放真实会话。
+- 修复：普通会话仅在结构/ID/序号与子调用终态有效、未触及数量截断歧义，且省略字节数符合 SDK 大小限制时接受 `complete:false`；真实 unfinished、缺失/重复回执及活动/不确定工具仍拒绝。工作流证据继续要求完整嵌套回执。Miss 状态栏次数改为成功保存的合格事件样本数，reload时按同session、阈值及有效金额匹配的历史样本恢复；通知失败/通知记录不改变事件数，单session一次提醒策略保持不变。
+- 验证：修复前用 Pi SDK 1.5.0 `NestedCallRecorder` 生成 9014 字节参数、`status=ok`、`complete:false` 的真实回执，复现旧 `toolsSettled` 错误拒绝。交接/工具收敛定向回归 `node --experimental-strip-types --test test/general-tool-settlement.test.js test/general-session-handoff.test.js test/general-session-transfer.test.js test/workflow-tool-binding.test.js test/session-handoff.test.js test/role-context-view.test.js test/provider-request-recovery.test.js` 为 93/93；Miss/状态定向回归 `node --experimental-strip-types --test test/cache-miss-reminder.test.js test/cache-status.test.js test/activity-status.test.js` 为 38/38；`npm run typecheck` 通过；文档更新后的 `git diff --check` 无诊断。
+- 边界：没有在真实 Pi UI 执行 fresh/确认或新建目标会话，没有改写 context-mode 日志，也没有更新安装副本、发布或 push；离线SDK fixture及只读日志检查不等于宿主切换已验证。详细策略与复发风险见[决策](decisions.md)及[踩坑](pitfalls.md)。
+
 ### 2026-11-03：修复交接快照被 Pi 失败恢复 context_edit 误判为过期
 
 - 现象与复核：运行副本更新后重新准备的 `session_handoff` 在 `2026-11-03T06:53:02Z` 成功（快照 `OK`）。模型在 `2026-11-03T06:54:27Z` 遇到 `upstream connect error ... connection termination`，Pi 为隐藏其空内容失败回复追加 `context_edit(replacement: null)`；当前源码逐 branch 核验从该记录起变为 `STALE`。故障记录时间为 UTC；不涉及之前已排除的统计遥测。

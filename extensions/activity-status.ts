@@ -76,7 +76,7 @@ export type ActivityStatusSnapshot = {
   operation?: ActivityStatusOperation;
   alert?: ActivityStatusAlert;
   cache?: ActivityStatusCache;
-  cacheReminderCount?: number;
+  cacheMissCount?: number;
   cacheMissTotalUsd?: number;
   workTimeMilliseconds?: number;
 };
@@ -218,13 +218,13 @@ export function activityStatusSegments(state: ActivityStatusSnapshot, now = Date
   if (workflow && primary !== workflow) segments.push(workflow);
   if (agentOperation && primary !== agentOperation && !compaction && !workflow) segments.push(agentOperation);
   if (urgentCurrentCache && primary !== urgentCurrentCache) segments.push(urgentCurrentCache);
-  const reminderCount = state.cacheReminderCount && Number.isSafeInteger(state.cacheReminderCount) && state.cacheReminderCount > 0
-    ? `${state.cacheReminderCount} 次`
+  const missCount = state.cacheMissCount && Number.isSafeInteger(state.cacheMissCount) && state.cacheMissCount > 0
+    ? `${state.cacheMissCount} 次`
     : undefined;
   if (typeof state.cacheMissTotalUsd === "number" && Number.isFinite(state.cacheMissTotalUsd) && state.cacheMissTotalUsd > 0) {
-    segments.push({ text: `Miss ${reminderCount ? `${reminderCount} ` : ""}≈$${state.cacheMissTotalUsd.toFixed(2)}`, tone: "warning" });
-  } else if (reminderCount) {
-    segments.push({ text: `Miss ${reminderCount}`, tone: "warning" });
+    segments.push({ text: `Miss ${missCount ? `${missCount} ` : ""}≈$${state.cacheMissTotalUsd.toFixed(2)}`, tone: "warning" });
+  } else if (missCount) {
+    segments.push({ text: `Miss ${missCount}`, tone: "warning" });
   }
   segments.push(...roleSegments(state.role));
 
@@ -362,8 +362,8 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     setOperation: (ctx: ExtensionContext, value: ActivityStatusOperation | undefined) => update(ctx, "operation", value),
     setAlert: (ctx: ExtensionContext, value: ActivityStatusAlert | undefined) => update(ctx, "alert", value),
     setCache: (ctx: ExtensionContext, value: ActivityStatusCache | undefined) => update(ctx, "cache", value),
-    setCacheReminderCount: (ctx: ExtensionContext, value: number | undefined, totalUsd?: number) => {
-      snapshot = { ...snapshot, cacheReminderCount: value, cacheMissTotalUsd: totalUsd };
+    setCacheMissCount: (ctx: ExtensionContext, value: number | undefined, totalUsd?: number) => {
+      snapshot = { ...snapshot, cacheMissCount: value, cacheMissTotalUsd: totalUsd };
       render(ctx);
     },
     setWorkTime: (ctx: ExtensionContext, value: number | undefined) => update(ctx, "workTimeMilliseconds", value),

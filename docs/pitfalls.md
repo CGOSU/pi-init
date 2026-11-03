@@ -14,6 +14,21 @@
 
 ## 已知问题
 
+### 2026-11-03：SDK complete:false 不一定代表嵌套工具未结束
+
+- 现象：Pi SDK 1.5.0 的嵌套回执可在子调用实际成功结束时报告 `complete:false`，普通 `/pi-init fresh` 若直接照搬此布尔值会返回 `TOOLS_NOT_SETTLED`。
+- 根因：`NestedCallRecorder` 会在单项参数超过 8 KiB 或累计参数超过 32 KiB 时省略参数正文；超过 256 条调用记录或仍有 unfinished 调用也可能令回执不完整。正文省略、记录截断和执行未结束必须分别核实。
+- 修复：仅对调用数低于歧义上限、ID/父子关系/序号结构完整唯一、所有子调用都有终态，且省略正文长度符合 SDK 上限的回执接受 `complete:false`。不可解析、超边界、unfinished、缺失/重复配对继续 fail-closed；工作流证据仍要求完整回执。
+- 验证：用 SDK 真实生成的 9014 字节参数省略回执复现；只读核对的 context-mode session 中20条不完整回执、497个子调用和415组外层结果均符合收敛规则，源日志hash未变。详见[会话记录](session-log.md#2026-11-03修复普通-fresh-嵌套回执误判并累计-miss-样本数)与[设计决策](decisions.md)。
+- 边界：普通日志中的历史终态只说明调用已收敛，不代表副作用成功或安全可重放；绝不能因 SDK 存在参数省略就整体忽略 `complete:false`。
+
+### 2026-11-03：Miss 次数不是成功提醒次数
+
+- 现象：同一 session 发生多次合格缓存失配，状态栏一直显示 `Miss 1 次`；UI提醒最多一次导致基于提醒记录恢复只能得到0或1。
+- 根因：`CACHE_MISS_NOTICE` 表示通知抑制/送达阶段，不是事件账本；每个成功持久化的合格样本各有一条阈值标记 `CACHE_MISS_TOTAL`。
+- 修复：计数按当前session中有效且阈值匹配的样本记录重建；只在事件记录写入成功后增加。通知送达与事件计数分离，失败的事件保存不得虚增。
+- 验证：连续样本、低额/等额门槛、session往返、历史恢复、`notifying`/`sent`通知故障和事件存储失败均由 cache-miss 定向回归覆盖，见[会话记录](session-log.md#2026-11-03修复普通-fresh-嵌套回执误判并累计-miss-样本数)。
+
 ### 2026-11-03：Pi 隐藏空白失败回复的 context_edit 会使交接快照过期
 
 - Pi 遇到连接中断等模型错误时，可能留下 `stopReason: error`、空 content 的 assistant entry，再追加 `context_edit` 以从后续模型上下文隐藏它。普通 session handoff 若只检查 entry ID，就会把这类非业务恢复记录识别成来源变化，导致预览/确认失败。

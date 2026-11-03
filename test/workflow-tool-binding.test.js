@@ -5,6 +5,7 @@ import { taskWorkflowParameters } from "../extensions/contracts.ts";
 import { validateWorkflowMutationIdentity } from "../src/workflow-handoff.ts";
 import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
+import { sdkReceipt } from "./support/nested-receipt.js";
 
 function fixture() {
   const handlers = new Map();
@@ -117,12 +118,34 @@ test("source lookup is non-consuming and refuses a message after its task or bra
   assert.equal(f.binding.source(message, f.ctx), undefined);
 });
 
+test("ordinary SDK argument omission is settled while workflow evidence still requires complete receipts", () => {
+  const f = fixture();
+  const anchor = { type: "custom_message", customType: "pi-init-workflow-task", details: f.identity };
+  const call = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }] } };
+  const result = { type: "message", message: { role: "toolResult", toolCallId: "root", content: [], nestedCalls: sdkReceipt() } };
+  f.setBranch([anchor, call, result]);
+  assert.equal(f.binding.toolsSettled(f.ctx), false);
+  f.state.workflowState = undefined;
+  assert.equal(f.binding.toolsSettled(f.ctx), true);
+  const prepare = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "prepare", name: "session_handoff", arguments: {} }] } };
+  f.setBranch([call, result, prepare]);
+  f.handlers.get("tool_execution_start")({ toolCallId: "prepare" });
+  assert.equal(f.binding.generalToolsSettled(f.ctx, "prepare").ok, true);
+  assert.equal(f.binding.generalToolsSettled(f.ctx).code, "TOOLS_RUNTIME_UNCERTAIN");
+  f.handlers.get("tool_execution_start")({ toolCallId: "other" });
+  assert.equal(f.binding.generalToolsSettled(f.ctx, "prepare").code, "TOOLS_RUNTIME_UNCERTAIN");
+  f.handlers.get("tool_execution_end")({ toolCallId: "other" });
+  assert.equal(f.binding.generalToolsSettled(f.ctx, "prepare").code, "TOOL_RESULT_MISSING");
+  f.handlers.get("tool_execution_end")({ toolCallId: "unknown" });
+  assert.equal(f.binding.generalToolsSettled(f.ctx, "prepare").code, "TOOLS_RUNTIME_UNCERTAIN");
+});
+
 test("ordinary sessions share root and nested tool convergence without a workflow identity", () => {
   const f = fixture();
   f.state.workflowState = undefined;
   const system = { type: "message", message: { role: "system", content: "Pi runtime system update", timestamp: 1 } };
   const assistant = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }] } };
-  const result = { type: "message", message: { role: "toolResult", toolCallId: "root", isError: false, content: [], nestedCalls: { complete: true } } };
+  const result = { type: "message", message: { role: "toolResult", toolCallId: "root", isError: false, content: [], nestedCalls: { complete: true, calls: [] } } };
   f.setBranch([system, assistant]);
   assert.equal(f.binding.toolsSettled(f.ctx), false);
   f.handlers.get("tool_execution_start")({ toolCallId: "root" });

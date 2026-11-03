@@ -41,10 +41,14 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     previous = undefined;
     const entries = ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch();
     const entry = entries.findLast(e => e.type === "custom" && e.customType === CACHE_MISS_NOTICE && record(e.data) && e.data.sessionId === sessionId);
-    const total = entries.findLast(e => e.type === "custom" && e.customType === CACHE_MISS_TOTAL && record(e.data) && e.data.sessionId === sessionId && e.data.thresholdUsd === CACHE_MISS_THRESHOLD_USD);
-    totalUsd = total?.type === "custom" && record(total.data) && typeof total.data.totalUsd === "number" && Number.isFinite(total.data.totalUsd) && total.data.totalUsd >= 0 ? total.data.totalUsd : 0;
+    // Each qualified total entry is one successfully persisted event, not one delivered notice.
+    const totals = entries.filter(e => e.type === "custom" && e.customType === CACHE_MISS_TOTAL && record(e.data)
+      && e.data.sessionId === sessionId && e.data.thresholdUsd === CACHE_MISS_THRESHOLD_USD
+      && typeof e.data.totalUsd === "number" && Number.isFinite(e.data.totalUsd) && e.data.totalUsd > CACHE_MISS_THRESHOLD_USD);
+    const total = totals.at(-1);
+    totalUsd = total?.type === "custom" && record(total.data) ? total.data.totalUsd as number : 0;
     suppressed = entry?.type === "custom";
-    count = entry?.type === "custom" && record(entry.data) && entry.data.phase === "sent" ? 1 : 0;
+    count = totals.length;
     publish(ctx);
   }
   function observe(ctx: ExtensionContext, message: AssistantMessage) {
@@ -63,6 +67,7 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     try { pi.appendEntry(CACHE_MISS_TOTAL, { sessionId, totalUsd: totalUsd + extra, thresholdUsd: CACHE_MISS_THRESHOLD_USD }); }
     catch { return; }
     totalUsd += extra;
+    count++;
     publish(ctx);
     if (suppressed) return;
     // Persist suppression first. An interrupted notification must not be replayed after reload.
@@ -73,10 +78,8 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     try {
       ctx.ui.notify(`Miss：估算额外成本约 $${extra.toFixed(2)}，本会话累计约 $${totalUsd.toFixed(2)}（非账单金额）。建议在当前执行结束后让执行角色用 session_handoff 准备短交接，再运行 /pi-init fresh 预览确认。不会自动准备、切换或暂停任务；本会话仅提醒一次。`, "warning");
     } catch { return; }
-    count = 1;
     try { pi.appendEntry(CACHE_MISS_NOTICE, { ...data, phase: "sent" }); }
-    catch { /* The persisted notifying marker still prevents duplicate notices; delivery count is unknown after reload. */ }
-    publish(ctx);
+    catch { /* The persisted notifying marker still prevents duplicate notices; event count is unaffected. */ }
   }
   pi.on("session_start", (_event, ctx) => restore(ctx));
   pi.on("session_tree", (_event, ctx) => restore(ctx));

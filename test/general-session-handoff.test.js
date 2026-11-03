@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerGeneralSessionHandoff } from "../extensions/general-session-handoff.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
+import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
 import { GENERAL_HANDOFF_ENTRY, parseGeneralHandoff, readGeneralHandoff } from "../src/general-session-handoff.ts";
 import { SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -24,7 +25,8 @@ function fixture(cwd) {
   const state = createExtensionRuntimeState();
   state.activeRole = { role: "developer-test", provider: "test", model: "test", thinkingLevel: "medium" };
   const ctx = { cwd, sessionManager: manager, model: { provider: "test", id: "test" }, isProjectTrusted: () => true };
-  const api = registerGeneralSessionHandoff(pi, state);
+  const binding = createWorkflowToolBinding(pi, state);
+  const api = registerGeneralSessionHandoff(pi, state, binding.generalToolsSettled);
   const save = input => tools[0].execute("prepare", input ?? body(), undefined, undefined, ctx).then(result => result.details);
   const emit = async (name, event = {}) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
   return { manager, state, ctx, api, save, emit, pi };

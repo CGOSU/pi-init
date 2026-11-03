@@ -6,6 +6,7 @@ import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.t
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createSessionHandoff } from "../extensions/session-handoff.ts";
 import { GENERAL_TRANSFER_ENTRY } from "../extensions/general-session-transfer.ts";
+import { sdkReceipt } from "./support/nested-receipt.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 
 const body = () => ({ goal: "继续普通会话", constraints: ["不部署"], completed: ["已调查"], remaining: ["实现后续"], verification: [], unknowns: ["未验证费用"], nextStep: "等待用户继续", sources: [] });
@@ -28,16 +29,18 @@ function fixture(cwd, manager = SessionManager.create(cwd, cwd)) {
     },
   };
   const binding = createWorkflowToolBinding(pi, state);
-  const api = createSessionHandoff(pi, state, { toolsSettled: current => settled && binding.toolsSettled(current), persist() { throw new Error("ordinary handoff must not create workflow"); }, restore() {}, schedule() { throw new Error("must not schedule"); } });
+  const api = createSessionHandoff(pi, state, { generalToolsSettled: (current, preparingId) => settled ? binding.generalToolsSettled(current, preparingId) : { ok: false, code: "TOOLS_NOT_SETTLED", message: "test runtime uncertainty" }, toolsSettled: current => settled && binding.toolsSettled(current), persist() { throw new Error("ordinary handoff must not create workflow"); }, restore() {}, schedule() { throw new Error("must not schedule"); } });
   const save = async () => {
     manager.appendMessage({ role: "user", content: "准备交接", timestamp: Date.now() });
     const input = body();
     input.sources = [{ kind: "session-entry", location: manager.getLeafId(), description: "原始需求" }];
+    manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "prepare", name: "session_handoff", arguments: input }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
     const result = await tools.find(t => t.name === "session_handoff").execute("prepare", input, undefined, undefined, ctx);
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    manager.appendMessage({ role: "toolResult", toolCallId: "prepare", toolName: "session_handoff", content: result.content, isError: false, timestamp: Date.now() });
     return result.details.value;
   };
-  const h = { api, state, manager, ctx, notices, confirmations, save, setSettled(v) { settled = v; }, dispose() { disposed = true; state.runtimeDisposed = true; } };
+  const h = { api, state, manager, ctx, notices, confirmations, tools, save, setSettled(v) { settled = v; }, dispose() { disposed = true; state.runtimeDisposed = true; } };
   h.emit = async (name, event = {}) => { const results = []; for (const fn of handlers.get(name) ?? []) results.push(await fn(event, ctx)); return results; };
   ctx.sendMessage = async (message, options) => {
     assert.equal(options.triggerTurn, false);
@@ -106,6 +109,25 @@ test("ordinary handoff accepts system updates and a resolved historical edit rej
     await h.api.fresh(h.ctx);
     assert.equal(h.calls, 1);
     assert.equal(h.target.notices.at(-1).level, "info");
+  });
+});
+
+test("real SDK omitted-argument receipts pass preparation and fresh, but incomplete execution blocks preparation", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    h.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
+    h.manager.appendMessage({ role: "toolResult", toolCallId: "root", toolName: "codemode", content: [], isError: false, nestedCalls: sdkReceipt({ failed: true }), timestamp: Date.now() });
+    await h.save();
+    await h.api.fresh(h.ctx);
+    assert.equal(h.calls, 1);
+  });
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    h.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "root", name: "codemode", arguments: {} }, { type: "toolCall", id: "prepare", name: "session_handoff", arguments: body() }], api: "test", provider: "test", model: "test", usage: {}, stopReason: "toolUse", timestamp: Date.now() });
+    h.manager.appendMessage({ role: "toolResult", toolCallId: "root", toolName: "codemode", content: [], isError: false, nestedCalls: sdkReceipt({ unfinished: true }), timestamp: Date.now() });
+    const result = await h.tools.find(t => t.name === "session_handoff").execute("prepare", body(), undefined, undefined, h.ctx);
+    assert.equal(result.details.code, "NESTED_UNFINISHED");
+    assert.equal(h.calls ?? 0, 0);
   });
 });
 
