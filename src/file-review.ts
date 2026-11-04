@@ -1,3 +1,4 @@
+import { isReviewPathWithin, isTemporaryReviewDirectory, type FileReviewScanScope, type FileReviewExclusion } from "./file-review-scope.ts";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
@@ -37,9 +38,9 @@ export type FileScanError = {
 
 export type FileScanResult =
   | { ok: false; error: FileScanError }
-  | { ok: true; projectRoot: string; files: FileSnapshot[]; errors: FileScanError[] };
+  | { ok: true; projectRoot: string; files: FileSnapshot[]; errors: FileScanError[]; excluded?: FileReviewExclusion[] };
 
-// List pages always cover the project inventory, never a requested path.
+// List uses project-relative coordinates within the current /large scan scope; path does not filter a page.
 export type FileReviewListScope = {
   scope: "project";
   ignoredPath?: string;
@@ -105,7 +106,7 @@ function scanError(code: FileScanError["code"], path: string, error: unknown): F
 
 export async function scanProjectFiles(
   rootDir: string,
-  options: { previous?: readonly FileSnapshot[]; forcePaths?: readonly string[]; forceAll?: boolean } = {},
+  options: { previous?: readonly FileSnapshot[]; forcePaths?: readonly string[]; forceAll?: boolean } & FileReviewScanScope = {},
 ): Promise<FileScanResult> {
   let projectRoot: string;
   try {
@@ -125,10 +126,17 @@ export async function scanProjectFiles(
     return { ok: false, error: scanError("PROJECT_ROOT_UNREADABLE", projectRoot, error) };
   }
 
+  if (options.scope && isExcludedReviewDirectory(options.scope.split("/"))) {
+    return { ok: false, error: { code: "UNSUPPORTED_FILE", path: options.scope,
+      message: "扫描范围属于审阅策略排除的依赖、生成或诊断目录，不能作为完整源码范围扫描" } };
+  }
+
   const previous = new Map((options.previous ?? []).map((file) => [file.path, file]));
   const forced = new Set(options.forcePaths ?? []);
   const files: FileSnapshot[] = [];
   const errors: FileScanError[] = [];
+  const excluded: FileReviewExclusion[] = [];
+  let scopeFound = !options.scope || options.scope === ".";
 
   async function visit(directory: string) {
     let entries;
@@ -143,10 +151,23 @@ export async function scanProjectFiles(
     for (const entry of entries) {
       const absolutePath = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
+      const entryPath = relative(projectRoot, absolutePath).split(sep).join("/");
+      if (options.exclude?.some(prefix => isReviewPathWithin(entryPath, prefix))) {
+        excluded.push({ path: entryPath, reason: "explicit" }); continue;
+      }
+      if (!options.includeTemporary && entry.isDirectory() && isTemporaryReviewDirectory(entryPath)) {
+        excluded.push({ path: entryPath, reason: "temporary-source" }); continue;
+      }
       if (entry.isDirectory()) {
-        if (!isExcludedReviewDirectory(relative(projectRoot, absolutePath).split(sep))) await visit(absolutePath);
+        const withinScope = !options.scope || isReviewPathWithin(entryPath, options.scope)
+          || isReviewPathWithin(options.scope, entryPath);
+        if (withinScope && !isExcludedReviewDirectory(entryPath.split("/"))) {
+          if (options.scope === entryPath) scopeFound = true;
+          await visit(absolutePath);
+        }
         continue;
       }
+      if (options.scope && !isReviewPathWithin(entryPath, options.scope)) continue;
       if (!entry.isFile() || !FILE_REVIEW_CODE_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
 
       const path = relative(projectRoot, absolutePath).split(sep).join("/");
@@ -180,9 +201,10 @@ export async function scanProjectFiles(
   }
 
   await visit(projectRoot);
+  if (!scopeFound) errors.push({ code: "FILE_NOT_FOUND", path: options.scope!, message: "扫描范围目录不存在、被排除或为符号链接" });
   files.sort((left, right) => left.path.localeCompare(right.path));
   errors.sort((left, right) => left.path.localeCompare(right.path));
-  return { ok: true, projectRoot, files, errors };
+  return { ok: true, projectRoot, files, errors, excluded };
 }
 
 function sameFileVersion(left: BigIntStats, right: BigIntStats) {

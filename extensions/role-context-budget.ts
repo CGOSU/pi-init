@@ -6,7 +6,7 @@ import type { ContextGroup } from "./role-context-protocol.ts";
 
 type Message = ContextEvent["messages"][number];
 const ANCHORS = new Set(["pi-init-workflow-task", "pi-init-workflow-replan",
-  "pi-init-task-memory-view", "pi-init-role-handoff", "pi-init-workflow-paused-context", "pi-init-role-recovery", "pi-init-role-context-view-diagnostic"]);
+  "pi-init-task-memory-view", "pi-init-role-handoff", "pi-init-workflow-paused-context", "pi-init-workflow-waiting-context", "pi-init-role-recovery", "pi-init-role-context-view-diagnostic"]);
 
 export function contextByteBudget(contextWindow?: number) {
   return Number.isFinite(contextWindow) && contextWindow! > 0

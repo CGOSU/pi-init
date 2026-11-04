@@ -1,3 +1,4 @@
+import "../scripts/test-bootstrap.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile, stat, utimes, appendFile } from "node:fs/promises";
@@ -33,6 +34,10 @@ test("黑匣子正常回合仅保存摘要，记录用量且不创建详细日�
     assert.deepEqual(data.map(row => row.kind), ["summary"]);
     assert.equal(data[0].tokens.totalTokens, 12);
     assert.equal(data[0].toolCalls, 1);
+    assert.equal(data[0].runtimeIdentity.pid, process.pid);
+    assert.match(data[0].runtimeIdentity.sourceFingerprint, /^[a-f0-9]{64}$/);
+    assert.match(data[0].runtimeIdentity.sdkVersion, /^\d+\./);
+    assert.ok(Number.isFinite(Date.parse(data[0].runtimeIdentity.loadedAt)));
     assert.deepEqual(await readdir(join(cwd, ".pi")), ["diagnostics"]);
     assert.equal(JSON.stringify(data).includes("private"), false);
   });
@@ -64,6 +69,34 @@ test("黑匣子业务拒绝与用户取消不混为运行故障", async () => {
     assert.equal(data.find(row => row.kind === "issue").category, "business-rejection");
     assert.equal(data.find(row => row.kind === "summary").aborted, true);
     assert.equal(new Set(data.filter(row => row.kind === "issue").map(row => row.id)).size, 1);
+  });
+});
+
+test("故障后续现场在回合或事件预算封口，无关回合不重写，真正复发重新采集", async () => {
+  await withBox(async ({ emit, rows }) => {
+    await emit("before_agent_start");
+    await emit("tool_result", { toolName: "read", toolCallId: "first", isError: true });
+    await emit("agent_settled", { aborted: false });
+    const first = (await rows()).filter(row => row.kind === "issue");
+    assert.equal(first.at(-1).count, 1);
+    for (let round = 0; round < 3; round++) {
+      await emit("before_agent_start");
+      await emit("input", { source: "interactive" });
+      await emit("agent_settled", { aborted: false });
+    }
+    assert.deepEqual((await rows()).filter(row => row.kind === "issue"), first);
+    await emit("before_agent_start");
+    await emit("tool_result", { toolName: "read", toolCallId: "recurrence", isError: true });
+    for (let event = 0; event < 40; event++) await emit("input", { source: "interactive" });
+    await emit("agent_settled", { aborted: false });
+    const repeated = (await rows()).filter(row => row.kind === "issue");
+    assert.equal(repeated.at(-1).id, first[0].id);
+    assert.equal(repeated.at(-1).count, 2);
+    assert.equal(repeated.at(-1).latestTrigger.data.toolCallId, "recurrence");
+    assert.ok(repeated.at(-1).events.length <= 32);
+    assert.ok(repeated.at(-1).events.some(event => event.data.toolCallId === "recurrence"));
+    await emit("before_agent_start"); await emit("agent_settled", { aborted: false });
+    assert.deepEqual((await rows()).filter(row => row.kind === "issue"), repeated);
   });
 });
 test("黑匣子未信任项目及完全关闭模式不记录", async () => {

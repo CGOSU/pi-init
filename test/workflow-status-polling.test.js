@@ -68,6 +68,39 @@ test("unrestorable workflow status stops repeated polling without a guessed task
   assert.equal(guard.observe("no-workflow-2", ctx).stop, false);
 });
 
+test("one full-detail upgrade and one bounded source query are consumable without enabling alternating polls", () => {
+  const { guard, ctx } = fixture();
+  assert.equal(guard.observe("summary", ctx).stop, false);
+  assert.equal(guard.observe("full", ctx, { detail: "full" }).stop, false);
+  assert.equal(guard.observe("sources", ctx, { evidenceIds: ["source-1"] }).stop, false);
+  assert.equal(guard.observe("other-sources", ctx, { evidenceIds: ["source-2"] }).stop, true);
+  assert.equal(guard.observe("summary-again", ctx).stop, true);
+  assert.equal(guard.observe("full-again", ctx, { detail: "full" }).stop, true);
+  for (const evidenceIds of [undefined, [], [" "], Array(9).fill("source"), ["x".repeat(257)]]) {
+    const fresh = fixture();
+    assert.equal(fresh.guard.observe("first", fresh.ctx).stop, false);
+    assert.equal(fresh.guard.observe("invalid-source-upgrade", fresh.ctx, { evidenceIds }).stop, true);
+  }
+});
+
+test("registered status tool delivers summary then full history before stopping repeated full queries", async () => {
+  const initial = fixture().state.workflowState;
+  const harness = createExtensionHarness([{ type: "custom", id: "paused-state", customType: "pi-init-workflow", data: initial }]);
+  await emitExtensionEvent(harness, "session_start");
+  const tool = harness.tools.find(item => item.name === "task_workflow");
+  const first = await tool.execute("summary", { action: "status" }, undefined, undefined, harness.context);
+  assert.notEqual(first.terminate, true);
+  assert.match(first.content[0].text, /detail="full"/);
+  const detail = await tool.execute("detail", { action: "status", detail: "full" }, undefined, undefined, harness.context);
+  assert.notEqual(detail.terminate, true);
+  assert.match(detail.content[0].text, /\[pending\] task/);
+  const repeated = await tool.execute("detail-again", { action: "status", detail: "full" }, undefined, undefined, harness.context);
+  assert.equal(repeated.terminate, true);
+  assert.equal(repeated.details.statusPolling.code, "WORKFLOW_STATUS_NO_PROGRESS");
+  assert.equal(harness.sentMessages.length, 0);
+  await emitExtensionEvent(harness, "session_shutdown");
+});
+
 test("executing tasks and actual dispatch transitions invalidate waiting observations", () => {
   const { state, guard, ctx } = fixture(false);
   assert.equal(guard.observe("waiting", ctx).stop, false);

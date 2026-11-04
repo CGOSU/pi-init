@@ -3,6 +3,7 @@ import { validateWorkflowHandoffIdentity } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
+import { isWaitingWorkflowBoundary } from "./role-context-waiting.ts";
 import { TASK_MEMORY_MESSAGE } from "./task-memory-runtime.ts";
 import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
 
@@ -102,7 +103,9 @@ export function createRoleRecovery(
       // Live task history belongs to the SDK token-budget/compaction path, not a second byte-sized sliding window.
       const summarizedIds = memory?.role === "custom" ? (memory.details as { summarizedToolCallIds?: unknown } | undefined)?.summarizedToolCallIds : undefined;
       const summarized = new Set(Array.isArray(summarizedIds) ? summarizedIds.filter((id): id is string => typeof id === "string") : []);
-      const bounded = boundContextWindow(messages, liveTask ? null : contextByteBudget(ctx.model?.contextWindow), summarized);
+      // Waiting views already preserve complete protected groups; uncertain boundaries retain the
+      // full input. Neither case may lose unknown outcomes to a second byte-based projection.
+      const bounded = boundContextWindow(messages, liveTask || isWaitingWorkflowBoundary(state) ? null : contextByteBudget(ctx.model?.contextWindow), summarized);
       if (memory && (!bounded.messages.includes(memory) || bounded.overBudget)) taskMemory?.suspend(ctx);
       const projected = bounded.checkpointed ? bounded.messages.map(message => {
         if (message.role !== "custom" || message.customType !== "pi-init-role-context-view-diagnostic" || typeof message.content !== "string") return message;

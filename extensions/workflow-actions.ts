@@ -41,6 +41,7 @@ import { attachWorkflowPresentation } from "./workflow-presentation.ts";
 import { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import { workflowStatusToolSummary } from "./workflow-status-tool-text.ts";
 import { transferFrozen } from "../src/session-handoff.ts";
 import { outgoingTransfer } from "./session-handoff.ts";
 
@@ -382,9 +383,11 @@ export function createWorkflowActions(
           ? `\n\n${recoveryActions.diagnostic()}；不会改写原记录或派发任务。`
           : "";
         const memory = deps.taskMemory?.read(ctx, params.evidenceIds);
-        const memoryText = memory ? taskMemoryText(memory) : "";
+        const full = params.detail === "full";
+        const memoryText = memory && (full || params.evidenceIds?.length) ? taskMemoryText(memory) : "";
+        const statusText = full ? deps.report.formatWorkflowState() : workflowStatusToolSummary(state, memory);
         return {
-          content: [{ type: "text", text: `${deps.report.formatWorkflowState()}${restoreDiagnostic}${memoryText ? "\n\n" + memoryText : ""}` }],
+          content: [{ type: "text", text: `${statusText}${restoreDiagnostic}${memoryText ? "\n\n" + memoryText : ""}` }],
           details: {
             ...(state.workflowRestoreError
               ? { ...(state.workflowState ?? {}), error: state.workflowRestoreError, recovery: recoveryActions.status() }

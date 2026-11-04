@@ -44,9 +44,17 @@ pi --no-extensions -e ./extensions/index.ts
 | `/pi-init fresh` | 预览并确认交接后创建新会话；普通会话与工作流统一入口 |
 | `/pi-init workflow status\|resume\|retry\|cancel\|fresh\|stop` | 查看或管理当前工作流；`workflow fresh` 保留为兼容入口 |
 | `/pi-init diagnostics`、`/blackbox` | 打开运行诊断 |
-| `/large` | 扫描大型代码文件的结构审阅候选 |
+| `/large [--scope 目录] [--exclude 目录] [--include-temporary]` | 按范围扫描大型代码文件并启动建议审阅 |
 
 标准职责包括 `architect`（规划）、`developer-test`（实现与验证）和 `docs-commit`（文档与交付）；项目也可以配置自定义角色。角色切换方式为 `auto`（自动）、`confirm`（确认后切换）或 `manual`（手动切换）。内联模型选择和文本输入等待用户时，会向 Pi 声明 question 阻塞状态；支持 Program Status 的终端可以显示 Pi 正在等待用户。
+
+## 按范围审阅与状态查询
+
+`/large --scope src --exclude src/generated` 只审阅指定目录；路径为项目相对目录前缀，可加引号，`--exclude` 可以重复，不支持 glob。默认排除项目顶层 `.tmp`、`.tmp-*` 临时目录，可用 `--include-temporary` 明确纳入；其他隐藏源码和普通 `tmp` 不因此排除。报告显示目录分布、排除项和当前范围。范围只在当前 session 生效，`/large` 无参数恢复默认，reload 或新 session 重置；Agent 忙碌时不更改范围。
+
+`file_review(action="list")` 的分页正文直接包含路径、行数、fingerprint 和下一页 offset；清单、读取及结论登记遵循当前扫描范围。审阅只产生建议，同一交付物连续读取、分析和登记，不逐文件切换角色；真正需要确定新公共契约或跨模块设计时，再集中交接决策。
+
+`task_workflow(action="status")` 默认返回当前进度、阻塞原因和下一步；需要完整计划、历史任务、身份与任务记忆时使用 `detail="full"`。`evidenceIds` 仍可定向读取真实来源，UI 展开详情保留完整视图。无变化等待状态的重复查询会结束当前回合，查询本身不会确认恢复或重放任务。
 
 ## 容量提醒与手动新会话
 

@@ -133,8 +133,10 @@ export function createWorkflowStatusPollingGuard(pi: ExtensionAPI, state: Extens
   let previousKey: string | undefined;
   let previousCallId: string | undefined;
   let stopped = false;
-  function reset() { previousKey = undefined; previousCallId = undefined; stopped = false; }
-  function observe(toolCallId: string, ctx: ExtensionContext) {
+  let fullObserved = false;
+  let sourcesObserved = false;
+  function reset() { previousKey = undefined; previousCallId = undefined; stopped = false; fullObserved = false; sourcesObserved = false; }
+  function observe(toolCallId: string, ctx: ExtensionContext, request: { detail?: unknown; evidenceIds?: readonly string[] } = {}) {
     const view = createCurrentWorkflowStatusView(state);
     const waiting = view.kind === "restore-error" || view.kind === "workflow"
       && ["paused", "execution-blocked", "waiting-dispatch", "waiting-task", "compaction-stalled"].includes(view.activity);
@@ -151,8 +153,21 @@ export function createWorkflowStatusPollingGuard(pi: ExtensionAPI, state: Extens
       roleCompactionPhase: state.roleCompactionPhase, pendingRoleCompaction: state.pendingRoleCompaction,
       activeRoleCompaction: state.activeRoleCompaction });
     if (!key) { reset(); return { stop: false as const }; }
-    if (key !== previousKey) { previousKey = key; previousCallId = toolCallId; stopped = false; return { stop: false as const }; }
+    const full = request.detail === "full";
+    const sources = Array.isArray(request.evidenceIds) && request.evidenceIds.length > 0 && request.evidenceIds.length <= 8
+      && request.evidenceIds.every(id => typeof id === "string" && id.trim().length > 0 && id.length <= 256);
+    if (key !== previousKey) {
+      previousKey = key; previousCallId = toolCallId; stopped = false;
+      fullObserved = full; sourcesObserved = sources;
+      return { stop: false as const };
+    }
     if (previousCallId === toolCallId && !stopped) return { stop: false as const };
+    // An explicit detail/source read provides new content once per scope. Switching query
+    // shapes or source IDs repeatedly must not reset the no-progress budget.
+    if (!stopped && (full && !fullObserved || sources && !sourcesObserved)) {
+      fullObserved ||= full; sourcesObserved ||= sources; previousCallId = toolCallId;
+      return { stop: false as const };
+    }
     const firstStop = !stopped;
     previousCallId = toolCallId;
     stopped = true;

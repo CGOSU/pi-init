@@ -39,6 +39,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
       "Never assign architect as an executable task role; planning validation rejects it, retained architect tasks cannot be applied by replan, and old active plans with architect execution tasks are not recovered or dispatched.",
       "Architect 只规划与决策，不读取、执行或连接 MCP。优先复用已有调查；缺少决策关键事实时才交给 docs-commit 集中补查，不因切角重读规则或重复调查。普通任务无需正式取证协议。",
       "本轮工具调用的工作流与协调身份由运行时绑定，通常只提交业务参数和真实结果，无需手填 workflow/session/attempt/handoff 等身份。兼容显式身份仍严格校验；不能套用最新状态提交旧回合结果。",
+      "status默认返回可行动摘要。需要完整规划、任务历史、身份或任务记忆时使用detail=full；缺少具体来源时使用evidenceIds定向读取，不重复请求无变化的状态。",
       `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；实现、验证与结果提交必须由当前执行角色负责。`,
       "每项任务围绕一个可独立验收的交付物，使用task/constraints/files/acceptanceCriteria说明目标、非目标、产物和风险匹配的验证；不要按读取→修改→测试机械拆分。必要事实先调查，远期不确定内容在边界细化；缺少关键事实或权限时block，不建立正式证据或嵌套协议。",
       "workflowMode=auto skips persistence for a valid low-risk plan with at most two tasks; set reviewRequired=true only when the user initially asks for architecture review.",
@@ -84,7 +85,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
       function finish(result: Awaited<ReturnType<typeof workflowActions.runTaskWorkflowAction>>) {
         if (params.action === "complete" && !result.terminate) prepareDelivery(_toolCallId);
         if (params.action !== "status" || signal?.aborted) return result;
-        const polling = observeStatusPolling(_toolCallId, ctx);
+        const polling = observeStatusPolling(_toolCallId, ctx, params);
         if (!polling.stop) return result;
         const text = "等待状态未发生变化，已结束本回合的重复状态轮询。工作流状态保持不变，未恢复、完成或重试任务；请按已有状态说明处理阻塞或恢复问题。";
         if (polling.firstStop) {

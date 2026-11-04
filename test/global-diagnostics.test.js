@@ -1,3 +1,4 @@
+import "../scripts/test-bootstrap.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
@@ -29,6 +30,8 @@ test("全局白名单仅存自身故障元数据，跨项目隔离并与项目�
   assert.ok(local.includes(first.diagnosticEventId));
   assert.ok(local.includes(first.diagnosticProjectId));
   assert.ok(local.includes(first.diagnosticSessionId));
+  assert.deepEqual(JSON.parse(local.trim()).runtimeIdentity, first.runtimeIdentity);
+  assert.equal(first.runtimeIdentity.pid, process.pid);
   const another = createGlobalDiagnostics({ agentDir });
   another.observe(ctx, "pi-init.role_failed");
   another.observe({ ...ctx, cwd: ctx.cwd + "-other" }, "pi-init.workflow_failed");
@@ -42,7 +45,7 @@ test("全局白名单仅存自身故障元数据，跨项目隔离并与项目�
   assert.notEqual(all[0].diagnosticProjectId, all[2].diagnosticProjectId);
   assert.notEqual(all[0].diagnosticSessionId, all[2].diagnosticSessionId);
   assert.equal(new Set(all.map(row => row.diagnosticEventId)).size, 3);
-  for (const row of all) assert.deepEqual(Object.keys(row).sort(), ["version", "timestamp", "runtimeId", "diagnosticEventId", "diagnosticProjectId", "diagnosticSessionId", "event", "category"].sort());
+  for (const row of all) assert.deepEqual(Object.keys(row).sort(), ["version", "timestamp", "runtimeIdentity", "runtimeId", "diagnosticEventId", "diagnosticProjectId", "diagnosticSessionId", "event", "category"].sort());
   const raw = JSON.stringify(all);
   for (const forbidden of [secret, "secret-token", "private-project", "private-session", "input", "stack"]) assert.equal(raw.includes(forbidden), false);
 }));
@@ -131,6 +134,7 @@ test("真实命令故障保持原失败提示，自动和详细模式都接入�
     const agent = join(root, "agent-" + mode);
     const source = `import {createExtensionHarness,emitExtensionEvent} from ${JSON.stringify(helper)};
       import {readFile,writeFile} from 'node:fs/promises';
+      process.env.PI_CODING_AGENT_DIR=${JSON.stringify(agent)};
       ${mode === "blocked" ? `await writeFile(${JSON.stringify(agent)}, 'blocked');` : ""}
       const h=createExtensionHarness([], {trusted:true}); h.context.cwd=${JSON.stringify(join(root, "project"))};
       h.context.ui.confirm=h.context.ui.select=h.context.ui.custom=async()=>{throw new Error('original-command-failure')};

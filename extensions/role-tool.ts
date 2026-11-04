@@ -24,6 +24,7 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
     promptSnippet: "Switch model and reasoning level for a configured project role",
     promptGuidelines: [
       "Call switch_role when entering a responsibility selected by the project's role-routing Skill or crossing a role boundary; do not repeat it within the same responsibility.",
+      "Keep one execution responsibility throughout a structure review: reading, analysis, recommendations and recording findings are one deliverable. Batch only genuine architecture decisions for a separate handoff; do not switch roles for each file or repeat already established evidence.",
       "A real role/model change during an active run ends that run; the runtime resumes unfinished work in a fresh run with the new role system prompt. Do not continue the old-role run after switching.",
       "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before resuming implementation, tests, docs, or shell work when the role is not already re-established.",
       "Use the role ID required by the current task; architect only thinks, analyzes, decides, plans, and arranges responsibilities, while other configured role IDs may execute their assigned work. Architect must not gather evidence, execute commands, or connect to MCP.",
@@ -60,18 +61,23 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
         return { content: [{ type: "text", text: boundary.message + "\n" + (rejection.stop ? "同一身份的角色切换已连续被拒绝；当前回合结束，自动续跑已停止，等待用户明确处理。工作流未被完成、取消或重试。" : boundary.nextAction) }], details: { ok: false, ...boundary, rejectionStopped: rejection.stop }, ...(rejection.stop ? { terminate: true } : {}) };
       }
       const source = roleHandoff.capture(ctx);
+      const recoveryRequired = runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed || Boolean(runtimeState.pendingWorkflowRecovery);
       const selection = await roleRuntime.automaticRole(params.role, ctx);
       const transition = roleHandoff.finishSwitch(ctx, source, selection.result, signal?.aborted);
       const result = selection.result;
-      const prefix = selection.requestedRole === result.role ? "已切换到" : `已按确认选择切换到 ${result.role}（建议为 ${selection.requestedRole}）`;
+      const unchanged = source.activeRole?.role === result.role && source.activeRole.provider === result.provider
+        && source.activeRole.model === result.model && source.activeRole.thinkingLevel === result.thinkingLevel;
+      const reused = unchanged && !recoveryRequired;
+      const prefix = reused ? "当前职责已确认，无需切换" : unchanged ? "已重新确认当前职责"
+        : selection.requestedRole === result.role ? "已切换到" : `已按确认选择切换到 ${result.role}（建议为 ${selection.requestedRole}）`;
       return {
         content: [
           {
             type: "text",
-            text: `${prefix}：${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${transition.terminate ? transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`,
+            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${reused ? "。沿当前职责继续未完成工作，不必再次确认。" : ""}${transition.terminate ? transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`,
           },
         ],
-        details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole, ...transition },
+        details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole, reused, ...transition },
         terminate: transition.terminate,
       };
     },

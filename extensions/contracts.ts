@@ -104,6 +104,7 @@ export const workflowTaskSchema = Type.Object({
 });
 export const taskWorkflowParameters = Type.Object({
   action: StringEnum(["plan", "status", "checkpoint", "complete", "block", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-goal"] as const, { description: "扁平任务工作流动作；不提供正式取证、契约澄清或嵌套执行协议" }),
+  detail: Type.Optional(StringEnum(["summary", "full"] as const, { description: "status默认summary返回当前进度、阻塞与下一步；full按需查看完整规划、任务历史、身份和任务记忆" })),
   checkpoint: Type.Optional(Type.Object({
     step: Type.String({ minLength: 1, maxLength: 200 }),
     accomplished: Type.Array(Type.Object({ summary: Type.String({ minLength: 1, maxLength: 512 }), evidenceIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 8 }) }), { maxItems: 16 }),

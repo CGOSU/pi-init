@@ -30,7 +30,7 @@ function elapsedText(view: Extract<WorkflowStatusView, { kind: "workflow" }>) {
     : ELAPSED_UNAVAILABLE;
 }
 
-function workflowIdentityLines(view: Extract<WorkflowStatusView, { kind: "workflow" }>) {
+export function workflowIdentityLines(view: Extract<WorkflowStatusView, { kind: "workflow" }>) {
   const lines = [
     `当前基础动作身份 JSON（后续变更动作仍须满足状态限制）：${JSON.stringify(view.identity.action)}`,
   ];

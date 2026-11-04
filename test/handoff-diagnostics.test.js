@@ -1,3 +1,4 @@
+import "../scripts/test-bootstrap.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";

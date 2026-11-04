@@ -168,3 +168,32 @@ test("扫描失败保留可区分错误，不返回成功的空项目", async ()
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.error.code, "PROJECT_ROOT_UNREADABLE");
 });
+
+test("review scans exclude top-level temporary directories but retain hidden source and ordinary tmp directories", async () => {
+  await withTempDirectory(async directory => {
+    for (const name of [".tmp-public-exports-ci-pi", ".tmp-other", ".tmp", ".hidden-source", "tmp", "src/.tmp-helper"]) {
+      await mkdir(path.join(directory, name), { recursive: true });
+      await writeFile(path.join(directory, name, "large.ts"), makeLines(501));
+    }
+    await writeFile(path.join(directory, ".tmp-helper.ts"), makeLines(501));
+    const result = await scanProjectFiles(directory);
+    assert.deepEqual(result.files.map(file => file.path), [".hidden-source/large.ts", ".tmp-helper.ts", "src/.tmp-helper/large.ts", "tmp/large.ts"]);
+    assert.deepEqual(result.excluded, [".tmp", ".tmp-other", ".tmp-public-exports-ci-pi"].map(path => ({ path, reason: "temporary-source" })));
+    assert.equal((await scanProjectFiles(directory, { includeTemporary: true })).files.length, 7);
+  });
+});
+
+test("explicit scope cannot report default-excluded directories as completely scanned empty source", async () => {
+  await withTempDirectory(async directory => {
+    for (const scope of ["node_modules", ".git", ".pi/diagnostics", "src/vendor", "NODE_MODULES/pkg"]) {
+      await mkdir(path.join(directory, scope), { recursive: true });
+      await writeFile(path.join(directory, scope, "large.ts"), makeLines(501));
+      for (const includeTemporary of [false, true]) {
+        const scan = await scanProjectFiles(directory, { scope, includeTemporary });
+        assert.equal(scan.ok, false, scope);
+        assert.equal(scan.error.code, "UNSUPPORTED_FILE", scope);
+        assert.equal((await inspectProjectFile(directory, `${scope}/large.ts`)).error.code, "UNSUPPORTED_FILE");
+      }
+    }
+  });
+});

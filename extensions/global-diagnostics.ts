@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { withDiagnosticLock } from "./diagnostic-storage.ts";
+import { loadedRuntimeIdentity } from "./runtime-identity.ts";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Deliberately omit dynamic messages, stacks, codes and payloads rather than attempt
@@ -76,7 +77,7 @@ export function createGlobalDiagnostics(options: {
       const projectId = hash("pi-init-project-v1", resolve(ctx.cwd));
       const sessionId = hash("pi-init-session-v1", projectId + "\0" + ctx.sessionManager.getSessionId());
       const correlation = { diagnosticEventId: randomUUID(), diagnosticProjectId: projectId, diagnosticSessionId: sessionId };
-      const line = JSON.stringify({ version: 1, timestamp: new Date(now()).toISOString(), runtimeId, ...correlation, event, category: categories.get(event) }) + "\n";
+      const line = JSON.stringify({ version: 1, timestamp: new Date(now()).toISOString(), runtimeIdentity: loadedRuntimeIdentity, runtimeId, ...correlation, event, category: categories.get(event) }) + "\n";
       if (failure === "storage" || failure === "lock-busy") { fail(ctx, failure); return correlation; }
       if (pending >= 128) { fail(ctx, "queue-full"); return correlation; }
       pending++;

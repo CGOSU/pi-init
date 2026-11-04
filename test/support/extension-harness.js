@@ -1,3 +1,4 @@
+import "../../scripts/test-bootstrap.js";
 import initProjectExtension from "../../extensions/index.ts";
 
 function createExtensionHarness(branch = [], options = {}) {

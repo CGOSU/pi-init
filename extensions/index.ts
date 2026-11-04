@@ -346,7 +346,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   registerWorkflowTool(pi, runtimeState, {
     workflowActions, roleRecovery, workflowBinding, userControl,
-    observeStatusPolling: (id, ctx) => statusPollingGuard.observe(id, ctx),
+    observeStatusPolling: (id, ctx, request) => statusPollingGuard.observe(id, ctx, request),
     observeRejection: (event, ctx) => rejectionGuard.observe(event, ctx),
     prepareDelivery: id => workflowDelivery.prepare(id),
   });

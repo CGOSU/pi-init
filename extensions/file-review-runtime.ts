@@ -1,3 +1,5 @@
+import { createFileReviewJournalEntry, restoreFileReviewJournal } from "../src/file-review-journal.ts";
+import { reviewPathSelected, type FileReviewScanScope, type FileReviewExclusion } from "../src/file-review-scope.ts";
 import { Type } from "typebox";
 import {
   isBashToolResult,
@@ -17,7 +19,6 @@ import {
   normalizeFileReviewError,
   inspectProjectFile,
   normalizeReviewPath,
-  readFileReviewState,
   recordFileReview,
   scanProjectFiles,
   type FileReviewListScope,
@@ -69,6 +70,9 @@ type ReviewSession = {
   scanErrors: FileScanError[];
   fileReviewState: StateReadResult;
   readCoverage: Map<string, FileCoverage>;
+  reviewRevision: number;
+  scanScope: FileReviewScanScope;
+  excluded: FileReviewExclusion[];
   incremental: IncrementalReviewState;
 };
 type ReviewDependencies = {
@@ -79,10 +83,10 @@ type ReviewDependencies = {
 };
 
 const reviewToolParameters = Type.Object({
-  action: Type.Union([Type.Literal("list"), Type.Literal("read"), Type.Literal("complete")], { description: "list paginates project inventory; read returns original code lines; complete requires path, current fingerprint, conclusion and rationale to record a review." }),
+  action: Type.Union([Type.Literal("list"), Type.Literal("read"), Type.Literal("complete")], { description: "list paginates the current scan inventory (project-relative, constrained by /large scope/exclude); read returns original code lines; complete requires path, current fingerprint, conclusion and rationale to record a review." }),
   offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: zero-based candidate offset (default 0). read: one-based line offset (default 1)." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: FILE_REVIEW_READ_MAX_LINES, description: "list: 1-50 candidates (default 10). read: 1-200 lines (default 100), at most 16 KiB of complete UTF-8 lines." })),
-  path: Type.Optional(Type.String({ description: "Required by read and complete. Ignored by list, which always returns project-wide candidates." })),
+  path: Type.Optional(Type.String({ description: "Required by read and complete. Ignored by list; candidates follow the current /large scan scope/exclude settings." })),
   fingerprint: Type.Optional(Type.String({ description: "Required by complete: current 64-character lowercase SHA-256 from read/list. Optional for read to reject version changes. Ignored by list. Never substitutes for full original-text reading." })),
   conclusion: Type.Optional(Type.Union([
     Type.Literal("keep"),
@@ -176,9 +180,9 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     markIncrementalReviewNotified(current.incremental, candidates);
   }
 
-  function persist(sessionToSave: ReviewSession) {
+  function persist(sessionToSave: ReviewSession, previous: PersistedFileReviewState) {
     try {
-      pi.appendEntry(FILE_REVIEW_ENTRY_TYPE, persistedState(sessionToSave));
+      pi.appendEntry(FILE_REVIEW_ENTRY_TYPE, createFileReviewJournalEntry(previous, persistedState(sessionToSave), sessionToSave.reviewRevision + 1));
       return { ok: true as const };
     } catch (error) {
       return {
@@ -193,6 +197,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     ctx: ExtensionContext,
     forcePaths: readonly string[] = [],
     forceAll = false,
+    requestedScope?: FileReviewScanScope,
   ): Promise<{ ok: true; added: FileSnapshot[] } | { ok: false; code: string; message: string; added: FileSnapshot[] }> {
     const current = session;
     if (!current || current.generation !== generation) {
@@ -204,7 +209,8 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return { ok: false, code: "STALE_SESSION", message: "当前 session branch 已变化，扫描结果未应用", added: [] };
     }
     const before = new Set(pending(current).map((file) => pathKey(file.path, file.fingerprint)));
-    const result = await scanProjectFiles(current.projectRoot, { previous: previousFiles, forcePaths, forceAll });
+    const scanScope = requestedScope ?? current.scanScope;
+    const result = await scanProjectFiles(current.projectRoot, { previous: previousFiles, forcePaths, forceAll, ...scanScope });
     if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
       || !branchContinuesFrom(ctx, branchIds) || !branchContinuesFrom(ctx, current.branchIds)) {
       return { ok: false, code: "STALE_SESSION", message: "扫描期间 Pi session 已变化，结果未应用", added: [] };
@@ -215,7 +221,10 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return { ok: false, code: result.error.code, message: result.error.message, added: [] };
     }
 
-    const next = new Map(current.inventory);
+    if (requestedScope && JSON.stringify(requestedScope) !== JSON.stringify(current.scanScope)) current.readCoverage.clear();
+    current.scanScope = scanScope;
+    current.excluded = result.excluded ?? [];
+    const next = new Map([...current.inventory].filter(([path]) => reviewPathSelected(path, scanScope)));
     if (result.errors.length === 0) next.clear();
     for (const file of result.files) {
       const previous = current.inventory.get(file.path);
@@ -242,12 +251,13 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       };
   }
 
-  async function restore(ctx: ExtensionContext) {
+  async function restore(ctx: ExtensionContext, preserveScope = false) {
     const thisGeneration = ++generation;
+    const scanScope = preserveScope && session?.sessionId === ctx.sessionManager.getSessionId() ? session.scanScope : {};
     session = undefined;
     const sessionId = ctx.sessionManager.getSessionId();
     const branchIds = branchEntryIds(ctx);
-    const scan = await scanProjectFiles(ctx.cwd);
+    const scan = await scanProjectFiles(ctx.cwd, scanScope);
     if (thisGeneration !== generation || ctx.sessionManager.getSessionId() !== sessionId
       || !branchContinuesFrom(ctx, branchIds)) return;
     if (!scan.ok) {
@@ -261,23 +271,16 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
         scanErrors: [scan.error],
         fileReviewState: emptyFileReviewState(ctx.cwd, sessionId),
         readCoverage: new Map(),
+        reviewRevision: 0, scanScope, excluded: [],
         incremental: createIncrementalReviewState([], false),
       };
       return;
     }
 
     const branch = ctx.sessionManager.getBranch();
-    const entry = branch.findLast(
-      (item) => item.type === "custom" && item.customType === FILE_REVIEW_ENTRY_TYPE,
-    );
-    const entryData = entry?.type === "custom" ? entry.data : undefined;
-    const restored = readFileReviewState(entryData, scan.projectRoot, sessionId);
-    const sameSessionRecord = entryData && typeof entryData === "object"
-      && (entryData as { projectRoot?: unknown }).projectRoot === scan.projectRoot
-      && (entryData as { sessionId?: unknown }).sessionId === sessionId;
-    const fileReviewState = restored.ok || sameSessionRecord
-      ? restored
-      : emptyFileReviewState(scan.projectRoot, sessionId);
+    const journal = restoreFileReviewJournal(branch.filter(item => item.type === "custom" && item.customType === FILE_REVIEW_ENTRY_TYPE)
+      .map(item => item.type === "custom" ? item.data : undefined), scan.projectRoot, sessionId);
+    const fileReviewState = journal.state;
     session = {
       generation: thisGeneration,
       projectRoot: scan.projectRoot,
@@ -287,10 +290,11 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       fileReviewState,
       errors: [
         ...scan.errors,
-        ...(!restored.ok && sameSessionRecord ? [{ code: restored.code, path: ".", message: restored.message }] : []),
+        ...(!fileReviewState.ok ? [{ code: fileReviewState.code, path: ".", message: fileReviewState.message }] : []),
       ],
       scanErrors: scan.errors,
       readCoverage: new Map(),
+      reviewRevision: journal.revision, scanScope, excluded: scan.excluded ?? [],
       incremental: createIncrementalReviewState(scan.files, scan.errors.length === 0),
     };
   }
@@ -315,7 +319,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return { ok: false as const, code: inspected.error.code, message: inspected.error.message, added: [] as FileSnapshot[] };
     }
     const before = new Set(pending().map((file) => pathKey(file.path, file.fingerprint)));
-    applyFileSnapshot(current, inspected.file);
+    if (reviewPathSelected(inspected.file.path, current.scanScope)) applyFileSnapshot(current, inspected.file);
     const added = pending().filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
     return { ok: true as const, added, file: inspected.file };
   }
@@ -436,9 +440,10 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     if (!completeReadEvidence(file)) return failure("FILE_NOT_FULLY_READ", "尚未通过 Pi read 或 file_review(action=read) 读取该版本的全部原文行；分页读全后再提交审阅结论。");
 
     const next = recordFileReview(persistedState(current), file, conclusion, rationale);
-    const saved = persist({ ...current, fileReviewState: { ok: true, value: next } });
+    const saved = persist({ ...current, fileReviewState: { ok: true, value: next } }, persistedState(current));
     if (!saved.ok) return failure(saved.code, `审阅结果未保存：${saved.message}`, true);
     current.fileReviewState = { ok: true, value: next };
+    current.reviewRevision += 1;
     current.readCoverage.delete(file.path);
     return success(`${file.path} 已记录为 ${conclusion === "keep" ? "保留" : "建议拆分"}；该结果只适用于当前内容版本。`, {
       reviewKind: "structure",
@@ -476,6 +481,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return failure("READ_AUTHORITY_CHANGED", "读取期间职责或安全门已变化，原文与覆盖均未返回。");
     }
     if (!page.ok) return failure(page.code, page.message);
+    if (!reviewPathSelected(page.file.path, current.scanScope)) return failure("OUTSIDE_SCAN_SCOPE", "文件不在当前扫描范围；请用 /large --scope 或 --include-temporary 明确纳入。");
     applyFileSnapshot(current, page.file);
     mergeCoverage(current.readCoverage, page.file, page.offset, page.endLine);
     const pagination = { fingerprint: page.file.fingerprint, totalLines: page.file.lineCount,
@@ -524,12 +530,21 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
         ...(typeof input.path === "string" ? { ignoredPath: input.path } : {}),
       };
       const scopeNotice = scope.ignoredPath !== undefined
-        ? `path=${JSON.stringify(scope.ignoredPath)} ignored: list returns project-wide inventory, not path-specific results. `
-        : "Project-wide inventory. ";
-      return success(`${scopeNotice}${scanStatus}${summary}`, {
+        ? `path=${JSON.stringify(scope.ignoredPath)} ignored: list returns the current scan inventory (project-relative, constrained by /large scope/exclude), not path-specific results. `
+        : "Current scan inventory (project-relative, constrained by /large scope/exclude). ";
+      const nextOffset = offset + items.length < candidates.length ? offset + items.length : null;
+      const body = [ `${scopeNotice}${scanStatus}${summary}`,
+        `offset=${offset}; limit=${limit}; nextOffset=${nextOffset}; eof=${nextOffset === null}`,
+        `扫描范围：${current.scanScope.scope ?? "."}；排除：${current.excluded.slice(0, 20).map(item => JSON.stringify(item.path)).join(", ") || "无额外排除"}`,
+        ...items.map(item => `- ${JSON.stringify(item.path)} · ${item.lineCount} 行 · fingerprint ${item.fingerprint}`),
+      ].join("\n");
+      return success(body, {
         ...scope,
         candidates: items,
         total: candidates.length,
+        nextOffset,
+        scanScope: current.scanScope,
+        excluded: current.excluded,
         structuralComplete: queue.structuralConfirmed,
         offset,
         reviewKind: "structure",
@@ -543,7 +558,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   }
 
   registerLargeCommand(pi, {
-    scan: (ctx) => scanCurrent(ctx, [], true),
+    scan: (ctx, scope) => scanCurrent(ctx, [], true, scope),
     getSnapshot: (): LargeReviewSnapshot | undefined => {
       const current = session;
       if (!current) return undefined;
@@ -563,6 +578,8 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
         files,
         candidates: queue?.candidates ?? [],
         structuralConfirmed: queue?.structuralConfirmed ?? false,
+        scanScope: current.scanScope,
+        excluded: current.excluded,
         errors,
       };
     },
@@ -575,13 +592,13 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   pi.registerTool({
     name: "file_review",
     label: "Review Files",
-    description: "List paginates project-wide pending structural candidates (zero-based offset, 1-50 items); path is ignored. Read returns original code lines for path (one-based offset, default 100/max 200 lines, max 16 KiB UTF-8), credits only complete returned lines, and supplies fingerprint/nextOffset; LINE_TOO_LONG never credits a partial line. Complete requires path, current fingerprint, conclusion (keep/recommend-split), rationale (12-2000 trimmed characters), and full current-version original-text reading. Markdown and symlinks are unsupported.",
+    description: "List paginates pending structural candidates in the current /large scan scope (zero-based offset, 1-50 items); path is ignored. Read returns original code lines for path (one-based offset, default 100/max 200 lines, max 16 KiB UTF-8), credits only complete returned lines, and supplies fingerprint/nextOffset; LINE_TOO_LONG never credits a partial line. Complete requires path, current fingerprint, conclusion (keep/recommend-split), rationale (12-2000 trimmed characters), and full current-version original-text reading. Markdown and symlinks are unsupported.",
     promptSnippet: "Review large files without treating line count as a hard limit",
     promptGuidelines: [
       `${FILE_REVIEW_THRESHOLD} lines identifies candidates, not a mandatory review for every edit; it is not a rule to split or reject edits.`,
       STRUCTURE_REVIEW_GUIDANCE,
       "Query current inventory on demand with file_review(action=\"list\", offset=...) or /large; incremental notices cover observed changes since the session/branch baseline, not an exact task Git diff.",
-      "list is zero-based project inventory pagination, not a path review; it discloses ignored path. read/complete require path. read uses one-based lines (default offset 1, limit 100; max 200 lines/16 KiB UTF-8).",
+      "list is zero-based current scan inventory pagination (project-relative, constrained by /large scope/exclude), not a path review; it discloses ignored path. read/complete require path. read uses one-based lines (default offset 1, limit 100; max 200 lines/16 KiB UTF-8).",
       "Only supported code files are reviewed; Markdown is excluded. A list result is not evidence that a supplied path was reviewed.",
       "Read the full current original text using native read or file_review(action=read,path,offset,limit) before complete. Follow nextOffset until eof, optionally pass fingerprint to reject mixed versions. Only complete returned lines count; oversized lines fail without partial credit. A page, script summary or list result is not full-read evidence.",
       "Omit reviewKind or use reviewKind=\"structure\"; conclusions are keep/recommend-split.",
@@ -595,7 +612,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 
   pi.on("session_start", async (_event, ctx) => restore(ctx));
   pi.on("session_tree", async (event, ctx) => {
-    if (event.oldLeafId !== event.newLeafId) await restore(ctx);
+    if (event.oldLeafId !== event.newLeafId) await restore(ctx, true);
   });
   pi.on("session_shutdown", () => {
     generation += 1;

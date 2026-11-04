@@ -3,17 +3,17 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
-import { createRequire } from "node:module";
+import { formatRuntimeIdentity, loadedRuntimeIdentity } from "./runtime-identity.ts";
 import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
 import { withDiagnosticLock } from "./diagnostic-storage.ts";
 import { createGlobalDiagnostics, isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
 import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains, formatCacheObservations } from "./runtime-diagnostics-report.ts";
 
-const extensionVersion = readExtensionVersion();
+const extensionVersion = loadedRuntimeIdentity.extensionVersion;
 
 type Data = Record<string, unknown>;
 type Observation = { sequence: number; timestamp: string; event: string; data: Data };
-type Issue = { id: string; category: string; code: string; stage: string; toolName?: string; count: number; firstSeen: string; lastSeen: string; events: Observation[]; snapshot: unknown; latestSnapshot: unknown; latestTrigger: Observation; evidenceTruncated: boolean; incomplete: boolean; dirty: boolean };
+type Issue = { id: string; category: string; code: string; stage: string; toolName?: string; count: number; firstSeen: string; lastSeen: string; events: Observation[]; snapshot: unknown; latestSnapshot: unknown; latestTrigger: Observation; evidenceTruncated: boolean; incomplete: boolean; dirty: boolean; remainingEvents: number };
 const queues = new Map<string, Promise<void>>();
 const RETENTION_MS = 7 * 86400000;
 const MAX_RING_BYTES = 32 * 1024;
@@ -127,11 +127,11 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   const rejectedCalls = new Map<string, string>();
   const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes, maxPending: MAX_PENDING, retentionMs: RETENTION_MS, rejectOversize: true, directoryMode: 0o700, warning: "运行黑匣子写入失败；已停用记录，不影响任务执行。" });
   function write(ctx: ExtensionContext, record: Data) {
-    writer.write(ctx, dropped => ({ version: 1, extensionVersion, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }));
+    writer.write(ctx, dropped => ({ version: 1, extensionVersion, runtimeIdentity: loadedRuntimeIdentity, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }));
   }
   function save(ctx: ExtensionContext, issue: Issue) {
     if (!issue.dirty) return;
-    write(ctx, { kind: "issue", ...issue, dirty: undefined });
+    write(ctx, { kind: "issue", ...issue, dirty: undefined, remainingEvents: undefined });
     issue.dirty = false;
   }
   function captureSnapshot() {
@@ -158,8 +158,10 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       ring.push(row); ringBytes += bytes;
       while (ring.length > 64 || ringBytes > MAX_RING_BYTES) ringBytes -= Buffer.byteLength(JSON.stringify(ring.shift()));
       for (const issue of issues.values()) {
-        if (issue.events.length < 32) { issue.events.push(row); issue.dirty = true; }
-        else { issue.events.splice(16, 1); issue.events.push(row); issue.incomplete = true; issue.evidenceTruncated = true; issue.dirty = true; }
+        if (issue.remainingEvents === 0) continue;
+        issue.events.push(row); issue.remainingEvents--; issue.dirty = true;
+        if (issue.remainingEvents === 0) { issue.incomplete = true; issue.evidenceTruncated = true; }
+        if (event === "agent.settled" || event === "session.shutdown") issue.remainingEvents = 0;
       }
       if (event === "agent.before_start") {
         run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear(); rejectedCalls.clear();
@@ -227,11 +229,24 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
           let issue = issues.get(id);
           if (!issue && issues.size < MAX_ISSUES) {
             const state = captureSnapshot();
-            issue = { id, ...problem, stage, toolName, count: 0, firstSeen: now, lastSeen: now, events: ring.slice(-16), snapshot: state, latestSnapshot: state, latestTrigger: row, evidenceTruncated: ring.length > 16, incomplete: ring.length > 16, dirty: true };
+            issue = { id, ...problem, stage, toolName, count: 0, firstSeen: now, lastSeen: now, events: ring.slice(-16), snapshot: state, latestSnapshot: state, latestTrigger: row, evidenceTruncated: ring.length > 16, incomplete: ring.length > 16, dirty: true, remainingEvents: 16 };
             issues.set(id, issue);
             try { ctx.ui.notify("运行黑匣子已发现新问题：" + problem.category + "/" + problem.code + "。使用 /blackbox 查看。", "info"); } catch {}
           }
-          if (issue) { issue.count++; issue.lastSeen = now; issue.latestTrigger = row; issue.latestSnapshot = issue.count === 1 ? issue.snapshot : captureSnapshot(); issue.dirty = true; if (issue.count === 1) save(ctx, issue); }
+          if (issue) {
+            issue.count++; issue.lastSeen = now; issue.latestTrigger = row;
+            issue.latestSnapshot = issue.count === 1 ? issue.snapshot : captureSnapshot();
+            // A genuine recurrence reopens a bounded window around its own trigger.
+            // The first snapshot/time remain available, but unrelated future rounds do not.
+            if (issue.count > 1) {
+              issue.events = issue.events.slice(0, 16);
+              if (!issue.events.some(event => event.sequence === row.sequence)) issue.events.push(row);
+              issue.evidenceTruncated = issue.incomplete = true;
+            }
+            issue.remainingEvents = Math.min(16, 32 - issue.events.length);
+            issue.dirty = true;
+            if (issue.count === 1) save(ctx, issue);
+          }
           else overflow++;
         }
       }
@@ -298,13 +313,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", global.report(), ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", formatRuntimeIdentity(), global.report(), ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
   }
   return { observe, report, flush: async () => { await Promise.all([writer.flush(), global.flush()]); } };
-}
-function readExtensionVersion() {
-  try {
-    const { version } = createRequire(import.meta.url)("../package.json");
-    return typeof version === "string" ? version : undefined;
-  } catch { return undefined; }
 }

@@ -62,6 +62,9 @@ test("list path is ignored for project inventory pagination and Markdown is neve
     assert.equal("ignoredPath" in inventory.details, false);
     assert.deepEqual(inventory.details.candidates.map((item) => item.path), ["src/large.ts", "src/other.ts"]);
     const page = await list({ offset: 1, limit: 1 });
+    assert.match(page.content[0].text, /src\/other\.ts/);
+    assert.match(page.content[0].text, new RegExp(page.details.candidates[0].fingerprint));
+    assert.match(page.content[0].text, /nextOffset=null/);
     for (const ignoredPath of ["docs/session-log.md", "src/large.ts", "missing.ts"]) {
       const result = await list({ path: ignoredPath, offset: 1, limit: 1 });
       assert.equal(result.details.scope, "project");
@@ -527,5 +530,122 @@ test("large-file candidates do not demand full review for a local display defaul
     assert.equal((await completeReview(h, listed.details.candidates[0])).details.code, "FILE_NOT_FULLY_READ");
     assert.equal(h.sentUserMessages.length, 0);
     await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("review delta append failure preserves memory and branch/reload restores only branch decisions", async () => {
+  await withTempDirectory(async directory => {
+    await writeFile(path.join(directory, "src/other.ts"), makeFile("other"));
+    let failDelta = true;
+    const branch = [{ id: "root", type: "custom", customType: "unrelated", data: {} }];
+    const h = createExtensionHarness(branch, { cwd: directory, appendEntry(type, data) {
+      if (type === "pi-init-file-review" && data.kind === "delta" && failDelta) throw new Error("disk unavailable");
+    }});
+    const role = () => h.tools.find(t => t.name === "switch_role").execute("role", { role: "developer-test" }, undefined, undefined, h.context);
+    const list = () => h.tools.find(t => t.name === "file_review").execute("list", { action: "list" }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "session_start", { reason: "startup" }); await role();
+    const [first, second] = (await list()).details.candidates;
+    await emitExtensionEvent(h, "tool_result", readEvent(first.path));
+    assert.equal((await completeReview(h, first)).details.ok, true);
+    const ancestor = structuredClone(branch);
+    await emitExtensionEvent(h, "tool_result", readEvent(second.path));
+    assert.equal((await completeReview(h, second)).details.code, "PERSIST_FAILED");
+    assert.equal((await list()).details.total, 1);
+    assert.equal(branch.filter(e => e.customType === "pi-init-file-review").length, 1);
+    failDelta = false;
+    assert.equal((await completeReview(h, second)).details.ok, true);
+    const delta = branch.findLast(e => e.customType === "pi-init-file-review").data;
+    assert.equal(delta.kind, "delta"); assert.equal(delta.revision, 2); assert.equal("decisions" in delta, false);
+    await emitExtensionEvent(h, "session_start", { reason: "reload" }); await role();
+    assert.equal((await list()).details.total, 0);
+    branch.splice(0, branch.length, ...ancestor);
+    await emitExtensionEvent(h, "session_tree", { oldLeafId: "later", newLeafId: "ancestor" }); await role();
+    assert.deepEqual((await list()).details.candidates.map(c => c.path), [second.path]);
+    branch.push({ type: "custom", customType: "pi-init-file-review", data: { ...delta, baseHash: "invalid" } });
+    await emitExtensionEvent(h, "session_start", { reason: "reload" }); await role();
+    const corrupt = await list();
+    assert.equal(corrupt.details.structuralComplete, false);
+  });
+});
+
+test("large scope/exclude is visible and consistent in lists, reads, completion, and resets", async () => {
+  await withTempDirectory(async directory => {
+    for (const name of [".tmp-public-exports-ci-pi", ".hidden-source", "src/private"]) {
+      await mkdir(path.join(directory, name), { recursive: true });
+      await writeFile(path.join(directory, name, "large.ts"), makeFile(name));
+    }
+    const h = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(h, "session_start", { reason: "startup" });
+    const role = () => h.tools.find(t => t.name === "switch_role").execute("role", { role: "developer-test" }, undefined, undefined, h.context);
+    await role();
+    const call = input => h.tools.find(t => t.name === "file_review").execute("call", input, undefined, undefined, h.context);
+    const initial = await call({ action: "list" });
+    const privateCandidate = initial.details.candidates.find(c => c.path === "src/private/large.ts");
+    await h.commands.get("large").handler("--scope src --exclude src/private", h.context);
+    assert.match(h.notifications.at(-1).message, /目录分布.*src.*1/);
+    assert.match(h.notifications.at(-1).message, /src\/private.*显式排除/);
+    assert.match(h.sentUserMessages[0].message, /不为逐文件.*机械换角/);
+    assert.deepEqual((await call({ action: "list" })).details.candidates.map(c => c.path), ["src/large.ts"]);
+    assert.equal((await call({ action: "read", path: privateCandidate.path })).details.code, "OUTSIDE_SCAN_SCOPE");
+    await emitExtensionEvent(h, "tool_result", readEvent(privateCandidate.path));
+    assert.equal((await completeReview(h, privateCandidate)).details.code, "FILE_NOT_FOUND");
+    assert.equal((await call({ action: "list" })).details.total, 1);
+    const idle = h.context.isIdle;
+    h.context.isIdle = () => false;
+    await h.commands.get("large").handler("--include-temporary", h.context);
+    assert.match(h.notifications.at(-1).message, /未改变扫描范围/);
+    assert.equal((await call({ action: "list" })).details.total, 1);
+    h.context.isIdle = idle;
+    await h.commands.get("large").handler("--include-temporary", h.context);
+    assert.equal((await call({ action: "list" })).details.total, 4);
+    await h.commands.get("large").handler("", h.context);
+    assert.equal((await call({ action: "list" })).details.total, 3);
+    await h.commands.get("large").handler("--scope src --exclude src/private", h.context);
+    await emitExtensionEvent(h, "session_start", { reason: "reload" }); await role();
+    assert.equal((await call({ action: "list" })).details.total, 3);
+    await h.commands.get("large").handler("--scope ../outside", h.context);
+    assert.match(h.notifications.at(-1).message, /项目内的相对目录/);
+    assert.equal((await call({ action: "list" })).details.total, 3);
+  });
+});
+
+test("retired policy review is replaced by a current snapshot and survives the next reload", async () => {
+  await withTempDirectory(async directory => {
+    const h = createExtensionHarness([], { cwd: directory });
+    const role = () => h.tools.find(t => t.name === "switch_role").execute("role", { role: "developer-test" }, undefined, undefined, h.context);
+    const list = () => h.tools.find(t => t.name === "file_review").execute("list", { action: "list" }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "session_start", { reason: "startup" }); await role();
+    const candidate = (await list()).details.candidates[0];
+    await emitExtensionEvent(h, "tool_result", readEvent(candidate.path));
+    assert.equal((await completeReview(h, candidate)).details.ok, true);
+    const oldEntry = h.branch.findLast(entry => entry.customType === "pi-init-file-review");
+    oldEntry.data.policyVersion = 0;
+    const oldCopy = structuredClone(oldEntry);
+    await emitExtensionEvent(h, "session_start", { reason: "reload" }); await role();
+    assert.equal((await list()).details.total, 1);
+    await emitExtensionEvent(h, "tool_result", readEvent(candidate.path));
+    assert.equal((await completeReview(h, candidate)).details.ok, true);
+    const current = h.branch.findLast(entry => entry.customType === "pi-init-file-review").data;
+    assert.equal(current.kind, "snapshot"); assert.equal(current.revision, 1);
+    assert.deepEqual(oldEntry, oldCopy);
+    await emitExtensionEvent(h, "session_start", { reason: "reload" }); await role();
+    assert.equal((await list()).details.total, 0);
+    assert.equal((await list()).details.structuralComplete, true);
+  });
+});
+
+test("large rejects a default-excluded scope without reporting an empty complete inventory or replacing the valid scope", async () => {
+  await withTempDirectory(async directory => {
+    await mkdir(path.join(directory, "node_modules"));
+    const h = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(h, "session_start", { reason: "startup" });
+    await h.tools.find(t => t.name === "switch_role").execute("role", { role: "developer-test" }, undefined, undefined, h.context);
+    await h.commands.get("large").handler("--scope node_modules", h.context);
+    assert.match(h.notifications.at(-1).message, /扫描不完整.*审阅策略排除/);
+    assert.doesNotMatch(h.notifications.at(-1).message, /没有当前版本待审候选/);
+    assert.equal(h.sentUserMessages.length, 0);
+    const listed = await h.tools.find(t => t.name === "file_review").execute("list", { action: "list" }, undefined, undefined, h.context);
+    assert.deepEqual(listed.details.scanScope, {});
+    assert.equal(listed.details.total, 1);
   });
 });

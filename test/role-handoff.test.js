@@ -49,6 +49,8 @@ test("同职责确认及闲置切角不额外终止或派发回合", async () =>
   await startRun(harness);
   const same = await switchRole(harness, "architect");
   assert.notEqual(same.terminate, true);
+  assert.equal(same.details.reused, true);
+  assert.match(same.content[0].text, /当前职责已确认，无需切换/);
   await emitExtensionEvent(harness, "agent_end");
   await emitExtensionEvent(harness, "agent_settled");
   assert.equal(handoffs(harness).length, 0);

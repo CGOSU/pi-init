@@ -2,6 +2,7 @@ import type { ContextEvent, ContextEventResult, ExtensionContext } from "@earend
 import { isWorkflowActive, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { reusableToolContext } from "./role-context-reuse.ts";
+import { waitingContextView } from "./role-context-waiting.ts";
 import { type ContextMessage, WORKFLOW_TASK_MESSAGE_TYPE, WORKFLOW_REPLAN_MESSAGE_TYPE,
   isRecord, messageRecord, identityMatches, isManagedHandoffMessage, branchContainsExactlyOneAnchor, hasCompleteToolPairs, failOpen, groupToolMessages } from "./role-context-protocol.ts";
 
@@ -89,6 +90,8 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
   if (event.messages.some((message) => messageRecord(message)?.role === "system")) {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_SYSTEM_MESSAGE_PRESENT", "context 输入包含 Pi 管理的 system message；为避免触碰 system/tool 状态而保留完整输入");
   }
+  const waiting = waitingContextView(state, event.messages, ctx);
+  if (waiting) return waiting;
 
   let anchor: ContextAnchor | undefined;
   try {
