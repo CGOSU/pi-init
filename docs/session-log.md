@@ -7,6 +7,7 @@
 - 完成：落实用户确认的四项优化。auto小计划可用`orchestration="required"`进入既有工作流，默认数量策略与off/审阅门不变；checkpoint参数描述和错误反馈说明真实来源与revision的按需获取/复用方式；角色交接承接匹配目的并按缺口读取；普通交接通过既有字段保留完整命令和必要非敏感环境。操作说明见[README](../README.md)及公共[操作参考](../skills/pi-init-role-routing/references/runtime-operations.md)，范围约束见[设计决策](decisions.md)。
 - 验证：auto显式编排在旧实现先复现被跳过，修复后针对性24项通过；checkpoint/状态查询33项、职责/恢复34项、普通交接26项均通过。增强已有来源回归：full status正文可获取真实工具结果ID/revision且不改状态，toolCallId/assistant entry ID不能代替来源。合并后`npm test` **822/822通过，0失败、0跳过**；类型检查发现SDK schema输入为unknown，沿原校验入口明确接收未知输入后`npm run typecheck`通过，受影响24项再次通过；后续仅类型标注与文档调整，复用此前全量结果。`git diff --check`通过，独立审阅未发现恢复或调度旁路。
 - 过程：auto新增用例首次复现失败；随后一次测试夹具误读持久化tasks位置已纠正，不将这些运行记作通过。无新增checkpoint/status强制步骤、持久化schema或交接必填字段；失败来源、版本陈旧、身份和恢复门均保留。
+- 安装：本机Pi安装副本已从本地开发仓库快进同步，原有package-lock.json改动经hash核对保持不变，未安装依赖。`node /tmp/pi-init-installed-guidance-check/verify.mjs`在隔离Pi profile实际加载安装副本，确认单扩展入口及新编排参数、checkpoint来源指引、执行环境交接描述可见；未触发业务工具或会话生命周期。
 - 边界：自动回归不证明真实模型必然遵循提示，误用/重复读取收益需新会话观察；未发送模型请求、改写原FlClash会话或主动reload。安装副本与运行中加载状态分别核对，磁盘更新不代表长驻实例已生效。
 
 ### 2026-11-04：审计FlClash最新Pi会话的规划与工具失败
