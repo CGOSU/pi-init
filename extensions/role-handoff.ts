@@ -4,6 +4,7 @@ import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity
 import { textOf, type ActiveRole, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
 import { checkWorkflowRoleSwitch } from "./workflow-action-policy.ts";
+import { isWaitingWorkflowBoundary } from "./role-context-waiting.ts";
 
 export const ROLE_HANDOFF_MESSAGE_TYPE = "pi-init-role-handoff";
 const ROLE_HANDOFF_ENTRY_TYPE = "pi-init-role-handoff-state";
@@ -26,6 +27,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
       sessionId: ctx.sessionManager.getSessionId(),
       contextGeneration: state.roleContextGeneration,
       runActive: state.agentRunActive,
+      recoveryPending: state.roleRecoveryPending,
       activeRole: activeRole ? { ...activeRole } : undefined,
       workKey: JSON.stringify({
         workflow: workflow ? { identity: workflowActionIdentity(workflow), status: workflow.status, handoff: workflowHandoffIdentity(workflow), replan: workflowReplanIdentity(workflow),
@@ -60,11 +62,16 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
   }
 
   function finishSwitch(ctx: ExtensionContext, scope: Scope, result: ActiveRole, aborted = false) {
-    if (!scope.runActive || sameRole(scope.activeRole, result)) return { terminate: false };
+    if (!scope.runActive) return { terminate: false };
+    const unchanged = sameRole(scope.activeRole, result);
+    const resumeSchedule = unchanged && scope.recoveryPending && !recoveryBlocked() && isWaitingWorkflowBoundary(state);
+    if (unchanged && !resumeSchedule) return { terminate: false };
     if (aborted || !state.agentRunActive || !sameScope(ctx, scope)) {
       state.traceHandoff?.(ctx, "role.handoff_discarded", { role: result.role });
       return { terminate: true, handoffFailure: "stale-or-aborted" };
     }
+    // Confirmation needs no extra role turn. Let agent_settled use the existing workflow queue.
+    if (resumeSchedule) return { terminate: true };
     const handoff: Handoff = { handoffId: randomUUID(), scope, targetRole: { ...result }, roleTransitionGeneration: state.roleTransitionGeneration,
       branchEntryIds: ctx.sessionManager.getBranch().map(entry => entry.id) };
     try {

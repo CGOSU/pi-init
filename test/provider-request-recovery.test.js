@@ -32,20 +32,125 @@ async function failure(h, message = assistant(h)) {
   await emitExtensionEvent(h, "agent_end");
   await emitExtensionEvent(h, "agent_settled", { aborted: message.stopReason === "aborted" });
 }
-async function completedTool(h, { persisted = true, nested = false, childEnds = true, isError = false } = {}) {
-  const id = "write-" + ++sequence;
-  const message = assistant(h, [{ type: "toolCall", id, name: "write", arguments: { path: "src/a.ts", content: "saved" } }], "toolUse", undefined);
+async function completedTool(h, { persisted = true, nested = false, childEnds = true, isError = false,
+  name = "write", input = { path: "src/a.ts", content: "saved" }, readOnlyNested } = {}) {
+  const id = name + "-" + ++sequence;
+  const message = assistant(h, [{ type: "toolCall", id, name, arguments: input }], "toolUse", undefined);
   await emitExtensionEvent(h, "before_provider_request", {});
   await emitExtensionEvent(h, "message_end", { message });
   h.branch.push({ type: "message", id: "assistant-" + sequence, message });
-  await emitExtensionEvent(h, "tool_execution_start", { toolCallId: id, toolName: "write", args: {} });
+  await emitExtensionEvent(h, "tool_execution_start", { toolCallId: id, toolName: name, args: input });
   if (nested) {
     await emitExtensionEvent(h, "tool_execution_start", { toolCallId: id + "/1", parentToolCallId: id, toolName: "external", args: {} });
     if (childEnds) await emitExtensionEvent(h, "tool_execution_end", { toolCallId: id + "/1", parentToolCallId: id, toolName: "external", result: {}, isError: false });
   }
-  await emitExtensionEvent(h, "tool_execution_end", { toolCallId: id, toolName: "write", result: {}, isError });
-  if (persisted) h.branch.push({ type: "message", id: "result-" + sequence, message: { role: "toolResult", toolCallId: id, toolName: "write", content: [{ type: "text", text: "saved" }], isError, timestamp: ++sequence } });
+  const receipts = [];
+  for (const [index, child] of (readOnlyNested ?? []).entries()) {
+    const childId = id + "/" + (index + 1);
+    const args = { path: "src/" + index + ".ts" };
+    await emitExtensionEvent(h, "tool_execution_start", { toolCallId: childId, parentToolCallId: id, toolName: child.name, args });
+    await emitExtensionEvent(h, "tool_result", { toolCallId: childId, parentToolCallId: id, toolName: child.name, input: args, content: [], details: {}, isError: child.isError });
+    await emitExtensionEvent(h, "tool_execution_end", { toolCallId: childId, parentToolCallId: id, toolName: child.name, result: {}, isError: child.isError });
+    receipts.push({ id: childId, name: child.name, arguments: args, status: child.isError ? "error" : "ok", durationMs: 2 });
+  }
+  const details = readOnlyNested ? { calls: receipts.map(({ arguments: args, ...call }) => ({ ...call, args: JSON.stringify(args) })) } : {};
+  const content = [{ type: "text", text: isError ? "known tool failure" : "saved" }];
+  await emitExtensionEvent(h, "tool_result", { toolCallId: id, toolName: name, input, content, details, isError });
+  await emitExtensionEvent(h, "tool_execution_end", { toolCallId: id, toolName: name, result: { content, details }, isError });
+  if (persisted) h.branch.push({ type: "message", id: "result-" + sequence, message: { role: "toolResult", toolCallId: id, toolName: name, content, details, isError, timestamp: ++sequence,
+    ...(readOnlyNested ? { nestedCalls: { complete: true, calls: receipts } } : {}) } });
 }
+
+test("paired permitted observations after a provider hold preserve continuation and the original attempt", async () => {
+  for (const observations of [[
+    { name: "task_workflow", input: { action: "status" } },
+    { name: "read", input: { path: "src/a.ts" } },
+  ], [{ name: "read", input: { path: "src/missing.ts" }, isError: true }]]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    const before = structuredClone(latest(h));
+    const sent = h.sentMessages.length;
+    await failure(h);
+    for (const observation of observations) {
+      assert.equal(await emitExtensionEvent(h, "tool_call", { toolName: observation.name, toolCallId: "inspect-" + sequence, input: observation.input }), undefined);
+      await completedTool(h, observation);
+    }
+    const observedMessages = h.branch.filter(e => e.type === "message").length;
+    assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
+    assert.deepEqual(latest(h), before);
+    assert.equal(h.sentMessages.length, sent);
+    assert.equal(h.branch.filter(e => e.type === "message").length, observedMessages);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("a failed codemode batch with complete matching native read receipts is a known observation", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    await completedTool(h, { name: "codemode", input: { code: "read batch" }, isError: true,
+      readOnlyNested: [{ name: "read" }, { name: "read" }, { name: "read", isError: true }] });
+    const before = structuredClone(latest(h));
+    await failure(h);
+    assert.deepEqual(latest(h), before);
+    assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.reason, "provider-request-failed");
+    assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
+    assert.deepEqual(latest(h), before);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("codemode errors still require complete read-only receipts without untracked model or write calls", async () => {
+  for (const change of [
+    result => { delete result.nestedCalls; },
+    result => { result.nestedCalls.complete = false; },
+    result => { result.nestedCalls.calls[0].status = "unfinished"; },
+    result => { result.nestedCalls.calls[0].name = "write"; },
+    result => { result.details.calls.push({ id: result.toolCallId + "/models.generateImages/1", name: "models.generateImages", status: "error", durationMs: 2 }); },
+    result => { delete result.details; },
+    result => { result.toolName = "external"; },
+  ]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    await completedTool(h, { name: "codemode", isError: true, readOnlyNested: [{ name: "read", isError: true }] });
+    change(h.branch.findLast(e => e.type === "message" && e.message.role === "toolResult").message);
+    await failure(h);
+    assert.equal(latest(h).tasks[0].outcomeUnknown, true);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("paired historical read failures do not turn a later provider failure into an unknown outcome", async () => {
+  for (const nextRun of [false, true]) {
+    await withTempDirectory(async cwd => {
+      const h = await fixture(cwd);
+      await completedTool(h, { name: "read", input: { path: "src/missing.ts" }, isError: true });
+      if (nextRun) await emitExtensionEvent(h, "agent_start");
+      const before = structuredClone(latest(h));
+      await failure(h);
+      assert.deepEqual(latest(h), before);
+      assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.reason, "provider-request-failed");
+      assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
+      assert.deepEqual(latest(h), before);
+      await emitExtensionEvent(h, "session_shutdown");
+    });
+  }
+});
+
+test("observations without complete receipts and intervening mutations still invalidate a provider hold", async () => {
+  for (const observation of [
+    { name: "read", persisted: false },
+    { name: "read", nested: true, childEnds: false },
+    { name: "write" },
+    { name: "task_workflow", input: { action: "retry" } },
+  ]) {
+    await withTempDirectory(async cwd => {
+      const h = await fixture(cwd);
+      await failure(h);
+      await completedTool(h, observation);
+      assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "handled" });
+      assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.stopped, true);
+      await emitExtensionEvent(h, "session_shutdown");
+    });
+  }
+});
 
 test("settled request-only failure preserves executing identity and one user continue resumes without task retry", async () => {
   await withTempDirectory(async cwd => {

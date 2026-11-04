@@ -1,4 +1,5 @@
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { getNextWorkflowTask } from "../src/workflow.ts";
 
 type PolicyState = Pick<ExtensionRuntimeState, "workflowState" | "pendingWorkflowRecovery" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "workflowRestoreError" | "userStopRequested"> & Partial<Pick<ExtensionRuntimeState, "roleModeStatus">>;
 export type WorkflowNextAction = {
@@ -15,15 +16,19 @@ export type WorkflowNextAction = {
 export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   const workflow = state.workflowState;
   const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
-  const taskScope = workflow?.currentTaskId ? { taskId: workflow.currentTaskId, requiredRole: task?.role } : {};
+  const nextTask = workflow?.pendingRevision ? undefined : getNextWorkflowTask(workflow);
+  const requiredRole = task?.role ?? (!workflow?.currentTaskId && workflow?.pendingRevision ? "architect" : nextTask?.role);
+  const taskId = workflow?.currentTaskId ?? nextTask?.id;
+  const taskScope = { ...(taskId ? { taskId } : {}), ...(requiredRole ? { requiredRole } : {}) };
   if (state.userStopRequested) return { action: "recover", recovery: "stop", code: "WORKFLOW_USER_STOPPED", message: "自动执行已停止，等待用户明确继续或恢复。", nextAction: "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。" };
   const activeWorkflow = workflow && !["completed", "cancelled"].includes(workflow.status);
+  const switchAction = requiredRole ? `switch_role(role="${requiredRole}")` : "switch_role";
   const roleAction = state.roleModeStatus === "manual"
-    ? "当前为 manual 模式；若当前角色可验证，使用 switch_role，否则请用户执行 /pi-init role <role>，不要反复调用 switch_role。"
+    ? `当前为 manual 模式；若当前角色可验证，使用 ${switchAction}，否则请用户执行 /pi-init role ${requiredRole ?? "<role>"}，不要反复调用 switch_role。`
     : state.roleModeStatus === undefined
       ? "当前职责模式尚未确认；先核对当前模式和职责，不得猜测执行授权。"
-      : "先按目标调用 switch_role 并等待成功。";
-  const recoveryStatus = '核对已返回的 task_workflow(action="status")（尚未获取时只读一次），不要重复轮询。';
+      : `调用 ${switchAction} 并等待成功。`;
+  const recoveryStatus = '当前工作流状态已提供；不要为恢复重复查询 task_workflow(action="status")。';
   if (state.roleRecoveryPersistenceFailed) return { action: "recover", recovery: "workflow", ...taskScope,
     code: "ROLE_RECOVERY_PERSIST_FAILED", message: "职责恢复记录持久化失败，执行仍被阻断。",
     nextAction: recoveryStatus + "职责恢复记录持久化失败；保持停止，先处理持久化错误，再按既有恢复流程核对职责与身份，不重复查询或自动派发任务。" };
@@ -45,7 +50,8 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
       && (workflow.status === "paused" || task?.outcomeUnknown || (workflow.currentTaskId && !task)))) {
     return { action: "recover", recovery: "workflow", ...taskScope,
       ...(state.roleRecoveryPending ? { code: "ROLE_RECOVERY_PENDING", message: "职责恢复尚未确认。" } : {}),
-      nextAction: recoveryStatus + '按现有恢复守卫核对当前身份和未知结果；不得自动重放副作用或沿用旧 attempt/handoff。' + (state.roleRecoveryPending ? `重新确认当前任务角色；${roleAction}恢复前不要执行其他工具。` : "") };
+      nextAction: recoveryStatus + '按现有恢复守卫核对当前身份和未知结果；不得自动重放副作用或沿用旧 attempt/handoff。' + (state.roleRecoveryPending
+        ? `${requiredRole ? `重新确认职责 ${requiredRole}；` : "按用户目标确认职责；"}${roleAction}恢复前不要执行其他工具。${nextTask ? "确认后结束本回合，由现有调度器派发待办；收到新的任务交接前不要执行待调度任务。" : ""}` : "") };
   }
   if (!workflow || ["completed", "cancelled"].includes(workflow.status)) return { action: "none", nextAction: "按当前用户目标和明确指定的任务角色继续尚未完成的工作；没有待办就结束，不创造新任务。同一交付物内保持职责，独立交付物或必要架构决策才换角。无活动工作流任务角色绑定，不豁免其他职责与安全守卫。" };
   if (workflow.currentTaskId) {
@@ -55,7 +61,7 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
     return { action: "finish-current-task", ...taskScope, nextAction: `保持或恢复当前任务显式执行角色 ${task?.role}，其优先于模型自行换角判断；使用当前真实 handoff 身份。${boundary}不要在当前任务尚未退出时切到 architect 提前重规划，不得自动标记完成或重放副作用。` };
   }
   if (workflow.pendingRevision) return { action: "schedule-replan", requiredRole: "architect", nextAction: "当前任务已退出；由现有工作流调度器安排 architect 使用当前 revision/handoff 身份规划，保留未知结果确认与证据守卫。" };
-  return { action: "none", nextAction: "按现有工作流调度继续，不重复派发任务。" };
+  return { action: "none", ...taskScope, nextAction: "按现有工作流调度继续，不重复派发任务。" };
 }
 
 /** Call before switch_role configuration/model/persistence side effects. */

@@ -74,7 +74,7 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
         content: [
           {
             type: "text",
-            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${reused ? "。沿当前职责继续未完成工作，不必再次确认。" : ""}${transition.terminate ? transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`,
+            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${reused ? "。沿当前职责继续未完成工作，不必再次确认。" : ""}${transition.terminate ? transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : unchanged ? "。当前回合结束；由现有工作流调度器派发待办任务。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`,
           },
         ],
         details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole, reused, ...transition },

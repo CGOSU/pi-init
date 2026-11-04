@@ -6,7 +6,7 @@ import { createWorkflowState, workflowMessageIdentity } from "./support/workflow
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildSessionHandoff, importedWorkflow, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
+import { handoffBoundary, resolveHandoffSnapshot, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
 import { readFile } from "node:fs/promises";
 
 async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = false } = {}) {
@@ -48,6 +48,31 @@ async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = fal
   return h;
 }
 function latest(h) { return h.branch.findLast(e => e.customType === "pi-init-workflow").data; }
+function enlargeWorkflow(h) {
+  latest(h).plan.constraints.push("完整约束".repeat(23000));
+  h.manager.appendCustomEntry("pi-init-workflow", latest(h));
+}
+async function completedNestedReadFailure(h, { complete = true, name = "read" } = {}) {
+  const id = "handoff-read-group";
+  const calls = ["types.go", "references.go", "classical.go"].map((file, index) => ({ id: id + "/" + (index + 1), name,
+    arguments: { path: "core/singbox/resources/" + file }, status: index === 2 ? "error" : "ok", durationMs: 1,
+    ...(index === 2 ? { error: "ENOENT: no such file or directory" } : {}),
+  }));
+  const input = { code: "await Promise.all(paths.map(path => tools.read({path})))" };
+  h.manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id, name: "codemode", arguments: input }], provider: "test", model: "model", api: "test", timestamp: Date.now(), stopReason: "toolUse", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  await emitExtensionEvent(h, "tool_execution_start", { toolCallId: id, toolName: "codemode", args: input });
+  for (const call of calls) {
+    await emitExtensionEvent(h, "tool_execution_start", { toolCallId: call.id, parentToolCallId: id, toolName: name, args: call.arguments });
+    await emitExtensionEvent(h, "tool_result", { toolCallId: call.id, parentToolCallId: id, toolName: name, input: call.arguments, content: [], isError: call.status === "error" });
+    await emitExtensionEvent(h, "tool_execution_end", { toolCallId: call.id, parentToolCallId: id, toolName: name, result: { content: [] }, isError: call.status === "error" });
+  }
+  const details = { calls: calls.map(({ arguments: args, ...call }) => ({ ...call, args: JSON.stringify(args) })) };
+  const result = { role: "toolResult", toolCallId: id, toolName: "codemode", content: [{ type: "text", text: "ENOENT: no such file or directory" }], details, isError: true, timestamp: Date.now(), nestedCalls: { calls, complete } };
+  await emitExtensionEvent(h, "tool_result", { ...result, input });
+  await emitExtensionEvent(h, "tool_execution_end", { toolCallId: id, toolName: "codemode", result, isError: true });
+  h.manager.appendMessage(result);
+  h.branch.splice(0, h.branch.length, ...h.manager.getBranch());
+}
 
 test("high host usage only reminds and does not pause or replace a session at the completed-task boundary", async () => {
   await withTempDirectory(async cwd => {
@@ -182,6 +207,7 @@ test("cancelled native switch leaves source offer resumable without creating ano
 test("uncertain replacement freezes the old owner and repeated fresh cannot create a duplicate", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);
+    enlargeWorkflow(h);
     let calls = 0;
     h.context.newSession = async () => { calls++; throw new Error("unknown switch outcome"); };
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
@@ -217,17 +243,199 @@ test("active tools, unknown outcomes, pending messages, lost trust and missing s
   }
 });
 
-test("oversized capsules are rejected intact without freezing or truncating the plan", async () => {
+test("large workflows transfer through a bounded manifest without truncating constraints or history", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);
-    latest(h).plan.constraints.push("x".repeat(SESSION_HANDOFF_MAX_BYTES));
+    enlargeWorkflow(h);
     const before = structuredClone(latest(h));
-    assert.throws(() => buildSessionHandoff(before, h.branch), /32 KiB/);
-    let calls = 0;
-    h.context.newSession = async () => { calls++; return { cancelled: false }; };
+    assert.ok(Buffer.byteLength(JSON.stringify(before)) >= 259576);
+    h.context.newSession = options => replaceSession(h, options);
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
-    assert.equal(calls, 0);
+    const target = h.target;
+    assert.ok(target, JSON.stringify(h.notifications));
+    assert.deepEqual(latest(target).plan, before.plan);
+    assert.deepEqual(latest(target).revisions, before.revisions);
+    const packet = target.branch.find(e => e.customType === "pi-init-session-handoff" && e.data.kind === "incoming").data.packet;
+    assert.equal(packet.version, 2);
+    assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= SESSION_HANDOFF_MAX_BYTES);
+    assert.equal(packet.workflow, undefined);
+    assert.equal(latest(target).currentTaskId, "second");
+    assert.ok(target.sentMessages.find(e => e.message.customType === "pi-init-workflow-task").message.content.includes(before.plan.constraints[1]), "worker receives the full constraint");
+    const seed = target.branch.find(e => e.type === "message" && e.message.role === "user").message.content;
+    assert.ok(Buffer.byteLength(seed) <= SESSION_HANDOFF_MAX_BYTES);
+    assert.match(seed, /完整.*快照/);
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("a settled known block can transfer without resuming or losing the original reason", async () => {
+  for (const cancel of [false, true]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    await emitExtensionEvent(h, "agent_settled");
+    await emitExtensionEvent(h, "agent_start");
+    await h.tools.find(t => t.name === "task_workflow").execute("handoff-block", { action: "block", ...workflowMessageIdentity(h), reason: "用户要求停在这里交接；没有在途操作" }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "agent_end");
+    const before = structuredClone(latest(h));
+    h.context.newSession = options => replaceSession(h, options, { cancel });
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const owner = cancel ? h : h.target;
+    assert.ok(owner, JSON.stringify(h.notifications));
+    assert.equal(latest(owner).status, "paused");
+    assert.equal(latest(owner).pauseReason, "task-blocked");
+    assert.equal(latest(owner).tasks[1].status, "blocked");
+    assert.equal(latest(owner).tasks[1].blockReason, before.tasks[1].blockReason);
+    if (!cancel) {
+      assert.equal(owner.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 0);
+      let replacements = 0;
+      owner.context.newSession = async () => { replacements++; return { cancelled: true }; };
+      await owner.commands.get("pi-init").handler("fresh", owner.context);
+      assert.equal(replacements, 0);
+      assert.equal(latest(owner).tasks[1].status, "blocked");
+    }
+    await emitExtensionEvent(owner, "session_shutdown");
+  });
+});
+
+test("large handoffs deliver unfinished checkpoints or an exact retrievable source without forging current memory", async () => {
+  for (const oversized of [false, true]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    enlargeWorkflow(h);
+    await emitExtensionEvent(h, "agent_settled");
+    await emitExtensionEvent(h, "agent_start");
+    const sent = h.sentMessages.findLast(e => e.message.customType === "pi-init-workflow-task").message;
+    const anchorIndex = h.branch.findLastIndex(e => e.customType === "pi-init-workflow-task");
+    const [anchor] = h.branch.splice(anchorIndex, 1);
+    await emitExtensionEvent(h, "message_start", { message: { role: "custom", ...sent, timestamp: Date.now() } });
+    h.branch.push(anchor);
+    const checkpoint = { step: "移交前已定位下一项", accomplished: [], blockers: [],
+      remaining: oversized ? Array(32).fill("边界约束".repeat(100)) : ["完成仍待处理的定向修改"],
+      nextStep: "从 resources/references.go 的真实缺口继续，不重跑此前调查" };
+    await h.tools.find(t => t.name === "task_workflow").execute("save-progress", { action: "checkpoint", ...workflowMessageIdentity(h), expectedMemoryRevision: 0, checkpoint }, undefined, undefined, h.context);
+    await h.tools.find(t => t.name === "task_workflow").execute("handoff-block", { action: "block", ...workflowMessageIdentity(h), reason: "用户要求在已保存进度处交接" }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "agent_end");
+    h.context.newSession = options => replaceSession(h, options);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const target = h.target;
+    assert.ok(target, JSON.stringify(h.notifications));
+    const seed = target.branch.find(e => e.type === "message" && e.message.role === "user").message.content;
+    const context = JSON.parse(seed.split("\n")[1]).context;
+    assert.ok(Buffer.byteLength(seed) <= SESSION_HANDOFF_MAX_BYTES);
+    assert.equal(target.branch.some(e => e.customType === "pi-init-task-memory"), false, "historical checkpoint must not acquire current attempt identity");
+    assert.equal(latest(target).tasks[1].status, "blocked");
+    const incoming = target.branch.find(e => e.customType === "pi-init-session-handoff" && e.data.kind === "incoming").data;
+    const full = resolveHandoffSnapshot(incoming.packet, h.manager.getEntries());
+    if (!oversized) {
+      assert.deepEqual(context.checkpoints[0].checkpoint, checkpoint);
+      assert.equal(context.checkpoints[0].sourceSessionId, h.manager.getSessionId());
+      assert.equal(context.checkpoints[0].sourceFile, h.manager.getSessionFile());
+      assert.equal(context.checkpoints[0].historical, true);
+      assert.equal(context.deferredCheckpointCount, 0);
+    } else {
+      assert.equal(context.checkpoints.length, 0);
+      assert.equal(context.deferredCheckpoints[0].nextStep, checkpoint.nextStep);
+      assert.equal(context.deferredCheckpointCount, 1);
+      assert.equal(context.snapshotSource.sourceFile, h.manager.getSessionFile());
+      assert.equal(context.snapshotSource.id, incoming.packet.snapshot.id);
+      assert.equal(context.snapshotSource.hash, incoming.packet.snapshot.hash);
+      assert.deepEqual(full.context.checkpoints[context.deferredCheckpoints[0].index].checkpoint, checkpoint);
+      assert.match(context.checkpointNotice, /正文未注入/);
+    }
+    // A later explicitly resumed attempt can be blocked again without losing old progress.
+    await target.tools.find(t => t.name === "switch_role").execute("confirm", { role: "developer-test" }, undefined, undefined, target.context);
+    await target.commands.get("pi-init").handler("workflow retry second", target.context);
+    await emitExtensionEvent(target, "agent_start");
+    await target.tools.find(t => t.name === "task_workflow").execute("block-again", { action: "block", ...workflowMessageIdentity(target), reason: "新的交接暂停" }, undefined, undefined, target.context);
+    await emitExtensionEvent(target, "agent_end");
+    target.context.newSession = options => replaceSession(target, options);
+    await target.commands.get("pi-init").handler("fresh", target.context);
+    assert.ok(target.target, JSON.stringify(target.notifications));
+    const second = target.target.branch.find(e => e.customType === "pi-init-session-handoff" && e.data.kind === "incoming").data;
+    assert.deepEqual(resolveHandoffSnapshot(second.packet, target.manager.getEntries()).context.checkpoints[0].checkpoint, checkpoint);
+    await emitExtensionEvent(target.target, "session_shutdown");
+  });
+});
+
+test("blocked fresh accepts a complete read-only codemode failure but keeps incomplete or effectful results frozen", async () => {
+  for (const options of [{}, { complete: false }, { name: "write" }]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    await emitExtensionEvent(h, "agent_settled");
+    await emitExtensionEvent(h, "agent_start");
+    await completedNestedReadFailure(h, options);
+    await h.tools.find(t => t.name === "task_workflow").execute("handoff-block", { action: "block", ...workflowMessageIdentity(h), reason: "用户要求停在这里交接" }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "agent_end");
+    h.context.newSession = args => replaceSession(h, args);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const safe = !Object.keys(options).length;
+    assert.equal(Boolean(h.target), safe, JSON.stringify(h.notifications));
+    assert.equal(latest(h.target ?? h).tasks[1].status, "blocked");
+    assert.equal(latest(h.target ?? h).tasks[1].outcomeUnknown, undefined);
+    await emitExtensionEvent(h.target ?? h, "session_shutdown");
+  });
+});
+
+test("known block handoff still rejects unknown outcomes and active delegated work", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    const state = structuredClone(latest(h));
+    state.status = "paused"; state.pauseReason = "task-blocked";
+    state.tasks[1].status = "blocked"; state.tasks[1].blockReason = "handoff";
+    delete state.continuation;
+    assert.equal(handoffBoundary(state), true);
+    state.tasks[1].outcomeUnknown = true;
+    assert.equal(handoffBoundary(state), false);
+    delete state.tasks[1].outcomeUnknown;
+    state.tasks[1].delegation = { status: "running" };
+    assert.equal(handoffBoundary(state), false);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("missing, tampered and duplicate large snapshots prevent activation and never create a second target", async () => {
+  for (const corrupt of ["missing", "tampered", "duplicate"]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    enlargeWorkflow(h);
+    h.context.newSession = options => replaceSession(h, options, { skipActivate: true });
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const target = h.target;
+    assert.ok(target);
+    const sourceFile = h.manager.getSessionFile();
+    const original = await readFile(sourceFile, "utf8");
+    let entries = original.trim().split("\n").map(line => JSON.parse(line));
+    const snapshot = entries.find(e => e.customType === "pi-init-session-handoff" && e.data.kind === "snapshot");
+    assert.ok(snapshot);
+    if (corrupt === "missing") entries = entries.filter(e => e !== snapshot);
+    if (corrupt === "tampered") snapshot.data.packet.workflow.plan.constraints[0] = "tampered";
+    if (corrupt === "duplicate") entries.push({ ...snapshot, id: "duplicate-snapshot-entry" });
+    await writeFile(sourceFile, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
+    let replacements = 0;
+    target.context.newSession = async () => { replacements++; return { cancelled: false }; };
+    await target.commands.get("pi-init").handler("fresh", target.context);
+    assert.equal(replacements, 0);
+    assert.equal(latest(target).pauseReason, "session-handoff-imported");
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 0);
+    await writeFile(sourceFile, original);
+    await target.commands.get("pi-init").handler("fresh", target.context);
+    assert.equal(replacements, 0);
+    assert.equal(latest(target).currentTaskId, "second");
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("a failed large snapshot write never creates a target or changes the source workflow", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    enlargeWorkflow(h);
+    const before = structuredClone(latest(h));
+    const append = h.manager.appendCustomEntry.bind(h.manager);
+    h.manager.appendCustomEntry = (type, data) => {
+      if (type === "pi-init-session-handoff" && data.kind === "snapshot") throw new Error("snapshot disk full");
+      return append(type, data);
+    };
+    h.context.newSession = () => assert.fail("snapshot was not saved");
+    await h.commands.get("pi-init").handler("fresh", h.context);
     assert.deepEqual(latest(h), before);
+    assert.equal(h.manager.getEntries().some(e => e.customType === "pi-init-session-handoff" && e.data.kind === "outgoing"), false);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
@@ -267,6 +475,7 @@ test("corrupted incoming packets never activate or create another owner", async 
 test("a partial target write is recoverable in that target without recreating a session or using stale APIs", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);
+    enlargeWorkflow(h);
     h.context.newSession = options => replaceSession(h, options, { failWorkflowWrite: true });
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
     const target = h.target;
@@ -299,6 +508,7 @@ test("an old source branch remains locked by the session-wide transfer intent", 
 test("source preparation failure never creates a target and does not unlock uncertain ownership", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);
+    enlargeWorkflow(h);
     const append = h.manager.appendCustomEntry.bind(h.manager);
     h.manager.appendCustomEntry = (type, data) => { if (type === "pi-init-workflow" && data.pauseReason === "session-transfer-pending") throw new Error("disk full"); return append(type, data); };
     let calls = 0;
@@ -329,6 +539,7 @@ test("source file identity is verified before freezing or replacing anything", a
 test("successive handoffs keep the original declared evidence read-only without copying old conversations", async () => {
   await withTempDirectory(async cwd => {
     const original = await fixture(cwd, { evidence: true, threeTasks: true });
+    enlargeWorkflow(original);
     original.context.newSession = options => replaceSession(original, options);
     await original.commands.get("pi-init").handler("workflow fresh", original.context);
     const middle = original.target;

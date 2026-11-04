@@ -4,6 +4,7 @@ import { roleLabel } from "../src/roles.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
 import { isWaitingWorkflowBoundary } from "./role-context-waiting.ts";
+import { nextWorkflowAction } from "./workflow-action-policy.ts";
 import { TASK_MEMORY_MESSAGE } from "./task-memory-runtime.ts";
 import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
 
@@ -103,9 +104,10 @@ export function createRoleRecovery(
       // Live task history belongs to the SDK token-budget/compaction path, not a second byte-sized sliding window.
       const summarizedIds = memory?.role === "custom" ? (memory.details as { summarizedToolCallIds?: unknown } | undefined)?.summarizedToolCallIds : undefined;
       const summarized = new Set(Array.isArray(summarizedIds) ? summarizedIds.filter((id): id is string => typeof id === "string") : []);
-      // Waiting views already preserve complete protected groups; uncertain boundaries retain the
-      // full input. Neither case may lose unknown outcomes to a second byte-based projection.
-      const bounded = boundContextWindow(messages, liveTask || isWaitingWorkflowBoundary(state) ? null : contextByteBudget(ctx.model?.contextWindow), summarized);
+      // Replanning and waiting views preserve protected history, including unknown outcomes.
+      // Their size belongs to SDK token budgeting, not a second byte limit that stops the workflow.
+      const bounded = boundContextWindow(messages, liveTask || workflow?.status === "replanning" || isWaitingWorkflowBoundary(state)
+        ? null : contextByteBudget(ctx.model?.contextWindow), summarized);
       if (memory && (!bounded.messages.includes(memory) || bounded.overBudget)) taskMemory?.suspend(ctx);
       const projected = bounded.checkpointed ? bounded.messages.map(message => {
         if (message.role !== "custom" || message.customType !== "pi-init-role-context-view-diagnostic" || typeof message.content !== "string") return message;
@@ -137,10 +139,10 @@ export function createRoleRecovery(
       customType: ROLE_RECOVERY_MESSAGE_TYPE,
       content: [
         "[PI-INIT 职责恢复门]",
-        "检测到上下文刚完成压缩。压缩恢复了任务内容，但不代表职责边界已经恢复。",
+        "上下文或会话已恢复；任务内容恢复不代表职责边界已经确认。",
         `扩展记录的上一个角色：${activeRole}（仅供参考，不要直接沿用）。`,
         activeWorkflow
-          ? "恢复顺序：存在活动工作流，先调用 task_workflow(action=\"status\")；然后根据用户目标和公共 pi-init-role-routing Skill 重新判断职责；需要执行任务前必须重新确认职责。"
+          ? nextWorkflowAction(state).nextAction
           : "当前没有活动工作流；无需工具或新证据的简单问答可以直接回答，不要调用 task_workflow(action=\"status\")，也不要把回答视为职责确认；需要执行任务前必须重新确认职责。",
         state.roleRecoveryPersistenceFailed
           ? "恢复门持久化失败：当前执行工具仍被阻断；不得继续或假设恢复已确认。"

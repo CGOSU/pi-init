@@ -7,6 +7,10 @@ import { isWorkflowContinuationInput, parseWorkflowControlInput } from "../src/w
 import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
 const ENTRY = "pi-init-user-control";
 const READ_ONLY = new Set(["read", "grep", "find", "ls"]);
+export function isWorkflowReadOnlyTool(toolName: string, input?: unknown) {
+  return READ_ONLY.has(toolName) || toolName === "task_workflow" && input !== null
+    && typeof input === "object" && "action" in input && input.action === "status";
+}
 function bounded(value: string | undefined, limit = 500) {
   return (value ?? "").replace(/[\r\n]+/g, " ").replace(/</g, "&lt;").slice(0, limit);
 }
@@ -105,7 +109,7 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
     return { action: "handled" as const };
   }
   function guardToolCall(event: { toolName: string; input?: Record<string, unknown> }) {
-    if (!state.userStopRequested || READ_ONLY.has(event.toolName) || event.toolName === "task_workflow" && event.input?.action === "status") return undefined;
+    if (!state.userStopRequested || isWorkflowReadOnlyTool(event.toolName, event.input)) return undefined;
     return { block: true as const, reason: "[pi-init-user-stop] 自动执行已停止；仅允许只读观察。用户明确继续或恢复后仍须通过原有身份与未知结果保护。" };
   }
   return { input, suspend, resume, restore, guardToolCall, allowsExternalTurn: () => externalTurn, settled: () => { externalTurn = false; } };

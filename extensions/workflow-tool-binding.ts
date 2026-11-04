@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { generalToolSettlement, type ToolSettlement } from "./general-tool-settlement.ts";
+import { generalToolSettlement, nestedToolSettlement, type ToolSettlement } from "./general-tool-settlement.ts";
+import { isWorkflowReadOnlyTool } from "./workflow-user-control.ts";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { activeRoleMatches } from "./runtime-state.ts";
@@ -23,11 +24,37 @@ const TASK_ACTIONS = new Set(["complete", "block", "checkpoint"]);
 const REPLAN_ACTIONS = new Set(["replan"]);
 const MUTATION_ACTIONS = new Set(["resume", "retry", "cancel", "cancel-all", "request-replan", "request-goal"]);
 
+function codemodeReadOnlyCalls(details: unknown) {
+  if (!isRecord(details) || !Array.isArray(details.calls) || !details.calls.length || details.calls.length > MAX_CALLS) return undefined;
+  const calls = details.calls;
+  return calls.every(call => isRecord(call) && typeof call.id === "string" && typeof call.name === "string"
+    && isWorkflowReadOnlyTool(call.name) && ["ok", "error"].includes(String(call.status))
+    && typeof call.durationMs === "number" && Number.isFinite(call.durationMs) && call.durationMs >= 0) ? calls : undefined;
+}
+function settledReadOnlyCodemode(message: ContextMessage) {
+  if (message.role !== "toolResult" || message.toolName !== "codemode" || !message.isError) return false;
+  const calls = codemodeReadOnlyCalls(message.details);
+  const nested = isRecord(message) ? message.nestedCalls : undefined;
+  if (!calls || !isRecord(nested) || nested.complete !== true || !Array.isArray(nested.calls)
+    || nested.calls.length !== calls.length || !nestedToolSettlement(nested, message.toolCallId).ok) return false;
+  const receipts = new Map(nested.calls.map(call => [call.id, call]));
+  // SDK receipts cover tools; codemode details also include models.* calls. Require
+  // both inventories to agree so an untracked model call cannot look like a read batch.
+  return new Set(calls.map(call => call.id)).size === calls.length && calls.every(call => {
+    const receipt = receipts.get(call.id);
+    return receipt !== undefined && receipt.name === call.name && receipt.status === call.status
+      && isWorkflowReadOnlyTool(receipt.name, receipt.arguments);
+  });
+}
+
 export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRuntimeState) {
   let request: RunBinding | undefined;
   let toolEpoch = 0;
+  let nonObservationEpoch = 0;
   let uncertainTools = false;
   const activeTools = new Set<string>();
+  const activeReadOnlyTools = new Map<string, string>();
+  const readOnlyCodemodeFailures = new Set<string>();
   const executedRoots = new Set<string>();
   let safeRequests = new WeakMap<RunBinding, number>();
   const calls = new Map<string, RunBinding>();
@@ -133,7 +160,16 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
       if (parent) remember(event.toolCallId, parent);
     }
   });
-  pi.on("tool_result", event => { calls.delete(event.toolCallId); if (event.isError) uncertainTools = true; });
+  pi.on("tool_result", event => {
+    calls.delete(event.toolCallId);
+    if (event.isError && event.toolName === "codemode" && codemodeReadOnlyCalls(event.details)) {
+      if (readOnlyCodemodeFailures.size >= MAX_CALLS) uncertainTools = true;
+      else readOnlyCodemodeFailures.add(event.toolCallId);
+      return;
+    }
+    if (event.isError && (activeReadOnlyTools.get(event.toolCallId) !== event.toolName
+      || !isWorkflowReadOnlyTool(event.toolName, event.input))) uncertainTools = true;
+  });
   function sourceBinding(message: object) {
     const key = messageKey(message);
     return sources.get(message) ?? (key ? sourceKeys.get(key) : undefined);
@@ -166,10 +202,19 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   function persistedToolsComplete(messages: readonly ContextMessage[]) {
     // Pi system updates carry no tool calls; retain them in history, outside pair validation.
     const toolMessages = messages.filter(message => message.role !== "system");
-    if (activeTools.size || uncertainTools || !hasCompleteToolPairs(toolMessages) || messages.some(message => {
+    if (activeTools.size || uncertainTools || !hasCompleteToolPairs(toolMessages)) return false;
+    const proposals = new Map(toolMessages.flatMap(message => message.role === "assistant"
+      ? message.content.filter(part => part.type === "toolCall").map(call => [call.id, call] as const) : []));
+    if (messages.some(message => {
       if (message.role !== "toolResult") return false;
+      const call = proposals.get(message.toolCallId);
+      if (message.isError && (!call || call.name !== message.toolName
+        || !isWorkflowReadOnlyTool(call.name, call.arguments) && !settledReadOnlyCodemode(message))) return true;
       const nested = isRecord(message) ? message.nestedCalls : undefined;
-      return message.isError || nested !== undefined && (!isRecord(nested) || nested.complete !== true);
+      return nested !== undefined && (!isRecord(nested) || nested.complete !== true
+        || !nestedToolSettlement(nested, message.toolCallId).ok || !Array.isArray(nested.calls)
+        || nested.calls.some(call => isRecord(call) && call.status === "error"
+          && (typeof call.name !== "string" || !isWorkflowReadOnlyTool(call.name, call.arguments))));
     })) return false;
     const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
     return [...executedRoots].every(id => results.has(id));
@@ -177,6 +222,8 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   function generalToolsSettled(ctx: ExtensionContext, preparingId?: string): ToolSettlement {
     if ([...activeTools].some(id => id !== preparingId) || uncertainTools) return { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "仍有活动工具或本轮工具结果未确认；请核对真实结果，不要重试未知操作。" };
     const messages = ctx.sessionManager.getBranch().flatMap(entry => entry.type === "message" ? [entry.message] : []);
+    if ([...readOnlyCodemodeFailures].some(id => !messages.some(message => message.role === "toolResult"
+      && message.toolCallId === id && settledReadOnlyCodemode(message)))) return { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "只读批次失败仍缺少完整持久化回执；请核对真实结果。" };
     const persisted = generalToolSettlement(messages, preparingId, executedRoots);
     if (!persisted.ok) return persisted;
     const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
@@ -204,28 +251,41 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
       || !binding || stale(binding, ctx) || safeRequests.get(binding) !== toolEpoch
       || !providerBoundarySafe(ctx) || ctx.hasPendingMessages()) return undefined;
     const epoch = toolEpoch;
+    const observationEpoch = nonObservationEpoch;
+    // Once held, permitted observations may advance the tool epoch. They must still
+    // finish and persist complete pairs; any other tool invalidates this continuation.
     return (current: ExtensionContext) => !stale(binding, current) && safeRequests.get(binding) === epoch
-      && epoch === toolEpoch && current.isIdle() && !current.hasPendingMessages() && providerBoundarySafe(current);
+      && observationEpoch === nonObservationEpoch && current.isIdle() && !current.hasPendingMessages() && providerBoundarySafe(current);
   }
   pi.on("agent_start", () => {
     uncertainTools = activeTools.size > 0;
     executedRoots.clear();
+    readOnlyCodemodeFailures.clear();
   });
   pi.on("tool_execution_start", event => {
     toolEpoch++;
+    const readOnly = isWorkflowReadOnlyTool(event.toolName, event.args);
+    if (!readOnly) nonObservationEpoch++;
     if (activeTools.size >= MAX_CALLS || activeTools.has(event.toolCallId)
       || event.parentToolCallId && !activeTools.has(event.parentToolCallId)) uncertainTools = true;
-    if (activeTools.size < MAX_CALLS) activeTools.add(event.toolCallId);
+    if (activeTools.size < MAX_CALLS) {
+      activeTools.add(event.toolCallId);
+      if (readOnly) activeReadOnlyTools.set(event.toolCallId, event.toolName);
+    }
     if (!event.parentToolCallId) {
       if (executedRoots.size >= MAX_CALLS) uncertainTools = true;
       else executedRoots.add(event.toolCallId);
     }
   });
   pi.on("tool_execution_end", event => {
-    if (!activeTools.delete(event.toolCallId) || event.isError) uncertainTools = true;
+    const readOnly = activeReadOnlyTools.has(event.toolCallId) && activeReadOnlyTools.get(event.toolCallId) === event.toolName;
+    const codemodeCandidate = event.toolName === "codemode" && readOnlyCodemodeFailures.has(event.toolCallId)
+      && codemodeReadOnlyCalls(event.result?.details);
+    activeReadOnlyTools.delete(event.toolCallId);
+    if (!activeTools.delete(event.toolCallId) || event.isError && !readOnly && !codemodeCandidate) uncertainTools = true;
   });
 
-  function reset() { toolEpoch++; activeTools.clear(); executedRoots.clear(); uncertainTools = false; safeRequests = new WeakMap(); request = undefined; calls.clear(); messages = new WeakMap(); sources = new WeakMap(); messageKeys.clear(); sourceKeys.clear(); }
+  function reset() { toolEpoch++; nonObservationEpoch++; activeTools.clear(); activeReadOnlyTools.clear(); readOnlyCodemodeFailures.clear(); executedRoots.clear(); uncertainTools = false; safeRequests = new WeakMap(); request = undefined; calls.clear(); messages = new WeakMap(); sources = new WeakMap(); messageKeys.clear(); sourceKeys.clear(); }
   pi.on("session_start", reset);
   pi.on("session_tree", reset);
   pi.on("session_shutdown", reset);

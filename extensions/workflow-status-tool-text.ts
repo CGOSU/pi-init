@@ -24,6 +24,7 @@ export function workflowStatusToolSummary(state: ExtensionRuntimeState, memory?:
     `目标：${excerpt(workflow.plan.summary)}`,
     ...workflowIdentityLines(view),
     ...(current ? [`当前任务：${current.id} · ${current.role} · ${excerpt(current.task)}`] : []),
+    ...(!current && step.taskId && step.requiredRole ? [`待调度任务：${step.taskId} · ${step.requiredRole}（尚无执行身份）`] : []),
     ...(view.recovery ? [`执行阻断：${view.recovery.code} · ${excerpt(view.recovery.message)}`] : []),
     ...(workflow.pauseReason ? [`暂停类别：${workflow.pauseReason}`] : []),
     ...(workflow.taskPauseReason ? [`暂停原因：${excerpt(workflow.taskPauseReason)}`] : []),
