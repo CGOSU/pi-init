@@ -11,11 +11,14 @@
 
 ## 检查点与历史来源
 
-- checkpoint携带expectedMemoryRevision及step/accomplished/remaining/blockers/nextStep；accomplished引用真实evidenceIds。缺revision时使用运行时给出的值，不为补字段循环查status。
+- checkpoint按需保存进展，不是complete、block或交接的新增前置条件；携带expectedMemoryRevision及step/accomplished/remaining/blockers/nextStep。有已知有效来源和当前revision时直接复用，缺少来源时按需一次`task_workflow(action="status", detail="full")`，从任务记忆正文JSON取`observations[].id`及`revision`（结构化路径为`details.taskMemory.memory`）。
+- 来源ID是工具结果的session entry ID，不是toolCallId、messageEntryId或obs_recall ID；以真实返回值为准，不猜造。observations是有界视图，已有归档但仍能核验的本任务来源可复用；核对outcome如实记录失败观察，只有complete的evidenceIds要求成功来源。accomplished没有成果时可传[]，每项实际成果的evidenceIds须非空，不为凑来源执行额外工具。
+- 缺revision时使用运行时错误已给出的当前值，不为补字段循环查status；revision陈旧时按需一次full status核对最新checkpoint/remaining/nextStep，合并有效进展后再决定提交，不只替换revision覆盖新进展。查询不解除身份、恢复或防轮询守卫。
 - status(evidenceIds)可定向读取真实来源；memoryFiles最多16个项目相对文件，只记内容hash。历史引用、指纹和工具成功不代表当前验收通过。
 - `/pi-init fresh` 是普通会话与托管工作流共用的用户命令，预览并确认后才进入安全换session流程；活动工作流仍走原有受保护交接路径。`/pi-init workflow fresh` 保留为兼容入口，`resume` 留在原会话。这些命令不是新的task_workflow工具动作。
 - 工作流已保存检查点不等于已经完成交接。无活动任务、工具已结束且结果已知的 `task-blocked` 可经 fresh 转移，目标保留阻塞原因，按原恢复动作继续；不伪造 complete，也不为交接先重试业务。大工作流使用源session的hash快照引用，保留源文件，预览摘要不替代完整状态。新会话仍遵守职责恢复与未知结果保护。
 - 普通会话无需工作流：当前已确认的非architect执行角色在现场稳定、当前执行结束后调用 `session_handoff`，显式填写 `goal`、`constraints`、`completed`、`remaining`、`verification`、`unknowns`、`nextStep`、`sources`；无内容的数组使用 `[]`。可选 `decisions` 记录影响下一步的跨角色关键结论、关键理由、必要的否决方案与适用边界，并用 `confirmed`（用户已确认/既定契约）、`proposed`（建议）、`unverified`（未验证假设）区分效力。正文保留关键结论，详细论证可引用来源但不会自动展开。无决策可省略或传空数组；理由不明可省略、留空或写待确认，不补造。遗漏检查是准备指导而非保存门槛，旧快照仍兼容。用户可先说“请用 `session_handoff` 准备短交接，记录目标、约束、已完成/待办、跨角色关键决策及理由、历史验证及来源、未知项和下一步”，等待工具返回后直接执行 `/pi-init fresh`。验证项必须引用历史来源；来源只能是当前session条目ID或文件位置，不能使用旧 `obs_recall` ID。工具只持久化所选背景，不创建session或续跑。32 KiB 是完整存储上限，不是token数；超限拒绝，不截断。新输入、其他工具活动或branch变化会让快照失效，因此准备后不要插入其他输入或工具操作。
+- 仅当影响后续执行时，复用已观察的工作目录、工具入口、依赖缓存及必要非敏感选项到constraints，在verification保留已验证完整命令、真实结果及来源，nextStep沿用这些条件。缺失条件写unknowns，不为交接扫描env/.env或重跑验证；凭据只记录变量名或安全获取方式，不复制值。不新增交接必填字段或自动采集流程。
 - cache miss提示：同一session曾报告缓存使用后，单次估算的额外成本严格超过$0.50且有UI时提醒一次；累计金额只包含单次成本严格超过该门槛且成功持久化的样本，等于或低于门槛不统计。状态栏提醒次数仅记录成功发送的通知，重开同一session可恢复。估算基于Pi暴露的usage和模型价格，不是Provider账单或完整提示前缀比较；数据不完整、错误/中止或没有可确认价格时不猜、不提醒。此提示不自动准备快照、不换session、不暂停任务；无UI的运行不占提醒次数。
 - `fresh` 会展示预览并等待用户确认，确认前重新核对session、branch和快照。目标只包含选定的历史背景，不继承完整历史/旧执行身份，也不自动继续任务。若交接结果未知，来源保持冻结；先检查是否已有目标，不要从来源再次创建。已有待核对包时，在目标运行 `/pi-init fresh` 只做核对，不创建第二个session。旧冻结工作流不能用普通会话路径绕过，也不能通过 `resume`/`retry`/`replan` 清除未知结果。
 

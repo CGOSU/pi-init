@@ -329,6 +329,11 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
   assert.equal(shouldOrchestrateWorkflow({ mode: "auto", taskCount: 1 }), false);
   assert.equal(shouldOrchestrateWorkflow({ mode: "auto", taskCount: 2 }), false);
   assert.equal(shouldOrchestrateWorkflow({ mode: "auto", taskCount: 3 }), true);
+  assert.equal(shouldOrchestrateWorkflow({ mode: "auto", taskCount: 1, orchestration: "required" }), true);
+  assert.equal(shouldOrchestrateWorkflow({ mode: "auto", taskCount: 2, orchestration: "required" }), true);
+  assert.equal(shouldOrchestrateWorkflow({ mode: "off", taskCount: 2, orchestration: "required" }), false);
+  assert.throws(() => shouldOrchestrateWorkflow({ mode: "auto", taskCount: 0, orchestration: "required" }), /工作流任务数无效/);
+  assert.throws(() => shouldOrchestrateWorkflow({ mode: "auto", taskCount: 2, orchestration: "force" }), /编排要求/);
   assert.throws(
     () => shouldOrchestrateWorkflow({ mode: "auto", taskCount: 0 }),
     /工作流任务数无效/,

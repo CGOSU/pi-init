@@ -318,15 +318,18 @@ export function resolveWorkflowExecutor(config: unknown): RoleConfigResult<Workf
   }
 }
 
-export function shouldOrchestrateWorkflow({ mode, taskCount }: { mode: WorkflowMode; taskCount: number }): boolean {
+export function shouldOrchestrateWorkflow({ mode, taskCount, orchestration }: { mode: WorkflowMode; taskCount: number; orchestration?: unknown }): boolean {
   if (!isOneOf(WORKFLOW_MODES, mode)) {
     throw new Error(`工作流模式 workflowMode 无效：${mode}`);
   }
   if (!Number.isInteger(taskCount) || taskCount < 1) {
     throw new Error(`工作流任务数无效：${taskCount}`);
   }
+  if (orchestration !== undefined && orchestration !== "required") {
+    throw new Error(`工作流编排要求 orchestration 无效：${orchestration}`);
+  }
 
-  return mode === "on" || (mode === "auto" && taskCount > WORKFLOW_AUTO_TASK_LIMIT);
+  return mode === "on" || (mode === "auto" && (orchestration === "required" || taskCount > WORKFLOW_AUTO_TASK_LIMIT));
 }
 
 export function resolveRoleModel(

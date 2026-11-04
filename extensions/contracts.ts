@@ -104,15 +104,16 @@ export const workflowTaskSchema = Type.Object({
 });
 export const taskWorkflowParameters = Type.Object({
   action: StringEnum(["plan", "status", "checkpoint", "complete", "block", "replan", "resume", "retry", "cancel", "cancel-all", "request-replan", "request-goal"] as const, { description: "扁平任务工作流动作；不提供正式取证、契约澄清或嵌套执行协议" }),
+  orchestration: Type.Optional(StringEnum(["required"] as const, { description: "仅plan：需要持久检查点、恢复或职责调度时设为required，使auto下的一至两项计划也进入工作流；省略沿用原数量策略，off仍拒绝规划，不授予恢复或执行权限" })),
   detail: Type.Optional(StringEnum(["summary", "full"] as const, { description: "status默认summary返回当前进度、阻塞与下一步；full按需查看完整规划、任务历史、身份和任务记忆" })),
   checkpoint: Type.Optional(Type.Object({
     step: Type.String({ minLength: 1, maxLength: 200 }),
-    accomplished: Type.Array(Type.Object({ summary: Type.String({ minLength: 1, maxLength: 512 }), evidenceIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 8 }) }), { maxItems: 16 }),
+    accomplished: Type.Array(Type.Object({ summary: Type.String({ minLength: 1, maxLength: 512 }), evidenceIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 8, description: "本任务真实工具结果的来源ID；缺少已知有效ID时按需一次status(detail=full)，取任务记忆observations[].id并核对outcome，不用toolCallId、messageEntryId或obs_recall ID替代；已有可核验来源可复用" }) }), { maxItems: 16, description: "每项成果至少引用一个真实来源；没有成果条目时可传[]，不为凑来源执行额外工具" }),
     remaining: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 32 }),
     blockers: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
     nextStep: Type.String({ minLength: 1, maxLength: 512 }),
   })),
-  expectedMemoryRevision: Type.Optional(Type.Integer({ minimum: 0, description: "checkpoint必填，使用当前任务记忆revision拒绝陈旧覆盖" })),
+  expectedMemoryRevision: Type.Optional(Type.Integer({ minimum: 0, description: "checkpoint必填；复用已知当前任务记忆revision或缺失字段错误给出的值。确需读取时一次status(detail=full)取得revision；版本陈旧须先核对最新checkpoint并合并有效进展，不只换数字覆盖" })),
   memoryFiles: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16, description: "checkpoint声明的项目相对文件；内容hash不证明完整验证依赖" })),
   evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status读取当前任务或已完成直接依赖的声明来源；complete可引用本任务成功工具结果。仅证明历史观察，不证明需求全部满足或当前版本有效" })),
   parentGoalId: Type.Optional(Type.String({ description: "目标归属ID，只分组、不创建执行栈" })),

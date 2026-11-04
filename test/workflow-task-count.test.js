@@ -81,6 +81,46 @@ test("auto 模式下两任务计划跳过工作流持久化和派发", async () 
   });
 });
 
+test("auto 小计划显式要求编排时持久化真实工作流并保留用户审阅门", async () => {
+  for (const reviewRequired of [false, true]) {
+    await withTempDirectory(async (directory) => {
+      const { harness, workflow } = await planThroughTool(directory, "auto");
+      const result = await workflow.execute("plan", {
+        action: "plan",
+        orchestration: "required",
+        summary: "当前迁移项需要持久检查点和恢复",
+        tasks: createPlanTasks(2),
+        reviewRequired,
+      }, undefined, undefined, harness.context);
+
+      assert.equal(result.details.status, reviewRequired ? "paused" : "running");
+      assert.equal(result.terminate, true);
+      const saved = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
+      assert.equal(saved.tasks.length, 2);
+      assert.equal(saved.currentTaskId, undefined);
+      assert.equal(saved.plan.orchestration, undefined, "规划时的编排要求不新增持久化协议字段");
+      if (reviewRequired) {
+        await emitExtensionEvent(harness, "agent_start");
+        assert.equal(harness.sentMessages.some(({ message }) => message.customType === "pi-init-workflow-task"), false);
+      }
+    });
+  }
+});
+
+test("显式编排要求不能绕过 workflowMode=off", async () => {
+  await withTempDirectory(async (directory) => {
+    const { harness, workflow } = await planThroughTool(directory, "off");
+    await assert.rejects(workflow.execute("plan", {
+      action: "plan",
+      orchestration: "required",
+      summary: "仍需先启用工作流",
+      tasks: createPlanTasks(2),
+    }, undefined, undefined, harness.context), /当前策略为 off/);
+    assert.equal(harness.branch.some((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow"), false);
+    assert.equal(harness.sentMessages.some(({ message }) => message.customType === "pi-init-workflow-task"), false);
+  });
+});
+
 test("初始规划接受超过 12 个任务并保留依赖顺序", () => {
   const tasks = createPlanTasks(15);
   const plan = validateWorkflowPlan({ summary: "规模超过建议上限", tasks });
@@ -101,6 +141,8 @@ test("工具 schema 接受超过 12 个任务且不设数量上限", () => {
     tasks: createPlanTasks(14),
   };
   assert.equal(Check(taskWorkflowParameters, params), true);
+  assert.equal(Check(taskWorkflowParameters, { ...params, orchestration: "required" }), true);
+  assert.equal(Check(taskWorkflowParameters, { ...params, orchestration: "force" }), false);
   assert.equal(Check(taskWorkflowParameters, { ...params, action: "replan", tasks: [] }), true);
   assert.throws(() => createWorkflowState({ ...params, tasks: [] }), /至少需要一个任务/);
   assert.equal(

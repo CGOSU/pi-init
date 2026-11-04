@@ -48,6 +48,8 @@ pi --no-extensions -e ./extensions/index.ts
 
 标准职责包括 `architect`（规划）、`developer-test`（实现与验证）和 `docs-commit`（文档与交付）；项目也可以配置自定义角色。角色切换方式为 `auto`（自动）、`confirm`（确认后切换）或 `manual`（手动切换）。内联模型选择和文本输入等待用户时，会向 Pi 声明 question 阻塞状态；支持 Program Status 的终端可以显示 Pi 正在等待用户。
 
+任务编排的 `workflowMode` 与角色切换方式独立：`off` 拒绝新计划，`on` 始终编排，`auto` 默认按数量跳过不超过两项的计划，不自动评估风险。需要持久检查点、恢复或职责调度时，architect 可在 `task_workflow(action="plan", orchestration="required", ...)` 中显式要求编排，包含一至两项的计划也会进入原工作流；`off` 仍拒绝。省略该参数保持原行为，跳过时没有活动工作流，不能用其checkpoint/complete/block。按真实交付物拆分，不为触发编排制造任务。
+
 ## 按范围审阅与状态查询
 
 `/large --scope src --exclude src/generated` 只审阅指定目录；路径为项目相对目录前缀，可加引号，`--exclude` 可以重复，不支持 glob。默认排除项目顶层 `.tmp`、`.tmp-*` 临时目录，可用 `--include-temporary` 明确纳入；其他隐藏源码和普通 `tmp` 不因此排除。报告显示目录分布、排除项和当前范围。范围只在当前 session 生效，`/large` 无参数恢复默认，reload 或新 session 重置；Agent 忙碌时不更改范围。
@@ -55,6 +57,8 @@ pi --no-extensions -e ./extensions/index.ts
 `file_review(action="list")` 的分页正文直接包含路径、行数、fingerprint 和下一页 offset；清单、读取及结论登记遵循当前扫描范围。审阅只产生建议，同一交付物连续读取、分析和登记，不逐文件切换角色；真正需要确定新公共契约或跨模块设计时，再集中交接决策。
 
 `task_workflow(action="status")` 默认返回当前进度、阻塞原因和下一步；需要完整计划、历史任务、身份与任务记忆时使用 `detail="full"`。`evidenceIds` 仍可定向读取真实来源，UI 展开详情保留完整视图。恢复提示直接给出待确认的任务角色；已有当前状态时执行该恢复动作，不重复查询。等待调度时同角色确认会结束当前回合，由现有调度器派发一次；普通同角色确认继续当前工作。无变化等待状态的重复查询仍会结束当前回合，查询本身不会确认恢复或重放任务。
+
+checkpoint按需保存阶段进展，不是complete、block或交接的新增前置条件。缺少已知有效来源时，一次full status可从任务记忆正文取得`observations[].id`和`revision`；缺revision优先使用错误反馈已给出的值，版本陈旧则先核对已保存进展再决定提交。来源范围、失败观察及字段用法见公共[操作参考](skills/pi-init-role-routing/references/runtime-operations.md#检查点与历史来源)。
 
 ## 容量提醒与手动新会话
 

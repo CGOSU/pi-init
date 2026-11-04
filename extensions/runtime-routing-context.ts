@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const SECTION_KEY = "pi_init_runtime";
-const CONTINUITY_POLICY = "职责连续性：活动工作流的显式任务角色优先于模型自行判断；无活动任务时优先遵循用户明确指定的任务角色，否则按交付物选择职责。同一交付物内连续调查、实现和验证，分析 Bug、读取 API 文档本身不触发换角；仅在独立交付物或必要架构决策边界交接。architect 不执行；权限、身份、恢复、停止与未知副作用守卫始终优先。无工作流的连续性是路由指导，不代表运行时硬绑定。";
+const CONTINUITY_POLICY = "职责连续性：活动工作流的显式任务角色优先于模型自行判断；无活动任务时优先遵循用户明确指定的任务角色，否则按交付物选择职责。承接切换前已说明且与当前职责匹配的交付物，同一交付物内连续调查、实现和验证，不为重新确认分工往返切角；职责确实不匹配、独立交付物或必要架构决策仍按边界路由。复用上下文中可见且来源版本、范围仍有效的规则和结果，只因切角不整批预读，缺失或变化时定向补读。architect 不执行；权限、身份、恢复、停止与未知副作用守卫始终优先。无工作流的连续性是路由指导，不代表运行时硬绑定。";
 
 type RuntimeRoutingDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;

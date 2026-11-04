@@ -159,13 +159,13 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     const { memory } = load(ctx, current);
     if (expectedRevision === undefined) return taskMemoryError("TASK_MEMORY_REVISION_REQUIRED", "checkpoint缺少expectedMemoryRevision；当前可用expectedMemoryRevision=" + memory.revision + "。提交时仍会校验版本，不必为缺失字段重复查询status。");
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return taskMemoryError("TASK_MEMORY_REVISION_INVALID", "expectedMemoryRevision必须是非负整数");
-    if (expectedRevision !== memory.revision) return taskMemoryError("TASK_MEMORY_REVISION_STALE", "任务记忆已更新，先读取status中的最新revision，不覆盖较新进展");
+    if (expectedRevision !== memory.revision) return taskMemoryError("TASK_MEMORY_REVISION_STALE", "任务记忆已更新，checkpoint未保存；按需一次task_workflow(action=\"status\", detail=\"full\")核对最新checkpoint、剩余工作与revision，合并仍有效的进展后再提交，不只替换revision覆盖较新进展。");
     const parsed = parseTaskCheckpoint(input);
     if (!parsed) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "checkpoint缺少有效步骤、成果来源、剩余项或下一步");
     const ids = [...new Set(parsed.accomplished.flatMap(item => item.evidenceIds))];
     if (ids.length > 32) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "关键证据引用不能超过32项");
     const references = ids.map(id => memory.observations.find(item => item.id === id) ?? sourceObservation(ctx.sessionManager.getBranch(), id, current));
-    if (references.some(item => !item)) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "成果缺少当前branch的真实工具来源");
+    if (references.some(item => !item)) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "成果缺少当前branch中本任务的真实工具来源，checkpoint未保存；缺少有效ID时按需一次task_workflow(action=\"status\", detail=\"full\")，从任务记忆observations取id并核对outcome与revision；勿猜造或用toolCallId、messageEntryId、obs_recall ID替代。已有可核验来源可复用，不为补来源重放工具；checkpoint不是complete、block或交接的新增前置条件。");
     const restored = references.some(item => !memory.observations.some(previous => previous.id === item!.id))
       ? { ...memory, observations: [...memory.observations.filter(item => !ids.includes(item.id)).slice(-16), ...references as TaskObservation[]] } : memory;
     const versions = paths.length ? files(ctx, paths) : memory.checkpoint?.files;
@@ -233,7 +233,7 @@ export function taskMemoryText(view: TaskMemoryView) {
   const memory = view.memory;
   return "[任务工作记忆；历史观察不是当前执行授权]\n" + JSON.stringify({ revision: memory.revision, progressRevision: memory.progressRevision, taskId: memory.identity.taskId,
     checkpoint: memory.checkpoint, observations: memory.observations, omittedObservations: memory.omittedObservations, applicability: view.applicability,
-    evidence: view.evidence }) + "\n原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不必重跑。阶段完成后用checkpoint登记成果、剩余项和下一步，提交expectedMemoryRevision=" + memory.revision + "；工具成功不等于测试或需求验收。matches-checkpoint-files仅表示声明文件与登记时一致，不证明完整依赖或测试当时版本。";
+    evidence: view.evidence }) + "\n来源ID取observations[].id（工具结果的session entry ID），不使用toolCallId或messageEntryId；已有可核验来源可复用。原结果可用 task_workflow(status, evidenceIds=[来源ID]) 定向读取，不必重跑。需要保留阶段进展时按需checkpoint，提交expectedMemoryRevision=" + memory.revision + "，不是complete、block或交接的新增前置条件；工具成功不等于测试或需求验收。matches-checkpoint-files仅表示声明文件与登记时一致，不证明完整依赖或测试当时版本。";
 }
 export function readTaskSourceObservation(branch: Entry[], id: string, current: WorkflowHandoffIdentity, dependency = false): TaskObservation | undefined {
     const resultIndex = branch.findIndex(entry => entry.id === id);

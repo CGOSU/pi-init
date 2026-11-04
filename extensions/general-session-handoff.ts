@@ -39,11 +39,18 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
   pi.registerTool({
     name: GENERAL_HANDOFF_TOOL,
     label: "准备短上下文交接",
-    description: "仅为普通会话准备并持久化短交接背景，不创建会话或工作流、不解除暂停、不自动续跑。除可选decisions外须显式填写全部字段，无内容用空数组。准备时检查各角色仍有效且影响下一步的关键结论是否遗漏；decisions区分已确认、建议和未验证判断，正文保留结论及关键理由、必要的否决方案与边界，详细论证留sources引用，引用不会自动展开。无决策可省略或为空，依据不明可标记待确认，不补造理由；完整性检查仅为指导，不阻止保存。验证与来源均为历史声明，不是本轮验证或执行授权。后续用户通过 /pi-init fresh 预览确认。保存后避免业务工具或新需求，否则需重新准备。",
+    description: "仅为普通会话准备并持久化短交接背景，不创建会话或工作流、不解除暂停、不自动续跑。除可选decisions外须显式填写全部字段，无内容用空数组。准备时检查各角色仍有效且影响下一步的关键结论是否遗漏；decisions区分已确认、建议和未验证判断，正文保留结论及关键理由、必要的否决方案与边界，详细论证留sources引用，引用不会自动展开。无决策可省略或为空，依据不明可标记待确认，不补造理由；完整性检查仅为指导，不阻止保存。影响后续执行时，复用已执行的完整命令及必要非敏感环境，不仅记录工具链版本；缺失写unknowns，不为交接额外扫描环境或重跑验证。不得复制凭据、整份env或.env；命令中的敏感值只保留变量名或安全引用。验证与来源均为历史声明，不是本轮验证或执行授权。后续用户通过 /pi-init fresh 预览确认。保存后避免业务工具或新需求，否则需重新准备。",
     parameters: Type.Object({
-      goal: Type.String(), constraints: strings, completed: strings, remaining: strings,
-      verification: Type.Array(Type.Object({ summary: Type.String(), sources: Type.Array(sourceSchema) }, { additionalProperties: false })),
-      unknowns: strings, nextStep: Type.String(), sources: Type.Array(sourceSchema),
+      goal: Type.String(),
+      constraints: Type.Array(Type.String(), { description: "仍有效的约束；按需保留已知工作目录、工具入口、依赖缓存路径和必要非敏感环境/构建选项，不要求新增环境调查。" }),
+      completed: strings, remaining: strings,
+      verification: Type.Array(Type.Object({
+        summary: Type.String({ description: "已执行验证的完整命令及真实结果，保留必要工作目录、环境和选项；敏感值仅保留变量名或安全引用，不为交接重跑。" }),
+        sources: Type.Array(sourceSchema, { description: "原验证结果的有效session条目或文件位置；历史通过不证明新环境仍可直接执行。" }),
+      }, { additionalProperties: false })),
+      unknowns: Type.Array(Type.String(), { description: "尚未核实的事实、缺失执行条件或环境可用性；如实记录，不为填交接自动补查。" }),
+      nextStep: Type.String({ description: "下一步目标及依赖的已有执行条件或待核实项；不是自动重放已验证命令的授权。" }),
+      sources: Type.Array(sourceSchema),
       decisions: Type.Optional(Type.Array(Type.Object({
         status: Type.Union([Type.Literal("confirmed"), Type.Literal("proposed"), Type.Literal("unverified")], { description: "confirmed=已获用户确认或既定契约；proposed=建议；unverified=未验证假设。交接不升级其效力。" }),
         conclusion: Type.String({ description: "影响下一步的关键结论，直接写入正文，不仅提供引用。" }),

@@ -102,13 +102,13 @@ export function createWorkflowActions(
     return result.value;
   }
 
-  function shouldOrchestrateConfiguredWorkflow(mode: WorkflowMode, taskCount: number) {
+  function shouldOrchestrateConfiguredWorkflow(mode: WorkflowMode, taskCount: number, orchestration?: unknown) {
     if (typeof shouldOrchestrateWorkflow !== "function") {
       throw new Error(
         "检测到 pi-init 运行时版本不一致：扩展与 src/roles.ts 不是同一版本，缺少 shouldOrchestrateWorkflow。请先执行 pi update --extensions，然后在 Pi 中执行 /reload；本地开发请重启 Pi，并确保使用同一份扩展和 src/roles.ts。",
       );
     }
-    return shouldOrchestrateWorkflow({ mode, taskCount });
+    return shouldOrchestrateWorkflow({ mode, taskCount, orchestration });
   }
   function assertConfiguredTaskRoles(
     config: { roleModels: Record<string, unknown> },
@@ -350,11 +350,11 @@ export function createWorkflowActions(
             "task_workflow 当前策略为 off；请先执行 /pi-init config workflow 选择 on 或 auto，或在 .pi/role-models.json 中将 workflowMode 设为 on/auto",
           );
         }
-        if (!shouldOrchestrateConfiguredWorkflow(config.workflowMode, plan.tasks.length)) {
+        if (!shouldOrchestrateConfiguredWorkflow(config.workflowMode, plan.tasks.length, params.orchestration)) {
           return {
             content: [{
               type: "text",
-              text: `当前工作流策略为 auto，规划包含 ${plan.tasks.length} 个任务（不超过 2 个），已跳过工作流编排；请按各任务指定的角色切换后顺序执行这些任务，架构角色只负责规划，不直接实现。`,
+              text: `当前工作流策略为 auto，规划包含 ${plan.tasks.length} 个任务（不超过 2 个）且未声明 orchestration=required，已跳过工作流编排，未创建活动工作流；请按各任务指定的角色顺序执行，架构角色不直接实现。此路径不能使用工作流 checkpoint/complete/block；确需持久检查点或恢复时，可由 architect 重新提交 plan 并声明 orchestration=required，不必增加无意义任务或重做调查。`,
             }],
             details: { workflowMode: config.workflowMode, taskCount: plan.tasks.length, orchestrated: false },
           };

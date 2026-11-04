@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-04：优化规划意图、checkpoint来源与交接连续性
+
+- 完成：落实用户确认的四项优化。auto小计划可用`orchestration="required"`进入既有工作流，默认数量策略与off/审阅门不变；checkpoint参数描述和错误反馈说明真实来源与revision的按需获取/复用方式；角色交接承接匹配目的并按缺口读取；普通交接通过既有字段保留完整命令和必要非敏感环境。操作说明见[README](../README.md)及公共[操作参考](../skills/pi-init-role-routing/references/runtime-operations.md)，范围约束见[设计决策](decisions.md)。
+- 验证：auto显式编排在旧实现先复现被跳过，修复后针对性24项通过；checkpoint/状态查询33项、职责/恢复34项、普通交接26项均通过。增强已有来源回归：full status正文可获取真实工具结果ID/revision且不改状态，toolCallId/assistant entry ID不能代替来源。合并后`npm test` **822/822通过，0失败、0跳过**；类型检查发现SDK schema输入为unknown，沿原校验入口明确接收未知输入后`npm run typecheck`通过，受影响24项再次通过；后续仅类型标注与文档调整，复用此前全量结果。`git diff --check`通过，独立审阅未发现恢复或调度旁路。
+- 过程：auto新增用例首次复现失败；随后一次测试夹具误读持久化tasks位置已纠正，不将这些运行记作通过。无新增checkpoint/status强制步骤、持久化schema或交接必填字段；失败来源、版本陈旧、身份和恢复门均保留。
+- 边界：自动回归不证明真实模型必然遵循提示，误用/重复读取收益需新会话观察；未发送模型请求、改写原FlClash会话或主动reload。安装副本与运行中加载状态分别核对，磁盘更新不代表长驻实例已生效。
+
 ### 2026-11-04：审计FlClash最新Pi会话的规划与工具失败
 
 - 完成：只读核对最新两个会话、项目诊断日志及pi-init/pi-graph源码，定向追溯更早graph超时；事实与改进建议统一保存在[审计记录](flclash-session-audit-2026-11-04.md)，未调整策略、工具或FlClash代码。

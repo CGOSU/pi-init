@@ -74,8 +74,12 @@ test("a result persisted before the memory write can be recovered without execut
 });
 test("checkpoint rejects fake sources, stale revisions, old identities and recovery gates", async () => {
   const f = fixture(); await f.commit();
-  const id = f.runtime.read(f.ctx).memory.observations[0].id;
-  assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint("fake"), 0), error => error.code === "TASK_MEMORY_SOURCE_MISSING");
+  const observation = f.runtime.read(f.ctx).memory.observations[0];
+  const id = observation.id;
+  const before = structuredClone(f.branch);
+  for (const invalid of ["fake", observation.toolCallId, observation.messageEntryId])
+    assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(invalid), 0), error => error.code === "TASK_MEMORY_SOURCE_MISSING");
+  assert.deepEqual(f.branch, before, "rejected sources must not persist a checkpoint");
   assert.throws(() => f.runtime.checkpoint(f.ctx, { ...f.identity, attemptId: "old" }, checkpoint(id), 0), error => error.code === "TASK_MEMORY_IDENTITY_INVALID");
   f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
   assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0), error => error.code === "TASK_MEMORY_REVISION_STALE");
@@ -124,9 +128,16 @@ test("long success and failure summaries remain bounded and checkpoint reference
 
 test("task_workflow checkpoint persists progress and status reads evidence without completing or dispatching", async () => {
   const f = fixture(); await f.commit();
-  const id = f.runtime.read(f.ctx).memory.observations[0].id;
   const actions = createWorkflowActions(f.state, { taskMemory: f.runtime, dispatch: {}, report: { formatWorkflowState: () => "task running" }, roleRuntime: { activeRoleFor: () => f.state.activeRole }, coordination: { status: () => undefined } });
-  const result = await actions.runTaskWorkflowAction({ ...f.identity, action: "checkpoint", checkpoint: checkpoint(id), expectedMemoryRevision: 0 }, undefined, f.ctx);
+  const before = structuredClone({ branch: f.branch, workflow: f.state.workflowState });
+  const full = await actions.runTaskWorkflowAction({ action: "status", detail: "full" }, undefined, f.ctx);
+  const json = full.content[0].text.split("\n").find(line => line.startsWith('{"revision":'));
+  assert.ok(json, "full status must expose source IDs and revision in model-visible text");
+  const memory = JSON.parse(json);
+  const id = memory.observations[0].id;
+  assert.equal(f.branch.find(entry => entry.id === id)?.message.role, "toolResult");
+  assert.deepEqual({ branch: f.branch, workflow: f.state.workflowState }, before, "discovering checkpoint inputs must remain read-only");
+  const result = await actions.runTaskWorkflowAction({ ...f.identity, action: "checkpoint", checkpoint: checkpoint(id), expectedMemoryRevision: memory.revision }, undefined, f.ctx);
   assert.equal(result.details.taskMemory.memory.revision, 1);
   assert.equal(result.terminate, undefined);
   const status = await actions.runTaskWorkflowAction({ action: "status", evidenceIds: [id] }, undefined, f.ctx);

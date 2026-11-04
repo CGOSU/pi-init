@@ -40,7 +40,7 @@ function taskDirectionGuidance(role: string) {
 
 function taskCompletionGuidance(role: string) {
   if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
-  return '阶段完成或验证结束后用task_workflow(checkpoint)登记成果与剩余工作；真实完成并验证后调用complete，提供completionSummary、implementationRationale和verification；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞用block。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
+  return '需要保留阶段进展时按需用task_workflow(checkpoint)，它不是complete、block或交接的新增前置条件；缺少有效来源ID时一次status(detail=full)取得任务记忆observations[].id和revision，已有有效来源及当前revision可复用，不猜ID或循环查询。真实完成并验证后调用complete，提供completionSummary、implementationRationale和verification；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞用block。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
 }
 
 export type WorkflowMessageDependencies = {
