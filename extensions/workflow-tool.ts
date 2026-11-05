@@ -32,7 +32,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
     name: "task_workflow",
     label: "Task Workflow",
     description:
-      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause only for an explicit architecture review or a real blocker.`,
+      `Manage an architecture-led sequential task workflow with a recommended size of ${WORKFLOW_RECOMMENDED_TASKS} tasks (a soft planning guideline, not a limit). The Architect only thinks, analyzes, decides, plans, and arranges responsibilities; executable tasks must use non-architect roles and the runtime rejects architect as a task role. Tasks complete one at a time, and the next task starts automatically after verified completion. Pause for an explicit user request (including session handoff), an explicit architecture review, or a real blocker.`,
     promptSnippet: "Create and advance an architecture-led sequential implementation task workflow",
     promptGuidelines: [
       "Use task_workflow action=plan only for explicit planning, cross-module/high-risk work, or a plan that cannot be safely handled locally. Route clear instructions directly to the matching role; unclear, ambiguous, or cross-responsibility instructions start with architect. Before action=plan or action=replan, the active role must be architect; otherwise call switch_role(role=architect) first and never emit planning calls from developer-test or docs-commit.",
@@ -40,10 +40,11 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
       "Architect 只规划与决策，不读取、执行或连接 MCP。优先复用已有调查；缺少决策关键事实时才交给 docs-commit 集中补查，不因切角重读规则或重复调查。普通任务无需正式取证协议。",
       "本轮工具调用的工作流与协调身份由运行时绑定，通常只提交业务参数和真实结果，无需手填 workflow/session/attempt/handoff 等身份。兼容显式身份仍严格校验；不能套用最新状态提交旧回合结果。",
       "status默认返回可行动摘要。缺少checkpoint的有效来源ID时按需一次status(detail=full)，从任务记忆正文取observations[].id及revision；已知有效来源和当前revision直接复用，已有ID的原文用status(evidenceIds)定向读取，不重复查询无变化状态。checkpoint按需保存，不是complete、block或交接的新增前置条件。",
+      "用户明确要求准备会话交接时，checkpoint只保存进展，不暂停活动任务。由当前执行角色按需保留进展，再对未完成任务如实block并保留未知结果；不伪造complete，不仅因保存checkpoint自动block。已task-blocked无需为交接retry；reload后先确认原执行职责，职责确认不解除业务暂停。工具与回合结束后由用户执行/pi-init fresh预览并核验其余安全条件，不提前声称可交接。",
       `Architect 在 task_workflow 上只允许 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}；实现、验证与结果提交必须由当前执行角色负责。`,
       "每项任务围绕一个可独立验收的交付物，使用task/constraints/files/acceptanceCriteria说明目标、非目标、产物和风险匹配的验证；不要按读取→修改→测试机械拆分。必要事实先调查，远期不确定内容在边界细化；缺少关键事实或权限时block，不建立正式证据或嵌套协议。",
       "workflowMode=auto默认仅按任务数跳过不超过两项的计划，不自动评估风险。计划需要持久检查点、恢复或职责调度时，在plan显式设置orchestration=required；按真实交付物拆分，不为触发编排凑任务。off仍拒绝规划。reviewRequired=true仅用于用户最初要求架构审阅的情形。",
-      "Call task_workflow(action=complete) only after real implementation and verification; use block for missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
+      "Call task_workflow(action=complete) only after real implementation and verification; use block for an explicit user request to pause or prepare session handoff, missing requirements, permissions, credentials, destructive-operation approval, product decisions, or unrecoverable failures. These execution actions belong to the active implementation role, not architect.",
       "Discussion does not change workflow state. Use request-replan to revise the existing queue and request-goal to insert a goal group. Parent/child IDs express ownership only; all tasks share one workflow ID, ready queue and executor. New goal planning must explicitly retain existing pending task IDs; dependencies take precedence over priority, ties preserve order, and running tools are not preempted. Old nested workflows are retired and never resumed automatically.",
     ],
     parameters: taskWorkflowParameters,
@@ -59,7 +60,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
       const presentation = workflowPresentationFromDetails(result.details);
       if (presentation) return renderWorkflowPresentation(presentation, expanded, theme);
       if (!expanded && (result.details as { checkpointSaved?: boolean } | undefined)?.checkpointSaved === true) {
-        return new Text("任务记忆已保存", 0, 0);
+        return new Text("任务记忆已保存；任务未暂停", 0, 0);
       }
 
       const details = result.details as import("./runtime-state.ts").WorkflowState | undefined;

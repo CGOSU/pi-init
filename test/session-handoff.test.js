@@ -222,13 +222,13 @@ test("uncertain replacement freezes the old owner and repeated fresh cannot crea
 });
 
 test("active tools, unknown outcomes, pending messages, lost trust and missing session persistence never switch", async () => {
-  for (const change of [
-    h => { h.context.isIdle = () => false; },
-    h => { h.context.hasPendingMessages = () => true; },
-    h => { h.context.isProjectTrusted = () => false; },
-    h => { h.context.sessionManager.getSessionFile = () => undefined; },
-    h => { latest(h).tasks[1].outcomeUnknown = true; },
-    h => emitExtensionEvent(h, "tool_execution_start", { toolCallId: "unfinished", toolName: "external", args: {} }),
+  for (const [change, reason] of [
+    [h => { h.context.isIdle = () => false; }, /AGENT_BUSY/],
+    [h => { h.context.hasPendingMessages = () => true; }, /MESSAGES_PENDING/],
+    [h => { h.context.isProjectTrusted = () => false; }, /PROJECT_UNTRUSTED/],
+    [h => { h.context.sessionManager.getSessionFile = () => undefined; }, /session未持久化/],
+    [h => { latest(h).tasks[1].outcomeUnknown = true; }, /OUTCOME_UNKNOWN/],
+    [h => emitExtensionEvent(h, "tool_execution_start", { toolCallId: "unfinished", toolName: "external", args: {} }), /TOOLS_UNSETTLED/],
   ]) {
     await withTempDirectory(async cwd => {
       const h = await fixture(cwd);
@@ -238,6 +238,7 @@ test("active tools, unknown outcomes, pending messages, lost trust and missing s
       await h.commands.get("pi-init").handler("workflow fresh", h.context);
       assert.equal(calls, 0);
       assert.equal(latest(h).pauseReason, undefined);
+      assert.match(h.notifications.at(-1).message, reason);
       await emitExtensionEvent(h, "session_shutdown");
     });
   }
@@ -293,6 +294,48 @@ test("a settled known block can transfer without resuming or losing the original
       assert.equal(latest(owner).tasks[1].status, "blocked");
     }
     await emitExtensionEvent(owner, "session_shutdown");
+  });
+});
+
+test("handoff preparation distinguishes an active checkpoint from a blocked workflow needing role confirmation", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    await emitExtensionEvent(h, "agent_settled");
+    await emitExtensionEvent(h, "agent_start");
+    const sent = h.sentMessages.findLast(e => e.message.customType === "pi-init-workflow-task").message;
+    const [anchor] = h.branch.splice(h.branch.findLastIndex(e => e.customType === "pi-init-workflow-task"), 1);
+    await emitExtensionEvent(h, "message_start", { message: { role: "custom", ...sent, timestamp: Date.now() } });
+    h.branch.push(anchor);
+    const workflow = h.tools.find(t => t.name === "task_workflow");
+    const checkpoint = { step: "保存未完成任务", accomplished: [], remaining: ["继续第二项"], blockers: [], nextStep: "确认交接后继续" };
+    await workflow.execute("save-progress", { action: "checkpoint", ...workflowMessageIdentity(h), expectedMemoryRevision: 0, checkpoint }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "agent_end");
+    h.context.newSession = options => replaceSession(h, options);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(h.target, undefined);
+    assert.match(h.notifications.at(-1).message, /ACTIVE_TASK.*checkpoint.*block/);
+    assert.equal(latest(h).tasks[1].status, "in_progress");
+
+    await emitExtensionEvent(h, "agent_start");
+    await workflow.execute("handoff-block", { action: "block", ...workflowMessageIdentity(h), reason: "用户要求暂停未完成任务以准备交接" }, undefined, undefined, h.context);
+    await emitExtensionEvent(h, "agent_end");
+    await emitExtensionEvent(h, "session_start", { reason: "reload" });
+    const blocked = structuredClone(latest(h));
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(h.target, undefined);
+    assert.match(h.notifications.at(-1).message, /ROLE_RECOVERY_PENDING.*switch_role.*不.*retry/);
+    assert.deepEqual(latest(h), blocked, "a rejected handoff must preserve the business pause");
+
+    const dispatched = h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length;
+    await h.tools.find(t => t.name === "switch_role").execute("confirm-role", { role: "developer-test" }, undefined, undefined, h.context);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.ok(h.target, JSON.stringify(h.notifications));
+    assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, dispatched);
+    assert.equal(latest(h.target).pauseReason, "task-blocked");
+    assert.equal(latest(h.target).tasks[1].status, "blocked");
+    assert.deepEqual(latest(h.target).tasks[1], blocked.tasks[1]);
+    assert.equal(h.target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 0);
+    await emitExtensionEvent(h.target, "session_shutdown");
   });
 });
 

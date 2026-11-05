@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-05：补齐工作流交接准备与拒绝诊断
+
+- 完成：根据FlClash交接末尾的真实记录，补齐工具、checkpoint回执、活动任务指导及公共Skill中的准备顺序：checkpoint不暂停；用户明确要求交接时由当前执行角色如实block；已blocked仅需职责恢复时确认原执行职责，保持业务暂停。操作步骤见公共[操作参考](../skills/pi-init-role-routing/references/runtime-operations.md#检查点与历史来源)，边界见[设计决策](decisions.md)。
+- 来源核对：只读解析源/目标JSONL，确认早期仅保存checkpoint、后续reload留下职责恢复pending、错误retry重新派发及最终两端同ID交接。完整事实集中维护于[踩坑记录](pitfalls.md)，不将源端prepared单独当作成功，也不重放历史业务工具。
+- 实际验证：checkpoint回执缺失“未暂停”说明、fresh通用拒绝缺具体原因分别先由定向用例复现失败；修正后 `npm test -- test/task-memory-runtime.test.js test/architect-boundary.test.js` **28/28通过**，`npm test -- test/workflow-action-policy.test.js test/runtime-routing-context.test.js` **13/13通过**，`npm test -- test/session-handoff.test.js` **24/24通过**，`npm test -- test/workflow-handoff.test.js` **15/15通过**，共 **80项相关回归通过**，未跑全量。交接集成覆盖checkpoint后拒绝、block后reload职责门拒绝、仅确认职责即可fresh且目标仍blocked、不重新派发；`npm run typecheck` 与 `git diff --check` 通过。
+- 边界：提示不能保证模型每次遵循，首次成功率仍需真实新会话观察；本轮不安装或同步Pi副本、不reload活动实例、不改写原日志、不push。
+
 ### 2026-11-05：减少测试无关执行与重复等待
 
 - 完成：按用户确认优化默认测试发现、日常选测和慢等待。小型启动器仅默认选择 `test/**/*.test.js`，保留显式文件、名称过滤、Agent 隔离及失败退出码；不新增依赖或自动影响分析。开发期不自动同步安装副本的偏好已写入 AGENTS，具体命令见 [README](../README.md#开发与测试)。

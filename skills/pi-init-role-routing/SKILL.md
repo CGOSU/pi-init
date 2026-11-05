@@ -48,12 +48,13 @@ metadata:
 
 ## 记忆、恢复与交付
 
-- 需要保留阶段进展时按需使用既有checkpoint，不要求每个工具后登记，也不是complete、block或交接的新增前置条件。已有有效来源与当前revision可复用；缺来源时按需一次full status取任务记忆observations[].id和revision，操作细节见[操作参考](references/runtime-operations.md)。缺结果时按来源读取，不因历史归档重读、重测或重放副作用。只有当前真实executing身份可写；checkpoint不完成、恢复或派发任务。
+- 需要保留阶段进展时按需使用既有checkpoint，不要求每个工具后登记，也不是complete、block或交接的新增前置条件。已有有效来源与当前revision可复用；缺来源时按需一次full status取任务记忆observations[].id和revision，操作细节见[操作参考](references/runtime-operations.md)。缺结果时按来源读取，不因历史归档重读、重测或重放副作用。只有当前真实executing身份可写；checkpoint不暂停、完成、恢复或派发任务。
 - 文件指纹仅表示登记时版本，不证明完整验证依赖；历史通过不证明当前有效，外来历史来源不构成本会话执行授权。缺来源、版本不符、超限或写失败如实报告，不猜测或默认成功。
 - session/branch/role/task/attempt/handoff/recovery由运行时绑定，不手填旧身份。恢复门未确认时只做原规则允许的查询与职责确认；角色确认不解除业务暂停。结果未知必须用户命令/面板核对并授权新attempt，模型填写布尔值不是授权。
 - 只有运行时确认当前实例可安全续接的模型请求失败，用户“继续”后才沿原身份接着做；不自行retry、重放或自动循环请求。缺工具、业务block、中止、reload及未知结果仍走原恢复门，零token或fetch failed字样不是安全凭据。
 - pi-init不主动压缩；Pi原生容量保护/手动压缩和职责恢复门保留，不启用第二套SoL Online Context Compact调度。容量提醒使用宿主getContextUsage百分比，与状态栏同源，70%仅是软提醒；不按序列化字符数估算，也不添加输出/安全余量。宿主用量不可用或窗口不匹配时显示未知；模型切换、启动及压缩回调清除旧观察，后续事件重新读取宿主数据。窗口未知或虚拟路由的下一物理模型未知时不报百分比。提醒不阻断、不暂停队列、不自动压缩或切换session，也不请求模型摘要。
 - 若同一session已观察到缓存使用，单次cache miss估算的额外成本严格超过$0.50且当前UI可见，Pi Init最多提醒一次；累计额外成本只累加严格超过该门槛的成功持久化样本，等于或低于门槛的不统计。提醒次数只记录成功发出的通知。使用的是Provider usage与Pi模型价格估算，不是账单金额；缺失或无效数据不推断。提示只建议用户准备交接，不自动调用session_handoff、创建session或暂停任务。规则与误差边界见[运行时操作参考](references/runtime-operations.md)。
+- 用户明确要求准备工作流交接时，由当前执行角色按需保留进展；未完成的活动任务须如实block说明用户要求暂停，结果未知仍保留outcomeUnknown，不伪造complete或把checkpoint称为已暂停。已blocked不为交接retry；reload后仅需职责确认时，核对原执行职责并确认，不因准备交接切到docs-commit。角色确认不解除业务暂停。回合结束后由用户执行fresh核验其余安全条件；block成功不保证可交接，具体步骤见[操作参考](references/runtime-operations.md)。
 - 普通会话无需工作流：当前已确认的非architect执行角色可用 `session_handoff` 保存有界的历史背景；它不是task/checkpoint、当前验证或执行授权。字段须显式填写；快照绑定运行时核对的session/项目/branch，新输入、其他工具或branch变化会使其失效。当前执行结束后用户执行 `/pi-init fresh` 预览并确认；活动工作流也走此入口，但继续受原工作流交接门约束，`/pi-init workflow fresh` 保留兼容。目标只得到所选背景，等待用户输入，不恢复旧身份或自动重放。遇到未知结果，先核对目标且保持源冻结，不要从来源重复创建。具体字段、准备时机和恢复方式见[运行时操作参考](references/runtime-operations.md)。不承诺全历史继承、Provider cache hit 或费用下降。
 - 托管工作流上下文投影不改写原session；只在任务/branch/工具组边界可核实时形成请求局部视图，保留Pi宿主管理的system状态、历史用户约束、失败/恢复/未知记录、完整工具调用结果配对及活动任务handoff后缀。结构或身份不能确认时保留完整输入；普通会话不做语义历史裁剪。保留用户停止；同任务提醒不是恢复、重放或源冻结的新授权锚点。旧退役记录只报告诊断，核对后走受保护隔离，不静默迁移或删除。
 - 根完成回复整体成果、真实验证、未处理项与Git状态。正常回复和单次确定性兜底共用完成视图；报告阶段不调查、执行Git或新增模型回合，不补称未观测到的成功。

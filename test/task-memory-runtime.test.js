@@ -140,6 +140,9 @@ test("task_workflow checkpoint persists progress and status reads evidence witho
   const result = await actions.runTaskWorkflowAction({ ...f.identity, action: "checkpoint", checkpoint: checkpoint(id), expectedMemoryRevision: memory.revision }, undefined, f.ctx);
   assert.equal(result.details.taskMemory.memory.revision, 1);
   assert.equal(result.terminate, undefined);
+  assert.match(result.content[0].text, /任务仍在执行，未暂停/);
+  assert.match(result.content[0].text, /用户明确要求交接.*block/);
+  assert.deepEqual(f.state.workflowState, before.workflow, "saving progress must not pause or otherwise change execution state");
   const status = await actions.runTaskWorkflowAction({ action: "status", evidenceIds: [id] }, undefined, f.ctx);
   assert.match(status.content[0].text, /91 passed/);
   assert.match(status.content[0].text, /generate patch/);

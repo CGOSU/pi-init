@@ -304,7 +304,7 @@ export function createWorkflowActions(
         const identity = requireTaskHandoffIdentity(params, ctx);
         if (!deps.taskMemory) throw Object.assign(new Error("任务记忆运行时不可用"), { code: "TASK_MEMORY_UNAVAILABLE" });
         const memory = deps.taskMemory.checkpoint(ctx, identity, params.checkpoint, params.expectedMemoryRevision, params.memoryFiles);
-        return { content: [{ type: "text", text: "任务记忆已保存；任务未被完成或重新派发。\n" + taskMemoryText(memory) }], details: { taskMemory: memory, checkpointSaved: true } };
+        return { content: [{ type: "text", text: "任务记忆已保存；任务仍在执行，未暂停、完成或重新派发。checkpoint不建立可换会话边界；若用户明确要求交接，由当前执行角色对未完成任务如实block并保留未知结果。工具与回合结束后再由用户执行 /pi-init fresh 核验其余安全条件。\n" + taskMemoryText(memory) }], details: { taskMemory: memory, checkpointSaved: true } };
       }
       case "request-replan":
       case "request-goal": {
