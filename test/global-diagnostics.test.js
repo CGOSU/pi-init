@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
 import { createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
+import { fastForwardTimeouts } from "./support/fast-forward-timeouts.js";
 
 async function fixture(fn) {
   const root = await fs.mkdtemp(join(tmpdir(), "pi-global-diagnostic-"));
@@ -104,19 +105,22 @@ test("不可写目录、磁盘耗尽和通知失败均隔离，失败状态可�
   assert.equal((await fs.readdir(join(agentDir(), "diagnostics", "pi-init"))).includes("runtime.lock"), false);
 }));
 
-test("故障风暴有界，存活或遗留锁不被抢占且不反复等待", async () => fixture(async ({ ctx, agentDir, file }) => {
-  await fs.mkdir(join(agentDir(), "diagnostics", "pi-init", "runtime.lock"), { recursive: true });
-  const d = createGlobalDiagnostics({ agentDir });
-  for (let i = 0; i < 140; i++) d.observe(ctx, "pi-init.command_failed");
-  assert.equal(d.status().pending, 128);
-  assert.equal(d.status().dropped, 12);
-  await d.flush();
-  assert.equal(d.status().pending, 0);
-  assert.equal(d.status().dropped, 140);
-  assert.equal(d.status().failure, "lock-busy");
-  assert.ok((await fs.stat(join(agentDir(), "diagnostics", "pi-init", "runtime.lock"))).isDirectory());
-  await assert.rejects(fs.stat(file), { code: "ENOENT" });
-}));
+test("故障风暴有界，存活或遗留锁不被抢占且不反复等待", { timeout: 5000 }, async t => {
+  const delays = await fastForwardTimeouts(t, () => fixture(async ({ ctx, agentDir, file }) => {
+    await fs.mkdir(join(agentDir(), "diagnostics", "pi-init", "runtime.lock"), { recursive: true });
+    const d = createGlobalDiagnostics({ agentDir });
+    for (let i = 0; i < 140; i++) d.observe(ctx, "pi-init.command_failed");
+    assert.equal(d.status().pending, 128);
+    assert.equal(d.status().dropped, 12);
+    await d.flush();
+    assert.equal(d.status().pending, 0);
+    assert.equal(d.status().dropped, 140);
+    assert.equal(d.status().failure, "lock-busy");
+    assert.ok((await fs.stat(join(agentDir(), "diagnostics", "pi-init", "runtime.lock"))).isDirectory());
+    await assert.rejects(fs.stat(file), { code: "ENOENT" });
+  }));
+  assert.deepEqual(delays, Array(100).fill(20), "only the first queued write waits on the real held lock");
+});
 
 test("项目写入失败不阻止全局诊断，未信任项目不写入", async () => fixture(async ({ ctx, agentDir, rows }) => {
   await fs.mkdir(ctx.cwd, { recursive: true }); await fs.writeFile(join(ctx.cwd, ".pi"), "blocked");

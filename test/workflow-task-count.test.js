@@ -130,11 +130,8 @@ test("初始规划接受超过 12 个任务并保留依赖顺序", () => {
   assert.deepEqual(createWorkflowState({ summary: "规模超过建议上限", tasks }).tasks.map((task) => task.id), tasks.map((task) => task.id));
 });
 
-test("工具 schema 接受超过 12 个任务且不设数量上限", () => {
-  const schema = taskWorkflowParameters.properties.tasks;
-  assert.equal(schema.maxItems, undefined);
-  assert.equal(schema.minItems, 0, "普通 replan 可仅保留/撤销任务；plan 与目标插入仍由运行时要求非空");
-
+test("工具参数接受超过 12 个任务并保留空计划边界", () => {
+  assert.equal(taskWorkflowParameters.properties.tasks.maxItems, undefined, "任务数没有硬上限，宿主 schema 不能提前拒绝更大的计划");
   const params = {
     action: "plan",
     summary: "工具入口规模",

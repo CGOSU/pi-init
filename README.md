@@ -89,3 +89,20 @@ pi-usage 2026-08-01 2026-08-25 --output usage.svg
 ```
 
 `pi-usage --update` 可立即更新统计数据。统计输出同时显示插件版本和来源 Git HEAD（例如 `v2.0.11 (git: a1b2c3d)`）；独立启动器记录安装时的来源 HEAD，非 Git 安装只显示版本号。CLI 与 SVG 报告会标明总费用是 Provider 上报、价目估算或混合来源；Provider 上报不等同于账单核对，明细成本及缓存失配额外成本仍按原有估算口径计算。详细诊断说明见[运行诊断文档](docs/runtime-diagnostics.md)。
+
+## 开发与测试
+
+开发期直接修改源码，默认不安装或同步本机 Pi package 副本。日常按改动选择测试文件，避免把普通任务收尾当作全量测试触发条件：
+
+```sh
+npm test -- test/runtime-diagnostics.test.js test/handoff-diagnostics.test.js
+npm test -- --test-name-pattern='故障风暴' test/global-diagnostics.test.js
+# 需要整体回归时运行；默认只发现 test/**/*.test.js
+npm test
+```
+
+无文件参数时，包括仅提供名称过滤选项时，使用上述受限发现范围；`test/support` 中的普通辅助模块不会被当作独立测试入口。Node 负责文件匹配和执行，[项目最低版本 Node 22.19 已支持测试 glob 与 mock timers](https://nodejs.org/download/release/v22.19.0/docs/api/test.html)。启动器保留隔离预加载与真实退出码，不解析改动来猜测应该跳过哪些测试。
+
+常用选项 `--test-name-pattern`、`--test-skip-pattern`、`--test-reporter`、`--test-reporter-destination`、`--test-concurrency`、`--test-timeout`、`--test-shard` 同时支持空格或 `=` 形式；其他带值选项使用 `--key=value`，由当前 Node 校验。未知裸选项会明确拒绝，`--` 后只接受文件选择。
+
+新增/精简用例、复用已有结果及全量验证的条件统一遵循 [AGENTS 验证要求](AGENTS.md#验证要求)，不按用例年龄或长期通过自动删除回归。

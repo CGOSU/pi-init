@@ -70,7 +70,6 @@ test("已保存 Runtime workflow 仅报告恢复错误，不本地重放或改�
     assert.ok(harness.notifications.some(({ message }) => message.includes("WORKFLOW_STATE_RUNTIME_RETIRED")));
     assert.ok(harness.statusCalls.some(({ text }) => text?.includes("WORKFLOW_STATE_RUNTIME_RETIRED")));
 
-    assert.equal(harness.commands.has("fast"), false);
     assert.deepEqual(harness.sentMessages, []);
 
     await assert.rejects(

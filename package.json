@@ -18,7 +18,7 @@
     "THIRD-PARTY-NOTICES"
   ],
   "scripts": {
-    "test": "node --import ./scripts/test-bootstrap.js --test",
+    "test": "node ./scripts/test.js",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/install-launchers.js"
   },

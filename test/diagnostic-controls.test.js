@@ -10,6 +10,7 @@ import { createDiagnosticWriter } from "../extensions/runtime-diagnostics.ts";
 import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
 import { withDiagnosticLock } from "../extensions/diagnostic-storage.ts";
 import { createExtensionHarness } from "./support/extension-harness.js";
+import { fastForwardTimeouts } from "./support/fast-forward-timeouts.js";
 
 async function fixture(run) {
   const root = await fs.mkdtemp(join(tmpdir(), "pi-controls-"));
@@ -86,27 +87,32 @@ test("拒绝目录/文件链接、损坏数据、超限文件，失败不生成�
   assert.equal((await controls.exportFile(ctx, "project", join(root, "missing", "export"))).code, "ENOENT");
 }));
 
-test("活动锁阻止清理，取消不等待锁；释放后项目与全局writer继续有效记录", () => fixture(async ({ directories, agent, ctx, controls }) => {
-  for (const scope of ["project", "global"]) {
-    const directory = directories[scope]; await fs.writeFile(file(directory), "{}\n");
-    let release, ready;
-    const acquired = new Promise(resolve => { ready = resolve; });
-    const lock = withDiagnosticLock(directory, async () => { ready(); await new Promise(resolve => { release = resolve; }); });
-    await acquired;
-    ctx.ui.confirm = async () => false;
-    assert.equal(await controls.clear(ctx, scope), undefined);
-    ctx.ui.confirm = async () => true;
-    assert.equal((await controls.clear(ctx, scope)).code, "DIAGNOSTIC_LOCK_BUSY");
-    assert.equal(await exists(file(directory)), true);
-    release(); await lock;
-    assert.equal((await controls.clear(ctx, scope)).ok, true);
-  }
-  const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes: 4096, maxPending: 5, warning: "failure" });
-  writer.write(ctx, () => ({ count: 1 })); await writer.flush();
-  const global = createGlobalDiagnostics({ agentDir: () => agent }); global.observe(ctx, "runtime.failure"); await global.flush();
-  assert.equal(JSON.parse(await fs.readFile(file(directories.project), "utf8")).count, 1);
-  assert.equal(JSON.parse(await fs.readFile(file(directories.global), "utf8")).event, "runtime.failure");
-}));
+test("活动锁阻止清理，取消不等待锁；释放后项目与全局writer继续有效记录", { timeout: 5000 }, async t => {
+  const delays = await fastForwardTimeouts(t, () => fixture(async ({ directories, agent, ctx, controls }) => {
+    for (const scope of ["project", "global"]) {
+      const directory = directories[scope]; await fs.writeFile(file(directory), "{}\n");
+      let release, ready;
+      const acquired = new Promise(resolve => { ready = resolve; });
+      const lock = withDiagnosticLock(directory, async () => { ready(); await new Promise(resolve => { release = resolve; }); });
+      await acquired;
+      try {
+        ctx.ui.confirm = async () => false;
+        assert.equal(await controls.clear(ctx, scope), undefined);
+        ctx.ui.confirm = async () => true;
+        assert.equal((await controls.clear(ctx, scope)).code, "DIAGNOSTIC_LOCK_BUSY");
+        assert.equal(await exists(file(directory)), true);
+        assert.ok((await fs.stat(join(directory, "runtime.lock"))).isDirectory());
+      } finally { release(); await lock; }
+      assert.equal((await controls.clear(ctx, scope)).ok, true);
+    }
+    const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes: 4096, maxPending: 5, warning: "failure" });
+    writer.write(ctx, () => ({ count: 1 })); await writer.flush();
+    const global = createGlobalDiagnostics({ agentDir: () => agent }); global.observe(ctx, "runtime.failure"); await global.flush();
+    assert.equal(JSON.parse(await fs.readFile(file(directories.project), "utf8")).count, 1);
+    assert.equal(JSON.parse(await fs.readFile(file(directories.global), "utf8")).event, "runtime.failure");
+  }));
+  assert.deepEqual(delays, Array(200).fill(20), "both real locks must exhaust the production retry waits");
+});
 
 test("独立进程写入与清理共用锁，不破坏新日志", () => fixture(async ({ directories, ctx, controls }) => {
   const directory = directories.project;
