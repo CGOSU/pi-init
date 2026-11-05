@@ -8,6 +8,7 @@ import type { createRoleRuntime } from "./role-runtime.ts";
 import type { createRoleHandoff } from "./role-handoff.ts";
 import type { createWorkflowUserControl } from "./workflow-user-control.ts";
 import type { createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
+import { nextWorkflowAction } from "./workflow-action-policy.ts";
 
 export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntimeState, dependencies: {
   roleRuntime: Pick<ReturnType<typeof createRoleRuntime>, "automaticRole">;
@@ -70,11 +71,15 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
       const reused = unchanged && !recoveryRequired;
       const prefix = reused ? "当前职责已确认，无需切换" : unchanged ? "已重新确认当前职责"
         : selection.requestedRole === result.role ? "已切换到" : `已按确认选择切换到 ${result.role}（建议为 ${selection.requestedRole}）`;
+      const nextAction = nextWorkflowAction(runtimeState);
+      const continuation = nextAction.action === "recover"
+        ? "。职责确认不解除工作流暂停或恢复限制，仍不能执行任务。\n" + nextAction.nextAction + (transition.terminate ? "当前回合结束。" : "")
+        : `${reused ? "。沿当前职责继续未完成工作，不必再次确认。" : ""}${transition.terminate ? unchanged ? "。当前回合结束；由现有工作流调度器派发待办任务。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`;
       return {
         content: [
           {
             type: "text",
-            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${reused ? "。沿当前职责继续未完成工作，不必再次确认。" : ""}${transition.terminate ? transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : unchanged ? "。当前回合结束；由现有工作流调度器派发待办任务。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`,
+            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : continuation}`,
           },
         ],
         details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole, reused, ...transition },

@@ -40,7 +40,7 @@ function taskDirectionGuidance(role: string) {
 
 function taskCompletionGuidance(role: string) {
   if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
-  return '需要保留阶段进展时按需用task_workflow(checkpoint)，它只保存进展、不暂停任务，也不是complete、block或交接的新增前置条件；缺少有效来源ID时一次status(detail=full)取得任务记忆observations[].id和revision，已有有效来源及当前revision可复用，不猜ID或循环查询。真实完成并验证后调用complete，提供completionSummary、implementationRationale和verification；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞或用户明确要求暂停（含准备会话交接）时如实block并保留未知结果；工具与回合结束后由fresh核验交接条件。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
+  return '需要保留阶段进展时按需用task_workflow(checkpoint)，它只保存进展、不暂停任务，也不是complete、block或交接的新增前置条件；缺少有效来源ID时一次status(detail=full)取得任务记忆observations[].id和revision，已有有效来源及当前revision可复用，不猜ID或循环查询。达到当前确认的验收标准并完成适用检查后调用complete，提供completionSummary、implementationRationale和verification；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞或用户明确要求暂停（含准备会话交接）时如实block并保留未知结果；工具与回合结束后由fresh核验交接条件。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
 }
 
 export type WorkflowMessageDependencies = {
@@ -80,7 +80,7 @@ export function createWorkflowMessages(
       `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
       taskRoleGuidance(task.role),
       "围绕当前可验收交付物连续调查、实现和验证，不按操作步骤反复换角。一般技术选择自主决定，真实目标/边界偏差才重规划。",
-      "验证按风险覆盖相关行为与失败边界；来源及配置未变时复用已有真实结果，不因文档修改或填写complete重跑全仓检查。命令和管道须保留被验证程序的真实退出码，不用最后echo/grep的成功掩盖失败。",
+      "验证按当前确认验收和风险覆盖相关行为与失败边界；真实指实际执行，不默认真机、人工浏览器或全链路。目标环境决定关键行为时做最小验证；明确安排后续的系统/人工验收记录待办，不扩大当前任务，也不自行降级已有必需验收。未测试不是outcomeUnknown。来源及配置未变时复用有效结果，不因收尾重跑全仓检查；命令和管道须保留被验证程序的真实退出码。",
       note ? `调度提示：${note}` : "",
       taskToolGuidance(task.role),
 

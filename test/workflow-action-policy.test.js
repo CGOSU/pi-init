@@ -4,7 +4,7 @@ import { nextWorkflowAction } from '../extensions/workflow-action-policy.ts';
 import { createExtensionRuntimeState } from '../extensions/runtime-state.ts';
 import { createRoleHandoff } from '../extensions/role-handoff.ts';
 import { createWorkflowState } from "./support/workflow-fixtures.js";
-import { startWorkflowTask, requestWorkflowReplan, completeWorkflowTask } from "../src/workflow.ts";
+import { startWorkflowTask, requestWorkflowReplan, completeWorkflowTask, markWorkflowTaskOutcomeUnknown } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { createRuntimeRoutingContext } from '../extensions/runtime-routing-context.ts';
@@ -55,6 +55,29 @@ test('recovery and unknown outcomes never recommend executor replay', () => {
   state.roleRecoveryPending = false;
   state.workflowState.tasks[0].outcomeUnknown = true;
   assert.equal(nextWorkflowAction(state).action, 'recover');
+});
+test('unknown task recovery identifies the user confirmation path without confusing session transfer', () => {
+  const workflow = markWorkflowTaskOutcomeUnknown(running(), { taskId: 'rust-crossfile', reason: 'tool outcome needs checking' });
+  for (const roleRecoveryPending of [false, true]) {
+    const state = { ...createExtensionRuntimeState(), workflowState: workflow, roleModeStatus: 'auto', roleRecoveryPending };
+    const before = structuredClone(state);
+    const action = nextWorkflowAction(state);
+    assert.equal(action.code, roleRecoveryPending ? 'ROLE_RECOVERY_PENDING' : 'WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED');
+    assert.match(action.nextAction, /任务执行结果.*待核对/);
+    assert.match(action.nextAction, /由用户执行 \/pi-init workflow retry rust-crossfile --confirm-unknown-outcome/);
+    assert.match(action.nextAction, /不要.*\/pi-init fresh/);
+    if (roleRecoveryPending) assert.match(action.nextAction, /switch_role\(role="developer-test"\)/);
+    assert.deepEqual(state, before);
+  }
+  const state = { ...createExtensionRuntimeState(), workflowState: structuredClone(workflow) };
+  state.workflowState.tasks.push({ ...workflow.tasks[0], id: 'another-unknown' });
+  assert.match(nextWorkflowAction(state).nextAction, /工作流面板.*选择.*任务/);
+  assert.doesNotMatch(nextWorkflowAction(state).nextAction, /workflow retry \S+ --confirm-unknown-outcome/);
+  state.userStopRequested = true;
+  assert.equal(nextWorkflowAction(state).code, 'WORKFLOW_USER_STOPPED');
+  state.userStopRequested = false;
+  state.roleRecoveryPersistenceFailed = true;
+  assert.equal(nextWorkflowAction(state).code, 'ROLE_RECOVERY_PERSIST_FAILED');
 });
 test('runtime section uses same boundary guidance rather than architect ping-pong', () => {
   const state = { ...createExtensionRuntimeState(), workflowState: requestWorkflowReplan(running(), { direction: 'new direction' }) };

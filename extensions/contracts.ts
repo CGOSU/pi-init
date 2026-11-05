@@ -95,7 +95,7 @@ export const workflowTaskSchema = Type.Object({
   }),
   acceptanceCriteria: Type.Array(Type.String(), {
     minItems: 1,
-    description: "交付物与按风险选择的真实验证；明确相关检查/失败边界，来源未变时复用有效结果，不默认全仓重验",
+    description: "当前交付物与按风险选择的验证；区分当前验收和后续系统/人工验收，真实指实际执行，不默认真机或全链路。已有必需验收不得自行降级，来源未变时复用有效结果",
   }),
   role: Type.Optional(workflowTaskRoleSchema),
   dependsOn: Type.Optional(Type.Array(Type.String(), { description: "必须先完成的任务 ID" })),
@@ -133,7 +133,7 @@ export const taskWorkflowParameters = Type.Object({
   confirmUnknownOutcome: Type.Optional(Type.Boolean({ description: "模型布尔值不构成未知结果重放授权，必须由用户命令或面板确认" })),
   completionSummary: Type.Optional(Type.String()),
   implementationRationale: Type.Optional(Type.String()),
-  verification: Type.Optional(Type.Array(Type.String(), { description: "complete时必填且非空，记录实际执行的检查及结果；只读调查可填写真实静态核对，不得将未执行测试描述为通过" })),
-  outcomeUnknown: Type.Optional(Type.Boolean({ description: "block时报告执行或副作用结果未知；仅增加保护，不授权清除未知状态或自动重试" })),
+  verification: Type.Optional(Type.Array(Type.String(), { description: "complete时必填且非空，记录当前确认验收所需的实际检查及结果；只读调查可填写静态核对。后续系统/人工验收另列待办，不得将未执行检查描述为通过" })),
+  outcomeUnknown: Type.Optional(Type.Boolean({ description: "block时报告已执行操作或副作用结果未知；尚未验证或等待人工验收不属于此状态。仅增加保护，不授权清除未知状态或自动重试" })),
   reason: Type.Optional(Type.String()),
 });

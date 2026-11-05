@@ -51,6 +51,8 @@ pi --no-extensions -e ./extensions/index.ts
 
 任务编排的 `workflowMode` 与角色切换方式独立：`off` 拒绝新计划，`on` 始终编排，`auto` 默认按数量跳过不超过两项的计划，不自动评估风险。需要持久检查点、恢复或职责调度时，architect 可在 `task_workflow(action="plan", orchestration="required", ...)` 中显式要求编排，包含一至两项的计划也会进入原工作流；`off` 仍拒绝。省略该参数保持原行为，跳过时没有活动工作流，不能用其checkpoint/complete/block。按真实交付物拆分，不为触发编排制造任务。
 
+验证按当前任务验收和风险选择；“真实验证”表示实际执行适用检查，不默认要求每项任务都做真机、人工浏览器或全链路测试。代码完成与系统集成/发布验收分别说明，明确安排的后续人工验收保留待办；环境相关关键行为应在链路可运行时尽早验证，已有必需验收不能自行省略。具体触发条件与阻塞边界统一见公共[执行与验证规则](skills/pi-init-role-routing/SKILL.md#执行与验证)。
+
 ## 按范围审阅与状态查询
 
 `/large --scope src --exclude src/generated` 只审阅指定目录；路径为项目相对目录前缀，可加引号，`--exclude` 可以重复，不支持 glob。默认排除项目顶层 `.tmp`、`.tmp-*` 临时目录，可用 `--include-temporary` 明确纳入；其他隐藏源码和普通 `tmp` 不因此排除。报告显示目录分布、排除项和当前范围。范围只在当前 session 生效，`/large` 无参数恢复默认，reload 或新 session 重置；Agent 忙碌时不更改范围。

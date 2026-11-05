@@ -204,6 +204,41 @@ test("missing persisted results, unfinished nested tools and failed tools retain
   }
 });
 
+test("unknown task recovery keeps role confirmation and observations separate from user-authorized retry", async () => {
+  for (const reload of [false, true]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    const attempt = latest(h).handoff.attemptId;
+    await completedTool(h, { isError: true });
+    await failure(h);
+    await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" });
+    if (reload) await emitExtensionEvent(h, "session_start", { reason: "reload" });
+    const paused = structuredClone(latest(h));
+    assert.equal(paused.tasks[0].outcomeUnknown, true);
+    const sent = h.sentMessages.length;
+    const role = await h.tools.find(t => t.name === "switch_role").execute("confirm-role", { role: "developer-test" }, undefined, undefined, h.context);
+    assert.equal(role.details.reused, !reload);
+    assert.match(role.content[0].text, /工作流.*暂停/);
+    assert.match(role.content[0].text, /由用户执行 \/pi-init workflow retry work --confirm-unknown-outcome/);
+    assert.doesNotMatch(role.content[0].text, /沿当前职责继续未完成工作|随后以新职责继续未完成工作/);
+    assert.deepEqual(latest(h), paused);
+    const rejected = await emitExtensionEvent(h, "tool_call", { toolName: "codemode", toolCallId: "inspect-wrapper", input: { code: 'await tools.read({path:"src/a.ts"})' } });
+    assert.equal(rejected.block, true);
+    assert.match(rejected.reason, /原生 read/);
+    assert.match(rejected.reason, /由用户执行 \/pi-init workflow retry work --confirm-unknown-outcome/);
+    assert.doesNotMatch(rejected.reason, /先查询 task_workflow/);
+    assert.equal(await emitExtensionEvent(h, "tool_call", { toolName: "read", toolCallId: "inspect-native", input: { path: "src/a.ts" } }), undefined);
+    const retry = await emitExtensionEvent(h, "tool_call", { toolName: "task_workflow", toolCallId: "model-retry", input: { action: "retry", taskId: "work", confirmUnknownOutcome: true } });
+    assert.equal(retry.block, true);
+    assert.deepEqual(latest(h), paused);
+    assert.equal(h.sentMessages.length, sent);
+    await h.commands.get("pi-init").handler("workflow retry work --confirm-unknown-outcome", h.context);
+    assert.equal(latest(h).status, "running");
+    assert.equal(latest(h).tasks[0].outcomeUnknown, undefined);
+    assert.notEqual(latest(h).handoff.attemptId, attempt);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
 test("explicit abort never qualifies for request-only continuation", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd);

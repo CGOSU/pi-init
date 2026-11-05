@@ -173,7 +173,7 @@ export function createRoleRecovery(
         : workflow?.tasks.find(item => taskId === undefined ? item.status === "blocked" : item.id === taskId);
       if (task?.outcomeUnknown) return {
         block: true,
-        reason: "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。请核对副作用，由用户执行 /pi-init workflow retry <taskId> --confirm-unknown-outcome 或使用工作流面板确认。",
+        reason: "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。" + nextWorkflowAction(state).nextAction,
       };
     }
     const unavailable = state.workflowRestoreError || state.pendingWorkflowRecovery || workflow?.status === "paused" || workflow?.status === "replanning";
@@ -181,7 +181,8 @@ export function createRoleRecovery(
     if (workflowAction && !["complete", "block", "clarify"].includes(String(workflowAction))) return undefined;
     return {
       block: true,
-      reason: "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。先查询 task_workflow(status)，按暂停原因恢复或由用户确认未知结果重试。",
+      reason: "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。" + nextWorkflowAction(state).nextAction
+        + "codemode/bash 包装不属于暂停时允许的只读入口。",
     };
   }
 

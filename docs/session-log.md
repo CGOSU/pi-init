@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-05：明确验证范围与未知任务结果的恢复入口
+
+- 验证规则：按用户确认的建议更新公共Skill、三角色说明与README，区分当前代码交付、目标环境验证及系统/发布验收；有效检查可复用，后续人工待办不扩为每项代码任务前置，已有必需验收仍保留。规则维护于公共[执行与验证](../skills/pi-init-role-routing/SKILL.md#执行与验证)，不新增模板副本或验收字段。
+- 恢复指导：区分任务handoff-outcome-unknown与跨session交接；职责确认/复用不解除业务暂停，沿原用户确认retry命令/面板恢复，不自动重试或放宽未知结果守卫。操作入口见公共[恢复参考](../skills/pi-init-role-routing/references/runtime-operations.md#暂停与未知结果恢复)。
+- 日志核对：只读按最终leaf祖先还原请求失败、自动停止、职责复用、错误fresh指引及显式确认后的新attempt；兄弟分支单独排除。具体行号与归因限制只维护于[踩坑记录](pitfalls.md)，不把overloaded或零token当成安全续接证明。
+- 实际验证：验证范围提示调整后，`npm test -- test/workflow-handoff.test.js test/architect-boundary.test.js test/workflow-protocol.test.js` **26/26通过**；契约改动仅字段说明，字段、类型和状态均未变化。恢复指引修正后，`npm test -- test/recovery-guidance.test.js test/role-recovery.test.js test/workflow-action-policy.test.js test/workflow-handoff.test.js test/provider-request-recovery.test.js test/role-handoff.test.js` **85/85通过**；两次选测有文件重叠，不合并为独立用例总数。`npm run typecheck` 与 `git diff --check` 通过，未跑全量。
+- 边界：未改写原会话或重放历史操作，不安装/同步本机Pi副本、不reload活动实例、不push。提示能否减少真实模型误用仍需后续观察。
+
 ### 2026-11-05：补齐工作流交接准备与拒绝诊断
 
 - 完成：根据FlClash交接末尾的真实记录，补齐工具、checkpoint回执、活动任务指导及公共Skill中的准备顺序：checkpoint不暂停；用户明确要求交接时由当前执行角色如实block；已blocked仅需职责恢复时确认原执行职责，保持业务暂停。操作步骤见公共[操作参考](../skills/pi-init-role-routing/references/runtime-operations.md#检查点与历史来源)，边界见[设计决策](decisions.md)。
