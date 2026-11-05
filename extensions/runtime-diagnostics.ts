@@ -32,7 +32,7 @@ function metadata(data: Data): Data {
 function classify(event: string, data: Data) {
   const code = typeof data.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(data.code) ? data.code : "UNKNOWN";
   if (event === "workflow.action_rejected" || data.businessOk === false) return { category: "business-rejection", code };
-  if ((event === "tool.result" || event === "routing.tool_result") && (data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0)) return { category: "tool-failure", code };
+  if ((event === "tool.result" || event === "routing.tool_result" || event === "tool.execution_end") && (data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0)) return { category: "tool-failure", code };
   if (event === "provider.response" && typeof data.status === "number" && data.status >= 400) return { category: "provider-http", code: "HTTP_" + data.status };
   if (event === "assistant.result" && data.stopReason === "error") return { category: "assistant-failure", code: typeof data.errorCodeHint === "string" ? data.errorCodeHint : "UNKNOWN" };
   if (event === "compaction.settled" && data.failed === true) return { category: "compaction-failure", code };
@@ -204,7 +204,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       // Compare full IDs, not the truncated display metadata; oversized IDs fail open.
       const callId = typeof raw.toolCallId === "string" && raw.toolCallId.length > 0 && raw.toolCallId.length <= 512 ? raw.toolCallId : undefined;
       const rejectionCode = callId ? rejectedCalls.get(callId) : undefined;
-      const correlatedResult = (event === "tool.result" || event === "routing.tool_result")
+      const correlatedResult = (event === "tool.result" || event === "routing.tool_result" || event === "tool.execution_end")
         && rejectionCode !== undefined && classified !== undefined
         && (classified.code === "UNKNOWN" || classified.code === rejectionCode)
         && (classified.category === "tool-failure" || classified.category === "business-rejection");

@@ -156,7 +156,7 @@ export function formatToolFailureChains(records: Data[]) {
     const scope = JSON.stringify([row.runtimeId, row.captureId, row.sessionId]);
     const observations = [...(Array.isArray(row.events) ? row.events : []), row.latestTrigger];
     for (const observation of observations) {
-      if (!observation || !["tool.result", "routing.tool_result"].includes(observation.event)) continue;
+      if (!observation || !["tool.result", "routing.tool_result", "tool.execution_end"].includes(observation.event)) continue;
       const data = observation.data as Data | undefined;
       if (!data || typeof data.toolCallId !== "string" || data.businessOk === false || !(data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0)) continue;
       const key = JSON.stringify([scope, data.toolCallId]);

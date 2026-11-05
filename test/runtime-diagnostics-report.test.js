@@ -60,4 +60,8 @@ test("failure chains deduplicate snapshots, isolate windows and tolerate incompl
   assert.equal(formatToolFailureChains([{ ...row, events: [observation("child", "parent")] }]), "");
   assert.equal(formatToolFailureChains([{ ...row, events: [observation("child", "parent")] }, { ...row, captureId: "other", events: [observation("parent")] }]), "");
   assert.match(formatToolFailureChains([{ ...row, events: [observation("child", "parent"), observation("parent", "child")] }]), /失败链：1/);
+  const end = (id, parent) => ({ ...observation(id, parent), event: "tool.execution_end" });
+  assert.match(formatToolFailureChains([{ ...row, events: [end("child", "parent"), end("parent")] }]), /失败链：1/);
+  assert.match(formatToolFailureChains([{ ...row, events: [end("child", "parent"), end("parent"), observation("child", "parent"), observation("parent")] }]), /失败链：1/);
+  assert.equal(formatToolFailureChains([{ ...row, events: [end("child", "parent"), { event: "tool.execution_end", data: { toolCallId: "parent", isError: false } }] }]), "");
 });

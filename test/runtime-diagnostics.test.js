@@ -537,6 +537,48 @@ async function withDirectDiagnostics(fn) {
   });
 }
 
+test("execution-end-only failures are observed without inferring schema errors from text", async () => {
+  await withBox(async ({ emit, rows }) => {
+    await emit("before_agent_start");
+    await emit("tool_execution_end", { toolName: "task_workflow", toolCallId: "schema-rejected", isError: true,
+      result: { content: [{ text: "Validation failed: private-arguments" }], details: {} } });
+    await emit("tool_execution_end", { toolName: "bash", toolCallId: "parent/1", parentToolCallId: "parent", isError: false,
+      result: { details: {}, structuredContent: { exit_code: 1, output: "private-output" } } });
+    await emit("tool_execution_end", { toolName: "codemode", toolCallId: "parent", isError: false, result: {} });
+    await emit("agent_settled", { aborted: false });
+    const data = await rows();
+    const latest = [...new Map(data.filter(row => row.kind === "issue").map(row => [row.id, row])).values()];
+    assert.deepEqual(latest.map(row => [row.toolName, row.code, row.count]), [["task_workflow", "UNKNOWN", 1], ["bash", "UNKNOWN", 1]]);
+    assert.equal(latest[1].latestTrigger.data.parentToolCallId, "parent");
+    assert.equal(latest[1].latestTrigger.data.exitCode, 1);
+    assert.equal(data.find(row => row.kind === "summary").issueOccurrences, 2);
+    assert.equal(JSON.stringify(data).includes("private-"), false);
+  });
+});
+
+test("result and execution-end order does not duplicate failures or observed workflow rejections", async () => {
+  for (const events of [["tool.result", "tool.execution_end"], ["tool.execution_end", "tool.result"]]) {
+    await withDirectDiagnostics(async ({ ctx, box, rows }) => {
+      box.observe(ctx, "agent.before_start");
+      box.observe(ctx, "workflow.action_rejected", { toolName: "task_workflow", toolCallId: "rejected", code: "TASK_MEMORY_REVISION_STALE" });
+      for (const event of events) {
+        box.observe(ctx, event, { toolName: "task_workflow", toolCallId: "rejected", isError: true });
+        box.observe(ctx, event, { toolName: "task_workflow", toolCallId: "rejected", businessOk: false, code: "TASK_MEMORY_REVISION_STALE" });
+        box.observe(ctx, event, { toolName: "task_workflow", toolCallId: "rejected", isError: true, code: "EIO" });
+        for (const toolCallId of ["failure-1", "failure-2"]) box.observe(ctx, event, { toolName: "read", toolCallId, isError: true });
+      }
+      box.observe(ctx, "agent.settled");
+      const data = await rows();
+      const latest = [...new Map(data.filter(row => row.kind === "issue").map(row => [row.id, row])).values()];
+      assert.deepEqual(latest.map(row => [row.category, row.code, row.count]), [
+        ["business-rejection", "TASK_MEMORY_REVISION_STALE", 1], ["tool-failure", "EIO", 1], ["tool-failure", "UNKNOWN", 2],
+      ]);
+      assert.equal(data.find(row => row.kind === "summary").issueOccurrences, 4);
+      assert.ok(latest[0].events.some(row => row.event === "tool.execution_end" && row.data.toolCallId === "rejected"));
+    });
+  }
+});
+
 test("workflow rejection correlates only observed call IDs; real failures and private result boundaries remain", async () => {
   await withDirectDiagnostics(async ({ ctx, box, rows }) => {
     box.observe(ctx, "agent.before_start");

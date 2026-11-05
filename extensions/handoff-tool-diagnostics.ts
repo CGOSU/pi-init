@@ -68,14 +68,16 @@ export async function summarizeToolInput(cwd: string, value: unknown, inspectFil
 
 export function summarizeToolResult(value: unknown, includeHashes = true) {
   const result = record(value);
-  const details = result.details === undefined ? record(result.structuredContent) : record(result.details);
+  const structuredContent = record(result.structuredContent);
+  const details = result.details === undefined ? structuredContent : record(result.details);
   const summary: Record<string, unknown> = { outputHash: includeHashes ? fingerprint(result.content) : undefined };
   if (result.isError === true) summary.errorHash = summary.outputHash;
   if (Array.isArray(result.content)) {
     summary.contentParts = result.content.length;
     summary.textChars = result.content.reduce((total, item) => total + (typeof record(item).text === "string" ? (record(item).text as string).length : 0), 0);
   }
-  if (typeof details.exitCode === "number") summary.exitCode = details.exitCode;
+  const exitCode = typeof details.exitCode === "number" ? details.exitCode : structuredContent.exit_code;
+  if (typeof exitCode === "number" && Number.isFinite(exitCode)) summary.exitCode = exitCode;
   if (typeof details.ok === "boolean") summary.businessOk = details.ok;
   if (typeof details.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(details.code)) summary.code = details.code;
   const truncation = record(details.truncation);

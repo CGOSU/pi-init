@@ -8,6 +8,7 @@
 - 使用随 package 发布的 `pi-init-role-routing` Skill 提供通用职责规则；项目可配置角色及对应模型。
 - 在 Pi 中切换职责、配置自动换角方式，并查看或管理任务工作流。
 - 提供 `/blackbox` 运行诊断、`/large` 大型代码文件结构审阅，以及独立的 `pi-usage` 用量统计命令。
+- 支持[本地诊断采集](docs/diagnostics-collection.md)：将明确指定的 pi-init 日志与关联 session 汇成带来源的离线报告，用于比较版本和排查优化候选。
 
 ## 安装
 
