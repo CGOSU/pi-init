@@ -1,3 +1,4 @@
+import { throwCodedError as bindingError } from "../src/error-utils.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { generalToolSettlement, nestedToolSettlement, type ToolSettlement } from "./general-tool-settlement.ts";
 import { isWorkflowReadOnlyTool } from "./workflow-user-control.ts";
@@ -96,10 +97,6 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     delete now.branchAnchor;
     return state.runtimeDisposed || JSON.stringify(previous) !== JSON.stringify(now)
       || (previousAnchor !== undefined && !ctx.sessionManager.getBranch().some(entry => entry.id === previousAnchor));
-  }
-
-  function bindingError(code: string, message: string): never {
-    throw Object.assign(new Error(message), { code });
   }
 
   function bind<T extends Record<string, unknown>>(toolCallId: string, params: T, ctx: ExtensionContext): T {

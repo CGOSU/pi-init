@@ -1,3 +1,4 @@
+import { isRecord } from "../src/value-guards.ts";
 import type { WorkflowHandoffIdentity } from "../src/workflow-types.ts";
 
 const TASK_MESSAGE_TYPE = "pi-init-workflow-task";
@@ -19,10 +20,6 @@ export type WorkflowTaskStartEvidenceResult =
 
 function failure(code: string, message: string, field?: IdentityField): WorkflowTaskStartEvidenceResult {
   return { ok: false, code, message, ...(field ? { field } : {}) };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function validateWorkflowTaskStartMessage(

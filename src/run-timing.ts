@@ -1,3 +1,5 @@
+import { isFiniteNumber as isValidTimestamp } from "./value-guards.ts";
+
 const EXTERNAL_RUN_SOURCES: ReadonlySet<string> = new Set(["interactive", "rpc"]);
 
 export type ExternalRunSource = "interactive" | "rpc";
@@ -18,10 +20,6 @@ type CompletedRunTiming = RunTimingCandidate & {
   startedAt: number;
   completedAt: number;
 };
-
-function isValidTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
 
 function isRunTimingCandidate(value: unknown): value is RunTimingCandidate {
   return (typeof value === "object" && value !== null) || typeof value === "function";

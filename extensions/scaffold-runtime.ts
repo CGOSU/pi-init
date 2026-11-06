@@ -1,3 +1,4 @@
+import { isRecord } from "../src/value-guards.ts";
 import { readFile } from "node:fs/promises";
 import { resolve, basename, join } from "node:path";
 import {
@@ -14,10 +15,6 @@ import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts
 function normalizeTargetDir(value: string): string {
   const target = value.trim();
   return target.startsWith("@") ? target.slice(1) : target;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {

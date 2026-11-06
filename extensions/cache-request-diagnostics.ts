@@ -1,3 +1,4 @@
+import { isRecord, recordOrEmpty as object } from "../src/value-guards.ts";
 import { createHmac, randomBytes } from "node:crypto";
 import { createCacheDiagnosticComparison } from "./cache-diagnostic-comparison.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -27,9 +28,6 @@ export const cacheDiagnosticFields = [
   "correlation", "cacheConclusion", "cacheOutcome", "duplicateUsageEvents", "usageEvents", "observationError",
 ] as const;
 
-function object(value: unknown): Data {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Data : {};
-}
 function count(value: unknown): Count {
   if (value === undefined) return { state: "missing", message: "Cache token count was not supplied." };
   if (typeof value !== "number") return { state: "invalid-type", message: "Cache token count must be numeric." };
@@ -41,7 +39,7 @@ function count(value: unknown): Count {
 }
 function usage(value: unknown, readKey: string, writeKey: string): Usage {
   const fields = object(value);
-  const state = value === undefined ? "missing" : value === null || typeof value !== "object" || Array.isArray(value) ? "invalid" : "observed";
+  const state = value === undefined ? "missing" : !isRecord(value) ? "invalid" : "observed";
   return { state, read: count(fields[readKey]), write: count(fields[writeKey]) };
 }
 function emptyUsage(): Usage { return usage(undefined, "", ""); }
@@ -169,7 +167,7 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
             ? "changed-counts-or-mode" : "same-counts-not-content" });
       previousProjection = projected;
       projection = undefined;
-      Object.assign(active.data, { cacheKeyPresence: payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      Object.assign(active.data, { cacheKeyPresence: isRecord(payload)
         ? Object.hasOwn(fields, "prompt_cache_key") ? "present" : "absent" : "payload-unavailable",
       systemFingerprint: system, contextFingerprint: context, toolsFingerprint: tools,
       promptFingerprint: [system, context, tools].every(value => value.startsWith("hmac:")) ? fingerprint([system, context, tools]) : "unavailable-partial" });

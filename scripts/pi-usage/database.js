@@ -1,13 +1,10 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { loadDuckDb, localDateString } from "./core.js";
+import { numberValue } from "./numbers.js";
 
 export const USAGE_SCHEMA_VERSION = 4;
 const APPENDER_BATCH_SIZE = 1024;
-
-function numberValue(value) {
-  return Number(value) || 0;
-}
 
 export async function initializeDatabase(connection) {
   await connection.run(`
@@ -182,7 +179,7 @@ export async function withTransaction(connection, callback) {
 }
 
 function appendBigInt(appender, value) {
-  appender.appendBigInt(BigInt(Math.trunc(Number(value) || 0)));
+  appender.appendBigInt(BigInt(Math.trunc(numberValue(value))));
 }
 
 async function appendRows(connection, tableName, rows, appendRow) {

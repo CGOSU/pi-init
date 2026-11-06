@@ -1,3 +1,4 @@
+import { isRecord } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
 import { assertAcyclic, cloneState, cloneTask, normalizeIdentityToken, normalizeTask, normalizeTaskIds, normalizeTextList, requireText, requireTimestamp } from "./workflow-model.ts";
 import { requestWorkflowReplan } from "./workflow-replan.ts";
@@ -7,7 +8,7 @@ export function normalizeWorkflowGoals(value: unknown, rootId: string, tasks: Wo
   if (value === undefined) value = [];
   if (!Array.isArray(value)) throw new Error("goals 必须是目标归属数组");
   const goals: WorkflowGoal[] = value.map((item: unknown) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("目标归属格式无效");
+    if (!isRecord(item)) throw new Error("目标归属格式无效");
     const goal = item as Record<string, unknown>;
     return { id: normalizeIdentityToken(goal.id, "目标 id"), parentId: normalizeIdentityToken(goal.parentId, "父目标 id"), summary: requireText(goal.summary, "目标说明"), constraints: normalizeTextList(goal.constraints, "目标约束"), createdAt: requireTimestamp(goal.createdAt, "目标创建时间") };
   });
@@ -36,7 +37,7 @@ export function requestWorkflowGoal(state: WorkflowState, input: { direction?: u
 }
 
 export function validateWorkflowGoalPlan(state: WorkflowState, input: unknown): WorkflowPlan {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("目标计划格式无效");
+  if (!isRecord(input)) throw new Error("目标计划格式无效");
   const plan = input as Record<string, unknown>;
   if (!Array.isArray(plan.tasks) || !plan.tasks.length) throw new Error("新目标至少需要一个任务");
   const tasks = plan.tasks.map((task, index) => normalizeTask(task, index));

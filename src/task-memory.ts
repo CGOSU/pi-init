@@ -1,3 +1,5 @@
+import { throwCodedError } from "./error-utils.ts";
+import { isRecord as record } from "./value-guards.ts";
 import type { WorkflowHandoffIdentity } from "./workflow-types.ts";
 
 export type TaskObservation = {
@@ -15,7 +17,7 @@ export type TaskMemory = {
   observations: TaskObservation[]; omittedObservations: number; checkpoint?: TaskCheckpoint;
 };
 export function taskMemoryError(code: string, message: string): never {
-  throw Object.assign(new Error(message), { code });
+  return throwCodedError(code, message);
 }
 export function taskMemoryScope(identity: WorkflowHandoffIdentity) {
   return JSON.stringify([identity.sessionId, identity.workflowId, identity.planVersion, identity.taskId]);
@@ -28,9 +30,6 @@ function text(value: unknown, maximum = 512): value is string {
 }
 function texts(value: unknown, maximum = 32, length = 512): value is string[] {
   return Array.isArray(value) && value.length <= maximum && value.every(item => text(item, length));
-}
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function validIdentity(value: unknown): value is WorkflowHandoffIdentity {
   return record(value) && ["sessionId", "workflowId", "taskId", "attemptId", "handoffId"].every(key => text(value[key], 256))

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { appendWorkflowReplanDirection, applyWorkflowReplan, completeWorkflowTask, getNextWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask } from "../src/workflow.ts";
-import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { createWorkflowState, latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { } from "../src/workflow.ts";
@@ -34,7 +34,7 @@ test("重规划交接携带完整身份并保留 architect 取证边界", async 
 
     const message = harness.sentMessages.find(({ message: item }) => item.customType === "pi-init-workflow-replan");
     assert.ok(message);
-    const latest = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const latest = latestWorkflowEntry(harness).data;
     assert.deepEqual(message.message.details, {
       workflowId: latest.workflowId,
       planVersion: latest.planVersion,

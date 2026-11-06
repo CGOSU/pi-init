@@ -1,11 +1,7 @@
-import { createHash } from "node:crypto";
+import { jsonHash as hash } from "./json-hash.ts";
 import { createFileReviewState, readFileReviewState, FILE_REVIEW_POLICY_VERSION, type FileReviewDecision, type PersistedFileReviewState, type StateReadResult } from "./file-review.ts";
 
 export const FILE_REVIEW_SNAPSHOT_INTERVAL = 25;
-
-function hash(state: PersistedFileReviewState) {
-  return createHash("sha256").update(JSON.stringify(state)).digest("hex");
-}
 
 type JournalBase = Omit<PersistedFileReviewState, "schemaVersion" | "decisions"> & {
   schemaVersion: 2; revision: number; hash: string;

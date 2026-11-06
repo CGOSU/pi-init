@@ -1,3 +1,4 @@
+import { isRecord } from "../src/value-guards.ts";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -17,7 +18,7 @@ function safeRecord(line: string): Result<Record<string, unknown>> {
   let value: unknown;
   try { value = JSON.parse(line); }
   catch { return { ok: false, code: "INVALID_DIAGNOSTIC_JSON", message: "诊断记录损坏或未写完整，请稍后重试。" }; }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, code: "INVALID_DIAGNOSTIC_RECORD", message: "诊断记录不是对象，未导出。" };
+  if (!isRecord(value)) return { ok: false, code: "INVALID_DIAGNOSTIC_RECORD", message: "诊断记录不是对象，未导出。" };
   const source = value as Record<string, unknown>;
   const result: Record<string, unknown> = {};
   for (const key of ["timestamp", "firstSeen", "lastSeen"]) {

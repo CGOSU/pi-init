@@ -1,3 +1,4 @@
+import { textOf } from "../src/error-utils.ts";
 import type { ContextEvent, ContextEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { validateWorkflowHandoffIdentity } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
@@ -33,7 +34,7 @@ export function createRoleRecovery(
       state.roleRecoveryPersistenceFailed = false;
     } catch (error) {
       state.roleRecoveryPersistenceFailed = true;
-      throw Object.assign(new Error(`无法持久化职责恢复门，执行工具仍保持阻断：${error instanceof Error ? error.message : String(error)}`), {
+      throw Object.assign(new Error(`无法持久化职责恢复门，执行工具仍保持阻断：${textOf(error)}`), {
         code: "ROLE_RECOVERY_PERSIST_FAILED",
       });
     }
@@ -59,7 +60,7 @@ export function createRoleRecovery(
     try {
       enterPending(reason);
     } catch (error) {
-      ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      ctx.ui.notify(textOf(error), "error");
     }
   }
 
@@ -82,7 +83,7 @@ export function createRoleRecovery(
     } catch (error) {
       state.roleRecoveryPending = true;
       state.roleRecoveryPersistenceFailed = true;
-      throw Object.assign(new Error(`无法持久化职责确认，恢复门仍保持阻断：${error instanceof Error ? error.message : String(error)}`), {
+      throw Object.assign(new Error(`无法持久化职责确认，恢复门仍保持阻断：${textOf(error)}`), {
         code: "ROLE_RECOVERY_PERSIST_FAILED",
       });
     }

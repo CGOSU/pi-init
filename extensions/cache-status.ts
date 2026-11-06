@@ -1,3 +1,4 @@
+import { isRecord } from "../src/value-guards.ts";
 import { createCacheMissReminder } from "./cache-miss-reminder.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -96,7 +97,7 @@ export function createCacheStatus(pi: ExtensionAPI, activityStatus: ActivityStat
   }
 
   function messageIdentity(message: unknown): AssistantMessageIdentity | undefined {
-    if (typeof message !== "object" || message === null || Array.isArray(message)) return undefined;
+    if (!isRecord(message)) return undefined;
     const candidate = message as Partial<AssistantMessage>;
     if (candidate.role !== "assistant"
       || typeof candidate.provider !== "string" || !candidate.provider

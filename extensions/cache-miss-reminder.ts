@@ -1,13 +1,13 @@
+import { isRecord as record } from "../src/value-guards.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getSessionEntries } from "./session-entries.ts";
 
 export const CACHE_MISS_NOTICE = "pi-init-cache-miss-reminder";
 export const CACHE_MISS_TOTAL = "pi-init-cache-miss-total";
 export const CACHE_MISS_THRESHOLD_USD = 0.50;
 type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
 type Sample = { prompt: number; read: number; paidRate: number; readRate: number; reportedCache: boolean };
-const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
-
 /** Uses observed usage prices, not account billing. Missing prices must never become zero-price guesses. */
 export function cacheMissSample(message: AssistantMessage, ctx: ExtensionContext): Result<Sample> {
   const usage = message.usage;
@@ -39,7 +39,7 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
   function restore(ctx: ExtensionContext) {
     sessionId = ctx.sessionManager.getSessionId();
     previous = undefined;
-    const entries = ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch();
+    const entries = getSessionEntries(ctx);
     const entry = entries.findLast(e => e.type === "custom" && e.customType === CACHE_MISS_NOTICE && record(e.data) && e.data.sessionId === sessionId);
     // Each qualified total entry is one successfully persisted event, not one delivered notice.
     const totals = entries.filter(e => e.type === "custom" && e.customType === CACHE_MISS_TOTAL && record(e.data)

@@ -1,3 +1,4 @@
+import { isRecord, isUnknownArray } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
 import {
   assertAcyclic,
@@ -29,14 +30,6 @@ type WorkflowReplanApplication = {
   reason?: unknown;
 };
 type NormalizedReplanPlan = WorkflowPlanSummary & { tasks: WorkflowTask[] };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isUnknownArray(value: unknown): value is unknown[] {
-  return Array.isArray(value);
-}
 
 export function normalizeReplanPlan(input: unknown): NormalizedReplanPlan {
   if (!isRecord(input)) throw new Error("工作流重规划格式无效");

@@ -1,14 +1,6 @@
 import { summarizeCostSource } from "./core.js";
 import { readUsageState } from "./database.js";
-
-function numberValue(value) {
-  return Number(value) || 0;
-}
-
-function averageTps(speed) {
-  if (!speed || speed.outputTokens <= 0 || speed.generationSeconds <= 0) return null;
-  return speed.outputTokens / speed.generationSeconds;
-}
+import { numberValue, averageTps } from "./numbers.js";
 
 export async function readSummary(connection, range) {
   const rowsReader = await connection.runAndReadAll(

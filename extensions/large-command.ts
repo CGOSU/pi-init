@@ -1,3 +1,4 @@
+import { textOf } from "../src/error-utils.ts";
 import { parseLargeScanScope, type FileReviewScanScope, type FileReviewExclusion } from "../src/file-review-scope.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FILE_REVIEW_THRESHOLD, type FileSnapshot } from "../src/file-review.ts";
@@ -169,13 +170,13 @@ export function registerLargeCommand(pi: ExtensionAPI, deps: LargeCommandDepende
           await pi.sendUserMessage(reviewRequest(current, ctx, deps));
         } catch (error) {
           if (activeReview === dispatchedReview) clearActiveReview();
-          const message = error instanceof Error ? error.message : String(error);
+          const message = textOf(error);
           return ctx.ui.notify(`${scanReport(current, true)}\n启动审阅失败：${message}`, "error");
         }
         ctx.ui.notify(`${scanReport(current, true)}\n已启动主动审阅。`, "info");
       } catch (error) {
         if (dispatchedReview && activeReview === dispatchedReview) clearActiveReview();
-        const message = error instanceof Error ? error.message : String(error);
+        const message = textOf(error);
         ctx.ui.notify(`大文件扫描或审阅启动失败：${message}`, "error");
       } finally {
         handlerInFlight = false;

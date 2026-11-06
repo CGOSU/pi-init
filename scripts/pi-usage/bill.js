@@ -1,5 +1,6 @@
 import { summarizeCostSource } from "./core.js";
 import { calculateCacheRatio, formatCostSource, formatNumber } from "./report.js";
+import { numberValue } from "./numbers.js";
 
 const BILL_WIDTH = 750;
 const SIDE_PADDING = 54;
@@ -7,10 +8,6 @@ const RIGHT_EDGE = BILL_WIDTH - SIDE_PADDING;
 const MODEL_ROW_HEIGHT = 104;
 const FONT_FAMILY = "-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif";
 const MONO_FONT_FAMILY = "SFMono-Regular,Consolas,Liberation Mono,monospace";
-
-function numberValue(value) {
-  return Number(value) || 0;
-}
 
 function escapeXml(value) {
   return String(value)

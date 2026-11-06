@@ -1,3 +1,4 @@
+import { recordOrEmpty as record } from "../src/value-guards.ts";
 import { createHash } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
@@ -10,10 +11,6 @@ export function fingerprint(value: unknown) {
       } catch {
         return undefined;
       }
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 async function fileSummary(cwd: string, input: Record<string, unknown>, inspect: boolean) {

@@ -37,7 +37,7 @@ export function captureRuntimeIdentity(root = packageRoot) {
         if (++entries > 4096) throw new Error("source entry budget");
         const path = join(directory, entry.name);
         if (entry.isDirectory()) visit(path, extension, depth + 1);
-        else if (entry.isFile() && entry.name.endsWith(extension)) files.push(path);
+        else if (entry.isFile() && (entry.name.endsWith(extension) || extension === ".ts" && entry.name.endsWith(".js"))) files.push(path);
         if (files.length > 1024) throw new Error("source file budget");
       }
     };

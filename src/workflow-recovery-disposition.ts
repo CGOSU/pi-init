@@ -1,3 +1,4 @@
+import { isRecord } from "./value-guards.ts";
 export const WORKFLOW_RECOVERY_DISPOSITION_TYPE = "pi-init-workflow-recovery-disposition";
 export const WORKFLOW_RECOVERY_DISPOSITION_VERSION = 1;
 
@@ -36,10 +37,6 @@ export type WorkflowRecoveryDispositionResult<T> =
 
 function fail(code: string, message: string): WorkflowRecoveryDispositionResult<never> {
   return { ok: false, error: { code, message } };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeIdentifier(value: unknown, label: string) {

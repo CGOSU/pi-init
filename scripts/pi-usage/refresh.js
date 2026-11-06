@@ -6,6 +6,7 @@ import { calculateDuration, dateRange, hashCheckpointTail, listSessionFiles, par
 import { USAGE_SCHEMA_VERSION, clearDerivedData, insertActivityEvents, insertSpeedEvents, insertUsageEvents, markUsageChecked, readEventDates, readUsageSchemaVersion, readUsageState, withDatabase, withTransaction } from "./database.js";
 
 import { readSummary } from "./query.js";
+import { numberValue } from "./numbers.js";
 
 function emitRefreshProgress(options, event) {
   if (typeof options.onProgress === "function") options.onProgress(event);
@@ -281,10 +282,6 @@ async function refreshDurationSummary(connection, range, duration) {
 function finiteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
-}
-
-function numberValue(value) {
-  return Number(value) || 0;
 }
 
 async function readActivityEvents(connection, range) {

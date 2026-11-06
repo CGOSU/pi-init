@@ -381,4 +381,13 @@ async function runExternalAgent(harness, source, options = {}) {
   await emitExtensionEvent(harness, "agent_settled");
 }
 
-export { createExtensionHarness, emitExtensionEvent, emitToolResult, runExternalAgent };
+async function callToolCall(harness, toolName, input = {}) {
+  let blocked;
+  for (const handler of harness.handlers.get("tool_call") ?? []) {
+    const result = await handler({ toolName, input }, harness.context);
+    if (result?.block) blocked = result;
+  }
+  return blocked;
+}
+
+export { createExtensionHarness, emitExtensionEvent, emitToolResult, runExternalAgent, callToolCall };

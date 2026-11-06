@@ -1,3 +1,4 @@
+import { isRecord } from "../src/value-guards.ts";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -26,7 +27,7 @@ function sameIdentity(left: WorkflowHandoffIdentity, right: WorkflowHandoffIdent
   return Object.keys(left).every(key => left[key as keyof WorkflowHandoffIdentity] === right[key as keyof WorkflowHandoffIdentity]);
 }
 function failedProgressReceipt(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!isRecord(value)) return false;
   const data = value as Record<string, unknown>;
   return data.status === "error" || data.status === "unfinished" || data.isError === true || data.ok === false
     || ["exitCode", "exit_code"].some(key => typeof data[key] === "number" && data[key] !== 0);

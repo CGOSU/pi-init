@@ -1,3 +1,5 @@
+import { isRecord as object } from "../../src/record-guard.js";
+
 const KINDS = new Set(["issue", "summary", "provider-request", "cache-request"]);
 const PROFILE_FIELDS = ["provider", "model", "role", "thinkingLevel"];
 const HOOKS = ["headers", "response", "assistant"];
@@ -53,7 +55,6 @@ export function summarizeRuntime(records) {
   };
 }
 
-function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function count(value) { return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function duration(value) { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null; }
 function boolean(value) { return typeof value === "boolean" ? value : null; }

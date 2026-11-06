@@ -3,7 +3,7 @@ import test from "node:test";
 import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
 import { validateWorkflowTaskStartMessage } from "../extensions/workflow-start-evidence.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
-import { createWorkflowState } from "./support/workflow-fixtures.js";
+import { createWorkflowState, latestWorkflow } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -42,10 +42,6 @@ async function createTaskHarness(directory, options = {}) {
   });
   await emitExtensionEvent(harness, "session_start");
   return harness;
-}
-
-function latestWorkflow(harness) {
-  return harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
 }
 
 function latestTaskMessage(harness) {

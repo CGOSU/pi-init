@@ -1,3 +1,4 @@
+import { latestWorkflow } from "./support/workflow-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -32,10 +33,6 @@ async function makeHarness(directory) {
   });
   await emitExtensionEvent(harness, "session_start");
   return harness;
-}
-
-function latestWorkflow(harness) {
-  return harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
 }
 
 test("只将明确的继续/恢复短句识别为恢复意图", () => {

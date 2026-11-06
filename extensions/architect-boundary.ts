@@ -1,3 +1,4 @@
+import { isRecord } from "../src/value-guards.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const ARCHITECT_ROLE = "architect";
@@ -13,7 +14,7 @@ const NON_ARCHITECT_WORKFLOW_PLAN_REASON =
   "只有架构角色可以执行 task_workflow 的 plan/replan；请先调用 switch_role(role=architect)。";
 
 function isTaskWorkflowAction(input: unknown): boolean {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) return false;
+  if (!isRecord(input)) return false;
   try {
     const action = (input as { action?: unknown }).action;
     return typeof action === "string" && ALLOWED_TASK_WORKFLOW_ACTIONS.has(action);
@@ -28,7 +29,7 @@ function isAllowedArchitectToolCall(toolName: unknown, input: unknown): boolean 
 }
 
 function isArchitectOnlyWorkflowPlan(toolName: unknown, input: unknown): boolean {
-  if (toolName !== "task_workflow" || input === null || typeof input !== "object" || Array.isArray(input)) {
+  if (toolName !== "task_workflow" || !isRecord(input)) {
     return false;
   }
   const action = (input as { action?: unknown }).action;

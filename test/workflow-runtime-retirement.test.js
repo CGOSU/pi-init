@@ -1,3 +1,4 @@
+import { latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
@@ -107,7 +108,7 @@ test("显式命令和工具取消都清除工作流状态段", async () => {
         await harness.commands.get("pi-init").handler("workflow cancel", harness.context);
       } else {
         const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
-        const current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+        const current = latestWorkflowEntry(harness).data;
         const result = await workflow.execute("explicit-cancel", {
           action: "cancel",
           workflowId: current.workflowId,
@@ -118,7 +119,7 @@ test("显式命令和工具取消都清除工作流状态段", async () => {
         assert.match(result.content[0].text, /工作流已取消/);
       }
 
-      const persisted = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
+      const persisted = latestWorkflowEntry(harness)?.data;
       assert.equal(persisted.status, "cancelled");
       assert.doesNotMatch(currentStatus(), /已暂停|\b\d+\/\d+\b/);
     });
@@ -147,7 +148,7 @@ test("AbortSignal 仅中止本次工作流工具操作，不改变暂停工作�
     const result = await workflow.execute("abort-operation", { action: "cancel" }, controller.signal, undefined, harness.context);
     assert.match(result.content[0].text, /本次工作流工具操作已中止；工作流状态未更改/);
     assert.equal(harness.branch.length, beforeEntries);
-    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data.status, "paused");
+    assert.equal(latestWorkflowEntry(harness)?.data.status, "paused");
     assert.ok(harness.statusCalls.some(({ text }) => text?.includes("已暂停")));
   });
 });

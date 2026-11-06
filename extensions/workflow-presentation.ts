@@ -1,3 +1,4 @@
+import { isObject as isRecord } from "../src/value-guards.ts";
 import type { WorkflowCompletionView, WorkflowTaskCompletionView } from "./workflow-completion-view.ts";
 import type { WorkflowStatusView } from "./workflow-status-view.ts";
 
@@ -17,10 +18,6 @@ export type WorkflowPresentation =
 
 export function attachWorkflowPresentation<T extends object>(details: T, presentation: WorkflowPresentation) {
   return { ...details, workflowPresentation: presentation };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function isOptionalString(value: unknown) {

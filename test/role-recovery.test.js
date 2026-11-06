@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ROLE_RECOVERY_ENTRY_TYPE } from "../extensions/role-recovery.ts";
 import { DEFAULT_ROLE_CONFIG } from "../src/roles.ts";
-import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createExtensionHarness, emitExtensionEvent, callToolCall } from "./support/extension-harness.js";
 import { createWorkflowState } from "./support/workflow-fixtures.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -101,19 +101,11 @@ test("架构师恢复门只允许工作流状态和职责切换", async () => {
   });
   await emitExtensionEvent(harness, "session_start");
 
-  const callTool = async (toolName, input = {}) => {
-    let blocked;
-    for (const handler of harness.handlers.get("tool_call") ?? []) {
-      const result = await handler({ toolName, input }, harness.context);
-      if (result?.block) blocked = result;
-    }
-    return blocked;
-  };
-  assert.equal((await callTool("read"))?.block, true);
-  assert.equal((await callTool("agent_message"))?.block, true);
-  assert.equal(await callTool("task_workflow", { action: "status" }), undefined);
-  assert.equal((await callTool("task_workflow", { action: "plan" }))?.block, true);
-  assert.equal(await callTool("switch_role", { role: "docs-commit" }), undefined);
+  assert.equal((await callToolCall(harness, "read"))?.block, true);
+  assert.equal((await callToolCall(harness, "agent_message"))?.block, true);
+  assert.equal(await callToolCall(harness, "task_workflow", { action: "status" }), undefined);
+  assert.equal((await callToolCall(harness, "task_workflow", { action: "plan" }))?.block, true);
+  assert.equal(await callToolCall(harness, "switch_role", { role: "docs-commit" }), undefined);
 });
 
 test("上下文压缩后必须恢复职责才能执行写入工具", async () => {

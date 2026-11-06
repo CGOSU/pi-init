@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { jsonHash } from "./json-hash.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { cloneState, getNextWorkflowTask, hydrateWorkflowState } from "./workflow.ts";
 import type { WorkflowState } from "./workflow-types.ts";
@@ -23,7 +23,7 @@ export function handoffBoundary(state: WorkflowState | undefined) {
     || !state.tasks.some(task => task.status === "completed")) return false;
   return blocked ? state.tasks.some(task => task.status === "blocked") : Boolean(getNextWorkflowTask({ ...state, status: "running" }));
 }
-export function handoffHash(value: unknown) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+export function handoffHash(value: unknown) { return jsonHash(value); }
 export function workflowContentHash(state: WorkflowState) {
   return handoffHash([state.workflowId, state.planVersion, state.plan, state.tasks, state.goals, state.revisions]);
 }

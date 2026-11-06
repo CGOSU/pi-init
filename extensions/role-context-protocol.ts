@@ -1,3 +1,5 @@
+import { isRecord } from "../src/value-guards.ts";
+export { isRecord } from "../src/value-guards.ts";
 import type { ContextEvent, ContextEventResult } from "@earendil-works/pi-coding-agent";
 export type ContextMessage = ContextEvent["messages"][number];
 
@@ -10,10 +12,6 @@ export const WORKFLOW_TASK_MESSAGE_TYPE = "pi-init-workflow-task";
 export const WORKFLOW_REPLAN_MESSAGE_TYPE = "pi-init-workflow-replan";
 
 const MANAGED_HANDOFF_TYPES = new Set([WORKFLOW_TASK_MESSAGE_TYPE, WORKFLOW_REPLAN_MESSAGE_TYPE]);
-
-export function isRecord(value: unknown): value is ContextMessageRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 export function messageRecord(message: unknown): ContextMessageRecord | undefined {
   return isRecord(message) ? message : undefined;

@@ -1,3 +1,5 @@
+import { textOf } from "./error-utils.ts";
+import { isRecord } from "./value-guards.ts";
 import { isReviewPathWithin, isTemporaryReviewDirectory, type FileReviewScanScope, type FileReviewExclusion } from "./file-review-scope.ts";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
@@ -100,7 +102,7 @@ function scanError(code: FileScanError["code"], path: string, error: unknown): F
   return {
     code,
     path,
-    message: error instanceof Error ? error.message : String(error),
+    message: textOf(error),
   };
 }
 
@@ -306,10 +308,6 @@ export function createFileReviewState(projectRoot: string, sessionId: string): P
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function validReviewPath(value: unknown) {
   if (typeof value !== "string" || value.length === 0 || value.includes("\\") || isAbsolute(value)) return false;
   const parts = value.split("/");
@@ -402,7 +400,7 @@ export function recordFileReview(
 }
 
 export function normalizeFileReviewError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return textOf(error);
 }
 
 export type { FileScanError as FileReviewDiagnostic };

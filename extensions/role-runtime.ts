@@ -1,3 +1,4 @@
+import { isRecord, hasOwn } from "../src/value-guards.ts";
 import {
     CONFIG_DIR_NAME,
     withFileMutationQueue,
@@ -120,7 +121,7 @@ export function createRoleRuntime(
 
   function clearStagedRoleConfig(role: string) {
     const roleModels = state.sessionRoleConfigOverrides.roleModels;
-    if (!roleModels || typeof roleModels !== "object" || Array.isArray(roleModels)) return;
+    if (!isRecord(roleModels)) return;
     const remaining = { ...(roleModels as Record<string, unknown>) };
     delete remaining[role];
     const next = { ...state.sessionRoleConfigOverrides };
@@ -139,7 +140,7 @@ export function createRoleRuntime(
       ctx.ui.notify("手动模式下模型已由宿主切换；当前无活动角色，未写入 .pi/role-models.json。", "info");
       return;
     }
-    if (!Object.prototype.hasOwnProperty.call(config.roleModels, role)) {
+    if (!hasOwn(config.roleModels, role)) {
       ctx.ui.notify(`角色 ${roleLabel(role)} 使用会话默认模型；本次手动切换不会创建固定映射。`, "info");
       return;
     }
@@ -210,7 +211,7 @@ export function createRoleRuntime(
         const resolved = unwrapRoleResult(resolveRoleConfig(current, changes)) as ResolvedRoleConfig;
         const canonical = persisted && typeof persisted === "object"
           && persisted.schemaVersion === resolved.schemaVersion
-          && Object.prototype.hasOwnProperty.call(persisted, "roleModels");
+          && hasOwn(persisted, "roleModels");
         if (!hasPendingChanges && (!persisted || canonical)) {
           return { resolved, changed: false };
         }
@@ -273,7 +274,7 @@ export function createRoleRuntime(
     const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;
     const target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
-    const hasExplicitModel = Object.prototype.hasOwnProperty.call(config.roleModels, normalizedRole);
+    const hasExplicitModel = hasOwn(config.roleModels, normalizedRole);
     const model = hasExplicitModel ? ctx.modelRegistry.find(target.provider, target.model) : undefined;
     if (hasExplicitModel && !model) {
       const error = new Error(

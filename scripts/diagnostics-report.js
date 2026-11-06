@@ -66,7 +66,7 @@ export async function collectDiagnostics(inputs) {
   const packageVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
   const collectorHash = createHash("sha256");
   for (const path of ["diagnostics-report.js", "diagnostics/sources.js", "diagnostics/runtime-report.js",
-    "diagnostics/session-report.js", "diagnostics/handoff-report.js", "handoff-report.js"]) {
+    "diagnostics/session-report.js", "diagnostics/handoff-report.js", "handoff-report.js", "../src/record-guard.js"]) {
     collectorHash.update(path + "\0").update(await readFile(new URL(path, import.meta.url))).update("\0");
   }
   return { report, manifest: { schemaVersion: 1, collector: "pi-init/diagnostics-report", packageVersion,

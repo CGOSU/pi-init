@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
-import { createWorkflowState, workflowMessageIdentity, markWorkflowTaskStarted } from "./support/workflow-fixtures.js";
+import { createWorkflowState, workflowMessageIdentity, markWorkflowTaskStarted, latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import { startWorkflowTask, requestWorkflowReplan } from "../src/workflow.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -81,8 +81,8 @@ test("status 的模型可见内容包含可直接提交的当前身份且保持�
     assert.deepEqual(harness.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message.details, identity);
     assert.equal(harness.branch.length, branchLength);
     assert.equal(status.details.workflowPresentation.kind, "workflow-status");
-    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
-    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.handoff.phase, "queued");
+    assert.equal(latestWorkflowEntry(harness).data.workflowPresentation, undefined);
+    assert.equal(latestWorkflowEntry(harness).data.handoff.phase, "queued");
   });
 });
 
@@ -96,7 +96,7 @@ test("queued handoff 可在匹配的结果调用中补记开始，重复或缺�
       workflow.execute("missing-identity", { ...completeParams(identity), handoffId: undefined }, undefined, undefined, harness.context),
       { code: "WORKFLOW_ACTION_IDENTITY_MISSING" },
     );
-    const queued = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const queued = latestWorkflowEntry(harness).data;
     assert.equal(queued.handoff.phase, "queued");
     assert.equal(queued.tasks[0].executionStartedAt, undefined);
 
@@ -115,7 +115,7 @@ test("queued handoff 可在匹配的结果调用中补记开始，重复或缺�
     assert.match(completionTui, /第一项完成/);
     assert.equal(completed.details.tasks[0].executionStartedAt !== undefined, true);
     assert.equal(completed.details.recoveryGeneration, identity.recoveryGeneration + 1);
-    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
+    assert.equal(latestWorkflowEntry(harness).data.workflowPresentation, undefined);
     await assert.rejects(
       workflow.execute("duplicate-complete", completeParams(identity), undefined, undefined, harness.context),
       { code: "WORKFLOW_ACTION_IDENTITY_STALE" },
@@ -148,7 +148,7 @@ test("中间任务使用显式任务完成展示类别并保留模型报告内�
       { isError: false },
     ).render(300).join("\n");
     assert.match(rendered, /下一任务将自动开始/);
-    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data.workflowPresentation, undefined);
+    assert.equal(latestWorkflowEntry(harness).data.workflowPresentation, undefined);
   });
 });
 
@@ -203,7 +203,7 @@ test("queued handoff 身份错误或当前 branch 缺少交接消息时不补记
         return true;
       },
     );
-    let current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    let current = latestWorkflowEntry(harness).data;
     assert.equal(current.handoff.phase, "queued");
     assert.equal(current.tasks[0].executionStartedAt, undefined);
 
@@ -222,7 +222,7 @@ test("queued handoff 身份错误或当前 branch 缺少交接消息时不补记
         return true;
       },
     );
-    current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    current = latestWorkflowEntry(harness).data;
     assert.equal(current.handoff.phase, "queued");
     assert.equal(current.tasks[0].executionStartedAt, undefined);
     harness.context.model = developerModel;
@@ -237,7 +237,7 @@ test("queued handoff 身份错误或当前 branch 缺少交接消息时不补记
         return true;
       },
     );
-    current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    current = latestWorkflowEntry(harness).data;
     assert.equal(current.handoff.phase, "queued");
     assert.equal(current.tasks[0].executionStartedAt, undefined);
   });
@@ -251,7 +251,7 @@ test("恢复已排队/已启动的任务转为未知结果，旧回调被隔离�
     await emitExtensionEvent(harness, "agent_start");
 
     await emitExtensionEvent(harness, "session_tree");
-    const restored = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const restored = latestWorkflowEntry(harness).data;
     assert.equal(restored.status, "paused");
     assert.equal(restored.pauseReason, "handoff-outcome-unknown");
     assert.equal(restored.tasks[0].outcomeUnknown, true);
@@ -339,7 +339,7 @@ test("legacy local in_progress 状态只迁移为需核对暂停，不自动重�
     };
     const original = JSON.stringify(legacy);
     const harness = await taskHarness(directory, { state: legacy });
-    const migrated = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const migrated = latestWorkflowEntry(harness).data;
     assert.equal(migrated.tasks[0].status, "blocked");
     assert.equal(migrated.tasks[0].outcomeUnknown, true);
     assert.equal(migrated.status, "paused");

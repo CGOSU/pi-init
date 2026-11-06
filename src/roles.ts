@@ -1,3 +1,5 @@
+import { textOf } from "./error-utils.ts";
+import { hasOwn, isRecord, isStringMember as isOneOf } from "./value-guards.ts";
 import type {
   DefaultRoleName,
   ModelReference,
@@ -41,22 +43,10 @@ export function roleModeLabel(mode: string): string {
   return ROLE_MODE_LABELS[mode] ?? mode;
 }
 
-function hasOwn(value: unknown, key: PropertyKey): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function readProperty(value: unknown, key: string): unknown {
   if (value === null || value === undefined) return undefined;
   if (typeof value !== "object" && typeof value !== "function") return undefined;
   return Reflect.get(value, key);
-}
-
-function isOneOf<const Values extends readonly string[]>(values: Values, value: unknown): value is Values[number] {
-  return typeof value === "string" && values.some((candidate) => candidate === value);
 }
 
 export function isRoleMode(value: unknown): value is RoleMode {
@@ -185,7 +175,7 @@ function failure(code: string, message: string): RoleConfigResult<never> {
 
 function resultFromError(error: unknown, fallbackCode = "ROLE_CONFIG_INVALID"): RoleConfigResult<never> {
   const errorCode = isRecord(error) && typeof error.code === "string" ? error.code : fallbackCode;
-  return failure(errorCode, error instanceof Error ? error.message : String(error));
+  return failure(errorCode, textOf(error));
 }
 
 export function unwrapRoleResult<T>(result: RoleConfigResult<T>): T {

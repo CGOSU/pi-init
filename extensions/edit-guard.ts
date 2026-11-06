@@ -1,3 +1,4 @@
+import { hasOwn, isRecord } from "../src/value-guards.ts";
 import {
   createEditToolDefinition,
   type EditToolInput,
@@ -37,10 +38,6 @@ export function formatEditGuardDiagnostic(diagnostic: Pick<EditGuardDiagnostic, 
   return `[${diagnostic.code}] ${diagnostic.message}`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.keys(value).every((key) => keys.includes(key));
 }
@@ -67,9 +64,9 @@ export function classifyEditArguments(input: unknown): EditArgumentsClassificati
     };
   }
 
-  const hasEdits = Object.prototype.hasOwnProperty.call(input, "edits");
-  const hasReadArguments = Object.prototype.hasOwnProperty.call(input, "offset")
-    || Object.prototype.hasOwnProperty.call(input, "limit");
+  const hasEdits = hasOwn(input, "edits");
+  const hasReadArguments = hasOwn(input, "offset")
+    || hasOwn(input, "limit");
   if (!hasEdits && hasReadArguments) {
     return {
       kind: "reject",

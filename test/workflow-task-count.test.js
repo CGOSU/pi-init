@@ -4,7 +4,7 @@ import { Check } from "typebox/value";
 import { taskWorkflowParameters } from "../extensions/contracts.ts";
 import { applyWorkflowReplan, completeWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask, validateWorkflowPlan } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
-import { createWorkflowState, markWorkflowTaskStarted } from "./support/workflow-fixtures.js";
+import { createWorkflowState, markWorkflowTaskStarted, latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -95,7 +95,7 @@ test("auto 小计划显式要求编排时持久化真实工作流并保留用户
 
       assert.equal(result.details.status, reviewRequired ? "paused" : "running");
       assert.equal(result.terminate, true);
-      const saved = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
+      const saved = latestWorkflowEntry(harness)?.data;
       assert.equal(saved.tasks.length, 2);
       assert.equal(saved.currentTaskId, undefined);
       assert.equal(saved.plan.orchestration, undefined, "规划时的编排要求不新增持久化协议字段");
@@ -161,7 +161,7 @@ test("工具入口接受超过 12 个任务的真实规划", async () => {
 
     assert.equal(result.details.tasks.length, 14);
     assert.equal(result.details.currentTaskId, undefined);
-    const persisted = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const persisted = latestWorkflowEntry(harness).data;
     assert.equal(persisted.tasks.length, 14);
   });
 });
@@ -292,7 +292,7 @@ test("超过 12 个任务时重规划仍拒绝复用历史 ID 并保留未提交
       }, undefined, undefined, harness.context),
       /WORKFLOW_ACTION_IDENTITY_MISSING/,
     );
-    const latest = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const latest = latestWorkflowEntry(harness).data;
     assert.equal(latest.tasks.length, 13);
     assert.equal(latest.tasks[0].status, "in_progress");
   });

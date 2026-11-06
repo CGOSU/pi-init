@@ -1,3 +1,4 @@
+import { hasOwn, isRecord } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneState, WORKFLOW_STATE_VERSION } from "./workflow-model.ts";
@@ -15,10 +16,6 @@ import type {
 const TASK_MESSAGE_TYPE = "pi-init-workflow-task";
 const REPLAN_MESSAGE_TYPE = "pi-init-workflow-replan";
 const BASE_IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration"] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function hasWorkflowIdentity(state: HydratedWorkflowState): state is WorkflowState {
   return typeof state.workflowId === "string"
@@ -39,7 +36,7 @@ function safeIdentityValues(source: unknown, fields: readonly string[]): Record<
   const result: Record<string, unknown> = {};
   const values = isRecord(source) ? source : undefined;
   for (const field of fields) {
-    if (!values || !Object.prototype.hasOwnProperty.call(values, field)) continue;
+    if (!values || !hasOwn(values, field)) continue;
     const value = values[field];
     if (typeof value === "string") result[field] = value.length <= 256 ? value : `${value.slice(0, 256)}…`;
     else if (typeof value === "number" && Number.isFinite(value)) result[field] = value;

@@ -1,3 +1,5 @@
+import { textOf } from "./error-utils.ts";
+import { hasOwn, isRecord, isUnknownArray } from "./value-guards.ts";
 import {
   WORKFLOW_STATE_VERSION,
   WORKFLOW_IDENTITY_STATE_VERSION,
@@ -32,14 +34,6 @@ import type {
   WorkflowValidationFailure,
 } from "./workflow-types.ts";
 import { normalizeWorkflowGoals } from "./workflow-goals.ts";
-
-function isRecord(value: unknown): value is WorkflowStateRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isUnknownArray(value: unknown): value is unknown[] {
-  return Array.isArray(value);
-}
 
 function isOneOf<const Values extends readonly (string | number)[]>(values: Values, value: unknown): value is Values[number] {
   return (typeof value === "string" || typeof value === "number") && values.some((candidate) => candidate === value);
@@ -386,7 +380,7 @@ function hasRuntimeAuthorityMarker(state: WorkflowStateRecord): boolean {
   return state.executor === "runtime"
     || authority === "runtime"
     || (isRecord(authority) && authority.kind === "runtime")
-    || Object.prototype.hasOwnProperty.call(state, "runtimeAuthority");
+    || hasOwn(state, "runtimeAuthority");
 }
 
 export function hydrateWorkflowState(state: unknown): WorkflowHydrationResult {
@@ -401,11 +395,11 @@ export function hydrateWorkflowState(state: unknown): WorkflowHydrationResult {
   }
   try {
     assertSupportedWorkflowFeatures(state);
-    if (Object.prototype.hasOwnProperty.call(state, "executor")) normalizeExecutor(state.executor);
-    if (Object.prototype.hasOwnProperty.call(state, "authority")) normalizeExecutor(state.authority);
+    if (hasOwn(state, "executor")) normalizeExecutor(state.executor);
+    if (hasOwn(state, "authority")) normalizeExecutor(state.authority);
     return { ok: true, value: hydrateWorkflowStateValue(state) };
   } catch (error) {
     const code = isRecord(error) && typeof error.code === "string" ? error.code : "WORKFLOW_STATE_INVALID";
-    return resultFailure(code, error instanceof Error ? error.message : String(error));
+    return resultFailure(code, textOf(error));
   }
 }

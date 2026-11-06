@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createExtensionHarness, emitExtensionEvent, callToolCall } from "./support/extension-harness.js";
 import {
   ARCHITECT_ALLOWED_ACTIONS_TEXT,
   ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS,
@@ -9,15 +9,6 @@ import {
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
-
-async function callToolCall(harness, toolName, input = {}) {
-  let blocked;
-  for (const handler of harness.handlers.get("tool_call") ?? []) {
-    const result = await handler({ toolName, input }, harness.context);
-    if (result?.block) blocked = result;
-  }
-  return blocked;
-}
 
 function architectHarness() {
   return createExtensionHarness([], {

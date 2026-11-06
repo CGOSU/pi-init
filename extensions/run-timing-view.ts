@@ -1,3 +1,4 @@
+import { isObject as isRecord } from "../src/value-guards.ts";
 import { getRunTimingDuration, isExternalRunSource } from "../src/run-timing.ts";
 
 export type RunTimingValue =
@@ -10,10 +11,6 @@ export type RunTimingView = {
   completedAt: RunTimingValue;
   duration: RunTimingValue;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function timingValue(value: unknown): RunTimingValue {
   if (typeof value !== "number" || !Number.isFinite(value) || !Number.isFinite(new Date(value).getTime())) {

@@ -1,11 +1,9 @@
+import { isFiniteNumber as validTimestamp } from "./value-guards.ts";
+
 export type SessionWorkTimeState = {
   totalMilliseconds: number;
   activeStartedAt: number | undefined;
 };
-
-function validTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
 
 function validTotalMilliseconds(value: unknown): value is number {
   return validTimestamp(value) && value >= 0;

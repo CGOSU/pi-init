@@ -1,3 +1,4 @@
+import { hasOwn, isObject as isRecord, isStringMember as isOneOf, isUnknownArray } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
 import { isValidRoleId, normalizeRoleId, unwrapRoleResult } from "./roles.ts";
 import type {
@@ -39,21 +40,9 @@ export const WORKFLOW_TASK_STATUSES = ["pending", "in_progress", "completed", "b
 export const WORKFLOW_AUDIT_TASK_STATUSES = [...WORKFLOW_TASK_STATUSES, "superseded"] as const satisfies readonly WorkflowTaskStatus[];
 export const WORKFLOW_REVISION_STATUSES = ["requested", "applied"] as const satisfies readonly WorkflowRevisionStatus[];
 
-function isOneOf<const Values extends readonly string[]>(values: Values, value: unknown): value is Values[number] {
-  return typeof value === "string" && values.some((candidate) => candidate === value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(message);
   return value;
-}
-
-function isUnknownArray(value: unknown): value is unknown[] {
-  return Array.isArray(value);
 }
 
 export function requireText(value: unknown, label: string): string {
@@ -125,9 +114,7 @@ export function requireTimestamp(value: unknown, label: string): number {
 }
 
 export function normalizeRevisionId(value: unknown, label: string): string {
-  const id = requireText(value, label);
-  if (id.length > 128) throw new Error(`${label}过长`);
-  return id;
+  return normalizeIdentityToken(value, label);
 }
 
 export function normalizeIdentityToken(value: unknown, label: string): string {
@@ -522,12 +509,12 @@ export function assertWorkflowGoalReferences(goals: WorkflowGoal[] | undefined, 
 
 export function cloneState(state: WorkflowState, now = Date.now()): WorkflowState {
     assertSupportedWorkflowFeatures(state);
-  if (Object.prototype.hasOwnProperty.call(state, "runtimeAuthority")) {
+  if (hasOwn(state, "runtimeAuthority")) {
     throw workflowError("WORKFLOW_STATE_RUNTIME_RETIRED", "旧 Runtime 工作流 authority 已退役；不能克隆或本地执行");
   }
   const executor = normalizeExecutor(state.executor);
   const authority = normalizeExecutor(
-    Object.prototype.hasOwnProperty.call(state, "authority") ? state.authority : executor,
+    hasOwn(state, "authority") ? state.authority : executor,
   );
   if (authority !== executor) throw new Error("工作流 authority 不允许在创建后切换");
   return {

@@ -1,3 +1,5 @@
+import { throwCodedError as throwActionError } from "../src/error-utils.ts";
+import { isRecord, hasOwn } from "../src/value-guards.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   hydrateWorkflowState,
@@ -88,10 +90,6 @@ export function createWorkflowRecoveryActions(
       : undefined;
   }
 
-  function throwActionError(code: string, message: string): never {
-    throw Object.assign(new Error(message), { code });
-  }
-
   function discard(
     sourceEntryId: string | undefined,
     confirmUnknownOutcome: boolean,
@@ -133,8 +131,8 @@ export function createWorkflowRecoveryActions(
       throwActionError("WORKFLOW_RECOVERY_SOURCE_CHANGED", "原记录已不再是当前 branch 的唯一最新工作流 entry；重新读取状态后再处理");
     }
     const sourceData = "data" in source ? source.data : undefined;
-    if (sourceData !== null && typeof sourceData === "object" && !Array.isArray(sourceData)
-      && Object.prototype.hasOwnProperty.call(sourceData, "sessionId")
+    if (isRecord(sourceData)
+      && hasOwn(sourceData, "sessionId")
       && (sourceData as Record<string, unknown>).sessionId !== sessionId) {
       throwActionError("WORKFLOW_SESSION_MISMATCH", "原记录声明的 sessionId 与当前 session 不一致；不能隔离或猜测其归属");
     }

@@ -1,3 +1,4 @@
+export { textOf } from "../src/error-utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RoleMode, ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
 import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
@@ -93,10 +94,6 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     internalContinuationPending: false,
     runtimeDisposed: false,
   };
-}
-
-export function textOf(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function activeRoleMatches(

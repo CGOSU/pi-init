@@ -1,3 +1,4 @@
+import { hasOwn, isRecord } from "../src/value-guards.ts";
 import {
   WORKFLOW_RECOVERY_DISPOSITION_TYPE,
   workflowRecoveryDispositionMatches,
@@ -8,10 +9,6 @@ type WorkflowRecoverySource = {
   entry?: Record<string, unknown>;
   entryId?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 export function latestWorkflowRecoverySource(branch: readonly unknown[]): WorkflowRecoverySource {
   const index = branch.findLastIndex((entry) => isRecord(entry)
@@ -39,7 +36,7 @@ export function workflowRestoreErrorForSource(
       const entry = branch[index];
       if (!isRecord(entry) || entry.type !== "custom"
         || entry.customType !== WORKFLOW_RECOVERY_DISPOSITION_TYPE
-        || !Object.prototype.hasOwnProperty.call(entry, "data")) continue;
+        || !hasOwn(entry, "data")) continue;
       const matches = workflowRecoveryDispositionMatches(entry.data, {
         sessionId,
         sourceEntryId: source.entryId,

@@ -1,3 +1,4 @@
+import { hasOwn, isRecord } from "../src/value-guards.ts";
 const WORKFLOW_ERROR_PREFIX = "[PI-INIT_WORKFLOW_ERROR]";
 const WORKFLOW_ERROR_MARKER = `${WORKFLOW_ERROR_PREFIX} `;
 const SAFE_IDENTITY_FIELDS = [
@@ -56,14 +57,6 @@ export type WorkflowErrorViewFailure = {
 export type WorkflowErrorViewResult =
   | { ok: true; value: WorkflowErrorView }
   | { ok: false; error: WorkflowErrorViewFailure };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(record: Record<string, unknown>, key: string) {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
 
 function invalidInput(code: string, message: string, rawText?: string): WorkflowErrorViewResult {
   return { ok: false, error: { kind: "invalid-input", code, message, ...(rawText !== undefined ? { rawText } : {}) } };

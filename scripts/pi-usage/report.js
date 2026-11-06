@@ -1,17 +1,9 @@
 import { PI_USAGE_BUILD } from "./version.js";
-import { FIELDS, MODEL_BAR_RESOLUTION, MODEL_BAR_SEGMENTS, MODEL_BAR_WIDTH, summarizeCostSource } from "./core.js";
+import { FIELDS, MODEL_BAR_RESOLUTION, MODEL_BAR_SEGMENTS, MODEL_BAR_WIDTH, summarizeCostSource, localDateString } from "./core.js";
+import { numberValue, averageTps } from "./numbers.js";
 
 function emptyUsage() {
   return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
-}
-
-function numberValue(value) {
-  return Number(value) || 0;
-}
-
-function averageTps(speed) {
-  if (!speed || speed.outputTokens <= 0 || speed.generationSeconds <= 0) return null;
-  return speed.outputTokens / speed.generationSeconds;
 }
 
 export function formatNumber(value) {
@@ -21,9 +13,7 @@ export function formatNumber(value) {
 export function formatDateMinute(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "未知";
-  const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate()]
-    .map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, "0")));
-  return `${parts.join("-")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return `${localDateString(date)} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 export function formatCostSource(source) {

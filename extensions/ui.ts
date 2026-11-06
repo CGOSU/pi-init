@@ -1,3 +1,4 @@
+import { textOf } from "../src/error-utils.ts";
 import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import {
   DynamicBorder,
@@ -135,7 +136,7 @@ export async function showMenu(
                 ));
               })
               .catch((error) => {
-                const message = error instanceof Error ? error.message : String(error);
+                const message = textOf(error);
                 saveStatus.setText(theme.fg("error", `保存失败：${message}`));
               })
               .finally(() => {
@@ -315,7 +316,7 @@ async function selectModelWithSearch(
               );
             })
             .catch((error) => {
-              const message = error instanceof Error ? error.message : String(error);
+              const message = textOf(error);
               saveStatus = theme.fg("error", `保存失败：${message}`);
             })
             .finally(() => {

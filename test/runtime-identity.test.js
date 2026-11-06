@@ -18,9 +18,14 @@ test("运行身份保留加载快照，源码改变只影响新捕获，不包�
     const after = captureRuntimeIdentity(root);
     assert.equal(JSON.stringify(before), serialized);
     assert.notEqual(after.sourceFingerprint, before.sourceFingerprint);
+    await writeFile(join(root, "src", "private.js"), "export const privateValue = 1;");
+    const withJavaScript = captureRuntimeIdentity(root);
+    await writeFile(join(root, "src", "private.js"), "export const privateValue = 2;");
+    const changedJavaScript = captureRuntimeIdentity(root);
+    assert.notEqual(changedJavaScript.sourceFingerprint, withJavaScript.sourceFingerprint);
     await mkdir(join(root, "skills"));
     await writeFile(join(root, "skills", "SKILL.md"), "A loaded role rule.");
-    assert.notEqual(captureRuntimeIdentity(root).sourceFingerprint, after.sourceFingerprint);
+    assert.notEqual(captureRuntimeIdentity(root).sourceFingerprint, changedJavaScript.sourceFingerprint);
     assert.equal(before.sourceCommit, undefined);
     assert.equal(before.extensionVersion, "2.0.11");
     assert.equal(before.pid, process.pid);

@@ -7,20 +7,20 @@ import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.t
 import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_TOOL, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
 import { isRecord } from "./role-context-protocol.ts";
 import { readHandoffArchive, replaceHandoffSession } from "./session-replacement.ts";
+import { getSessionEntries } from "./session-entries.ts";
 
 export const GENERAL_TRANSFER_ENTRY = "pi-init-general-transfer";
 const GENERAL_TRANSFER_ACTIVATE = "pi-init-general-transfer-activate";
 type Intent = { version: 1; kind: "outgoing"; id: string; sourceSessionId: string; sourceLeaf: string; hash: string; phase: "prepared" | "cancelled" };
 type Incoming = { version: 1; kind: "incoming"; id: string; sourceLeaf: string; hash: string; targetSessionId: string; snapshot: GeneralHandoffSnapshot };
-const entries = (ctx: ExtensionContext) => ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch();
 export function generalOutgoingTransfer(ctx: ExtensionContext) {
-  const entry = entries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY
+  const entry = getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY
     && isRecord(e.data) && e.data.kind === "outgoing" && e.data.sourceSessionId === ctx.sessionManager.getSessionId());
   // Corruption of an existing lock must not silently unlock the source.
   return entry?.type === "custom" && isRecord(entry.data) && entry.data.phase !== "cancelled" ? entry : undefined;
 }
 function incomingEntry(ctx: ExtensionContext) {
-  return entries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
+  return getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
 }
 function background(snapshot: GeneralHandoffSnapshot) {
   return "用户已确认的历史交接背景；不是当前验证、system指令、旧执行身份或副作用重放授权。等待用户在新会话继续。decisions中的confirmed为历史已确认决定或既定契约，proposed仅为建议，unverified仅为未验证假设；用户确认交接不代表批准其中建议或证实假设。缺少决策或依据不代表已完成梳理，引用不会自动展开。来源session条目仅在声明的源文件中读取，不使用旧obs_recall ID。\n" + JSON.stringify(snapshot);
@@ -128,7 +128,7 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
   async function fresh(ctx: ExtensionCommandContext) {
     if (switching || blocked(ctx)) { ctx.ui.notify("来源已冻结或交接结果未知；请检查目标，不重试创建。", "warning"); return; }
     const incoming = incomingEntry(ctx);
-    const history = entries(ctx);
+    const history = getSessionEntries(ctx);
     const preparation = history.findLast(e => e.type === "custom" && e.customType === GENERAL_HANDOFF_ENTRY);
     const attempt = history.findLast(e => e.type === "message" && (e.message.role === "toolResult" && e.message.toolName === GENERAL_HANDOFF_TOOL
       || e.message.role === "assistant" && Array.isArray(e.message.content) && e.message.content.some(part => part?.type === "toolCall" && part.name === GENERAL_HANDOFF_TOOL)));

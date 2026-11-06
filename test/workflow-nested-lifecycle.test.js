@@ -5,7 +5,7 @@ import { createExtensionHarness, emitExtensionEvent } from "./support/extension-
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { workflowMessageIdentity, latestWorkflow } from "./support/workflow-fixtures.js";
 import { workflowActionIdentity } from "../src/workflow.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
@@ -42,10 +42,6 @@ function workflowTool(harness) {
 
 function execute(harness, params) {
   return workflowTool(harness).execute("nested-lifecycle-test", params, undefined, undefined, harness.context);
-}
-
-function latestWorkflow(harness) {
-  return harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
 }
 
 async function startMessage(harness, customType) {

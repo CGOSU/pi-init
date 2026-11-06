@@ -1,3 +1,4 @@
+import { isRecord } from "./value-guards.ts";
 
 import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -107,9 +108,6 @@ function escapeInlineCode(value: string): string {
   return value.replace(/`/g, "\\`");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await lstat(filePath);

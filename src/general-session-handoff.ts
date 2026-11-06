@@ -1,3 +1,4 @@
+import { isRecord as record } from "./value-guards.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "./session-handoff.ts";
 import { normalizeToolProposals } from "./handoff-execution-history.ts";
@@ -23,7 +24,6 @@ export type GeneralHandoffSnapshot = {
   source: { sessionId: string; projectRoot: string; sessionFile: string; branchLeafId: string; branchHash: string; toolCallId: string };
 };
 const fail = (code: string, message: string): HandoffResult<never> => ({ ok: false, code, message });
-const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const nonempty = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
 
 /** Reject the whole input; these byte limits are storage bounds, not token estimates. */

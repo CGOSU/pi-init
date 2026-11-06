@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
-import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { createWorkflowState, workflowMessageIdentity, latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import { startWorkflowTask } from "../src/workflow.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -88,7 +88,7 @@ test("初始任务状态写入失败不派发任务且后续可安全重新调�
     failAppend = false;
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
-    const persisted = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const persisted = latestWorkflowEntry(harness).data;
     assert.equal(persisted.currentTaskId, "first");
     assert.equal(persisted.tasks[0].status, "in_progress");
   });
@@ -116,7 +116,7 @@ test("取消状态持久化失败时不报告成功并保留原工作流与状�
     await emitExtensionEvent(harness, "session_start");
     const workflow = harness.tools.find((tool) => tool.name === "task_workflow");
 
-    const current = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const current = latestWorkflowEntry(harness).data;
     await assert.rejects(
       workflow.execute("cancel-with-write-failure", {
         action: "cancel",
@@ -130,7 +130,7 @@ test("取消状态持久化失败时不报告成功并保留原工作流与状�
 
     const status = await workflow.execute("status-after-cancel-write-failure", { action: "status" }, undefined, undefined, harness.context);
     assert.equal(status.details.status, "paused");
-    assert.equal(harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data.status, "paused");
+    assert.equal(latestWorkflowEntry(harness)?.data.status, "paused");
     assert.ok(harness.statusCalls.some(({ name, text }) => name === "pi-init-activity" && text?.includes("已暂停")));
   });
 });
@@ -332,7 +332,7 @@ test("完成状态写入失败不返回成功或派发后续任务", async () =>
     assert.equal(status.details.tasks[0].status, "in_progress");
     assert.equal(status.details.tasks[0].completionSummary, undefined);
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, beforeDispatchCount);
-    const persisted = harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow").data;
+    const persisted = latestWorkflowEntry(harness).data;
     assert.equal(persisted.currentTaskId, "first");
     assert.equal(persisted.tasks[0].status, "in_progress");
   });

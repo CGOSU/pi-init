@@ -14,7 +14,7 @@ import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts"
 import { formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
 import { attachWorkflowPresentation } from "../extensions/workflow-presentation.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
-import { workflowMessageIdentity } from "./support/workflow-fixtures.js";
+import { workflowMessageIdentity, latestWorkflow } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 
 function createCompletedWorkflow() {
@@ -75,8 +75,7 @@ test("workflow acknowledge 只收起当前告警、按 branch/reload 重新提�
   }];
   const harness = createExtensionHarness(branch, { trusted: true });
   await emitExtensionEvent(harness, "session_start");
-  const currentWorkflow = () => harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow")?.data;
-  const workflowBeforeAck = structuredClone(currentWorkflow());
+  const workflowBeforeAck = structuredClone(latestWorkflow(harness));
   const branchLengthBeforeAck = harness.branch.length;
   assert.match(latestActivityStatus(harness), /已暂停/);
   assert.doesNotMatch(latestActivityStatus(harness), /待处理：/);
@@ -87,7 +86,7 @@ test("workflow acknowledge 只收起当前告警、按 branch/reload 重新提�
   });
   await harness.commands.get("pi-init").handler("workflow acknowledge", harness.context);
 
-  assert.deepEqual(currentWorkflow(), workflowBeforeAck);
+  assert.deepEqual(latestWorkflow(harness), workflowBeforeAck);
   assert.equal(harness.branch.length, branchLengthBeforeAck);
   assert.match(latestActivityStatus(harness), /待处理：已暂停工作流/);
   assert.match(latestActivityStatus(harness), /本次 R2k/);
@@ -100,7 +99,7 @@ test("workflow acknowledge 只收起当前告警、按 branch/reload 重新提�
   assert.equal(harness.commands.has("fast"), false);
   assert.equal(harness.sentUserMessages.length, 0);
   assert.equal(harness.branch.length, statusBeforeFast);
-  assert.equal(currentWorkflow().status, "paused");
+  assert.equal(latestWorkflow(harness).status, "paused");
 
   await emitExtensionEvent(harness, "session_tree", { oldLeafId: "branch-a", newLeafId: "branch-b" });
   assert.match(latestActivityStatus(harness), /已暂停/);

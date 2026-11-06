@@ -1,9 +1,10 @@
+import { isRecord as object } from "../../src/record-guard.js";
+
 // Offline observations only: never interpret tool text, commands or arguments.
 const LIMITS = Object.freeze({ records: 100000, sessions: 64, tools: 64, references: 8, nestedCalls: 256 });
 const PI_TOOLS = new Set(["task_workflow", "switch_role", "session_handoff"]);
 const USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
 const ENTRY_TYPES = new Set(["message", "custom", "custom_message", "thinking_level_change", "model_change", "usage", "compaction", "branch_summary", "label", "session_info", "context_edit"]);
-const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const identifier = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:|-]{0,255}$/.test(value) ? value : undefined;
 const toolName = value => typeof value === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/.test(value) ? value : undefined;
 const validNumber = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;

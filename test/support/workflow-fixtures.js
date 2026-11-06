@@ -9,4 +9,12 @@ const markWorkflowTaskStarted = (state, taskId, now) => markWorkflowTaskStartedR
 
 const workflowMessageIdentity = (harness, customType = "pi-init-workflow-task") => harness.sentMessages.findLast(({ message }) => message.customType === customType)?.message.details;
 
-export { createWorkflowState, markWorkflowTaskStarted, workflowMessageIdentity };
+function latestWorkflowEntry(harness) {
+  return harness.branch.findLast((entry) => entry.type === "custom" && entry.customType === "pi-init-workflow");
+}
+
+function latestWorkflow(harness) {
+  return latestWorkflowEntry(harness)?.data;
+}
+
+export { createWorkflowState, markWorkflowTaskStarted, workflowMessageIdentity, latestWorkflowEntry, latestWorkflow };

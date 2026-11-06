@@ -4,6 +4,7 @@ import { createReadStream, mkdirSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { numberValue } from "./numbers.js";
 
 const DUCKDB_PACKAGE = "@duckdb/node-api";
 const DUCKDB_VERSION = "1.5.5-r.3";
@@ -175,7 +176,7 @@ function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
   const value = usageForEntry(entry);
   if (!date || !value?.usage) return undefined;
   const usage = value.usage;
-  const fields = Object.fromEntries(FIELDS.map((field) => [field, Number(usage[field]) || 0]));
+  const fields = Object.fromEntries(FIELDS.map((field) => [field, numberValue(usage[field])]));
   return {
     sourceFile,
     entryKey: stableEntryKey(entry, lineNumber),
@@ -184,7 +185,7 @@ function parseUsageEvent(entry, sourceFile, lineNumber, cwd) {
     model: value.model,
     ...fields,
     tokens: FIELDS.reduce((total, field) => total + fields[field], 0),
-    cost: Number(usage.cost?.total) || 0,
+    cost: numberValue(usage.cost?.total),
     costFromProvider: usage.cost?.totalFromProvider === true &&
       typeof usage.cost.total === "number" && Number.isFinite(usage.cost.total) && usage.cost.total >= 0,
     cwd,

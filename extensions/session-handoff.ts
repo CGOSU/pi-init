@@ -1,3 +1,4 @@
+import { textOf } from "../src/error-utils.ts";
 import { randomUUID } from "node:crypto";
 import type { ToolSettlement } from "./general-tool-settlement.ts";
 import { registerGeneralSessionHandoff } from "./general-session-handoff.ts";
@@ -14,16 +15,16 @@ import { readTaskSourceObservation, contentText } from "./task-memory-runtime.ts
 import { parseTaskMemoryIdentity } from "../src/task-memory.ts";
 import type { TaskEvidence } from "./task-memory-runtime.ts";
 import { showCapacityHandoffHint } from "./role-context-capacity.ts";
+import { getSessionEntries } from "./session-entries.ts";
 
 type Outgoing = { version: 1; kind: "outgoing"; id: string; workflowId: string; sourceSessionId: string; phase: "prepared" | "cancelled"; contentHash: string; packetHash: string };
 type Incoming = { version: 1; kind: "incoming"; id: string; workflowId: string; sourceSessionId: string; targetSessionId: string; sourceFile: string; projectRoot: string; contentHash: string; packetHash: string; packet: SessionHandoffPacket };
 type HandoffReadiness = { ok: true } | { ok: false; code: string; message: string };
-function records(ctx: ExtensionContext) { return ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch(); }
 export function outgoingTransfer(ctx: ExtensionContext, workflow: WorkflowState | undefined) {
   const general = generalOutgoingTransfer(ctx);
   if (general) return general;
   if (!workflow) return undefined;
-  const entry = records(ctx).findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
+  const entry = getSessionEntries(ctx).findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
     && isRecord(entry.data) && entry.data.kind === "outgoing" && entry.data.workflowId === workflow.workflowId
     && entry.data.sourceSessionId === ctx.sessionManager.getSessionId());
   return entry?.type === "custom" && isRecord(entry.data) && entry.data.phase === "prepared" ? entry.data as unknown as Outgoing : undefined;
@@ -158,7 +159,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       const action = state.workflowState?.pauseReason === SESSION_HANDOFF_IMPORTED || !state.workflowState
         ? "修复原因后在此会话执行 /pi-init workflow fresh 重新核对，不重复新建"
         : "请查看当前工作流状态并按原恢复流程处理，不重复创建session";
-      ctx.ui.notify("交接未确认，旧队列保持冻结；" + action + "：" + (error instanceof Error ? error.message : String(error)), "warning");
+      ctx.ui.notify("交接未确认，旧队列保持冻结；" + action + "：" + (textOf(error)), "warning");
     } finally { activating = false; }
   }
   pi.on("message_end", async (event, ctx) => {
@@ -169,7 +170,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
   async function fresh(ctx: ExtensionCommandContext) {
     const unfinished = state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status);
     // A historical import does not own future ordinary handoffs after that workflow has ended.
-    const workflowImport = !state.workflowState && records(ctx).some(e => e.type === "custom" && e.customType === SESSION_HANDOFF_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
+    const workflowImport = !state.workflowState && getSessionEntries(ctx).some(e => e.type === "custom" && e.customType === SESSION_HANDOFF_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
     if (generalTransfer.blocked(ctx) || (!unfinished && !workflowImport)) { await generalTransfer.fresh(ctx); return; }
     await workflowFresh(ctx);
   }
