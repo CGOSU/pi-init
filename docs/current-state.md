@@ -30,7 +30,7 @@
 
 - 新AGENTS只记录项目定位、目录职责、环境、命令、项目具体约束与记忆位置；初始化只补缺失，已有AGENTS、记忆、角色配置及符号链接均保留，独占创建防止竞态覆盖，无变更不reload。
 - 公共执行规则/角色职责由pi-init包维护，每回合加载固定公共section和当前角色section，切角替换而不叠加旧职责；不改写项目AGENTS。Clean Code细则归包内references，不再生成项目副本。
-- 托管模板同步引擎、基线状态生成和同步菜单已退役，旧sync命令只提示；旧托管块、状态文件和自定义clean-code原样保留，维护者确认后自行整理。升级插件并reload更新插件规则，项目具体约束及原安全门保持有效。
+- 托管模板同步引擎、基线状态生成、同步菜单及旧sync命令入口均已移除；旧托管块、状态文件和自定义clean-code原样保留，维护者确认后自行整理。升级插件并reload更新插件规则，项目具体约束及原安全门保持有效。
 - 轻量路径、短结果直返、结构候选不等于必审等规则集中在公共Skill；不再要求每个项目同步这些通用描述。
 
 ## 交付粒度与无效往返收敛
@@ -128,7 +128,6 @@
 - `/pi-init coordination reopen <reportId> <reason>` 仅重开最新且明确 `block` 的证据审阅：追加关联原报告、阻塞审阅与理由的重开记录，持久化成功后才签发新的 architect 复审 handoff；原取证/审阅记录和来源版本保留，不自动接受证据、不派发开发。协调状态 schema v2 迁移读取 v1；项目不可信、Agent 忙、恢复异常或存在未完成/结果未知 handoff 时 fail-closed，旧 handoff 身份不复用。验证及真实 Pi/TUI 未覆盖项见 [`docs/session-log.md`](session-log.md)。
 
 - Local 工作流的 `complete`/`block` 到达时若交接仍为 `queued`，仅在完整 handoff 身份匹配、活动 session branch 含精确交接消息且当前角色匹配任务角色时，先持久化补记 `executing` 再进行严格验收；身份、branch 或角色不符仍 fail-closed，未知结果仍须显式核对和 retry。身份校验失败以模型可见 JSON 给出 code、差异字段、白名单 expected/received 与下一步；`status`、任务提示和重规划提示展示通过共享构造器生成的可复制 JSON 身份，`status` 保持只读。`task_workflow` TUI 将这些失败诊断按类别、代码、原因、白名单身份差异和下一步分段显示；普通错误与无法解析的诊断仍保留原始错误内容，不改变模型错误 JSON 或失败守卫。该路径不改变恢复时 queued 结果未知的策略，也不确认原始 stale identity 故障的字段根因。
-- 控制中心同步当前项目发生实际变更并执行 `ctx.reload()` 后立即结束旧控制中心调用；同步结果通过 `reloaded` 标记向调用方表达，避免 reload 后继续使用失效的旧 `ctx`。无变更或有冲突时不 reload，菜单仍可继续。具体决策与验证见 [`docs/decisions.md`](decisions.md) 和 [`docs/session-log.md`](session-log.md)。
 - pi-init 工作流固定为当前主会话内 local 顺序执行；缺省 executor 与旧 `workflowExecutor: "local"` 配置仍可读，执行器不再是控制中心或 schema 选项。`subagents`、`subtask`、`collaboration` 等未知值明确拒绝。当前状态持久化在 `pi.appendEntry` 正常返回后才更新内存状态；append 异常保留旧状态并停止本次调度。`architect` 不得作为执行任务角色，plan/replan 校验拒绝该角色；旧活动计划含 architect 执行任务时不持久化自动修复或派发，仅保留恢复错误供检查；用户显式取消后可另建计划。后续交接身份与恢复边界见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
 - 工作流暂停通知和 block 工具结果使用分区摘要，突出真实原因及恢复建议；纯文本与 TUI 从同一类型化暂停视图独立渲染，不解析已格式化文案。暂停结果不以成功标记呈现，展开后显示完整任务与身份技术状态。未知结果仍须先核对外部副作用，再显式确认 retry；block 工具不另发重复通知。
 - 工作流工具 `AbortSignal` 只中止当前工具操作；业务取消需显式持久化 `cancelled`，只有持久化成功才退休所属续跑，且不等同于宿主压缩终止。`acknowledge` 是当前来源匹配告警的易失展示确认，不改变状态/守卫，身份变化、branch 切换及 reload 会重新提醒。`discard-recovery` 仅对明确不可恢复且无可读/待持久化状态的原记录，在可信项目、Agent 空闲、当前 branch 唯一且最新的原 entry ID、session/branch/error 精确匹配并确认未知副作用后，追加版本化引用处置；它不构成任务成功或取消。安全边界见 [`docs/decisions.md`](decisions.md)，用户用法见 [`README.md`](../README.md)。
