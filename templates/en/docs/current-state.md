@@ -1,6 +1,6 @@
 # Current State
 
-Keep the “Last Updated” list in reverse chronological order. The current-state sections describe the present situation and are not a timeline.
+Keep only current facts and unfinished work that later work will need. Do not append an update history.
 
 ## Project
 
@@ -19,7 +19,3 @@ Keep the “Last Updated” list in reverse chronological order. The current-sta
 
 - Document the technology stack and current goals.
 - Confirm the test command: `{{TEST_COMMAND}}`
-
-## Last Updated
-
-- No entries yet. Update after completing the first task.

@@ -1,11 +1,11 @@
 # Session Log
 
-Record completed work, actual verification, and remaining issues in reverse chronological order, with the newest entry first. Insert new entries at the corresponding date position. Do not record secrets or unverified results.
+Keep only investigation or verification evidence that later work will need and that is difficult to reconstruct, in reverse chronological order. An entry is not required for every task. Do not record secrets or unverified results; see the [collaboration guide](../AGENTS.md#project-memory-locations) for the maintenance policy.
 
 ## Entry Format
 
-Each entry should include its date, completed work, actual verification, and remaining issues.
+Include the date, investigation findings or actual verification evidence, scope of applicability, and unresolved issues as needed. Link to existing sources directly.
 
 ## Sessions
 
-None yet. Add the first entry after completing a task.
+No records requiring long-term retention yet.

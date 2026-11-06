@@ -24,10 +24,12 @@ Maintainers add business, API, data, safety and Git/release requirements here, i
 
 ## Project Memory Locations
 
-- `docs/current-state.md`: current facts and unfinished work.
-- `docs/decisions.md`: consequential project decisions.
-- `docs/session-log.md`: completed work and actual verification.
-- `docs/pitfalls.md`: recurring project-specific issues.
+Update only when later work will need the information. Put routine completion notes and verification results in the delivery response or commit message; a separate session log entry is not required. Prefer revising or merging existing entries. Maintain each fact in one place and link to that source when needed.
+
+- `docs/current-state.md`: necessary current facts and unfinished work, without an update history.
+- `docs/decisions.md`: consequential choices and rationale that affect future implementation.
+- `docs/session-log.md`: investigation or verification evidence that later work will need and that is difficult to reconstruct.
+- `docs/pitfalls.md`: non-obvious, recurring issues with useful prevention guidance.
 
 ## Plugin Policy Source
 
