@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-06：为项目运行时补充通用能力复用约束
+
+- 完成：按用户明确的运行时范围更新包内公共规则，具体取舍见[设计决策](decisions.md#2026-11-06通用能力先调查复用方案再决定自行实现)。既有加载器读取公共正文并注入pi_init_policy，无需另改运行时代码；未修改本仓库AGENTS、各项目规则或初始化模板。
+- 实际验证：`npm test -- test/runtime-routing-context.test.js` **5/5通过**；通过一次性Node探针调用真实beforeAgentStart加载函数，核对无指定角色及三种标准角色均收到完整三条新增规则，项目自有section保持不变；独立静态复核确认加载来源与规则边界。未新增文案断言测试，未运行全量、类型检查或构建。
+- 校验限制：`python3 /Users/cgosu/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/pi-init-role-routing` 因环境缺少PyYAML退出1；未安装额外依赖，改为人工核对未变的frontmatter与正文结构，并以上述实际加载核对确认可读性。
+- 生效边界：规则属于模型指令约束，不是依赖选型的硬拦截；本轮未安装/同步本机Pi副本、未reload或push，现有实例需加载更新后的包才会收到规则，实际遵循效果仍需后续使用观察。
+
 ### 2026-11-06：按行为等价性分组合并重复实现
 
 - 在 `codex/merge-equivalent-implementations` 分支先比对来源、边界和调用方，再逐组保留唯一实现；公开入口、独立安装路径及有细微差异的业务逻辑继续保留。合并清单、调用索引与净行数统一见[审计报告](duplication-audit.md)。
