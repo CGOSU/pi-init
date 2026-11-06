@@ -23,6 +23,10 @@ Maintainers describe important directories, module responsibilities and project-
 - Only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then a Chinese-language commit may be created automatically. `git push` still requires explicit user authorization.
 - Use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
 - After the whole task is complete and applicable checks pass, automatically create a Chinese-language commit by default, containing only changes clearly attributable to that task. Pause and explain if existing or staged changes cannot be safely separated; do not create an empty commit when nothing changed. Follow any explicit user or project override. `git push` requires explicit user authorization.
+- For JS/TS projects without a specified package manager or established toolchain, default to pnpm. Use the corresponding pnpm commands for dependency installation, scripts, and tool execution.
+- For existing projects, first check `package.json`'s `packageManager`, lockfiles, and project commands. Resolve conflicting conventions before proceeding; do not migrate or mix package managers without authorization.
+- In pnpm projects, do not introduce another package manager's lockfile, such as `package-lock.json`, `npm-shrinkwrap.json`, or `yarn.lock`.
+- If pnpm is unavailable, check the environment and executable entry point instead of silently falling back to npm/npx.
 
 Maintainers add other business, API, data, safety and Git/release requirements here, including paths to any local standards.
 

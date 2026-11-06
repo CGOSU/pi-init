@@ -23,6 +23,10 @@
 - 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后可自动创建中文 commit；push 仍须用户明确授权。
 - 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
 - 整项任务完成并通过适用检查后，默认自动创建中文 commit，仅包含明确归属于本任务的改动；若已有或暂存改动无法安全区分，暂停提交并说明，无改动不创建空提交。用户或项目另有明确约定时遵循其约定；push 必须得到用户明确授权。
+- JS/TS项目未指定包管理器且没有既定工具链时，默认使用pnpm；依赖安装、脚本运行和工具执行使用对应的pnpm命令。
+- 已有项目先核对 `package.json` 的 `packageManager`、锁文件和项目命令；存在冲突先查明，不擅自迁移或混用包管理器。
+- 使用pnpm的项目不新增 `package-lock.json`、`npm-shrinkwrap.json` 或 `yarn.lock` 等其他包管理器的锁文件。
+- pnpm不可用时先核实环境和执行入口，不静默退回npm/npx。
 
 其他业务、接口、数据、安全及 Git/发布约定由维护者补充；如已有本地规范，注明其路径。
 

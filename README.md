@@ -35,6 +35,8 @@ pi --no-extensions -e ./extensions/index.ts
 
 默认中英文模板面向 CGOSU 项目，包含知识库、仓库 Git 身份及任务完成后默认中文提交的约定，push 仍需明确授权。其他团队使用前应调整这些项目约定。
 
+JS/TS项目无既定工具链时默认使用pnpm。快速/高级初始化推断测试命令时，优先使用 `package.json` 的 `packageManager`，其次识别已有锁文件（包含npm的 `package-lock.json` 和 `npm-shrinkwrap.json`），没有这些标记才采用pnpm。只为实际存在的 `test`、`check` 或 `lint` 脚本生成命令，用户明确填写的命令优先；不安装工具或转换锁文件。
+
 旧 `/pi-init sync` 命令及托管模板同步机制已移除。项目文档由维护者维护；公共 Skill 与角色规则随插件更新，通过 `/reload` 或重启生效，不会自动覆盖已有项目文档。
 
 ## 常用命令
