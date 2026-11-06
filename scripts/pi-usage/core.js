@@ -15,9 +15,7 @@ export const MODEL_BAR_WIDTH = 24;
 export const MODEL_BAR_SEGMENTS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 export const MODEL_BAR_RESOLUTION = MODEL_BAR_SEGMENTS.length - 1;
 const TOKEN_SPEED_CUSTOM_TYPE = "pi-token-speed";
-const USAGE_SCHEMA_VERSION = 2;
 const CHECKPOINT_TAIL_BYTES = 64 * 1024;
-const APPENDER_BATCH_SIZE = 1024;
 
 
 export function summarizeCostSource(rows) {

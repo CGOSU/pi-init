@@ -140,58 +140,13 @@ export function formatWorkflowStatusSummaryText(view: WorkflowStatusView) {
   return lines.join("\n");
 }
 
-type WorkflowGoalTreeNode = {
-  workflowId: string;
-  planSummary: string;
-  status: Extract<WorkflowStatusView, { kind: "workflow" }>["status"];
-  completed: number;
-  total: number;
-  parentTaskId?: string;
-  activePath: boolean;
-  current: boolean;
-  children: WorkflowGoalTreeNode[];
-};
-
-function workflowGoalTreeRoot(view: Extract<WorkflowStatusView, { kind: "workflow" }>): WorkflowGoalTreeNode {
-  return { workflowId: view.identity.action.workflowId, planSummary: view.planSummary, status: view.status, completed: view.progress.completed, total: view.progress.total, activePath: true, current: true, children: [] };
-}
-
-/** Compact visible tree of active goals plus completed/cancelled child goals. */
+/** Current workflow plus goal groups sharing its execution queue. */
 export function formatWorkflowGoalTreeText(view: WorkflowStatusView) {
   if (view.kind !== "workflow") return "";
-  const root = workflowGoalTreeRoot(view);
-  if (!root) return "目标树：无";
-  const lines = ["目标树："];
-  const append = (node: WorkflowGoalTreeNode, prefix: string, last: boolean, isRoot: boolean) => {
-    const status = node.current
-      ? `当前 · ${workflowStatusActivityLabel(view.activity)}`
-      : node.activePath
-        ? "等待子目标"
-        : node.status === "completed"
-          ? "已完成"
-          : node.status === "cancelled"
-            ? "已取消"
-            : node.status === "paused"
-              ? "已暂停"
-              : node.status === "replanning"
-                ? "等待重规划"
-                : "进行中";
-    const marker = node.current
-      ? "●"
-      : node.activePath
-        ? "⏸"
-        : node.status === "completed"
-          ? "✓"
-          : node.status === "cancelled"
-            ? "×"
-            : "○";
-    const connector = isRoot ? "└──" : last ? "└──" : "├──";
-    const parentTask = node.parentTaskId ? ` · 父任务 ${node.parentTaskId}` : "";
-    lines.push(`${prefix}${connector} ${marker} ${node.planSummary} · ${status} · 已完成 ${node.completed}/${node.total}${parentTask}`);
-    const childPrefix = isRoot ? "    " : `${prefix}${last ? "    " : "│   "}`;
-    node.children.forEach((child, index) => append(child, childPrefix, index === node.children.length - 1, false));
-  };
-  append(root, "", true, true);
+  const lines = [
+    "目标树：",
+    `└── ● ${view.planSummary} · 当前 · ${workflowStatusActivityLabel(view.activity)} · 已完成 ${view.progress.completed}/${view.progress.total}`,
+  ];
   if (view.goals?.length) {
     lines.push("目标归属（共享队列，不挂起父目标）：");
     const appendGroup = (parentId: string, depth: number) => {
