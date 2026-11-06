@@ -257,8 +257,8 @@ test("registered extension records SDK results and binds checkpoint without inje
       const saved = await tool.execute("save-memory", params, undefined, undefined, h.context);
       assert.equal(saved.details.taskMemory.memory.revision, 1);
       let messages = [{ role: "user", content: "finish patch", timestamp: 0 }, anchor, message, result];
-      for (const handler of h.handlers.get("context") ?? []) {
-        const projected = await handler({ type: "context", messages }, h.context);
+      for (const handler of h.handlers.get("context_with_system") ?? []) {
+        const projected = await handler({ type: "context_with_system", messages }, h.context);
         if (projected?.messages) messages = projected.messages;
       }
       assert.equal(messages.filter(item => item.customType === TASK_MEMORY_MESSAGE).length, 0);

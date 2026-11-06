@@ -55,7 +55,7 @@ test("context preserves all users/system and whole completing call group plus su
   const messages = [{ role: "system", content: "host" }, { role: "user", content: "goal" }, call("old"), result("old"),
     call("sibling", "complete"), result("sibling"), result("complete"), { role: "custom", content: "suffix" }];
   const before = structuredClone(messages);
-  const out = f.emit("context", { messages }).messages;
+  const out = f.emit("context_with_system", { messages }).messages;
   assert.deepEqual(out.slice(0, -1), [messages[0], messages[1], ...messages.slice(4)]);
   assert.ok(hasCompleteToolPairs(out.filter(m => m.role !== "system")));
   assert.match(out.at(-1).content, /Do not re-investigate/);
@@ -66,7 +66,7 @@ test("unsafe or missing call boundary keeps original context intact", () => {
   for (const messages of [[call("other"), result("other")], [call("complete", "missing"), result("complete")], [result("orphan"), call("complete"), result("complete")]]) {
     const f = fixture();
     f.controller.prepare("complete");
-    const out = f.emit("context", { messages }).messages;
+    const out = f.emit("context_with_system", { messages }).messages;
     // An orphan before a safe completing group may be removed, never introduced.
     if (messages[0].role !== "toolResult") assert.deepEqual(out.slice(0, -1), messages);
     else assert.ok(hasCompleteToolPairs(out));
@@ -156,7 +156,7 @@ test("model basis and fallback share the immutable completion renderer", async (
   const report = formatWorkflowCompletionText(createWorkflowCompletionView(f.state.workflowState));
   f.controller.prepare("complete");
   f.state.workflowState.tasks[0].completionSummary = "Later mutation";
-  const basis = f.emit("context", { messages: [] }).messages.at(-1).content;
+  const basis = f.emit("context_with_system", { messages: [] }).messages.at(-1).content;
   assert.ok(basis.endsWith(report));
   await f.emit("agent_settled");
   assert.equal(f.sent[0][0].content, report);

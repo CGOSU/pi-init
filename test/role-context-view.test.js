@@ -233,7 +233,7 @@ function callContextHandler(state, harness, messages) {
   const pi = { on(name, handler) { handlers.set(name, handler); } };
   const roleContextView = createRoleContextView(state);
   createRoleRecovery(pi, state, roleContextView.context);
-  return handlers.get("context")({ type: "context", messages }, harness.context);
+  return handlers.get("context_with_system")({ type: "context_with_system", messages }, harness.context);
 }
 
 test("public context callback isolates the current role window while retaining new instructions, failures, and tool pairs", () => {
@@ -285,7 +285,7 @@ test("public context callback isolates the current role window while retaining n
   const handlers = new Map();
   const pi = { on(name, handler) { handlers.set(name, handler); } };
   createRoleRecovery(pi, state, createRoleContextView(state).context);
-  const result = handlers.get("context")({ type: "context", messages }, harness.context);
+  const result = handlers.get("context_with_system")({ type: "context_with_system", messages }, harness.context);
 
   assert.ok(result);
   assert.equal(result.messages.some((message) => message.content === "old unrelated request"), true,
@@ -308,10 +308,10 @@ test("public context callback isolates the current role window while retaining n
   assert.deepEqual(messages, originalMessages, "the context hook must not mutate Pi's input array or session messages");
   assert.deepEqual(harness.branch, originalBranch, "context filtering must not rewrite branch entries");
   assert.equal(result.messages.some((message) => message.role === "system"), false,
-    "Pi owns system/tool state; context receives only conversation messages");
+    "a conversation-only input must not invent host system messages");
 });
 
-test("unknown boundaries, damaged tool pairs, and system messages fail open with explicit diagnostics", () => {
+test("unknown boundaries and damaged pairs fail open while host system messages remain untouched", () => {
   const { state, harness, handoffMessage } = makeWorkflowContextFixture();
   const ordinaryPrefix = [{ role: "user", content: "keep all input", timestamp: 1 }];
   const absentAnchor = callContextHandler(state, harness, ordinaryPrefix);
@@ -328,9 +328,10 @@ test("unknown boundaries, damaged tool pairs, and system messages fail open with
 
   const systemInput = [{ role: "system", content: "Pi-managed prompt", timestamp: 0 }, handoffMessage];
   const systemResult = callContextHandler(state, harness, systemInput);
-  assert.deepEqual(systemResult.messages.slice(0, systemInput.length), systemInput);
-  assert.ok(systemResult.messages.some((message) => message.role === "system"));
-  assert.equal(systemResult.messages.at(-1).details.code, "ROLE_CONTEXT_VIEW_SYSTEM_MESSAGE_PRESENT");
+  assert.equal(systemResult, undefined, "the public hook separates host system messages from the unchanged conversation");
+  const unexpectedSystem = createRoleContextView(state).context({ type: "context", messages: systemInput }, harness.context);
+  assert.deepEqual(unexpectedSystem.messages.slice(0, systemInput.length), systemInput);
+  assert.equal(unexpectedSystem.messages.at(-1).details.code, "ROLE_CONTEXT_VIEW_SYSTEM_MESSAGE_PRESENT");
 
   const compactState = structuredClone(state);
   compactState.roleCompactionInFlight = true;

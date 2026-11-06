@@ -2,7 +2,7 @@
 
 ## 范围与结论
 
-本次只读核对用户指定的 `2026-11-05T12-52-56-129Z_01a1abc4-fcc1-7498-a898-80d13fe2a266.jsonl`、对应项目运行诊断及 pi-init 实现/提交。所有时间均为北京时间。
+本报告先记录对用户指定的 `2026-11-05T12-52-56-129Z_01a1abc4-fcc1-7498-a898-80d13fe2a266.jsonl`、对应项目运行诊断及 pi-init 实现/提交的只读调查；用户随后授权的修复另见[后续修复](#后续修复)。所有时间均为北京时间。
 
 会话仍在追加，本报告固定采用前 **4,851 行**，截至 **2026-11-06 15:27:05.712**；这段原始字节长度为 **104,205,146**，SHA-256 为 `5f6b1bc2344d45722be3ab866e42550f6d872b7c80326e7ffc68dbc15e7cd5e9`。统计覆盖该文件范围内全部实际请求记录，不把历史分支删除或上下文裁剪当作请求未发生。
 
@@ -47,7 +47,7 @@
 
 实际安装的 Pi SDK 为 1.5.0。该版本 `openai-codex/gpt-6.1-sol` 模型目录显式设置 `supportsMidConvoSystemMessages=true`，不能将问题归因为模型默认不支持中途 system 消息。
 
-但普通 `context` 扩展处理有另一条路径：`pi-coding-agent/dist/core/extensions/runner.js` 第 1,013 行在调用 handler 前过滤 system；handler 返回改动后的消息列表时，第 101 行的 `restoreSystemMessages` 会通过 `getCurrentSystemMessage` 将历史 system sections 合并成开头一条 system。[pi-init 恢复处理](../extensions/role-recovery.ts)第 138—157 行追加恢复提示，第 191 行注册普通 context handler，因此会触发该合并；[路由上下文](../extensions/runtime-routing-context.ts)第 78—93 行又通过 sections 提供动态 `pi_init_runtime`。
+但普通 `context` 扩展处理有另一条路径：`pi-coding-agent/dist/core/extensions/runner.js` 第 1,013 行在调用 handler 前过滤 system；handler 返回改动后的消息列表时，第 101 行的 `restoreSystemMessages` 会通过 `getCurrentSystemMessage` 将历史 system sections 合并成开头一条 system。修复前源码（`4defb75`）的 `extensions/role-recovery.ts` 第 138—157 行追加恢复提示，第 191 行注册普通 context handler，因此会触发该合并；[路由上下文](../extensions/runtime-routing-context.ts)第 78—93 行又通过 sections 提供动态 `pi_init_runtime`。
 
 在实际安装 SDK、真实模型目录、真实 pi-init `createRoleRecovery` 及 Responses converter 上做了零网络离线复现：
 
@@ -59,10 +59,22 @@
 
 这个集成机制并非 11 月 6 日新引入：动态 runtime sections 来自 `ae617d2`（9 月 20 日），普通 context 注册来自 `6369680`（10 月 12 日），静态 policy 注入来自 `d3553fe`（10 月 24 日）。[SDK v0.87.0 发布说明](https://github.com/earendil-works/pi/releases/tag/v0.87.0)已说明普通 context 隐藏 system，并由宿主恢复 prompt/tools，同时提供 `context_with_system`。11 月 6 日的 `2434a27` 对缓存相关文件仅归并等价 guard/helper；`31e07be` 的规则更新确实在本会话重载时改变 policy，但无法据此断言它新引入了持续缓存故障。
 
-## 验证与边界
+## 调查阶段验证与边界
 
 - 已执行只读 JSONL 统计、告警时间与用量逐项对齐、运行身份及原始 usage 核对、相关提交与提示 section 差异检查；源会话和活动实例未修改。
 - 已执行上述实际安装 SDK 与恢复 handler 的离线复现，4 项断言通过，未发送模型请求。
 - 本次没有行为修改，不运行全量测试、类型检查或构建，也没有调用模型做在线 A/B。
 - 尚未确定连续低命中需要多轮才恢复的具体原因；上下文诊断不完整，不能将“系统字段相同”扩大为完整请求前缀相同。
 - 当前调查不决定修改恢复守卫或自动重试，不安装/同步 Pi 副本，不 reload 活动会话，不推送。
+
+## 后续修复
+
+2026 年 11 月 6 日，用户授权修复已复现的 pi-init 上下文集成问题。修复仅消除自身 handler 引起的 system 历史折叠，保留原职责恢复、暂停、工具权限与 token 预算逻辑。
+
+- [职责恢复](../extensions/role-recovery.ts)改用 SDK 的 `context_with_system`。先将非 system 消息交给原有上下文/恢复处理，确有变化才通过[位置恢复函数](../extensions/context-system-messages.ts)重建请求视图；无变化时不替换原上下文。
+- 位置恢复按原顺序和保留下来的原消息位置放回全部 system delta，保留开头指令、工具新增/删除与 section 删除；新增摘要和末尾恢复提示不把历史 system 合并到请求开头，也不改写源 session。
+- [完成报告投影](../extensions/workflow-delivery.ts)沿用已有 system 保留逻辑，改接同一公开事件，避免完成阶段再次触发宿主普通 context 合并。
+
+新增真实 SDK `ExtensionRunner` 回归覆盖恢复提示、末尾 system、有序裁剪/新摘要、无变化路径与完成报告，并核对有效 prompt、工具状态和源历史。修复前失败证据、最终选测及结果复用依据统一见[会话验证记录](session-log.md#2026-11-06保留上下文投影中的system历史边界)。
+
+本轮没有安装/同步本机 Pi 副本或 reload 活动实例，也未调用 Provider。修复后的实际缓存收益尚未验证；其他扩展的前缀修改、模型适配器处理及多轮低命中的其余原因不由本修复保证。

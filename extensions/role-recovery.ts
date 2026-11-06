@@ -8,6 +8,7 @@ import { isWaitingWorkflowBoundary } from "./role-context-waiting.ts";
 import { nextWorkflowAction } from "./workflow-action-policy.ts";
 import { TASK_MEMORY_MESSAGE } from "./task-memory-runtime.ts";
 import type { TaskMemoryRuntime } from "./task-memory-runtime.ts";
+import { restoreSystemMessagePositions } from "./context-system-messages.ts";
 
 export const ROLE_RECOVERY_ENTRY_TYPE = "pi-init-role-recovery";
 export const ROLE_RECOVERY_MESSAGE_TYPE = "pi-init-role-recovery";
@@ -188,7 +189,14 @@ export function createRoleRecovery(
   }
 
   pi.on("session_compact", (event, ctx) => afterCompact(event, ctx));
-  pi.on("context", (event, ctx) => context(event, ctx));
+  pi.on("context_with_system", (event, ctx) => {
+    const conversation = event.messages.filter(message => message.role !== "system");
+    const result = context({ type: "context", messages: conversation }, ctx);
+    if (!result?.messages) return result;
+    if (result.messages.length === conversation.length && result.messages.every((message, index) => message === conversation[index])) return;
+    // Ordinary context handlers make Pi collapse all system deltas into the request header.
+    return { messages: restoreSystemMessagePositions(event.messages, result.messages) };
+  });
   pi.on("tool_call", (event, ctx) => {
     const result = guardToolCall(event);
     if (result?.block) {

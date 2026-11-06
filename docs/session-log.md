@@ -2,6 +2,14 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-06：保留上下文投影中的system历史边界
+
+- 完成：按用户授权修复调查已复现的问题，职责恢复与完成报告使用SDK公开的保留system事件，原上下文处理和恢复守卫继续复用。具体变化及生效限制统一见[缓存审计后续修复](flclash-cache-audit-2026-11-06.md#后续修复)；未改写此前只读调查的历史结论。
+- 失败复现：新增真实SDK `ExtensionRunner` 集成回归，修复前 **1通过、3失败**，修复后 **4/4通过**；覆盖system delta顺序、工具新增/删除、section删除、源历史不变及无变化路径。
+- 相关选测：执行 `npm test -- test/role-recovery.test.js test/role-context-view.test.js test/role-context-waiting.test.js test/workflow-delivery.test.js test/role-context-budget.test.js test/role-context-capacity.test.js test/task-memory-runtime.test.js`，**97项中96通过、1失败**。唯一失败是旧公开hook对system消息的预期不再适用；保留内部view防御断言并调整新公开hook预期后，执行 `npm test -- test/context-system-preservation.test.js test/role-context-view.test.js`，**28/28通过**。其余73项对应源码、测试和配置未再变化，复用前批通过结果；最终共 **101项不重复的相关回归通过**，不把重叠选测重复累计。
+- 其他检查：`npm run typecheck` 与 `git diff --check` 退出0；未运行全量、模型请求或在线缓存A/B。
+- 边界：未安装/同步本机Pi副本、reload活动实例或push。本修复只消除pi-init自身触发的system折叠，不承诺服务端缓存命中或消除其他扩展的前缀变化。
+
 ### 2026-11-06：调查FlClash会话缓存Miss与近期改动的关系
 
 - 完成：只读对齐用户指定session的请求用量、告警、system section变化与实际实例加载身份；固定审计范围、金额口径、诊断证据和归因限制统一维护在[缓存审计记录](flclash-cache-audit-2026-11-06.md)。

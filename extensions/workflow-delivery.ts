@@ -41,7 +41,7 @@ export function createWorkflowDelivery(pi: ExtensionAPI, state: ExtensionRuntime
     trace(ctx, "prepared");
   }
 
-  pi.on("context", (event, ctx) => {
+  pi.on("context_with_system", (event, ctx) => {
     const active = current(ctx);
     if (!active || active.delivered) return;
     const original = event.messages;

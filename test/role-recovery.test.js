@@ -119,7 +119,13 @@ test("上下文压缩后必须恢复职责才能执行写入工具", async () =>
   assert.equal(harness.branch.at(-1).customType, ROLE_RECOVERY_ENTRY_TYPE);
   assert.equal(harness.entries.at(-1).data.status, "pending");
 
-  const context = getHandler(harness, "context");
+  const context = (event, ctx) => {
+    let messages = event.messages;
+    for (const handler of harness.handlers.get("context_with_system") ?? []) {
+      messages = handler({ type: "context_with_system", messages }, ctx)?.messages ?? messages;
+    }
+    return { messages };
+  };
   const recoveryContext = context({
     messages: [{ role: "user", content: "继续任务", timestamp: Date.now() }],
   }, harness.context);

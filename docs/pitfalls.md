@@ -5,7 +5,8 @@
 ### 2026-11-06：追加system section不保证Provider请求前缀不变
 
 - 实际安装SDK与恢复handler的离线复现确认：普通context处理后的宿主恢复步骤可以把历史system delta合并到开头，即使模型支持中途system消息，也不能只凭session中“追加记录”判断缓存前缀稳定。具体版本、调用路径、命令与会话证据统一见[缓存审计的机制说明](flclash-cache-audit-2026-11-06.md#已复现的前缀变化机制)。
-- 归因限制：system字段稳定不代表完整context稳定；有界指纹的`unknown-partial`不能当作相等。连续低命中的完整原因尚未确认，本次未修改上下文或恢复行为。
+- 后续已按用户授权修复pi-init自身的投影接线，保留原system历史顺序；实现及未部署边界见[后续修复](flclash-cache-audit-2026-11-06.md#后续修复)。
+- 归因限制：system字段稳定不代表完整context稳定；有界指纹的`unknown-partial`不能当作相等。连续低命中的完整原因尚未确认，不将本修复视为已验证的Provider缓存收益。
 
 ### 2026-11-06：未complete不等于停滞，无进展不等于副作用未知
 
