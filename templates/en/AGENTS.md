@@ -20,7 +20,10 @@ Maintainers describe important directories, module responsibilities and project-
 
 ## Project-specific Constraints
 
-Maintainers add business, API, data, safety and Git/release requirements here, including paths to any local standards.
+- Only when a task produces reusable cross-project knowledge, update `https://github.com/CGOSU/knowledge.git`; run `git pull` in its local checkout first, then a Chinese-language commit may be created automatically. `git push` still requires explicit user authorization.
+- Use `git config user.name CGOSU` and `git config user.email dev@cgosu.com` for this repository.
+
+Maintainers add other business, API, data, safety and Git/release requirements here, including paths to any local standards.
 
 ## Project Memory Locations
 

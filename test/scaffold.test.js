@@ -220,16 +220,23 @@ test("exclusive create 保留检查之后出现的文件和悬挂链接", async 
   });
 });
 
-test("project AGENTS contains project context rather than a copy of plugin policy", async () => {
+test("中英文初始化保留知识库与Git身份约定，不复制插件流程", async () => {
   await withTempDirectory(async directory => {
-    await createScaffold(directory, { projectName: "Owned", description: "Project-specific purpose", testCommand: "npm run focused" });
-    const agents = await readFile(path.join(directory, "AGENTS.md"), "utf8");
-    assert.match(agents, /Project-specific purpose/);
-    assert.match(agents, /npm run focused/);
-    assert.match(agents, /项目特有约束/);
-    assert.doesNotMatch(agents, /pi-init:managed|Fast Path|task_workflow|dev@cgosu.com/);
+    for (const language of ["zh-CN", "en"]) {
+      const target = path.join(directory, language);
+      await createScaffold(target, { language, projectName: "Owned", description: "Project-specific purpose", testCommand: "npm run focused" });
+      const agents = await readFile(path.join(target, "AGENTS.md"), "utf8");
+      assert.match(agents, /Project-specific purpose/);
+      assert.match(agents, /npm run focused/);
+      assert.match(agents, language === "en" ? /Project-specific Constraints/ : /项目特有约束/);
+      for (const rule of ["https://github.com/CGOSU/knowledge.git", "git pull", "git config user.name CGOSU", "git config user.email dev@cgosu.com"]) {
+        assert.ok(agents.includes(rule), `${language} 初始化缺少项目约定：${rule}`);
+      }
+      assert.match(agents, language === "en" ? /git push.*explicit user authorization/ : /push.*用户明确授权/);
+      assert.doesNotMatch(agents, /pi-init:managed|Fast Path|task_workflow/);
+      await assert.rejects(readFile(path.join(target, "docs/clean-code.md")), { code: "ENOENT" });
+    }
     const guide = await readFile(path.join(process.cwd(), "skills/pi-init-role-routing/references/clean-code.md"), "utf8");
     assert.match(guide, /Clean Code/);
-    await assert.rejects(readFile(path.join(directory, "docs/clean-code.md")), { code: "ENOENT" });
   });
 });

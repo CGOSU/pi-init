@@ -20,7 +20,10 @@
 
 ## 项目特有约束
 
-由维护者补充业务、接口、数据、安全及 Git/发布约定；如已有本地规范，注明其路径。
+- 仅当任务需要沉淀可复用的跨项目知识时，更新知识库 `https://github.com/CGOSU/knowledge.git`；更新前先在其本地检出中执行 `git pull`，完成后可自动创建中文 commit；push 仍须用户明确授权。
+- 本仓库 Git 身份使用 `git config user.name CGOSU` 和 `git config user.email dev@cgosu.com`。
+
+其他业务、接口、数据、安全及 Git/发布约定由维护者补充；如已有本地规范，注明其路径。
 
 ## 项目记忆位置
 
