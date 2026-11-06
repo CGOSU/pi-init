@@ -61,6 +61,27 @@ async function completedTool(h, { persisted = true, nested = false, childEnds = 
     ...(readOnlyNested ? { nestedCalls: { complete: true, calls: receipts } } : {}) } });
 }
 
+test("停滞暂停仍保留缺失或未收敛工具结果的未知保护", async () => {
+  for (const operation of [{ persisted: false }, { nested: true, childEnds: false }, { isError: true }]) {
+    await withTempDirectory(async cwd => {
+      const h = await fixture(cwd);
+      for (let turn = 0; turn < 2; turn++) {
+        await emitExtensionEvent(h, "agent_end");
+        await emitExtensionEvent(h, "agent_settled");
+        await emitExtensionEvent(h, "agent_start");
+      }
+      const sent = h.sentMessages.length;
+      await completedTool(h, operation);
+      await emitExtensionEvent(h, "agent_end");
+      await emitExtensionEvent(h, "agent_settled");
+      assert.equal(latest(h).pauseReason, "handoff-outcome-unknown");
+      assert.equal(latest(h).tasks[0].outcomeUnknown, true);
+      assert.equal(h.sentMessages.length, sent);
+      await emitExtensionEvent(h, "session_shutdown");
+    });
+  }
+});
+
 test("paired permitted observations after a provider hold preserve continuation and the original attempt", async () => {
   for (const observations of [[
     { name: "task_workflow", input: { action: "status" } },

@@ -305,6 +305,15 @@ export function cancelWorkflow(state: WorkflowState, now = Date.now()): Workflow
   return result;
 }
 
+export function resetWorkflowNudges(state: WorkflowState, now = Date.now()): WorkflowState {
+  const task = state.currentTaskId ? getWorkflowTask(state, state.currentTaskId) : undefined;
+  if (state.status !== "running" || state.handoff?.phase !== "executing"
+    || task?.status !== "in_progress" || task.outcomeUnknown || !state.nudgeCount) return state;
+  const result = cloneState(state, now);
+  result.nudgeCount = 0;
+  return result;
+}
+
 export function recordWorkflowNudge(state: WorkflowState, now?: number): WorkflowState;
 export function recordWorkflowNudge(state: WorkflowState | undefined, now?: number): WorkflowState | undefined;
 export function recordWorkflowNudge(state: null, now?: number): null;
@@ -319,15 +328,14 @@ export function recordWorkflowNudge(
     const task = getWorkflowTask(result, state.currentTaskId);
     if (!task) throw new Error(`工作流当前任务不存在：${state.currentTaskId}`);
     task.status = "blocked";
-    task.outcomeUnknown = true;
-    task.blockReason = `连续 ${WORKFLOW_MAX_NUDGES} 次回合未提交完成或阻塞结果；执行结果未知，核对副作用后再 retry`;
+    task.blockReason = `阶段进展未再更新，已达到 ${WORKFLOW_MAX_NUDGES} 次续跑检查上限；请核对当前阻塞，再决定继续或调整任务范围`;
     delete result.handoff;
     delete result.continuation;
     result.recoveryGeneration += 1;
     result.status = "paused";
-    result.pauseReason = "handoff-outcome-unknown";
+    result.pauseReason = task.outcomeUnknown ? "handoff-outcome-unknown" : "task-blocked";
     result.currentTaskId = undefined;
-    result.taskPauseReason = `任务 ${state.currentTaskId} 连续 ${WORKFLOW_MAX_NUDGES} 次回合未提交完成或阻塞结果`;
+    result.taskPauseReason = `任务 ${state.currentTaskId} 已达到 ${WORKFLOW_MAX_NUDGES} 次续跑检查上限，仍缺新的阶段进展或任务结果`;
   }
   return result;
 }

@@ -25,7 +25,7 @@ test("架构工作流只有明确审阅要求时才暂停，并支持阻塞重�
   assert.equal(retried.tasks[0].status, "pending");
 });
 
-test("架构工作流未提交完成时有限次提醒后暂停", () => {
+test("无阶段进展的有限次提醒只暂停任务，不凭回合数推断未知副作用", () => {
   const state = startWorkflowTask(
     createWorkflowState({
       summary: "提醒测试",
@@ -42,13 +42,14 @@ test("架构工作流未提交完成时有限次提醒后暂停", () => {
   const paused = recordWorkflowNudge(corrective);
   assert.equal(paused.status, "paused");
   assert.equal(paused.tasks[0].status, "blocked");
-  assert.equal(paused.pauseReason, "handoff-outcome-unknown");
-  assert.equal(paused.tasks[0].outcomeUnknown, true);
-  assert.throws(
-    () => retryWorkflowTask(paused, "task"),
-    { code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" },
-  );
-  assert.equal(retryWorkflowTask(paused, "task", undefined, { confirmUnknownOutcome: true }).status, "running");
+  assert.equal(paused.pauseReason, "task-blocked");
+  assert.equal(paused.tasks[0].outcomeUnknown, undefined);
+  assert.equal(retryWorkflowTask(paused, "task").status, "running");
+  const alreadyUnknown = structuredClone(corrective);
+  alreadyUnknown.tasks[0].outcomeUnknown = true;
+  const protectedPause = recordWorkflowNudge(alreadyUnknown);
+  assert.equal(protectedPause.pauseReason, "handoff-outcome-unknown");
+  assert.throws(() => retryWorkflowTask(protectedPause, "task"), { code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" });
   assert.equal(WORKFLOW_MAX_NUDGES, 3);
 });
 

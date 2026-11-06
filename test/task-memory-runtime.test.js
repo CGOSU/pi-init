@@ -21,7 +21,7 @@ function fixture() {
   state.activeRole = { role: "developer-test", provider: "test", model: "model", thinkingLevel: "high" };
   state.workflowState = { version: 7, executor: "local", authority: "local", plan: { summary: "work", constraints: [] }, nudgeCount: 0, revisions: [], subworkflowHistory: [], createdAt: 0, updatedAt: 0, ...identity, status: "running", currentTaskId: "task", tasks: [{ id: "task", role: "developer-test", status: "in_progress" }], handoff: { ...identity, phase: "executing" } };
   let branch = [{ type: "custom_message", id: "anchor", customType: "pi-init-workflow-task", details: identity, content: "task", timestamp: "2026-01-01T00:00:00Z" }];
-  let serial = 0, fail = false, stops = 0;
+  let serial = 0, fail = false, stops = 0, progress = 0;
   const notices = [];
   const pi = { on(name, fn) { handlers.set(name, [...(handlers.get(name) ?? []), fn]); }, sendMessage(message, options) {
     assert.equal(options.triggerTurn, false);
@@ -32,25 +32,29 @@ function fixture() {
   } };
   const ctx = { cwd: process.cwd(), isProjectTrusted: () => true, sessionManager: { getSessionId: () => "session", getBranch: () => branch, getEntry: id => branch.find(entry => entry.id === id) }, ui: { notify: (...args) => notices.push(args) } };
   const binding = createWorkflowToolBinding(pi, state);
-  const runtime = createTaskMemoryRuntime(pi, state, binding, () => { stops++; });
+  const runtime = createTaskMemoryRuntime(pi, state, binding, () => { stops++; }, undefined, () => {
+    assert.equal(branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data.progressRevision, progress + 1);
+    progress++;
+  });
   async function emit(name, event = {}) {
     let result;
     for (const fn of handlers.get(name) ?? []) result = await fn(event, ctx) ?? result;
     return result;
   }
-  async function commit(text = "Tests 91 passed", isError = false) {
+  async function commit(text = "Tests 91 passed", isError = false, command = "verify", metadata = {}) {
     const n = ++serial;
-    const message = { role: "assistant", timestamp: n, provider: "test", model: "model", content: [{ type: "toolCall", id: "call-" + n, name: "bash", arguments: { command: "verify" } }] };
+    const toolName = metadata.toolName ?? "bash";
+    const message = { role: "assistant", timestamp: n, provider: "test", model: "model", content: [{ type: "toolCall", id: "call-" + n, name: toolName, arguments: { command } }] };
     await emit("before_provider_request"); await emit("message_start", { message });
     branch.push({ type: "message", id: "message-" + n, message });
     await emit("message_end", { message });
-    const result = { role: "toolResult", toolCallId: "call-" + n, toolName: "bash", isError, content: [{ type: "text", text }], timestamp: n };
+    const result = { role: "toolResult", toolCallId: "call-" + n, toolName, isError, content: [{ type: "text", text }], timestamp: n, ...metadata };
     branch.push({ type: "message", id: "result-" + n, message: result });
     const event = { type: "turn_end", outcome: "completed", message, messageEntryId: "message-" + n, toolResults: [result], toolResultEntryIds: ["result-" + n] };
     await emit("turn_end", event);
     return event;
   }
-  return { pi, state, ctx, runtime, binding, identity, emit, commit, notices, get branch() { return branch; }, setBranch(value) { branch = value; }, setFail(value) { fail = value; }, get stops() { return stops; } };
+  return { pi, state, ctx, runtime, binding, identity, emit, commit, notices, get branch() { return branch; }, setBranch(value) { branch = value; }, setFail(value) { fail = value; }, get stops() { return stops; }, get progress() { return progress; } };
 }
 function checkpoint(id) { return { step: "package", accomplished: [{ summary: "Historical test result", evidenceIds: [id] }], remaining: ["generate patch"], blockers: [], nextStep: "generate patch" }; }
 
@@ -157,6 +161,57 @@ test("rephrasing a checkpoint changes its write revision but not evidence progre
   const next = f.runtime.read(f.ctx).memory;
   assert.equal(next.revision, first.revision + 1);
   assert.equal(next.progressRevision, first.progressRevision);
+  assert.equal(f.progress, 1);
+});
+
+test("checkpoint progress is notified only after persistence and old sources cannot renew it", async () => {
+  const f = fixture();
+  const first = (await f.commit("first result")).toolResultEntryIds[0];
+  assert.equal(f.progress, 0);
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(first), 0);
+  assert.equal(f.progress, 1);
+  const repeated = (await f.commit("same command with different elapsed time")).toolResultEntryIds[0];
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(repeated), 1);
+  assert.equal(f.progress, 1);
+  const second = (await f.commit("second result", false, "verify-next-step")).toolResultEntryIds[0];
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(second), 2);
+  assert.equal(f.progress, 2);
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(first), 3);
+  assert.equal(f.progress, 2, "the first result was consumed before the immediately previous checkpoint");
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(first), 4);
+  assert.equal(f.progress, 2, "identical checkpoints are idempotent");
+  const restored = createTaskMemoryRuntime(f.pi, f.state, f.binding, undefined, undefined, () => assert.fail("reload must not renew old progress"));
+  restored.checkpoint(f.ctx, f.identity, checkpoint(repeated), 4);
+  assert.equal(restored.read(f.ctx).memory.progressRevision, 2);
+});
+
+test("structured nested failures cannot renew progress or change historical observation classification", async () => {
+  const cases = [
+    { nestedCalls: { complete: true, calls: [{ id: "root/1", name: "bash", status: "error", durationMs: 1 }] } },
+    { nestedCalls: { complete: false, calls: [{ id: "root/1", name: "bash", status: "unfinished", durationMs: 1 }] } },
+    { details: { calls: [{ id: "root/1", name: "bash", status: "error", durationMs: 1 }] } },
+    { details: { exit_code: 7 } },
+  ];
+  for (const metadata of cases) {
+    const f = fixture();
+    const failed = (await f.commit("outer script finished", false, "batch", { toolName: "codemode", ...metadata })).toolResultEntryIds[0];
+    assert.equal(f.runtime.read(f.ctx).memory.observations[0].outcome, "tool-ok", "legacy observation classification stays stable");
+    f.runtime.checkpoint(f.ctx, f.identity, checkpoint(failed), 0);
+    assert.equal(f.progress, 0, JSON.stringify(metadata));
+    const restored = createTaskMemoryRuntime(f.pi, f.state, f.binding);
+    assert.equal(restored.read(f.ctx).status, "available");
+    const succeeded = (await f.commit("batch succeeded", false, "batch", { toolName: "codemode", nestedCalls: { complete: true, calls: [] } })).toolResultEntryIds[0];
+    f.runtime.checkpoint(f.ctx, f.identity, checkpoint(succeeded), 1);
+    assert.equal(f.progress, 1, "the earlier failed batch does not consume later successful progress");
+  }
+});
+
+test("successful nested argument omission is not classified as failed progress", async () => {
+  const f = fixture();
+  const id = (await f.commit("batch succeeded", false, "batch", { toolName: "codemode",
+    nestedCalls: { complete: false, calls: [{ id: "root/1", name: "read", status: "ok", durationMs: 1, argumentsBytes: 9000 }] } })).toolResultEntryIds[0];
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
+  assert.equal(f.progress, 1);
 });
 test("paused recovery can read historical memory without reviving the old handoff", async () => {
   const f = fixture(); await f.commit();
@@ -347,6 +402,7 @@ test("failed checkpoint write cannot return an ack or advance the saved revision
   assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0), error => error.code === "TASK_MEMORY_WRITE_FAILED");
   assert.equal(f.branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data.revision, 0);
   assert.equal(f.stops, 1);
+  assert.equal(f.progress, 0);
 });
 
 test("missing checkpoint revision is reported accurately with a usable revision", async () => {

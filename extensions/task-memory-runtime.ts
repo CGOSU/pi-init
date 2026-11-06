@@ -25,7 +25,24 @@ export function contentText(content: unknown) {
 function sameIdentity(left: WorkflowHandoffIdentity, right: WorkflowHandoffIdentity) {
   return Object.keys(left).every(key => left[key as keyof WorkflowHandoffIdentity] === right[key as keyof WorkflowHandoffIdentity]);
 }
-export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntimeState, binding: MemoryBinding, onFailure?: (ctx: ExtensionContext) => void, historicalEvidence?: (ctx: ExtensionContext, id: string, dependencies: string[]) => TaskEvidence | undefined) {
+function failedProgressReceipt(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  return data.status === "error" || data.status === "unfinished" || data.isError === true || data.ok === false
+    || ["exitCode", "exit_code"].some(key => typeof data[key] === "number" && data[key] !== 0);
+}
+function excludedProgressSources(branch: Entry[]) {
+  const excluded = new Set<string>();
+  for (const entry of branch) {
+    if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+    const message = entry.message;
+    const details = message.details && typeof message.details === "object" ? message.details as Record<string, unknown> : {};
+    const calls = [...(Array.isArray(message.nestedCalls?.calls) ? message.nestedCalls.calls : []), ...(Array.isArray(details.calls) ? details.calls : [])];
+    if (failedProgressReceipt(details) || calls.some(failedProgressReceipt)) excluded.add(entry.id);
+  }
+  return excluded;
+}
+export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntimeState, binding: MemoryBinding, onFailure?: (ctx: ExtensionContext) => void, historicalEvidence?: (ctx: ExtensionContext, id: string, dependencies: string[]) => TaskEvidence | undefined, onProgress?: (ctx: ExtensionContext) => void) {
   const failures = new Set<string>();
   const stopped = new Set<string>();
   function suspend(ctx: ExtensionContext) {
@@ -141,6 +158,29 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       return { status: "unavailable", reason: error && typeof error === "object" && "code" in error ? String(error.code) : "TASK_MEMORY_UNAVAILABLE" };
     }
   }
+  function checkpointHistory(ctx: ExtensionContext, current: WorkflowHandoffIdentity) {
+    const branch = ctx.sessionManager.getBranch();
+    const history: TaskMemory[] = [];
+    const sources = new Map<string, TaskObservation | undefined>();
+    for (const entry of branch) {
+      if (entry.type !== "custom" || entry.customType !== TASK_MEMORY_ENTRY) continue;
+      const raw = entry.data as Record<string, unknown> | undefined;
+      const savedIdentity = parseTaskMemoryIdentity(raw?.identity);
+      if (!savedIdentity || taskMemoryScope(savedIdentity) !== taskMemoryScope(current)) continue;
+      const memory = parseTaskMemory(raw);
+      if (!memory) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务的历史记忆快照损坏，无法核对已登记进展");
+      if (!memory.checkpoint) continue;
+      for (const id of memory.checkpoint.accomplished.flatMap(item => item.evidenceIds)) {
+        if (!sources.has(id)) sources.set(id, sourceObservation(branch, id, current));
+        const actual = sources.get(id);
+        if (!actual || JSON.stringify(actual) !== JSON.stringify(memory.observations.find(item => item.id === id))) {
+          return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "历史进展来源不在当前branch或与原结果不一致");
+        }
+      }
+      history.push(memory);
+    }
+    return history;
+  }
   function checkpoint(ctx: ExtensionContext, submitted: WorkflowHandoffIdentity, input: unknown, expectedRevision: number | undefined, paths: string[] = []) {
     const current = identity(ctx);
     const workflow = state.workflowState;
@@ -169,8 +209,11 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     const restored = references.some(item => !memory.observations.some(previous => previous.id === item!.id))
       ? { ...memory, observations: [...memory.observations.filter(item => !ids.includes(item.id)).slice(-16), ...references as TaskObservation[]] } : memory;
     const versions = paths.length ? files(ctx, paths) : memory.checkpoint?.files;
-    const next = checkpointTaskMemory(restored, { ...parsed, files: versions });
-    if (next !== memory) persist(ctx, { ...next, identity: current });
+    const next = checkpointTaskMemory(restored, { ...parsed, files: versions }, checkpointHistory(ctx, current), excludedProgressSources(ctx.sessionManager.getBranch()));
+    if (next !== memory) {
+      persist(ctx, { ...next, identity: current });
+      if (next.progressRevision > memory.progressRevision) onProgress?.(ctx);
+    }
     return read(ctx);
   }
   pi.on("turn_end", (event: TurnEndEvent, ctx) => {

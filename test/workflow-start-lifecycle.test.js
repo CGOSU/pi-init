@@ -272,11 +272,113 @@ test("无进展时先发一次纠偏续跑，仍无结果则暂停且不再自�
     await runUnfinishedTurn();
     const paused = latestWorkflow(harness);
     assert.equal(paused.status, "paused");
-    assert.equal(paused.pauseReason, "handoff-outcome-unknown");
+    assert.equal(paused.pauseReason, "task-blocked");
     assert.equal(paused.nudgeCount, 3);
-    assert.equal(paused.tasks[0].outcomeUnknown, true);
+    assert.equal(paused.tasks[0].outcomeUnknown, undefined);
     assert.equal(harness.sentMessages.length, messageCountAfterCorrection, "纠偏后仍无结果时不再自动续跑");
     await emitExtensionEvent(harness, "session_shutdown");
+  });
+});
+
+async function invokeTaskTool(h, name, args, execute) {
+  const serial = h.branch.length + 1;
+  const id = "stage-call-" + serial;
+  const message = { role: "assistant", timestamp: serial, provider: developerModel.provider, model: developerModel.id,
+    stopReason: "toolUse", content: [{ type: "toolCall", id, name, arguments: args }] };
+  await emitExtensionEvent(h, "before_provider_request");
+  await emitExtensionEvent(h, "message_end", { message });
+  h.branch.push({ type: "message", id: "stage-proposal-" + serial, message });
+  await emitExtensionEvent(h, "tool_execution_start", { toolCallId: id, toolName: name, args });
+  const result = execute ? await execute(id) : { content: [{ type: "text", text: "source " + args.path }] };
+  const isError = result.isError === true;
+  await emitExtensionEvent(h, "tool_result", { toolCallId: id, toolName: name, input: args, ...result, isError });
+  await emitExtensionEvent(h, "tool_execution_end", { toolCallId: id, toolName: name, result, isError });
+  const source = "stage-result-" + serial;
+  h.branch.push({ type: "message", id: source, message: { role: "toolResult", toolCallId: id, toolName: name,
+    ...result, isError, timestamp: serial } });
+  return source;
+}
+
+test("真实阶段检查点让长任务跨越三轮继续，重复旧成果仍有限暂停", async () => {
+  await withTempDirectory(async directory => {
+    const h = await createTaskHarness(directory, { deferSendMessagePersistence: true });
+    const workflow = h.tools.find(tool => tool.name === "task_workflow");
+    const identity = latestTaskMessage(h).details;
+    const invoke = (...args) => invokeTaskTool(h, ...args);
+    let oldSource;
+    for (let turn = 0; turn < 6; turn++) {
+      await emitExtensionEvent(h, "before_agent_start", { systemPrompt: "" });
+      await emitExtensionEvent(h, "agent_start");
+      await emitExtensionEvent(h, "message_start", taskMessageEvent(latestTaskMessage(h)));
+      h.persistSentMessage(h.sentMessages.at(-1).message);
+      if (turn === 1) {
+        await invoke("bash", { command: "test regression" }, async () => ({
+          content: [{ type: "text", text: "Known regression assertion failed" }], isError: true,
+        }));
+        await invoke("edit", { path: "src/fix.ts", oldText: "broken", newText: "fixed" });
+      }
+      const source = turn === 1 ? await invoke("bash", { command: "test regression" }, async () => ({
+        content: [{ type: "text", text: "Regression passed after repair" }],
+      })) : turn < 4 ? await invoke("read", { path: `src/part-${turn}.ts` }) : oldSource;
+      oldSource = source;
+      const revision = h.branch.findLast(entry => entry.customType === "pi-init-task-memory")?.data.revision ?? 0;
+      const args = { action: "checkpoint", expectedMemoryRevision: revision, checkpoint: {
+        step: "阶段 " + turn, accomplished: [{ summary: "已核对本阶段来源", evidenceIds: [source] }],
+        remaining: ["整项交付尚未完成"], blockers: [], nextStep: "继续下一阶段",
+      } };
+      await invoke("task_workflow", args, id => workflow.execute(id, args, undefined, undefined, h.context));
+      await emitExtensionEvent(h, "agent_end");
+      await emitExtensionEvent(h, "agent_settled");
+      const state = latestWorkflow(h);
+      if (turn < 4) {
+        assert.equal(state.status, "running", `第 ${turn + 1} 轮有新成果，不应因缺终态而暂停`);
+        assert.equal(state.nudgeCount, 1);
+        assert.equal(state.handoff.attemptId, identity.attemptId);
+      }
+    }
+    assert.equal(latestWorkflow(h).pauseReason, "task-blocked");
+    assert.equal(latestWorkflow(h).tasks[0].outcomeUnknown, undefined);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("阶段成果已保存但提醒计数写入失败时停止推进，不重放检查点", async () => {
+  await withTempDirectory(async directory => {
+    let failProgressWrite = false;
+    const h = await createTaskHarness(directory, { deferSendMessagePersistence: true,
+      appendEntry(type, data) {
+        if (failProgressWrite && type === "pi-init-workflow" && data.status === "running" && data.nudgeCount === 0) {
+          throw new Error("progress counter write failed");
+        }
+      },
+    });
+    await emitExtensionEvent(h, "agent_start");
+    await emitExtensionEvent(h, "message_start", taskMessageEvent(latestTaskMessage(h)));
+    h.persistSentMessage();
+    await emitExtensionEvent(h, "agent_end");
+    await emitExtensionEvent(h, "agent_settled");
+    assert.equal(latestWorkflow(h).nudgeCount, 1);
+    await emitExtensionEvent(h, "agent_start");
+    const source = await invokeTaskTool(h, "edit", { path: "src/fix.ts", oldText: "old", newText: "new" });
+    failProgressWrite = true;
+    const args = { action: "checkpoint", expectedMemoryRevision: 0, checkpoint: {
+      step: "保存新成果", accomplished: [{ summary: "改动已保存", evidenceIds: [source] }],
+      remaining: ["最终验证"], blockers: [], nextStep: "验证",
+    } };
+    const tool = h.tools.find(item => item.name === "task_workflow");
+    const receipt = await invokeTaskTool(h, "task_workflow", args, async id => {
+      await assert.rejects(tool.execute(id, args, undefined, undefined, h.context), /progress counter write failed/);
+      return { content: [{ type: "text", text: "progress counter write failed" }], isError: true };
+    });
+    assert.equal(h.branch.findLast(entry => entry.customType === "pi-init-task-memory").data.revision, 1);
+    assert.notEqual(h.branch.find(entry => entry.id === receipt).message.details?.checkpointSaved, true);
+    assert.equal(h.branch.findLast(entry => entry.customType === "pi-init-user-control").data.stopped, true);
+    const sent = h.sentMessages.length;
+    await emitExtensionEvent(h, "agent_end");
+    await emitExtensionEvent(h, "agent_settled");
+    assert.equal(h.sentMessages.length, sent);
+    assert.equal(latestWorkflow(h).tasks[0].outcomeUnknown, true);
+    await emitExtensionEvent(h, "session_shutdown");
   });
 });
 

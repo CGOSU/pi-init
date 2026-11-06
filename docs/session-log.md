@@ -2,6 +2,16 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-06：识别长任务阶段进展并减少例行重规划
+
+- 已确认范围：用户选择先修复三回合进展判定、区分无进展暂停与真实结果未知，以及目标/契约不变时直接关联文件的自主增补。实现前已记录[设计决策](decisions.md#2026-11-06按真实阶段进展判断停滞并保留目标不变时的实现自主权)，不新增字段、审批、每轮checkpoint或自动retry，不降低原完成验收、恢复及权限边界。
+- 公共规则：更新Skill、职责说明及README，区分阶段进展和complete；task.files默认用于定位，明确禁止、隔离与既有硬范围继续有效。规则集中在公共[工作流说明](../skills/pi-init-role-routing/SKILL.md#单一扁平工作流)。
+- 来源：只读按最终leaf祖先核对FlClash会话，阶段进展误停及文件范围往返的具体行号集中维护于[踩坑记录](pitfalls.md#2026-11-06未complete不等于停滞无进展不等于副作用未知)。不将无消息间隔计为开发时间，也不将相关测试重跑普遍归为浪费。
+- 运行时：checkpoint使用原progressRevision识别经历史去重的新阶段来源或已记录文件的新版本，成功持久化后清零原nudge计数；失败来源、重复命令计时变化、旧来源轮换、纯文案及文件清单增删本身不刷新。计数写入失败沿原userControl停止，不重放。只读workflowProgressObserver的业务完成诊断保持不变，阶段进展不作为验收。
+- 暂停分类：仅达到续跑上限时使用既有工具收敛检查；结果完整已知时进入普通task-blocked，缺回执、工具活动或本轮结果不确定时仍保留unknown。正常红测后修复并保存新进展不增加暂停门，旧unknown不自动解除或迁移。
+- 实际验证：最终统一执行 `npm test -- test/provider-request-recovery.test.js test/workflow-protocol.test.js test/workflow-start-lifecycle.test.js test/task-memory.test.js test/task-memory-runtime.test.js test/workflow-handoff.test.js test/workflow-user-control.test.js test/workflow-tool-binding.test.js test/workflow-status-polling.test.js test/workflow-progress.test.js test/workflow-action-policy.test.js test/role-recovery.test.js test/workflow-runtime-exports.test.js test/workflow-runtime-retirement.test.js test/general-session-handoff.test.js`，15个相关文件 **175/175通过**，失败与跳过均为0；`npm run typecheck` 与 `git diff --check` 退出0。未运行全量，不将此前重叠选测另加为独立覆盖数。
+- 边界：第一批三项已实现，未安装/同步本机Pi副本、未reload或推送。原会话保持只读；真实新会话中的完成效率仍需后续观察。
+
 ### 2026-11-05：明确验证范围与未知任务结果的恢复入口
 
 - 验证规则：按用户确认的建议更新公共Skill、三角色说明与README，区分当前代码交付、目标环境验证及系统/发布验收；有效检查可复用，后续人工待办不扩为每项代码任务前置，已有必需验收仍保留。规则维护于公共[执行与验证](../skills/pi-init-role-routing/SKILL.md#执行与验证)，不新增模板副本或验收字段。

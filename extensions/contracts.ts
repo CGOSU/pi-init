@@ -91,7 +91,7 @@ export const workflowTaskSchema = Type.Object({
   task: Type.String({ description: "一个可独立验收的交付物及非目标；不按读取/修改/测试机械拆任务，执行者在范围内自主闭环" }),
   files: Type.Array(Type.String(), {
     minItems: 1,
-    description: "任务允许涉及的文件或目录，用于约束实现范围",
+    description: "任务定位与预估涉及的文件或目录；目标、验收和公共契约不变时可补必要直接关联文件，无需仅因此重规划。明确的禁止、隔离与权限边界仍须遵守",
   }),
   acceptanceCriteria: Type.Array(Type.String(), {
     minItems: 1,
@@ -118,7 +118,7 @@ export const taskWorkflowParameters = Type.Object({
   evidenceIds: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 8, description: "status读取当前任务或已完成直接依赖的声明来源；complete可引用本任务成功工具结果。仅证明历史观察，不证明需求全部满足或当前版本有效" })),
   parentGoalId: Type.Optional(Type.String({ description: "目标归属ID，只分组、不创建执行栈" })),
   summary: Type.Optional(Type.String({ description: "规划摘要或修正方向" })),
-  constraints: Type.Optional(Type.Array(Type.String())),
+  constraints: Type.Optional(Type.Array(Type.String(), { description: "已确认的目标、非目标及硬约束；明确禁止修改、隔离与权限边界不可越过。普通文件预估放files，不将helper、调用方、测试或构建接线细节写成额外审批条件" })),
   revisionId: Type.Optional(Type.String()),
   retainTaskIds: Type.Optional(Type.Array(Type.String(), { description: "replan时仅填写需要原样保留的pending任务ID；已完成任务自动保留，不要填入" })),
   tasks: Type.Optional(Type.Array(workflowTaskSchema, { minItems: 0, description: "依赖优先的顺序任务；建议不超过 " + WORKFLOW_RECOMMENDED_TASKS + " 项，不是硬上限；replan时仅放新增或替换任务，须使用未出现过的新ID，并同步更新依赖" })),

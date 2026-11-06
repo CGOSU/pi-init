@@ -3,7 +3,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { findMatchingRole, roleLabel } from "../src/roles.ts";
-import { isWorkflowActive, markWorkflowTaskOutcomeUnknown, workflowActionIdentity } from "../src/workflow.ts";
+import { isWorkflowActive, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
 import { createWorkflowRevisionInput } from "./workflow-revision-input.ts";
 import { registerExtensionCommand } from "./extension-command.ts";
 import { registerProjectTool } from "./project-tool.ts";
@@ -57,7 +57,20 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     assistantFailureScope = ["error", "aborted"].includes(event.message.stopReason) ? executionScope(ctx) : undefined;
     failedAssistant = assistantFailureScope ? event.message : undefined;
   });
-  const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding, ctx => userControl.suspend(ctx, "task-memory-unavailable"), (ctx, id, dependencies) => sessionHandoff.readEvidence(ctx, id, dependencies));
+  const taskMemory = createTaskMemoryRuntime(pi, runtimeState, workflowBinding,
+    ctx => userControl.suspend(ctx, "task-memory-unavailable"),
+    (ctx, id, dependencies) => sessionHandoff.readEvidence(ctx, id, dependencies),
+    ctx => {
+      const current = runtimeState.workflowState;
+      if (!current) return;
+      const next = resetWorkflowNudges(current);
+      if (next === current) return;
+      try { workflowReport.persistWorkflowState(next, ctx); }
+      catch (error) {
+        userControl.suspend(ctx, "task-memory-progress-unavailable");
+        throw error;
+      }
+    });
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, { onRepeatedRead: ctx => userControl.suspend(ctx, "repeated-read") });
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
@@ -133,6 +146,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime,
     messages: workflowMessages,
     report: workflowReport,
+    toolsSettled: workflowBinding.generalToolsSettled,
     offerSessionHandoff: ctx => sessionHandoff.beforeDispatch(ctx),
     guardSessionHandoff: ctx => { if (outgoingTransfer(ctx, runtimeState.workflowState)) sessionHandoff.beforeDispatch(ctx); },
     setCurrentContext: (ctx) => {

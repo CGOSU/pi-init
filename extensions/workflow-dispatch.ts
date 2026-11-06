@@ -7,6 +7,7 @@ import {
     getWorkflowTask,
     hydrateWorkflowState,
     isWorkflowActive,
+    markWorkflowTaskOutcomeUnknown,
     recordWorkflowNudge,
     recoverWorkflowState,
     setWorkflowHandoffPhase,
@@ -30,11 +31,13 @@ import type { WorkflowMessages } from "./workflow-messages.ts";
 import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
 import { validateWorkflowTaskStartMessage } from "./workflow-start-evidence.ts";
+import type { ToolSettlement } from "./general-tool-settlement.ts";
 
 export type WorkflowDispatchDependencies = {
   roleRuntime: RoleRuntime;
   offerSessionHandoff?: (ctx: ExtensionContext) => boolean;
   guardSessionHandoff?: (ctx: ExtensionContext) => void;
+  toolsSettled?: (ctx: ExtensionContext) => ToolSettlement;
   messages: WorkflowMessages;
   report: WorkflowReport;
   setCurrentContext: (ctx: ExtensionContext) => void;
@@ -339,6 +342,16 @@ export function createWorkflowDispatch(
     }
     if (effect.kind === "nudge-task") {
       state.traceHandoff?.(ctx, "workflow.nudge_requested");
+      if ((current.nudgeCount ?? 0) + 1 >= WORKFLOW_MAX_NUDGES) {
+        const settlement = deps.toolsSettled?.(ctx);
+        if (!settlement?.ok) {
+          const paused = markWorkflowTaskOutcomeUnknown(current, {
+            taskId: current.currentTaskId!, reason: settlement?.message ?? "缺少工具结果收敛依据，不能将停滞登记为已知阻塞。",
+          });
+          if (persistDispatchPause(ctx, paused, current.currentTaskId!)) ctx.ui.notify(deps.report.formatWorkflowPauseSummary(paused), "warning");
+          return;
+        }
+      }
       const nudged = recordWorkflowNudge(current);
       if (nudged === current) return;
       if (nudged !== current) deps.report.persistWorkflowState(nudged, ctx);
@@ -350,8 +363,8 @@ export function createWorkflowDispatch(
       if (identity) {
         const corrective = nudged.nudgeCount === WORKFLOW_MAX_NUDGES - 1;
         const note = corrective
-          ? "无进展纠偏（仅此一次）：上一回合仍未提交完成或阻塞结果。停止重复查询相同 status、反复读取已检查内容或重复重规划；复用当前上下文中已核实的事实和已完成成果，直接执行当前任务下一项具体工作。不得重放结果未知或副作用不明的操作；若无法安全继续，立即 block 并如实说明阻塞和可能副作用。完成实际工作与验证后，用本消息当前身份调用 task_workflow(action=complete)。"
-          : "上一回合尚未收到任务完成或阻塞结果；请继续当前任务并在结束时调用 task_workflow，使用本消息中的当前执行身份。";
+          ? "无进展纠偏（仅此一次）：近期未登记新的阶段进展或提交任务结果。停止重复查询相同 status、反复读取已检查内容或重复重规划；复用已核实成果，推进当前任务下一项具体工作。已有阶段成果时可用真实新来源保存checkpoint，不为刷新计数重复检查或改写文案，也不要求每轮登记。不得重放未知副作用；无法安全继续时如实block，达到当前验收后complete，不把阶段进展冒充整项完成。"
+          : "当前任务尚未完成；沿现有成果继续下一项具体工作，使用本消息中的当前执行身份。需要保留真实阶段成果时可按需checkpoint；重复旧来源不刷新进展，也不要求每轮保存。满足验收后complete，确有阻塞时block。";
         deps.messages.sendWorkflowTaskMessage(ctx, identity.taskId, note, identity);
       }
       deps.report.updateWorkflowStatus(ctx);

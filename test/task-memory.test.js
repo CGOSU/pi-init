@@ -50,3 +50,55 @@ test("identical command receipts are not collapsed because side effects may repe
   const memory = recordTaskObservations(createTaskMemory(identity), [first, second], second.id);
   assert.deepEqual(memory.observations.map(item => item.id), ["command-1", "command-2"]);
 });
+
+function checkpointFor(id, files) {
+  return { step: "continue", accomplished: id ? [{ summary: "Observed progress", evidenceIds: [id] }] : [], remaining: ["finish"], blockers: [], nextStep: "finish", ...(files ? { files } : {}) };
+}
+
+test("checkpoint progress counts new successful sources once across the task history", () => {
+  const first = observation("first");
+  const second = observation("second");
+  let memory = recordTaskObservations(createTaskMemory(identity), [first, second], second.id);
+  const savedFirst = checkpointTaskMemory(memory, checkpointFor(first.id));
+  const savedSecond = checkpointTaskMemory(savedFirst, checkpointFor(second.id), [savedFirst]);
+  memory = checkpointTaskMemory(savedSecond, checkpointFor(first.id), [savedFirst, savedSecond]);
+  assert.equal(memory.progressRevision, 2, "rotating old checkpoint sources must not renew progress");
+  const repeated = { ...first, id: "repeated", toolCallId: "repeated", outputHash: "new-elapsed-time" };
+  memory = recordTaskObservations(memory, [repeated], repeated.id);
+  memory = checkpointTaskMemory(memory, checkpointFor(repeated.id), [savedFirst, savedSecond]);
+  assert.equal(memory.progressRevision, 2, "a successful identical command is not new work because its timing changed");
+  const failed = observation("failed", "tool-error");
+  memory = recordTaskObservations(memory, [failed], failed.id);
+  assert.equal(checkpointTaskMemory(memory, checkpointFor(failed.id), [savedFirst, savedSecond]).progressRevision, 2);
+});
+
+test("explicit new read findings count, while repeated content and old reads do not", () => {
+  const first = { ...observation("read-first"), toolName: "read" };
+  const repeated = { ...first, id: "read-repeat", toolCallId: "read-repeat" };
+  const changed = { ...first, id: "read-changed", toolCallId: "read-changed", outputHash: "changed-content" };
+  let memory = recordTaskObservations(createTaskMemory(identity), [first], first.id);
+  const savedFirst = checkpointTaskMemory(memory, checkpointFor(first.id));
+  memory = recordTaskObservations(savedFirst, [repeated, changed], changed.id);
+  assert.equal(memory.progressRevision, 1, "ordinary observations alone are not progress");
+  memory = checkpointTaskMemory(memory, checkpointFor(repeated.id), [savedFirst]);
+  assert.equal(memory.progressRevision, 1);
+  const savedChanged = checkpointTaskMemory(memory, checkpointFor(changed.id), [savedFirst]);
+  assert.equal(savedChanged.progressRevision, 2);
+  assert.equal(checkpointTaskMemory(savedChanged, checkpointFor(first.id), [savedFirst, savedChanged]).progressRevision, 2);
+});
+
+test("file progress requires a new hash for a previously recorded path, not a different file list", () => {
+  const file = (path, hash) => ({ path, hash: hash.repeat(64) });
+  const a = file("source.ts", "a"), b = file("source.ts", "b"), other = file("other.ts", "c");
+  const savedA = checkpointTaskMemory(createTaskMemory(identity), checkpointFor(undefined, [a]));
+  assert.equal(savedA.progressRevision, 0);
+  const added = checkpointTaskMemory(savedA, checkpointFor(undefined, [other, a]), [savedA]);
+  const removed = checkpointTaskMemory(added, checkpointFor(undefined, [other]), [savedA, added]);
+  const reordered = checkpointTaskMemory(removed, checkpointFor(undefined, [a, other]), [savedA, added, removed]);
+  assert.equal(reordered.progressRevision, 0);
+  const savedB = checkpointTaskMemory(reordered, checkpointFor(undefined, [b]), [savedA, added, removed, reordered]);
+  assert.equal(savedB.progressRevision, 1);
+  assert.equal(checkpointTaskMemory(savedB, checkpointFor(undefined, [a]), [savedA, savedB]).progressRevision, 1);
+  const otherTask = { ...savedB, identity: { ...identity, taskId: "different" } };
+  assert.equal(checkpointTaskMemory(savedA, checkpointFor(undefined, [b]), [otherTask]).progressRevision, 1);
+});
