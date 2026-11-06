@@ -2,6 +2,13 @@
 
 本文件按日期倒序记录每次工作的完成内容、实际验证和遗留问题；新增记录插入对应日期位置，最新条目在前。不记录敏感信息或未经验证的结果。
 
+### 2026-11-06：补清精确编辑的原文与失败恢复规则
+
+- 完成：按用户确认收窄公共Skill中的edit指导，规则及范围见[设计决策](decisions.md#2026-11-06补清精确编辑的原文与失败恢复规则)。核对运行时完整加载公共Skill，角色与模板仅引用，不新增重复规则或修改原生edit包装器；独立只读审阅后将整文件覆盖限制明确限定在绕过零匹配的恢复场景。
+- 验证：最终措辞下执行 `npm test -- test/runtime-routing-context.test.js`，5/5通过；`git diff --check`通过。使用Node比对HEAD确认Skill frontmatter未变，人工核对正文结构。未新增文案断言或运行全量测试。
+- 校验限制：`python3 /Users/cgosu/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/pi-init-role-routing` 因缺少PyYAML报 `ModuleNotFoundError: No module named 'yaml'`，未安装依赖，也不将该脚本记为通过。
+- 生效边界：本次仅修改仓库规则与必要记录，未安装/同步本机Pi副本、未reload或push；实际实例加载更新后的包才会收到规则。尚未在原singbox.rs会话复现或验证失配率下降，不承诺模型必然遵循。
+
 ### 2026-11-06：保留上下文投影中的system历史边界
 
 - 完成：按用户授权修复调查已复现的问题，职责恢复与完成报告使用SDK公开的保留system事件，原上下文处理和恢复守卫继续复用。具体变化及生效限制统一见[缓存审计后续修复](flclash-cache-audit-2026-11-06.md#后续修复)；未改写此前只读调查的历史结论。
