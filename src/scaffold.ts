@@ -1,4 +1,5 @@
 import { isRecord } from "./value-guards.ts";
+import { readProjectMetadata } from "./project-metadata.ts";
 
 import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -170,8 +171,11 @@ export async function createScaffold(targetDir: string, options: ScaffoldOptions
     : language === "en"
       ? "To be completed by the project maintainer."
       : "待项目维护者补充。";
-  const testCommand = options.testCommand
-    ? validateSingleLine(options.testCommand, "测试命令")
+  const requestedTestCommand = options.testCommand === undefined
+    ? (await readProjectMetadata(absoluteTarget)).testCommand
+    : options.testCommand;
+  const testCommand = requestedTestCommand
+    ? validateSingleLine(requestedTestCommand, "测试命令")
     : language === "en"
       ? "To be completed by the project maintainer."
       : "待项目维护者补充。";

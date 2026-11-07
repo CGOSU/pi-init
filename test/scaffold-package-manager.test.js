@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { advancedInit, quickInit } from "../extensions/scaffold-runtime.ts";
+import { advancedInit, quickInit, runScaffold } from "../extensions/scaffold-runtime.ts";
+import { createScaffold } from "../src/scaffold.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 
 function scaffoldContext(directory) {
@@ -104,6 +105,34 @@ test("不存在test、check或lint脚本时不编造测试命令", async t => {
       await withProject({ manifest }, async directory => {
         await quickInit(".", scaffoldContext(directory));
         assert.equal(await generatedTestCommand(directory), "待项目维护者补充。");
+      });
+    });
+  }
+});
+
+test("底层脚手架与工具运行入口自动推断测试命令", async t => {
+  for (const [entry, initialize] of [
+    ["createScaffold", directory => createScaffold(directory)],
+    ["runScaffold", directory => runScaffold(scaffoldContext(directory), ".", {}, "conflicts")],
+  ]) {
+    await t.test(entry, async () => {
+      await withProject({ manifest: { scripts: { test: "node --test" } } }, async directory => {
+        await initialize(directory);
+        assert.equal(await generatedTestCommand(directory), "pnpm test");
+      });
+    });
+  }
+});
+
+test("显式命令优先且显式留空不重新推断", async t => {
+  for (const [testCommand, expected] of [
+    ["custom verify", "custom verify"],
+    ["", "待项目维护者补充。"],
+  ]) {
+    await t.test(JSON.stringify(testCommand), async () => {
+      await withProject({ manifest: { scripts: { test: "node --test" } } }, async directory => {
+        await createScaffold(directory, { testCommand });
+        assert.equal(await generatedTestCommand(directory), expected);
       });
     });
   }

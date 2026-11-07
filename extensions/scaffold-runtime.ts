@@ -1,6 +1,5 @@
-import { isRecord } from "../src/value-guards.ts";
-import { readFile } from "node:fs/promises";
-import { resolve, basename, join } from "node:path";
+import { resolve } from "node:path";
+import { readProjectMetadata as readMetadata } from "../src/project-metadata.ts";
 import {
   withFileMutationQueue,
   type ExtensionCommandContext,
@@ -18,52 +17,7 @@ function normalizeTargetDir(value: string): string {
 }
 
 async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
-  const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
-  let packageJson: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(absoluteTarget, "package.json"), "utf8"));
-    if (isRecord(parsed)) packageJson = parsed;
-  } catch {
-    // package.json is optional; directory-name defaults still make quick init useful.
-  }
-
-  const declaredPackageManager = typeof packageJson.packageManager === "string"
-    ? packageJson.packageManager.split("@")[0]?.trim()
-    : undefined;
-  let packageManager = declaredPackageManager || "pnpm";
-  if (!declaredPackageManager) {
-    for (const [lockfile, manager] of [
-      ["pnpm-lock.yaml", "pnpm"],
-      ["yarn.lock", "yarn"],
-      ["bun.lockb", "bun"],
-      ["bun.lock", "bun"],
-      ["package-lock.json", "npm"],
-      ["npm-shrinkwrap.json", "npm"],
-    ] as const) {
-      try {
-        await readFile(join(absoluteTarget, lockfile));
-        packageManager = manager;
-        break;
-      } catch {
-        // Try the next package manager marker.
-      }
-    }
-  }
-
-  const scripts = isRecord(packageJson.scripts) ? packageJson.scripts : {};
-  const scriptName = ["test", "check", "lint"].find((name) => typeof scripts[name] === "string");
-  const scriptRunner = packageManager === "npm" && scriptName !== "test" ? "npm run" : packageManager;
-  const inferredName = basename(absoluteTarget);
-  return {
-    projectName: typeof packageJson.name === "string" && packageJson.name.trim()
-      ? packageJson.name.trim()
-      : inferredName,
-    description:
-      typeof packageJson.description === "string" && packageJson.description.trim()
-        ? packageJson.description.trim()
-        : undefined,
-    testCommand: scriptName ? `${scriptRunner} ${scriptName}` : undefined,
-  };
+  return readMetadata(resolve(ctx.cwd, normalizeTargetDir(targetDir) || "."));
 }
 
 export function formatResult(result: {
