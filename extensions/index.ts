@@ -2,7 +2,9 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { findMatchingRole, roleLabel } from "../src/roles.ts";
+import { findMatchingRole } from "../src/roles.ts";
+import { clearRoleConfigNotice, showRoleConfigNotice } from "./role-config-notice.ts";
+import { evaluateFileReviewDispatch } from "./file-review-dispatch-policy.ts";
 import { isWorkflowActive, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
 import { createWorkflowRevisionInput } from "./workflow-revision-input.ts";
 import { registerExtensionCommand } from "./extension-command.ts";
@@ -120,13 +122,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
     roleRecoveryPending: () => runtimeState.roleRecoveryPending,
     getDispatchBlockReason: (ctx) => {
-      if (runtimeState.roleRecoveryPersistenceFailed) return "职责恢复记录持久化失败；扫描结果已保留，未启动 AI 审阅。";
-      if (runtimeState.workflowRestoreError) return `工作流恢复失败（${runtimeState.workflowRestoreError.code}）；未启动 AI 审阅。`;
-      if (runtimeState.pendingWorkflowRecovery) return "有待处理的工作流恢复；未启动 AI 审阅。";
-      if (runtimeState.workflowState && !["completed", "cancelled"].includes(runtimeState.workflowState.status)) return "当前有未结束的工作流；未启动 AI 审阅。";
-      if (runtimeState.workflowDispatchInFlight) return "工作流正在派发；未启动 AI 审阅。";
-      if (!ctx.isIdle()) return "Agent 正忙；未启动或排队 AI 审阅。";
-      return undefined;
+      const decision = evaluateFileReviewDispatch(runtimeState, ctx);
+      return decision.allowed ? undefined : decision.message;
     },
   });
   const runtimeRoutingContext = createRuntimeRoutingContext(runtimeState, {
@@ -206,7 +203,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const control = await userControl.input(event, ctx);
     if (control) return control;
     if (await captureWorkflowRevisionInput(event, ctx)) return { action: "handled" };
-    if (!runTimingDiagnostics.captureInput(event.source)) return { action: "continue" };
+    runTimingDiagnostics.captureInput(event.source);
     return { action: "continue" };
   });
 
@@ -220,7 +217,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("agent_start", (_event, ctx) => {
     if (runtimeState.userStopRequested && !userControl.allowsExternalTurn()) { ctx.abort(); return; }
-    ctx.ui.setWidget("pi-init-role-config", undefined);
+    clearRoleConfigNotice(ctx);
     roleHandoff.reset(); // A host-started run consumes any waiting continuation.
     runtimeState.agentRunActive = true;
     workflowTaskConsumptionRunActive = !runtimeState.userStopRequested;
@@ -314,20 +311,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           }
         : undefined;
       roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
-      const roleModelConfigs = config.modelStrategy === "auto" && config.autoModel
-        ? [`◆ Auto · 固定模型\n  模型：${config.autoModel.provider}/${config.autoModel.model}\n  起始强度：${config.autoModel.initialThinkingLevel}\n  允许范围：${config.autoModel.minThinkingLevel}–${config.autoModel.maxThinkingLevel}\n  原职责映射保留但暂不使用，职责和共享流程不变。`]
-        : Object.entries(config.roleModels).map(([configuredRole, model]) =>
-          `◆ ${roleLabel(configuredRole)}\n  模型：${model.provider}/${model.model}\n  推理强度：${model.thinkingLevel}`,
-        );
-      if (ctx.mode === "tui") {
-        // Info notifications share one slot in Pi; other startup notices can replace them.
-        ctx.ui.setWidget(
-          "pi-init-role-config",
-          roleModelConfigs.length > 0
-            ? `📌 Pi Init · 角色模型配置\n\n${roleModelConfigs.join("\n\n")}`.split("\n")
-            : undefined,
-        );
-      }
+      showRoleConfigNotice(ctx, config);
       if (!runtimeState.userStopRequested) {
             await workflowDispatch.scheduleWorkflow(ctx);
       }

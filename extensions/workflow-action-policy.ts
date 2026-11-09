@@ -43,7 +43,7 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   if (state.roleRecoveryPending && !activeWorkflow) {
     return { action: "recover", recovery: "role", code: "ROLE_RECOVERY_PENDING", message: "职责恢复尚未确认。", nextAction: `无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}` };
   }
-  if (!state.roleRecoveryPending && !state.pendingWorkflowRecovery && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError && workflow?.status === "paused"
+  if (!state.roleRecoveryPending && workflow?.status === "paused"
     && ["session-handoff-review", "session-transfer-pending", "session-handoff-imported"].includes(workflow.pauseReason ?? "")) {
     return { action: "recover", recovery: "wait", nextAction: workflow.taskPauseReason ?? "等待用户确认会话交接；不自行新建session、重试任务或重规划。" };
   }
