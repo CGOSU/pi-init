@@ -26,15 +26,20 @@ export async function configureModelStrategy(ctx: ExtensionCommandContext, confi
     return;
   }
   const previous = config.autoModel;
-  const selected = await selectRoleModel(ctx, "Auto 固定模型", previous ? { provider: previous.provider, model: previous.model, thinkingLevel: previous.initialThinkingLevel } : undefined);
+  const selected = await selectRoleModel(
+    ctx,
+    "Auto 固定模型",
+    previous ? { provider: previous.provider, model: previous.model, thinkingLevel: previous.initialThinkingLevel } : undefined,
+    { thinkingLabel: "Auto 起始推理强度（1/3）", thinkingDescription: "任务开始时的默认强度；随后可在最低和最高强度之间自动升降" },
+  );
   if (!selected || isMenuBack(selected)) return;
   const model = ctx.modelRegistry.find(selected.provider, selected.model);
   if (!model) throw new Error("选择的 Auto 固定模型不可用");
   const supported = getSupportedThinkingLevels(model) as ThinkingLevel[];
   const initialIndex = supported.indexOf(selected.thinkingLevel);
-  const min = await showMenu(ctx, "Auto 最小强度", supported.slice(0, initialIndex + 1).map((value) => ({ value, label: value })));
+  const min = await showMenu(ctx, "Auto 最小强度（2/3 · 自动调整下限）", supported.slice(0, initialIndex + 1).map((value) => ({ value, label: value })));
   if (!min || isMenuBack(min)) return;
-  const max = await showMenu(ctx, "Auto 最大强度", supported.slice(initialIndex).map((value) => ({ value, label: value })));
+  const max = await showMenu(ctx, "Auto 最大强度（3/3 · 自动调整上限）", supported.slice(initialIndex).map((value) => ({ value, label: value })));
   if (!max || isMenuBack(max)) return;
   const fixed: AutoModelConfig = unwrapRoleResult(parseAutoModel({ provider: selected.provider, model: selected.model, initialThinkingLevel: selected.thinkingLevel, minThinkingLevel: min, maxThinkingLevel: max }));
   unwrapRoleResult(validateAutoModelCapabilities(fixed, supported));

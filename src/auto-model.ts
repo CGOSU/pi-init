@@ -30,13 +30,12 @@ export function validateAutoModelCapabilities(config: AutoModelConfig, supported
   return { ok: true, value: config };
 }
 
-export function validateAutoSuggestion(config: AutoModelConfig, supported: readonly string[], level: unknown, current: ThinkingLevel, allowLower: boolean): RoleConfigResult<ThinkingLevel> {
+export function validateAutoSuggestion(config: AutoModelConfig, supported: readonly string[], level: unknown): RoleConfigResult<ThinkingLevel> {
   const index = AUTO_THINKING_LEVELS.indexOf(level as ThinkingLevel);
   if (index < 0) return { ok: false, code: "AUTO_THINKING_LEVEL_INVALID", message: "建议的推理强度不合法" };
   if (index < AUTO_THINKING_LEVELS.indexOf(config.minThinkingLevel) || index > AUTO_THINKING_LEVELS.indexOf(config.maxThinkingLevel)) {
     return { ok: false, code: "AUTO_THINKING_OUT_OF_RANGE", message: "建议的推理强度超出 Auto 允许范围" };
   }
   if (!supported.includes(level as string)) return { ok: false, code: "AUTO_THINKING_UNSUPPORTED", message: "固定模型不支持建议的推理强度" };
-  if (!allowLower && index < AUTO_THINKING_LEVELS.indexOf(current)) return { ok: false, code: "AUTO_TASK_DOWNGRADE_DENIED", message: "同一任务内仅允许保持或提高强度；请在新任务边界重新评估" };
   return { ok: true, value: level as ThinkingLevel };
 }

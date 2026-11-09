@@ -94,12 +94,13 @@ test("SDK event chain applies initial strength, then only future requests use a 
   assert.equal(f.thinking, "medium");
   assert.equal((await f.suggest("high")).ok, true);
   assert.equal(f.thinking, "high");
-  assert.equal((await f.suggest("low")).code, "AUTO_TASK_DOWNGRADE_DENIED");
+  assert.equal((await f.suggest("low")).ok, true);
+  assert.equal(f.thinking, "low");
   await f.start();
-  assert.equal(f.thinking, "high", "ordinary rounds must not reset the adaptive level");
+  assert.equal(f.thinking, "low", "ordinary rounds must not reset the adaptive level");
   assert.equal((await f.suggest("low", "New task", true)).code, "AUTO_TASK_BOUNDARY_UNAVAILABLE");
-  await f.runner.emit({ type: "input", text: "Continue", source: "interactive" });
-  assert.equal((await f.suggest("low")).code, "AUTO_TASK_DOWNGRADE_DENIED");
+  assert.equal((await f.suggest("high")).ok, true);
+  await f.runner.emit({ type: "input", text: "Independent new task", source: "interactive" });
   assert.equal((await f.suggest("low", "Independent new task", true)).ok, true);
   assert.equal(f.thinking, "low");
   assert.equal((await f.suggest("xhigh")).code, "AUTO_THINKING_OUT_OF_RANGE");
@@ -150,14 +151,17 @@ test("manual selection before the first Auto request is not overwritten by the i
   assert.equal((await f.suggest("medium")).code, "AUTO_MANUAL_OVERRIDE");
 });
 
-test("workflow task boundaries permit reassessment but role changes and extension continuations do not", async () => {
+test("workflow permits strength increases and decreases within a task without requiring a new boundary", async () => {
   const f = fixture();
   f.state.workflowState = { status: "running", currentTaskId: "one", tasks: [{ id: "one", status: "in_progress" }] };
   await f.start();
   assert.equal((await f.suggest("high")).ok, true);
   f.state.activeRole.role = "docs-commit";
   await f.runner.emit({ type: "input", text: "Continue", source: "extension" });
-  assert.equal((await f.suggest("low")).code, "AUTO_TASK_DOWNGRADE_DENIED");
+  assert.equal((await f.suggest("low")).ok, true);
+  assert.equal(f.thinking, "low");
+  assert.equal((await f.suggest("high")).ok, true);
+  assert.equal(f.thinking, "high");
   f.state.workflowState.currentTaskId = "two";
   f.state.workflowState.tasks.push({ id: "two", status: "in_progress" });
   assert.equal((await f.suggest("low")).ok, true);

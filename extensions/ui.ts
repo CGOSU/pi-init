@@ -344,7 +344,7 @@ export async function selectRoleModel(
   ctx: ExtensionContext,
   role: string,
   initialConfig?: RoleModelConfig,
-  options: Pick<MenuOptions, "onSave"> = {},
+  options: Pick<MenuOptions, "onSave"> & { thinkingLabel?: string; thinkingDescription?: string } = {},
 ) {
   const models = getAvailableRoleModels(ctx);
   if (models.length === 0) {
@@ -383,11 +383,11 @@ export async function selectRoleModel(
 
     const thinkingLevel = await showMenu(
       ctx,
-      `推理强度 · ${shortModelName(model.id)}`,
+      `${options.thinkingLabel ?? "推理强度"} · ${shortModelName(model.id)}`,
       supportedLevels.map((level) => ({
         value: level,
         label: level,
-        description: level === "max" ? "最高推理强度，耗时和成本也最高" : undefined,
+        description: options.thinkingDescription ?? (level === "max" ? "最高推理强度，耗时和成本也最高" : undefined),
       })),
       {
         selectedValue: selectedModel === model ? initialConfig?.thinkingLevel : undefined,

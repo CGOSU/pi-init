@@ -121,9 +121,8 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const task = state.workflowState?.currentTaskId;
     if (saved.task !== task) { saved.task = task; saved.assessed = false; }
     const model = fixedModel(ctx, fixed);
-    const newOrdinaryTask = !task && taskBoundary && (saved.pendingBoundary || !saved.assessed);
     if (taskBoundary && !task && saved.assessed && !saved.pendingBoundary) return fail("AUTO_TASK_BOUNDARY_UNAVAILABLE", "没有新的用户输入，不得声明新的普通任务边界");
-    const check = validateAutoSuggestion(fixed, getSupportedThinkingLevels(model), level, pi.getThinkingLevel(), !saved.assessed || Boolean(newOrdinaryTask));
+    const check = validateAutoSuggestion(fixed, getSupportedThinkingLevels(model), level);
     if (!check.ok) return check;
     if (mode(config) === "manual") return fail("AUTO_MANUAL_MODE", "手动切换方式下不自动调整强度；请手动选择或改为自动/确认方式");
     if (pi.getThinkingLevel() !== level && mode(config) === "confirm") {
@@ -215,7 +214,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (saved.task !== task) { saved.task = task; saved.assessed = false; save(); }
     const sections = event.systemPromptOptions?.sections;
     if (!sections) return;
-    sections.pi_init_auto_model = `模型策略 Auto：固定 ${fixed.provider}/${fixed.model}；允许强度 ${fixed.minThinkingLevel}–${fixed.maxThinkingLevel}；当前 ${pi.getThinkingLevel()}。${saved.manual ? "用户手动强度优先，自动调整暂停，只有用户在控制中心恢复 Auto 才解除。" : "在已确认职责后按任务复杂度和风险评估强度：调用 switch_role，role 为当前职责，同时提供 thinkingLevel 和非空 reason；这是调档建议，不是换角，不需结束当前任务。首次判断用起始强度，调整仅影响后续请求。新用户任务或工作流任务边界可重新评估，同一任务内只升不降；普通会话仅在新的用户输入确实引入独立任务时传 taskBoundary=true，继续、补充说明和普通消息不是新任务；工作流边界由运行时确定。角色变化、普通工具失败或每轮消息本身不是调档依据。不额外调用分类模型。"} 职责权限、格式化、验证、文档和提交仍沿用共享流程。切换方式 ${mode(config)}；manual 不自动应用强度。`;
+    sections.pi_init_auto_model = `模型策略 Auto：固定 ${fixed.provider}/${fixed.model}；允许强度 ${fixed.minThinkingLevel}–${fixed.maxThinkingLevel}；当前 ${pi.getThinkingLevel()}。${saved.manual ? "用户手动强度优先，自动调整暂停，只有用户在控制中心恢复 Auto 才解除。" : "在已确认职责后按任务复杂度和风险评估强度：调用 switch_role，role 为当前职责，同时提供 thinkingLevel 和非空 reason；这是调档建议，不是换角，不需结束当前任务。首次判断用起始强度，调整仅影响后续请求。同一任务内可按当前阶段复杂度和风险在允许范围内升降强度，无需声明新任务边界；普通会话仅在新的用户输入确实引入独立任务时传 taskBoundary=true，继续、补充说明和普通消息不是新任务；工作流边界由运行时确定。角色变化、普通工具失败或每轮消息本身不是调档依据。不额外调用分类模型。"} 职责权限、格式化、验证、文档和提交仍沿用共享流程。切换方式 ${mode(config)}；manual 不自动应用强度。`;
   });
   return { ensure, suggest, resume, validate: (ctx: ExtensionContext, config: ResolvedRoleConfig) => fixedModel(ctx, config.autoModel!) };
 }
