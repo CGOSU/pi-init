@@ -25,14 +25,17 @@ test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", as
 
     const tuiHarness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(tuiHarness, "session_start");
-    assert.deepEqual(tuiHarness.notifications.at(-1), {
-      message: "📌 Pi Init · 角色模型配置\n\n◆ 架构设计\n  模型：openai-codex/gpt-5.6-luna\n  推理强度：max",
-      level: "info",
-    });
+    const startup = tuiHarness.widgets.get("pi-init-role-config");
+    assert.ok(startup);
+    tuiHarness.context.ui.notify("另一扩展的启动通知", "info");
+    assert.equal(tuiHarness.widgets.get("pi-init-role-config"), startup);
+    assert.ok(startup.content.join("\n").includes("openai-codex/gpt-5.6-luna"));
+    await emitExtensionEvent(tuiHarness, "agent_start");
+    assert.equal(tuiHarness.widgets.has("pi-init-role-config"), false);
 
     const rpcHarness = createExtensionHarness([], { cwd: directory, mode: "rpc", trusted: true });
     await emitExtensionEvent(rpcHarness, "session_start");
-    assert.equal(rpcHarness.notifications.some(({ message }) => message.startsWith("Pi Init 已就绪")), false);
+    assert.equal(rpcHarness.widgets.has("pi-init-role-config"), false);
   });
 });
 
@@ -50,10 +53,31 @@ test("启动提示输出未匹配当前模型的角色配置", async () => {
 
     const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(harness, "session_start");
-    assert.deepEqual(harness.notifications.at(-1), {
-      message: "📌 Pi Init · 角色模型配置\n\n◆ 架构设计\n  模型：openai-codex/gpt-5.6-sol\n  推理强度：max\n\n◆ 开发测试\n  模型：openai-codex/gpt-5.6-luna\n  推理强度：max\n\n◆ 文档收尾\n  模型：openai-codex/gpt-5.6-astra\n  推理强度：high",
-      level: "info",
-    });
+    const startup = harness.widgets.get("pi-init-role-config").content.join("\n");
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-astra"]) {
+      assert.ok(startup.includes(model));
+    }
+  });
+});
+
+test("Auto 启动提示支持空角色映射，重新加载空配置时清除旧提示", async () => {
+  await withTempDirectory(async (directory) => {
+    await mkdir(path.join(directory, ".pi"), { recursive: true });
+    const configPath = path.join(directory, ".pi", "role-models.json");
+    await writeFile(configPath, JSON.stringify({
+      modelStrategy: "auto",
+      autoModel: {
+        provider: "test", model: "fixed", initialThinkingLevel: "medium",
+        minThinkingLevel: "low", maxThinkingLevel: "high",
+      },
+      roleModels: {},
+    }));
+    const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
+    await emitExtensionEvent(harness, "session_start");
+    assert.ok(harness.widgets.get("pi-init-role-config").content.join("\n").includes("test/fixed"));
+    await writeFile(configPath, JSON.stringify({ roleModels: {} }));
+    await emitExtensionEvent(harness, "session_start");
+    assert.equal(harness.widgets.has("pi-init-role-config"), false);
   });
 });
 

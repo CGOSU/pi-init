@@ -220,6 +220,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
 
   pi.on("agent_start", (_event, ctx) => {
     if (runtimeState.userStopRequested && !userControl.allowsExternalTurn()) { ctx.abort(); return; }
+    ctx.ui.setWidget("pi-init-role-config", undefined);
     roleHandoff.reset(); // A host-started run consumes any waiting continuation.
     runtimeState.agentRunActive = true;
     workflowTaskConsumptionRunActive = !runtimeState.userStopRequested;
@@ -318,10 +319,13 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         : Object.entries(config.roleModels).map(([configuredRole, model]) =>
           `◆ ${roleLabel(configuredRole)}\n  模型：${model.provider}/${model.model}\n  推理强度：${model.thinkingLevel}`,
         );
-      if (ctx.mode === "tui" && roleModelConfigs.length > 0) {
-        ctx.ui.notify(
-          `📌 Pi Init · 角色模型配置\n\n${roleModelConfigs.join("\n\n")}`,
-          "info",
+      if (ctx.mode === "tui") {
+        // Info notifications share one slot in Pi; other startup notices can replace them.
+        ctx.ui.setWidget(
+          "pi-init-role-config",
+          roleModelConfigs.length > 0
+            ? `📌 Pi Init · 角色模型配置\n\n${roleModelConfigs.join("\n\n")}`.split("\n")
+            : undefined,
         );
       }
       if (!runtimeState.userStopRequested) {
