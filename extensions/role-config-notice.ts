@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import type { ResolvedRoleConfig } from "./contracts.ts";
 import { roleLabel } from "../src/roles.ts";
 
@@ -17,11 +18,12 @@ function roleConfigSections(config: ResolvedRoleConfig): string[] {
 export function showRoleConfigNotice(ctx: ExtensionContext, config: ResolvedRoleConfig) {
   if (ctx.mode !== "tui") return;
   const sections = roleConfigSections(config);
-  // Info notifications share one slot in Pi; other startup notices can replace them.
+  // Info notifications share one slot; string-array widgets are capped at 10 lines.
+  // A component factory keeps all configured roles visible.
   ctx.ui.setWidget(
     ROLE_CONFIG_WIDGET,
     sections.length > 0
-      ? `📌 Pi Init · 角色模型配置\n\n${sections.join("\n\n")}`.split("\n")
+      ? () => new Text(`📌 Pi Init · 角色模型配置\n\n${sections.join("\n\n")}`, 1, 0)
       : undefined,
   );
 }

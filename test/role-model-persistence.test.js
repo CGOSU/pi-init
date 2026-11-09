@@ -5,6 +5,18 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mergeRoleConfigData, resolveRoleConfig } from "../src/roles.ts";
+import { initTheme, InteractiveMode } from "@earendil-works/pi-coding-agent";
+
+function renderStartupWidget(widget) {
+  initTheme("dark");
+  const host = {
+    extensionWidgetsAbove: new Map(),
+    extensionWidgetsBelow: new Map(),
+    renderWidgets() {},
+  };
+  InteractiveMode.prototype.setExtensionWidget.call(host, "startup", widget.content, widget.options);
+  return host.extensionWidgetsAbove.get("startup").render(120).join("\n");
+}
 
 test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", async () => {
   await withTempDirectory(async (directory) => {
@@ -29,7 +41,7 @@ test("TUI 启动时输出配置中的全部角色模型，非 TUI 不提示", as
     assert.ok(startup);
     tuiHarness.context.ui.notify("另一扩展的启动通知", "info");
     assert.equal(tuiHarness.widgets.get("pi-init-role-config"), startup);
-    assert.ok(startup.content.join("\n").includes("openai-codex/gpt-5.6-luna"));
+    assert.ok(renderStartupWidget(startup).includes("openai-codex/gpt-5.6-luna"));
     await emitExtensionEvent(tuiHarness, "agent_start");
     assert.equal(tuiHarness.widgets.has("pi-init-role-config"), false);
 
@@ -53,7 +65,7 @@ test("启动提示输出未匹配当前模型的角色配置", async () => {
 
     const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(harness, "session_start");
-    const startup = harness.widgets.get("pi-init-role-config").content.join("\n");
+    const startup = renderStartupWidget(harness.widgets.get("pi-init-role-config"));
     for (const model of ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-astra"]) {
       assert.ok(startup.includes(model));
     }
@@ -74,7 +86,7 @@ test("Auto 启动提示支持空角色映射，重新加载空配置时清除旧
     }));
     const harness = createExtensionHarness([], { cwd: directory, mode: "tui", trusted: true });
     await emitExtensionEvent(harness, "session_start");
-    assert.ok(harness.widgets.get("pi-init-role-config").content.join("\n").includes("test/fixed"));
+    assert.ok(renderStartupWidget(harness.widgets.get("pi-init-role-config")).includes("test/fixed"));
     await writeFile(configPath, JSON.stringify({ roleModels: {} }));
     await emitExtensionEvent(harness, "session_start");
     assert.equal(harness.widgets.has("pi-init-role-config"), false);
