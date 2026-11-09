@@ -5,7 +5,7 @@
 ## 能做什么
 
 - 初始化项目的 `AGENTS.md`、`docs/` 项目记忆和 `.pi/role-models.json`，只创建缺失文件，已有文件原样保留。
-- 使用随 package 发布的 `pi-init-role-routing` Skill 提供通用职责规则；项目可配置角色及对应模型。
+- 使用随 package 发布的 `pi-init-role-routing` Skill 提供通用职责规则；支持按职责模型映射或固定模型 Auto 强度自适应。
 - 在 Pi 中切换职责、配置自动换角方式，并查看或管理任务工作流。
 - 提供 `/blackbox` 运行诊断、`/large` 大型代码文件结构审阅，以及独立的 `pi-usage` 用量统计命令。
 - 支持[本地诊断采集](docs/diagnostics-collection.md)：将明确指定的 pi-init 日志与关联 session 汇成带来源的离线报告，用于比较版本和排查优化候选。
@@ -54,6 +54,24 @@ JS/TS项目无既定工具链时默认使用pnpm。快速/高级初始化推断�
 | `/large [--scope 目录] [--exclude 目录] [--include-temporary]` | 按范围扫描大型代码文件并启动建议审阅 |
 
 标准职责包括 `architect`（规划）、`developer-test`（实现与验证）和 `docs-commit`（文档与交付）；项目也可以配置自定义角色。角色切换方式为 `auto`（自动）、`confirm`（确认后切换）或 `manual`（手动切换）。内联模型选择和文本输入等待用户时，会向 Pi 声明 question 阻塞状态；支持 Program Status 的终端可以显示 Pi 正在等待用户。
+
+模型策略与角色切换方式、任务编排的 `workflowMode` 相互独立。默认 `roles` 策略沿用原职责模型映射；在控制中心「角色与模型 → 模型策略」选择 `Auto` 后，指定一个固定模型及支持范围内的起始、最小和最大推理强度（最小 ≤ 起始 ≤ 最大）。下例中的 provider/model 是占位符，请从 Pi 已注册模型列表中选择。例如：
+
+```json
+{
+  "schemaVersion": 2,
+  "modelStrategy": "auto",
+  "autoModel": {
+    "provider": "<provider-id>",
+    "model": "<model-id>",
+    "initialThinkingLevel": "medium",
+    "minThinkingLevel": "low",
+    "maxThinkingLevel": "high"
+  }
+}
+```
+
+启用 `Auto` 时原 `roleModels` 映射保留但暂不使用；切回 `roles` 后恢复使用。菜单更改先暂存于当前会话，按 `Ctrl+S`/`F2` 或运行 `/pi-init save` 才写入项目配置。每次已确认职责后，模型可按任务复杂度与风险调用 `switch_role`，传入当前职责、`thinkingLevel` 和理由，为后续请求建议强度；这不换职责、不结束当前任务，也不额外调用分类模型。首次判断使用起始强度，同一任务内只升不降；工作流任务边界由运行时识别，普通会话仅在新的用户输入确实开始独立任务时设置 `taskBoundary: true`，不能把继续说明当作新任务。用户手动指定推理强度后自动调档暂停，可在模型策略菜单恢复 Auto。`confirm` 仍要求确认，`manual` 不自动应用模型或调档；模型能力、凭据或强度不匹配时明确失败，不回退到其他模型。Auto 只改变固定模型的选择与推理强度，不改变职责权限；代码格式化、测试验证、文档及提交仍由原职责流程共享，architect 也不会因此获得仓库读取或实现权限。
 
 任务编排的 `workflowMode` 与角色切换方式独立：`off` 拒绝新计划，`on` 始终编排，`auto` 默认按数量跳过不超过两项的计划，不自动评估风险。需要持久检查点、恢复或职责调度时，architect 可在 `task_workflow(action="plan", orchestration="required", ...)` 中显式要求编排，包含一至两项的计划也会进入原工作流；`off` 仍拒绝。省略该参数保持原行为，跳过时没有活动工作流，不能用其checkpoint/complete/block。按真实交付物拆分，不为触发编排制造任务。
 

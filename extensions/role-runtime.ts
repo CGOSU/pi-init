@@ -1,4 +1,5 @@
 import { isRecord, hasOwn } from "../src/value-guards.ts";
+import { createAutoModelRuntime } from "./auto-model-runtime.ts";
 import {
     CONFIG_DIR_NAME,
     withFileMutationQueue,
@@ -52,6 +53,7 @@ export function createRoleRuntime(
   deps: RoleRuntimeDependencies,
 ) {
   let internalModelSelectionDepth = 0;
+  const autoModel = createAutoModelRuntime(pi, state, readSessionRoleConfig, (ctx) => refreshRoleStatus(ctx, state.roleModeStatus));
 
   async function readRoleConfig(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) return { ok: true as const, value: undefined };
@@ -134,7 +136,7 @@ export function createRoleRuntime(
     ctx: ExtensionContext,
     config: ResolvedRoleConfig,
   ) {
-    if (internalModelSelectionDepth > 0) return; // Ignore pi.setModel()'s internal model_select event.
+    if (internalModelSelectionDepth > 0 || config.modelStrategy === "auto") return; // Auto never writes inactive role mappings.
     const role = state.activeRole?.role;
     if (!role) {
       ctx.ui.notify("手动模式下模型已由宿主切换；当前无活动角色，未写入 .pi/role-models.json。", "info");
@@ -178,7 +180,7 @@ export function createRoleRuntime(
         const persistedBase = persisted === undefined ? {} : persisted;
         const resolved = unwrapRoleResult(resolveRoleConfig(persistedBase, changes));
         await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
+        await writeFile(configPath, `${JSON.stringify(mergeRoleConfigData(persistedBase, resolved), null, 2)}\n`, "utf8");
       });
       clearStagedRoleConfig(role);
       state.configuredRoleNames = unwrapRoleResult(getRoleNames(await readSessionRoleConfig(ctx)));
@@ -216,7 +218,7 @@ export function createRoleRuntime(
           return { resolved, changed: false };
         }
         await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, `${JSON.stringify(resolved, null, 2)}\n`, "utf8");
+        await writeFile(configPath, `${JSON.stringify(mergeRoleConfigData(current, resolved), null, 2)}\n`, "utf8");
         return { resolved, changed: true };
       });
       if (!outcome.changed) {
@@ -274,7 +276,11 @@ export function createRoleRuntime(
     const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
     state.workflowModeStatus = config.workflowMode;
     const target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
-    const hasExplicitModel = hasOwn(config.roleModels, normalizedRole);
+    if (config.modelStrategy === "auto") {
+      await autoModel.ensure(ctx, config, true);
+      target.thinkingLevel = pi.getThinkingLevel();
+    }
+    const hasExplicitModel = config.modelStrategy === "auto" || hasOwn(config.roleModels, normalizedRole);
     const model = hasExplicitModel ? ctx.modelRegistry.find(target.provider, target.model) : undefined;
     if (hasExplicitModel && !model) {
       const error = new Error(
@@ -357,17 +363,22 @@ export function createRoleRuntime(
     const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const config = await readSessionRoleConfig(ctx);
     unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
+    if (config.modelStrategy === "auto") autoModel.validate(ctx, config);
     const mode = state.sessionModeOverride ?? config.mode;
     if (mode === "auto") {
       const result = await applyRole(normalizedRole, ctx, config);
       return { mode, requestedRole: normalizedRole, result };
     }
     if (mode === "manual") {
+      if (config.modelStrategy === "auto" && (ctx.model?.provider !== config.autoModel?.provider || ctx.model?.id !== config.autoModel?.model)) {
+        throw new Error("当前真实模型不是 Auto 固定模型；手动模式请先执行 /pi-init role <role>");
+      }
       const result = currentRole(normalizedRole, ctx);
       return { mode, requestedRole: normalizedRole, result };
     }
 
-    if (state.activeRole?.role === normalizedRole) {
+    const matchesAutoModel = config.modelStrategy !== "auto" || (ctx.model?.provider === config.autoModel?.provider && ctx.model?.id === config.autoModel?.model);
+    if (state.activeRole?.role === normalizedRole && matchesAutoModel) {
       try {
         return { mode, requestedRole: normalizedRole, result: currentRole(normalizedRole, ctx) };
       } catch {
@@ -382,7 +393,7 @@ export function createRoleRuntime(
       {
         value: "accept",
         label: "采用建议",
-        description: config.roleModels[normalizedRole] ? "切换到项目配置的模型" : "沿用当前 Pi 会话模型",
+        description: config.modelStrategy === "auto" ? "使用 Auto 固定模型并保留当前自适应强度" : config.roleModels[normalizedRole] ? "切换到项目配置的模型" : "沿用当前 Pi 会话模型",
       },
       { value: "manual", label: "切换为手动模式", description: "本次会话不再自动换角" },
       { value: "cancel", label: "取消" },
@@ -409,6 +420,8 @@ export function createRoleRuntime(
   }
   return {
     activeRoleFor,
+    suggestThinking: autoModel.suggest,
+    resumeAutoThinking: autoModel.resume,
 
     readSessionRoleConfig,
     hasPendingRoleConfigChanges,

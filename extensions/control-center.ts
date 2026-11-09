@@ -20,6 +20,7 @@ import {
   showMenu,
 } from "./ui.ts";
 import type { WorkflowCommandResult } from "./workflow-panel-actions.ts";
+import { configureModelStrategy } from "./model-strategy-menu.ts";
 
 export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
@@ -38,8 +39,15 @@ export type ControlCenterDependencies = {
 function roleMenuItems(config: ResolvedRoleConfig, mode: string, roleNames: string[]) {
   return [
     {
+      value: "strategy",
+      label: config.modelStrategy === "auto" ? "● 模型策略 · Auto（固定模型）" : "● 模型策略 · 按职责配置",
+      description: config.modelStrategy === "auto" && config.autoModel
+        ? `${config.autoModel.provider}/${config.autoModel.model} · 起始 ${config.autoModel.initialThinkingLevel} · ${config.autoModel.minThinkingLevel}–${config.autoModel.maxThinkingLevel}；原职责映射暂不使用`
+        : "职责分工和格式化、验证、文档提交流程始终共用",
+    },
+    {
       value: "mode",
-      label: `● 模式 · ${roleModeLabel(mode)}`,
+      label: `● 切换确认方式 · ${roleModeLabel(mode)}`,
       description: "只影响本次会话，不修改项目文件",
     },
     ...roleNames.map((role) => {
@@ -49,7 +57,7 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string, roleNames: stri
         label: model
           ? `● ${roleLabel(role)} · ${shortModelName(model.model)}/${model.thinkingLevel}`
           : `● ${roleLabel(role)} · 会话默认模型`,
-        description: model ? formatRoleModel(model) : "未单独配置模型时，沿用当前 Pi 会话模型和推理强度",
+        description: config.modelStrategy === "auto" ? "映射保留，Auto 下暂不使用" : model ? formatRoleModel(model) : "未单独配置模型时，沿用当前 Pi 会话模型和推理强度",
       };
     }),
     { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
@@ -218,6 +226,10 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         || await roleRuntime.isRoleModelConfigPersisted(role, selection, ctx);
       if (alreadySaved) roleRuntime.clearStagedRoleConfig(role);
       else roleRuntime.stageRoleConfig({ roleModels: { [role]: selection } });
+      if (config.modelStrategy === "auto") {
+        ctx.ui.notify("职责模型映射已保留；Auto 下暂不使用，不改变当前固定模型或强度。", "info");
+        return;
+      }
       const result = await roleRuntime.applyRole(role, ctx);
       ctx.ui.notify(
         alreadySaved
@@ -241,6 +253,12 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       const mode = state.sessionModeOverride ?? config.mode;
       const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode, state.configuredRoleNames), saveMenuOptions(ctx));
       if (!action || isMenuBack(action)) return;
+      if (action === "strategy") {
+        try { await configureModelStrategy(ctx, config, roleRuntime); }
+        catch (error) { ctx.ui.notify(String(error instanceof Error ? error.message : error), "error"); }
+        config = await roleRuntime.readSessionRoleConfig(ctx);
+        continue;
+      }
       if (action === "mode") {
         await setSessionMode(undefined, ctx);
         continue;
@@ -275,7 +293,8 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         ? `${shortModelName(ctx.model.id)}/${deps.getThinkingLevel()}`
         : "未选择模型";
       const summary = [
-        `模式  ${roleModeLabel(mode)}`,
+        `切换确认方式  ${roleModeLabel(mode)}`,
+        `模型策略  ${config.modelStrategy === "auto" ? "Auto · 固定模型，自适应强度" : "按职责配置"}`,
         role
           ? `角色  ${roleLabel(role.role)}`
           : "角色  尚未切换（按任务自动选择）",

@@ -303,7 +303,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.currentContext = ctx;
       runtimeState.workflowModeStatus = config.workflowMode;
       const thinkingLevel = pi.getThinkingLevel();
-      const role = findMatchingRole(config, ctx.model, thinkingLevel);
+      const role = config.modelStrategy === "auto" ? undefined : findMatchingRole(config, ctx.model, thinkingLevel);
       runtimeState.activeRole = role && ctx.model
         ? {
             role,
@@ -313,9 +313,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
           }
         : undefined;
       roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
-      const roleModelConfigs = Object.entries(config.roleModels).map(([configuredRole, model]) =>
-        `◆ ${roleLabel(configuredRole)}\n  模型：${model.provider}/${model.model}\n  推理强度：${model.thinkingLevel}`,
-      );
+      const roleModelConfigs = config.modelStrategy === "auto" && config.autoModel
+        ? [`◆ Auto · 固定模型\n  模型：${config.autoModel.provider}/${config.autoModel.model}\n  起始强度：${config.autoModel.initialThinkingLevel}\n  允许范围：${config.autoModel.minThinkingLevel}–${config.autoModel.maxThinkingLevel}\n  原职责映射保留但暂不使用，职责和共享流程不变。`]
+        : Object.entries(config.roleModels).map(([configuredRole, model]) =>
+          `◆ ${roleLabel(configuredRole)}\n  模型：${model.provider}/${model.model}\n  推理强度：${model.thinkingLevel}`,
+        );
       if (ctx.mode === "tui" && roleModelConfigs.length > 0) {
         ctx.ui.notify(
           `📌 Pi Init · 角色模型配置\n\n${roleModelConfigs.join("\n\n")}`,

@@ -1,4 +1,5 @@
 import { textOf } from "./error-utils.ts";
+import { parseAutoModel } from "./auto-model.ts";
 import { hasOwn, isRecord, isStringMember as isOneOf } from "./value-guards.ts";
 import type {
   DefaultRoleName,
@@ -151,6 +152,8 @@ const CONFIG_METADATA_KEYS = new Set([
   "workflowEnabled",
   "workflowExecutor",
   "roleModels",
+  "modelStrategy",
+  "autoModel",
   "providerPolicy",
   "runtime",
 ]);
@@ -334,10 +337,14 @@ export function resolveRoleModel(
   if (!normalizedRole.ok) return normalizedRole;
   const roleName = normalizedRole.value;
   const configured = resolved.value.roleModels[roleName];
-  if (configured) return { ok: true, value: configured };
-  if (!DEFAULT_ROLE_NAME_SET.has(roleName)) {
+  if (!configured && !DEFAULT_ROLE_NAME_SET.has(roleName)) {
     return failure("ROLE_NOT_ENABLED", `角色 ${roleName} 未启用；请先配置该角色及职责说明`);
   }
+  if (resolved.value.modelStrategy === "auto" && resolved.value.autoModel) {
+    const fixed = resolved.value.autoModel;
+    return { ok: true, value: { provider: fixed.provider, model: fixed.model, thinkingLevel: fixed.initialThinkingLevel } };
+  }
+  if (configured) return { ok: true, value: configured };
   if (!sessionDefault) {
     return failure("SESSION_MODEL_UNAVAILABLE", `角色 ${roleName} 未配置模型，且当前 Pi 会话没有可用的默认模型`);
   }
@@ -401,7 +408,14 @@ function parseRoleConfig(source: Record<string, unknown>): ResolvedRoleConfig {
   const roleModels = normalizeRoleModels(source);
   const workflowExecutor = resolveWorkflowExecutor(source);
   if (!workflowExecutor.ok) throw configError(workflowExecutor.code, workflowExecutor.message);
-  const resolved = {
+  if (source.modelStrategy !== undefined && source.modelStrategy !== "roles" && source.modelStrategy !== "auto") {
+    throw configError("MODEL_STRATEGY_INVALID", "模型策略必须是 roles 或 auto");
+  }
+  const autoModel = source.autoModel === undefined ? undefined : unwrapRoleResult(parseAutoModel(source.autoModel));
+  if (source.modelStrategy === "auto" && !autoModel) throw configError("AUTO_MODEL_MISSING", "Auto 策略需要配置固定模型");
+  const resolved: ResolvedRoleConfig = {
+    ...(source.modelStrategy !== undefined ? { modelStrategy: source.modelStrategy } : {}),
+    ...(autoModel ? { autoModel } : {}),
     schemaVersion: ROLE_CONFIG_SCHEMA_VERSION,
     mode: unwrapRoleResult(resolveRoleMode(source)),
     workflowMode: unwrapRoleResult(resolveWorkflowMode(source)),

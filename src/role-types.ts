@@ -10,7 +10,17 @@ export type RoleModelConfig = {
   thinkingLevel: ThinkingLevel;
 };
 
+export type AutoModelConfig = {
+  provider: string;
+  model: string;
+  initialThinkingLevel: ThinkingLevel;
+  minThinkingLevel: ThinkingLevel;
+  maxThinkingLevel: ThinkingLevel;
+};
+
 export type ResolvedRoleConfig = {
+  modelStrategy?: "roles" | "auto";
+  autoModel?: AutoModelConfig;
   schemaVersion: number;
   mode: RoleMode;
   workflowMode: WorkflowMode;

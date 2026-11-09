@@ -80,7 +80,12 @@ export const roleNameSchema = Type.String({
   description: "要切换的角色 ID；必须是小写字母、数字和单连字符",
 });
 
-export const switchRoleParameters = Type.Object({ role: roleNameSchema });
+export const switchRoleParameters = Type.Object({
+  role: roleNameSchema,
+  thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Auto 策略下建议后续请求使用的强度；role 必须是当前职责，不同时换角" })),
+  reason: Type.Optional(Type.String({ description: "Auto 强度建议的任务复杂度或风险依据" })),
+  taskBoundary: Type.Optional(Type.Boolean({ description: "仅普通会话的新用户输入确实引入独立任务时设为 true；继续或补充说明不是新任务，工作流边界由运行时决定" })),
+});
 
 export const workflowTaskRoleSchema = Type.String({
   pattern: ROLE_ID_PATTERN.source,
