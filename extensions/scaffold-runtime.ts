@@ -232,7 +232,6 @@ async function collectOptions(
       step = 3;
       continue;
     }
-    if (!value || value === "cancel") return undefined;
     if (value !== "default" && value !== "custom") return undefined;
     roleConfiguration = value;
     if (roleConfiguration === "custom") {

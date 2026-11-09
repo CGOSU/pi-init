@@ -231,11 +231,6 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       if (previous && previous.fingerprint !== file.fingerprint) current.readCoverage.delete(file.path);
       next.set(file.path, file);
     }
-    if (result.errors.length === 0) {
-      for (const filePath of next.keys()) {
-        if (!result.files.some((file) => file.path === filePath)) next.delete(filePath);
-      }
-    }
     current.inventory = next;
     current.errors = result.errors;
     current.scanErrors = result.errors;

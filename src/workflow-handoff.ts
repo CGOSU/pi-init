@@ -218,7 +218,6 @@ export function workflowReplanIdentity(state: WorkflowState | undefined): Workfl
     return undefined;
   }
   const actionIdentity = workflowActionIdentity(state);
-  if (!actionIdentity) return undefined;
   return {
     ...actionIdentity,
     revisionId: revision.revisionId,
@@ -305,16 +304,6 @@ export function validateWorkflowReplanIdentity(
   if (!base.ok) return base;
   if (!isRecord(input)) {
     return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份");
-  }
-  const continuation = state?.continuation;
-  const revision = state?.pendingRevision;
-  if (state?.status !== "replanning" || !revision || continuation?.kind !== "replan") {
-    return failure("WORKFLOW_REPLAN_HANDOFF_MISSING", "当前没有可应用的重规划交接", {
-      mismatchedFields: ["replan.handoff"],
-      expected: safeIdentityValues(state, BASE_IDENTITY_FIELDS),
-      received: safeIdentityValues(input, BASE_IDENTITY_FIELDS),
-      nextAction: "查询当前状态；没有 pending revision 与 replan handoff 时，不得提交旧重规划结果。",
-    });
   }
   const fields = [...BASE_IDENTITY_FIELDS, "revisionId", "handoffId"];
   const expected = workflowReplanIdentity(state);

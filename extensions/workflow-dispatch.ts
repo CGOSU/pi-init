@@ -44,9 +44,7 @@ export type WorkflowDispatchDependencies = {
 };
 
 function workflowIdentity(state: WorkflowState): WorkflowActionIdentity {
-  const identity = workflowActionIdentity(state);
-  if (!identity) throw new Error("工作流状态缺少基础动作身份");
-  return identity;
+  return workflowActionIdentity(state);
 }
 
 function sameIdentity(left: WorkflowActionIdentity, right: WorkflowActionIdentity) {
@@ -193,8 +191,6 @@ export function createWorkflowDispatch(
               };
               ctx.ui.notify(`无法持久化工作流恢复状态：${textOf(error)}`, "error");
             }
-            if (state.workflowState === recovered.value) {
-                  }
           }
         }
       }
@@ -322,12 +318,6 @@ export function createWorkflowDispatch(
       ctx.ui.notify(`工作流任务不可派发（${roleValidation.code}）：${roleValidation.message}`, "error");
       return;
     }
-    try {
-      } catch (error) {
-      ctx.ui.notify(`证据绑定同步尚未持久化，已保存任务结果不会重放，暂不派发：${textOf(error)}`, "warning");
-      return;
-    }
-
     if (deps.offerSessionHandoff?.(ctx)) return;
     const effect = selectWorkflowScheduleEffect(current);
     if (!effect) return;
@@ -354,7 +344,7 @@ export function createWorkflowDispatch(
       }
       const nudged = recordWorkflowNudge(current);
       if (nudged === current) return;
-      if (nudged !== current) deps.report.persistWorkflowState(nudged, ctx);
+      deps.report.persistWorkflowState(nudged, ctx);
       if (nudged.status === "paused") {
         ctx.ui.notify(deps.report.formatWorkflowPauseSummary(nudged), "warning");
         return;

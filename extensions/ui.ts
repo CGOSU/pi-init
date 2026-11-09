@@ -123,27 +123,25 @@ export async function showMenu(
         if (matchesKey(data, Key.escape)) {
           done(MENU_BACK);
         } else if (hasSaveAction && isSaveShortcut(data)) {
-          if (!saveInFlight) {
-            saveInFlight = true;
-            saveStatus.setText(theme.fg("warning", "正在保存…"));
-            Promise.resolve()
-              .then(() => options.onSave?.(list.getSelectedItem()?.value))
-              .then((result) => {
-                const success = result === undefined || result.ok;
-                saveStatus.setText(theme.fg(
-                  success ? "success" : "error",
-                  result === undefined ? "保存操作已完成。" : result.message,
-                ));
-              })
-              .catch((error) => {
-                const message = textOf(error);
-                saveStatus.setText(theme.fg("error", `保存失败：${message}`));
-              })
-              .finally(() => {
-                saveInFlight = false;
-                tui.requestRender();
-              });
-          }
+          saveInFlight = true;
+          saveStatus.setText(theme.fg("warning", "正在保存…"));
+          Promise.resolve()
+            .then(() => options.onSave?.(list.getSelectedItem()?.value))
+            .then((result) => {
+              const success = result === undefined || result.ok;
+              saveStatus.setText(theme.fg(
+                success ? "success" : "error",
+                result === undefined ? "保存操作已完成。" : result.message,
+              ));
+            })
+            .catch((error) => {
+              const message = textOf(error);
+              saveStatus.setText(theme.fg("error", `保存失败：${message}`));
+            })
+            .finally(() => {
+              saveInFlight = false;
+              tui.requestRender();
+            });
         } else {
           list.handleInput(data);
         }

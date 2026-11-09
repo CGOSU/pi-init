@@ -428,6 +428,26 @@ test("shell 写入产生的新超限文件在当前工具结果中被发现", as
     assert.match(result.content.at(-1).text, /src\/new\.ts/);
   });
 });
+test("完整重扫移除已删除和缩短的候选，并纳入新文件", async () => {
+  await withTempDirectory(async (directory) => {
+    const harness = createExtensionHarness([], { cwd: directory });
+    await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+    const tool = harness.tools.find((item) => item.name === "file_review");
+    const candidates = async () => {
+      const result = await tool.execute("rescan", { action: "list" }, undefined, undefined, harness.context);
+      assert.equal(result.details.ok, true);
+      return result.details.candidates.map((item) => item.path).sort();
+    };
+    assert.deepEqual(await candidates(), ["src/large.ts"]);
+    await writeFile(path.join(directory, "src", "new.ts"), makeFile("new"));
+    assert.deepEqual(await candidates(), ["src/large.ts", "src/new.ts"]);
+    await rm(path.join(directory, "src", "large.ts"));
+    await writeFile(path.join(directory, "src", "new.ts"), "export const shortened = true;\n");
+    await writeFile(path.join(directory, "src", "replacement.ts"), makeFile("replacement"));
+    assert.deepEqual(await candidates(), ["src/replacement.ts"]);
+  });
+});
+
 test("短测试不会形成候选、通知或 /large 主动派发", async () => {
   await withTempDirectory(async (directory) => {
     await rm(path.join(directory, "src", "large.ts"));
