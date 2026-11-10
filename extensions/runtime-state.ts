@@ -1,6 +1,6 @@
 export { textOf } from "../src/error-utils.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { RoleMode, ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
+import type { ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
 import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
 import type {
   WorkflowActionIdentity,
@@ -48,11 +48,9 @@ export type ExtensionRuntimeState = {
   agentRunActive: boolean;
   userStopRequested: boolean;
   activeRole?: ActiveRole;
-  sessionModeOverride?: RoleMode;
   sessionRoleConfigOverrides: Record<string, unknown>;
   configuredRoleNames: string[];
   controlCenterGuideShown: boolean;
-  roleModeStatus: RoleMode;
   workflowModeStatus: WorkflowMode;
   workflowRestoreError?: { code: string; message: string; sourceEntryId?: string };
   workflowNoticeAcknowledgement?: { sessionId: string; contextGeneration: number; sourceKey: string };
@@ -82,7 +80,6 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     sessionRoleConfigOverrides: {},
     configuredRoleNames: [],
     controlCenterGuideShown: false,
-    roleModeStatus: "auto",
     workflowModeStatus: "auto",
     roleRecoveryPending: false,
     roleRecoveryPersistenceFailed: false,

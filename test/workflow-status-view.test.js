@@ -63,7 +63,7 @@ test("恢复阻断覆盖持久 running 状态，保留原任务身份且给出�
     [{ pendingWorkflowRecovery: state }, "WORKFLOW_RECOVERY_PENDING"],
     [{ userStopRequested: true }, "WORKFLOW_USER_STOPPED"],
   ]) {
-    const view = createWorkflowStatusView(state, { ...idleRuntime, roleModeStatus: "auto", ...flags });
+    const view = createWorkflowStatusView(state, { ...idleRuntime, ...flags });
     assert.equal(view.status, "running");
     assert.equal(view.activity, "execution-blocked");
     assert.equal(view.recovery.code, code);

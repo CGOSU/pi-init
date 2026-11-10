@@ -80,7 +80,7 @@ export type WorkflowStatusRuntime = Pick<
   ExtensionRuntimeState,
   "roleCompactionOperationId" | "roleContextGeneration" | "roleTransitionGeneration" | "activeRoleCompaction"
   | "workflowProgressObservation" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed"
-  | "pendingWorkflowRecovery" | "userStopRequested" | "roleModeStatus"
+  | "pendingWorkflowRecovery" | "userStopRequested"
 >>;
 
 function recoveryFor(state: WorkflowState, runtime: WorkflowStatusRuntime) {
@@ -295,7 +295,6 @@ export function workflowStatusRuntimeFromState(state: ExtensionRuntimeState): Wo
     roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed,
     pendingWorkflowRecovery: state.pendingWorkflowRecovery,
     userStopRequested: state.userStopRequested,
-    roleModeStatus: state.roleModeStatus,
   };
 }
 

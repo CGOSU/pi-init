@@ -1,9 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
-  ROLE_MODES,
-  isRoleMode,
   roleLabel,
-  roleModeLabel,
 } from "../src/roles.ts";
 import type { ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
@@ -36,7 +33,7 @@ export type ControlCenterDependencies = {
   ) => Promise<WorkflowCommandResult>;
 };
 
-function roleMenuItems(config: ResolvedRoleConfig, mode: string, roleNames: string[]) {
+function roleMenuItems(config: ResolvedRoleConfig, roleNames: string[]) {
   return [
     {
       value: "strategy",
@@ -45,11 +42,11 @@ function roleMenuItems(config: ResolvedRoleConfig, mode: string, roleNames: stri
         ? `${config.autoModel.provider}/${config.autoModel.model} · 起始 ${config.autoModel.initialThinkingLevel} · ${config.autoModel.minThinkingLevel}–${config.autoModel.maxThinkingLevel}；原职责映射暂不使用`
         : "职责分工和格式化、验证、文档提交流程始终共用",
     },
-    {
-      value: "mode",
-      label: `● 切换确认方式 · ${roleModeLabel(mode)}`,
-      description: "只影响本次会话，不修改项目文件",
-    },
+    ...(config.requiresAutomaticMigration ? [{
+      value: "enable-automatic",
+      label: "启用全自动并迁移旧配置",
+      description: "旧配置限制自动切换；仅明确启用后生效，显式保存才写入文件",
+    }] : []),
     ...roleNames.map((role) => {
       const model = config.roleModels[role];
       return {
@@ -75,31 +72,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         return result;
       },
     };
-  }
-
-  async function setSessionMode(requested: string | undefined, ctx: ExtensionCommandContext) {
-    const mode = requested || await showMenu(
-      ctx,
-      "角色切换模式",
-      ROLE_MODES.map((value) => ({
-        value,
-        label: roleModeLabel(value),
-        description:
-          value === "auto" ? "按任务自动切换角色；显式配置映射时切换对应模型"
-          : value === "manual" ? "不自动换角；原生 /model 仅为显式映射的当前角色写回配置"
-          : undefined,
-      })),
-      saveMenuOptions(ctx),
-    );
-    if (!mode || isMenuBack(mode)) return undefined;
-    if (!isRoleMode(mode)) {
-      ctx.ui.notify(`未知角色模式：${mode}；可用值：${ROLE_MODES.join(", ")}`, "error");
-      return undefined;
-    }
-    state.sessionModeOverride = mode;
-    roleRuntime.setRoleStatus(ctx, mode);
-    ctx.ui.notify(`当前会话角色模式：${roleModeLabel(mode)}`, "info");
-    return mode;
   }
 
   async function switchRole(requested: string | undefined, ctx: ExtensionCommandContext) {
@@ -162,7 +134,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     }
     const next = await roleRuntime.readSessionRoleConfig(ctx);
     state.workflowModeStatus = next.workflowMode;
-    roleRuntime.refreshRoleStatus(ctx, state.roleModeStatus);
+    roleRuntime.refreshRoleStatus(ctx);
     ctx.ui.notify(
       next.workflowMode === "off"
         ? "当前会话工作流已关闭，新规划将被拒绝。保存角色配置后才会写入项目文件。"
@@ -250,8 +222,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
 
     let config = await roleRuntime.readSessionRoleConfig(ctx);
     while (true) {
-      const mode = state.sessionModeOverride ?? config.mode;
-      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, mode, state.configuredRoleNames), saveMenuOptions(ctx));
+      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, state.configuredRoleNames), saveMenuOptions(ctx));
       if (!action || isMenuBack(action)) return;
       if (action === "strategy") {
         try { await configureModelStrategy(ctx, config, roleRuntime); }
@@ -259,8 +230,10 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         config = await roleRuntime.readSessionRoleConfig(ctx);
         continue;
       }
-      if (action === "mode") {
-        await setSessionMode(undefined, ctx);
+      if (action === "enable-automatic") {
+        await roleRuntime.enableAutomaticSwitching(ctx);
+        config = await roleRuntime.readSessionRoleConfig(ctx);
+        ctx.ui.notify("已为当前会话启用全自动；显式保存才迁移项目配置。", "info");
         continue;
       }
       if (action === "workflow") {
@@ -287,13 +260,12 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     while (true) {
       const config = await roleRuntime.readSessionRoleConfig(ctx);
       state.workflowModeStatus = config.workflowMode;
-      const mode = state.sessionModeOverride ?? config.mode;
       const role = roleRuntime.activeRoleFor(ctx);
       const modelLabel = ctx.model
         ? `${shortModelName(ctx.model.id)}/${deps.getThinkingLevel()}`
         : "未选择模型";
       const summary = [
-        `切换确认方式  ${roleModeLabel(mode)}`,
+        config.requiresAutomaticMigration ? "自动执行  等待显式启用旧配置迁移" : "自动执行  已启用",
         `模型策略  ${config.modelStrategy === "auto" ? "Auto · 固定模型，自适应强度" : "按职责配置"}`,
         role
           ? `角色  ${roleLabel(role.role)}`
@@ -305,7 +277,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       if (showGuide) summary.push("", "快速初始化适合大多数项目；高级初始化可修改全部配置。");
       const section = await showMenu(ctx, "Pi Init 控制中心", [
         { value: "init", label: "初始化", description: "快速初始化或高级初始化当前项目" },
-        { value: "change", label: "变更", description: "角色与模型、工作流策略、角色和会话模式" },
+        { value: "change", label: "变更", description: "模型策略、角色映射与工作流策略" },
         { value: "workflow", label: "工作流", description: "查看、留在本会话继续、新会话交接、重试或取消任务" },
         ...(deps.diagnosticsCommand ? [{ value: "diagnostics", label: "运行诊断", description: "项目与全局状态、脱敏导出、确认清理（仅本机）" }] : []),
         { value: "exit", label: "← 返回" },
@@ -335,12 +307,10 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       if (section === "change") {
         while (true) {
           const currentConfig = await roleRuntime.readSessionRoleConfig(ctx);
-          const currentMode = state.sessionModeOverride ?? currentConfig.mode;
           const action = await showMenu(ctx, "变更", [
             { value: "config", label: "角色与模型", description: "查看或暂存已配置角色的模型" },
             { value: "workflow-config", label: `工作流策略：${workflowModeLabel(currentConfig.workflowMode)}`, description: "配置当前会话的 task_workflow 编排策略" },
             { value: "role", label: "切换角色", description: "立即应用某个角色的模型和推理强度" },
-            { value: "mode", label: `切换模式：${roleModeLabel(currentMode)}`, description: "只影响当前会话" },
             { value: MENU_BACK, label: "← 返回上一级", description: "返回控制中心" },
           ], { selectedValue: selectedChangeAction, ...saveMenuOptions(ctx) });
           if (!action || isMenuBack(action)) break;
@@ -357,9 +327,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
             await switchRole(undefined, ctx);
             continue;
           }
-          if (action === "mode") {
-            await setSessionMode(undefined, ctx);
-          }
         }
         continue;
       }
@@ -372,7 +339,6 @@ export function createControlCenter(deps: ControlCenterDependencies) {
   }
 
   return {
-    setSessionMode,
     switchRole,
     configureWorkflow,
     configureRole,

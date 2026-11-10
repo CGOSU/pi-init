@@ -147,7 +147,7 @@ test("真实命令故障保持原失败提示，自动和详细模式都接入�
       await emitExtensionEvent(h,'session_shutdown');
       ${mode === "blocked" ? `if(!h.notifications.some(n=>JSON.stringify(n).includes('全局本地诊断写入失败'))) throw new Error('missing diagnostic failure');` : `const rows=(await readFile(${JSON.stringify(join(agent, "diagnostics", "pi-init", "runtime.jsonl"))},'utf8')).trim().split('\\n').map(JSON.parse);
       if(!rows.some(r=>r.event==='pi-init.command_failed')) throw new Error('missing command failure');`}
-      await h.commands.get('pi-init').handler('mode auto',h.context);
+      await h.commands.get('pi-init').handler('save',h.context);
       if(h.notifications.at(-1)?.level!=='info') throw new Error('successful command changed');`;
     await new Promise((res, rej) => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", source], { cwd: resolve("."), env: { ...process.env, PI_CODING_AGENT_DIR: agent, PI_INIT_HANDOFF_LOG: mode }, stdio: ["ignore", "pipe", "pipe"] });

@@ -21,7 +21,7 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
     name: "switch_role",
     label: "Switch Role",
     description:
-      "Switch the active Pi model and reasoning level for a configured responsibility. Reads the project model strategy and session overrides; switching never writes .pi/role-models.json. Auto model strategy pins provider/model: explicitly assess strength once on task entry after confirming the role; submit thinkingLevel and a bounded reason even when keeping the current strength. Successful decisions are recorded and only affect subsequent requests without changing responsibility or ending the run. Reassess within a task only for a material phase complexity/risk change; taskBoundary is only for an independent new ordinary task. Missing assessment gets one soft reminder, not an execution gate. Simple no-tool answers need no assessment-only call. Switching modes auto/confirm/manual remain separate. Use /pi-init save to explicitly persist staged configuration.",
+      "Switch the active Pi model and reasoning level for a configured responsibility. Reads the project model strategy and session overrides; switching never writes .pi/role-models.json. Auto model strategy pins provider/model: explicitly assess strength once on task entry after confirming the role; submit thinkingLevel and a bounded reason even when keeping the current strength. Successful decisions are recorded and only affect subsequent requests without changing responsibility or ending the run. Reassess within a task only for a material phase complexity/risk change; taskBoundary is only for an independent new ordinary task. Missing assessment gets one soft reminder, not an execution gate. Simple no-tool answers need no assessment-only call. Responsibility and model changes are automatic; stop, recovery and manual host overrides remain protected. Use /pi-init save to explicitly persist staged configuration.",
     promptSnippet: "Switch model and reasoning level for a configured project role",
     promptGuidelines: [
       "Call switch_role when entering a responsibility selected by the project's role-routing Skill or crossing a role boundary; do not repeat it within the same responsibility. Exception: when Auto model strategy is active, explicitly assess once at task entry after confirming the role, submitting thinkingLevel and a bounded non-sensitive reason with the current role even to keep the current strength. This does not change responsibility or end the run. Simple no-tool answers need no assessment-only call. Do not reassess merely for role changes or ordinary rounds; failures or cancellation must not trigger automatic retries.",
@@ -29,7 +29,6 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
       "A real role/model change during an active run ends that run; the runtime resumes unfinished work in a fresh run with the new role system prompt. Do not continue the old-role run after switching.",
       "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before resuming implementation, tests, docs, or shell work when the role is not already re-established.",
       "Use the role ID required by the current task; architect only thinks, analyzes, decides, plans, and arranges responsibilities, while other configured role IDs may execute their assigned work. Architect must not gather evidence, execute commands, or connect to MCP.",
-      "In manual mode, switch_role does not change models; ask the user to run /pi-init role <role> and retry.",
     ],
     parameters: switchRoleParameters,
     renderCall(args, theme) {
@@ -70,14 +69,14 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
       }
       const source = roleHandoff.capture(ctx);
       const recoveryRequired = runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed || Boolean(runtimeState.pendingWorkflowRecovery);
-      const selection = await roleRuntime.automaticRole(params.role, ctx);
+      const selection = await roleRuntime.automaticRole(params.role, ctx, signal);
       const transition = roleHandoff.finishSwitch(ctx, source, selection.result, signal?.aborted);
       const result = selection.result;
       const unchanged = source.activeRole?.role === result.role && source.activeRole.provider === result.provider
         && source.activeRole.model === result.model && source.activeRole.thinkingLevel === result.thinkingLevel;
       const reused = unchanged && !recoveryRequired;
       const prefix = reused ? "当前职责已确认，无需切换" : unchanged ? "已重新确认当前职责"
-        : selection.requestedRole === result.role ? "已切换到" : `已按确认选择切换到 ${result.role}（建议为 ${selection.requestedRole}）`;
+        : "已切换到";
       const nextAction = nextWorkflowAction(runtimeState);
       const continuation = nextAction.action === "recover"
         ? "。职责确认不解除工作流暂停或恢复限制，仍不能执行任务。\n" + nextAction.nextAction + (transition.terminate ? "当前回合结束。" : "")
@@ -86,10 +85,10 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
         content: [
           {
             type: "text",
-            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}，模式 ${selection.mode}${transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : continuation}`,
+            text: `${prefix}：${result.role} · ${result.provider}/${result.model}，推理强度 ${result.thinkingLevel}${transition.handoffFailure ? "。当前回合结束；交接未确认，不会自动续跑，请检查会话。" : continuation}`,
           },
         ],
-        details: { ...result, mode: selection.mode, requestedRole: selection.requestedRole, reused, ...transition },
+        details: { ...result, requestedRole: selection.requestedRole, reused, ...transition },
         terminate: transition.terminate,
       };
     },

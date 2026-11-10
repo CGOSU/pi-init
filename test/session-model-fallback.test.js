@@ -62,13 +62,13 @@ test("schema v2 缺省 roleModels 但拒绝显式错误映射类型", () => {
   }
 });
 
-test("手动模式下无映射的活动职责不会因宿主模型切换生成映射", async () => {
+test("无映射的活动职责不会因宿主模型切换生成映射", async () => {
   await withTempDirectory(async (directory) => {
     const model = { provider: "test-provider", id: "session-model" };
     const nextModel = { provider: "test-provider", id: "next-session-model" };
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
-      mode: "manual",
+      schemaVersion: 3,
       roleModels: {},
     }));
     const harness = createExtensionHarness([], {
@@ -84,6 +84,10 @@ test("手动模式下无映射的活动职责不会因宿主模型切换生成�
     await emitExtensionEvent(harness, "model_select", { model: nextModel, previousModel: model, source: "user" });
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.deepEqual(persisted.roleModels, {});
-    assert.match(harness.notifications.at(-1).message, /会话默认模型.*不会创建固定映射/);
+    const selected = await harness.tools.find(tool => tool.name === "switch_role").execute(
+      "confirm-default", { role: "developer-test" }, undefined, undefined, harness.context,
+    );
+    assert.equal(selected.details.model, nextModel.id);
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8")).roleModels, {});
   });
 });

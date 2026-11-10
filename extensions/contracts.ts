@@ -53,8 +53,18 @@ export const roleModelsMapSchema = Type.Record(
 export const roleModelsSchema = Type.Object({
   schemaVersion: Type.Optional(Type.Integer({
     minimum: 1,
-    maximum: 2,
-    description: "角色模型配置版本；当前保存版本为 2",
+    maximum: 3,
+    description: "角色模型配置版本；当前保存版本为 3（统一全自动）",
+  })),
+  modelStrategy: Type.Optional(StringEnum(["roles", "auto"] as const, {
+    description: "模型策略：roles 自动使用角色映射；auto 固定模型并自动调整推理强度。两套配置互相保留",
+  })),
+  autoModel: Type.Optional(Type.Object({
+    provider: Type.String({ description: "固定模型提供商 ID" }),
+    model: Type.String({ description: "固定模型 ID" }),
+    initialThinkingLevel: StringEnum(THINKING_LEVELS),
+    minThinkingLevel: StringEnum(THINKING_LEVELS),
+    maxThinkingLevel: StringEnum(THINKING_LEVELS),
   })),
   workflowMode: Type.Optional(StringEnum(WORKFLOW_MODES, {
     description: "任务工作流策略：off、on 或 auto（auto 在不超过 2 个任务时跳过编排）",

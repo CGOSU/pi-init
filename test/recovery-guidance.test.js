@@ -15,7 +15,6 @@ function workflow() {
 
 const scenarios = [
   ["role only", s => { s.roleRecoveryPending = true; }, "role"],
-  ["manual role", s => { s.roleRecoveryPending = true; s.roleModeStatus = "manual"; }, "role"],
   ["finished workflow", s => { s.roleRecoveryPending = true; s.workflowState = workflow(); s.workflowState.status = "completed"; }, "role"],
   ["active role recovery", s => { s.roleRecoveryPending = true; s.workflowState = workflow(); }, "workflow"],
   ["paused workflow", s => { s.workflowState = workflow(); s.workflowState.status = "paused"; }, "workflow"],

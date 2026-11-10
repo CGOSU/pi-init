@@ -21,7 +21,7 @@ const roleModels = {
 };
 function fixture(cwd = process.cwd(), withAuto = true) {
   const state = createExtensionRuntimeState();
-  let config = { mode: "auto", modelStrategy: "auto", autoModel: { ...fixed }, roleModels };
+  let config = { modelStrategy: "auto", autoModel: { ...fixed }, roleModels };
   let thinking = "low";
   const branch = [];
   const handlers = new Map();
@@ -32,8 +32,12 @@ function fixture(cwd = process.cwd(), withAuto = true) {
   let auth = true;
   let authWait;
   const model = { provider: "test", id: "fixed", reasoning: true };
+  let currentModel = model;
   const ctx = {
-    cwd, model, hasUI: false, isProjectTrusted: () => true,
+    // ExtensionRunner copies context descriptors; the SDK model getter stays live.
+    get model() { return currentModel; },
+    set model(value) { currentModel = value; },
+    cwd, hasUI: false, isProjectTrusted: () => true,
     sessionManager: { getSessionId: () => "auto-test", getBranch: () => branch },
     modelRegistry: { find: () => available ? model : undefined, async getApiKeyAndHeaders() { if (authWait) await authWait(); return { ok: auth }; } },
     ui: { notify(message, level) { notices.push({ message, level }); } },
@@ -229,19 +233,19 @@ test("cancelled signals and a host that does not apply the requested level canno
   assert.equal(f.thinking, "medium");
 });
 
-test("manual mode and noninteractive confirm mode never silently apply an adjustment", async () => {
-  const f = fixture();
-  await f.start();
-  f.config.mode = "manual";
-  assert.equal((await f.suggest("high")).code, "AUTO_MANUAL_MODE");
-  f.config.mode = "confirm";
-  assert.equal((await f.suggest("high")).code, "AUTO_CANCELLED");
-  assert.equal(f.thinking, "medium");
-  const initial = fixture();
-  initial.config.mode = "manual";
-  await initial.start();
-  assert.equal(initial.ctx.aborted, true);
-  assert.equal(initial.thinking, "low");
+test("legacy restrictive settings block Auto until explicitly activated", async () => {
+  for (const mode of ["manual", "confirm"]) {
+    const f = fixture();
+    f.config = resolveRoleConfig({ ...f.config, schemaVersion: 2, mode }).value;
+    await f.start();
+    assert.equal(f.ctx.aborted, true);
+    assert.equal(f.thinking, "low");
+    assert.equal((await f.suggest("high")).code, "AUTOMATIC_MIGRATION_REQUIRED");
+    f.config = resolveRoleConfig(f.config, { schemaVersion: 3 }).value;
+    await f.start();
+    assert.equal(f.thinking, "medium");
+    assert.equal((await f.suggest("high")).ok, true);
+  }
 });
 
 test("manual choice or stop during an awaited credential check wins over an Auto suggestion", async () => {
@@ -271,23 +275,17 @@ test("switch_role strength entry does not capture a role handoff or terminate/re
   assert.equal(f.state.activeRole.role, "developer-test");
 });
 
-test("interactive confirmation accepts, cancels and respects a stop during the prompt", async () => {
-  for (const decision of ["accept", "cancel", "stop", "manual"]) {
+test("automatic application and strength changes never request interactive confirmation", async () => {
+  for (const hasUI of [true, false]) {
     const f = fixture();
+    f.ctx.hasUI = hasUI;
+    f.ctx.mode = hasUI ? "tui" : "rpc";
+    f.ctx.ui.custom = () => assert.fail("normal Auto changes must not show a confirmation menu");
     await f.start();
-    f.config.mode = "confirm";
-    f.ctx.hasUI = true;
-    f.ctx.mode = "tui";
-    const harness = createExtensionHarness([], { mode: "tui", custom: async call => {
-      if (decision === "cancel") call.component.handleInput("\u001b[B");
-      if (decision === "stop") f.state.userStopRequested = true;
-      if (decision === "manual") await f.manual("low");
-      call.component.handleInput("\n");
-    } });
-    f.ctx.ui = harness.context.ui;
-    const result = await f.suggest("high");
-    assert.equal(result.ok, decision === "accept");
-    assert.equal(f.thinking, decision === "accept" ? "high" : decision === "manual" ? "low" : "medium");
+    assert.equal(f.thinking, "medium");
+    assert.equal((await f.suggest("high")).ok, true);
+    assert.equal(f.thinking, "high");
+    assert.equal((await f.suggest("high", "Keep the risk-matched strength")).assessment.decision, "keep");
   }
 });
 
@@ -411,30 +409,31 @@ test("ordinary inputs stay uncertain until a semantic task boundary is explicitl
   assert.equal(latestAutoState(f).pendingBoundary, false);
 });
 
-test("cancelled entry assessments stay pending without automatic reminders or repeated confirmation", async () => {
+test("failed entry assessments stay pending without automatic retry or repeated reminders", async () => {
   const f = fixture();
   await f.start();
-  f.config.mode = "confirm";
-  assert.equal((await f.suggest("high")).code, "AUTO_CANCELLED");
+  f.auth = false;
+  assert.equal((await f.suggest("high")).code, "AUTO_AUTH_UNAVAILABLE");
   assert.equal(latestAutoState(f).assessment, undefined);
   assert.equal(latestAutoState(f).attempted, true);
+  f.auth = true;
   await f.runner.emit({ type: "session_start" });
   await f.start();
   assert.equal(await businessResult(f), undefined);
   assert.equal(f.notices.length, 0);
   assert.equal(f.thinking, "medium");
-  assert.equal((await f.suggest("medium", "Explicit keep needs no strength-change confirmation")).ok, true);
-  assert.equal(latestAutoState(f).assessment.decision, "keep");
+  assert.equal((await f.suggest("medium", "Explicitly keep current strength")).ok, true);
   await f.runner.emit({ type: "input", text: "Independent next task", source: "interactive" });
-  assert.equal((await f.suggest("high", "New task has higher risk", true)).code, "AUTO_CANCELLED");
-  assert.equal(latestAutoState(f).assessment, undefined, "the previous task's assessment must not count for a cancelled new task");
+  f.auth = false;
+  assert.equal((await f.suggest("high", "New task has higher risk", true)).code, "AUTO_AUTH_UNAVAILABLE");
+  assert.equal(latestAutoState(f).assessment, undefined);
   assert.equal(await businessResult(f), undefined);
 });
 
 test("manual control and protected execution suppress the assessment reminder without claiming success", async () => {
   for (const protect of [
     f => f.manual("high"),
-    f => { f.config.mode = "manual"; },
+    f => { f.config = { ...f.config, requiresAutomaticMigration: true }; },
     f => { f.state.activeRole = undefined; },
     f => { f.state.userStopRequested = true; },
     f => { f.state.roleRecoveryPending = true; },

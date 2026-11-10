@@ -154,12 +154,12 @@ test("移除 Provider 锁后原生模型切换不再被回滚或拦截", async (
 
 });
 
-test("手动模式原生模型切换写回配置且不重复写入", async () => {
+test("宿主原生模型切换不写回角色映射或项目配置", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     const safe = { provider: "openai-codex", id: "gpt-5.6-luna" };
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
-      mode: "manual",
+      schemaVersion: 3,
       roleModels: {
         "developer-test": { provider: safe.provider, model: safe.id, thinkingLevel: "max" },
       },
@@ -180,8 +180,8 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.deepEqual(persisted.roleModels["developer-test"], {
-      provider: "openrouter",
-      model: "anthropic/claude-haiku-4.5",
+      provider: safe.provider,
+      model: safe.id,
       thinkingLevel: "max",
     });
     assert.equal(persisted.providerPolicy, undefined);
@@ -199,7 +199,7 @@ test("手动模式原生模型切换写回配置且不重复写入", async () =>
   });
 });
 
-test("手动模式下无活动角色的原生切换只提示不写文件", async () => {
+test("旧限制配置下无活动角色的宿主切换也不写文件", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ mode: "manual" }));

@@ -203,7 +203,7 @@ export function createWorkflowReport(
   }
 
   function updateWorkflowStatus(ctx: ExtensionContext) {
-    deps.roleRuntime.refreshRoleStatus(ctx, state.roleModeStatus);
+    deps.roleRuntime.refreshRoleStatus(ctx);
     workflowStatusContext = ctx;
     renderWorkflowStatus(ctx);
     if (!state.workflowState || state.workflowState.status !== "running") {

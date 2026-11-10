@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_ROLE_CONFIG, DEFAULT_ROLE_NAMES, DEFAULT_WORKFLOW_EXECUTOR, DEFAULT_WORKFLOW_MODE, getRoleNames, normalizeModelReference, resolveRoleConfig, resolveRoleMode, resolveWorkflowExecutor, resolveWorkflowMode, resolveRoleModel, unwrapRoleResult, shouldOrchestrateWorkflow } from "../src/roles.ts";
+import { DEFAULT_ROLE_CONFIG, DEFAULT_ROLE_NAMES, DEFAULT_WORKFLOW_EXECUTOR, DEFAULT_WORKFLOW_MODE, getRoleNames, normalizeModelReference, resolveRoleConfig, resolveWorkflowExecutor, resolveWorkflowMode, resolveRoleModel, unwrapRoleResult, shouldOrchestrateWorkflow } from "../src/roles.ts";
 import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
@@ -50,7 +50,8 @@ test("旧版顶层角色配置在显式保存时迁移到 roleModels", async () 
     await command.handler("save", harness.context);
 
     const migrated = JSON.parse(await readFile(configPath, "utf8"));
-    assert.equal(migrated.schemaVersion, 2);
+    assert.equal(migrated.schemaVersion, 3);
+    assert.equal("mode" in migrated, false);
     assert.deepEqual(migrated.roleModels, {
       architect: legacy.architect,
       "developer-test": legacy["developer-test"],
@@ -304,9 +305,9 @@ test("精确模型引用拒绝模糊名称且不再依赖 Provider 白名单", (
 });
 
 test("职责模型配置支持默认值、覆盖和校验", () => {
-  assert.equal(unwrapRoleResult(resolveRoleMode(undefined)), "auto");
-  assert.equal(unwrapRoleResult(resolveRoleMode({ mode: "manual" })), "manual");
-  assert.equal(resolveRoleMode({ mode: "sometimes" }).code, "ROLE_MODE_INVALID");
+  assert.equal(unwrapRoleResult(resolveRoleConfig(undefined)).requiresAutomaticMigration, undefined);
+  assert.equal(unwrapRoleResult(resolveRoleConfig({ mode: "manual" })).requiresAutomaticMigration, true);
+  assert.equal(resolveRoleConfig({ mode: "sometimes" }).code, "ROLE_MODE_INVALID");
   assert.equal(unwrapRoleResult(resolveWorkflowMode(undefined)), DEFAULT_WORKFLOW_MODE);
   assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowMode: "off" })), "off");
   assert.equal(unwrapRoleResult(resolveWorkflowMode({ workflowMode: "on" })), "on");
@@ -369,7 +370,7 @@ test("职责模型配置支持默认值、覆盖和校验", () => {
     unwrapRoleResult(resolveRoleModel(partial, "architect", sessionDefault)),
     { provider: "test-provider", model: "session-default", thinkingLevel: "high" },
   );
-  assert.equal(resolveRoleConfig({ schemaVersion: 3, roleModels: {} }).code, "ROLE_CONFIG_UNSUPPORTED_VERSION");
+  assert.equal(resolveRoleConfig({ schemaVersion: 4, roleModels: {} }).code, "ROLE_CONFIG_UNSUPPORTED_VERSION");
   assert.equal(
     resolveRoleModel({ architect: { provider: "", model: "x", thinkingLevel: "max" } }, "architect", sessionDefault).code,
     "ROLE_MODEL_PROVIDER_INVALID",

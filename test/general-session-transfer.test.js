@@ -330,7 +330,7 @@ test("real SDK omitted-argument receipts pass preparation and fresh, but incompl
 test("ordinary readiness identifies the blocking safety gate without changing it", async () => {
   for (const [change, code] of [
     [h => { h.state.roleRecoveryPending = true; }, "ROLE_RECOVERY"],
-    [h => { h.state.sessionModeOverride = "auto"; }, "UNSAVED_CONFIG"],
+    [h => { h.state.sessionRoleConfigOverrides = { modelStrategy: "roles" }; }, "UNSAVED_CONFIG"],
     [h => h.setSettled(false), "TOOLS_NOT_SETTLED"],
     [h => { h.state.userStopRequested = true; }, "USER_STOPPED"],
   ]) await withTempDirectory(async cwd => {
@@ -345,7 +345,7 @@ test("missing, stale, unsafe, mismatched role, active nested tools and unfinishe
   const changes = [
     h => { h.state.userStopRequested = true; }, h => { h.state.roleRecoveryPending = true; },
     h => { h.state.pendingWorkflowRecovery = {}; }, h => { h.state.workflowRestoreError = { code: "UNKNOWN", message: "unknown" }; },
-    h => { h.state.activeRole.model = "other"; }, h => { h.state.sessionModeOverride = "auto"; },
+    h => { h.state.activeRole.model = "other"; }, h => { h.state.sessionRoleConfigOverrides = { modelStrategy: "auto" }; },
     h => { h.state.sessionRoleConfigOverrides = { "developer-test": {} }; }, h => h.setSettled(false),
     h => { h.ctx.hasPendingMessages = () => true; }, h => { h.ctx.isIdle = () => false; },
     h => { h.ctx.isProjectTrusted = () => false; }, h => { h.state.workflowState = { status: "paused" }; },

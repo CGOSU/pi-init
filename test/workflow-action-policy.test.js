@@ -59,7 +59,7 @@ test('recovery and unknown outcomes never recommend executor replay', () => {
 test('unknown task recovery identifies the user confirmation path without confusing session transfer', () => {
   const workflow = markWorkflowTaskOutcomeUnknown(running(), { taskId: 'rust-crossfile', reason: 'tool outcome needs checking' });
   for (const roleRecoveryPending of [false, true]) {
-    const state = { ...createExtensionRuntimeState(), workflowState: workflow, roleModeStatus: 'auto', roleRecoveryPending };
+    const state = { ...createExtensionRuntimeState(), workflowState: workflow, roleRecoveryPending };
     const before = structuredClone(state);
     const action = nextWorkflowAction(state);
     assert.equal(action.code, roleRecoveryPending ? 'ROLE_RECOVERY_PENDING' : 'WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED');

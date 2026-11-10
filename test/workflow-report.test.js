@@ -130,7 +130,6 @@ test("告警确认绑定原因与恢复/attempt身份，状态刷新不被旧确
   const state = {
     workflowState: createBlockedHistory(),
     roleContextGeneration: 2,
-    roleModeStatus: "auto",
   };
   let currentSessionId = "test-session";
   const context = { sessionManager: { getSessionId: () => currentSessionId } };

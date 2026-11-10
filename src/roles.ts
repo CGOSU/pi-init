@@ -5,7 +5,6 @@ import type {
   DefaultRoleName,
   ModelReference,
   RoleConfigResult,
-  RoleMode,
   RoleModelConfig,
   RoleModelOption,
   ResolvedRoleConfig,
@@ -14,14 +13,12 @@ import type {
   WorkflowMode,
 } from "./role-types.ts";
 
-export const ROLE_MODES = ["auto", "confirm", "manual"] as const satisfies readonly RoleMode[];
-export const DEFAULT_ROLE_MODE: RoleMode = "auto";
 export const WORKFLOW_MODES = ["off", "on", "auto"] as const satisfies readonly WorkflowMode[];
 export const DEFAULT_WORKFLOW_MODE: WorkflowMode = "auto";
 export const WORKFLOW_EXECUTORS = ["local"] as const satisfies readonly WorkflowExecutor[];
 export const DEFAULT_WORKFLOW_EXECUTOR: WorkflowExecutor = "local";
 export const WORKFLOW_AUTO_TASK_LIMIT = 2;
-export const ROLE_CONFIG_SCHEMA_VERSION = 2;
+export const ROLE_CONFIG_SCHEMA_VERSION = 3;
 export const ROLE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const ROLE_LABELS: Record<string, string> = {
@@ -30,28 +27,14 @@ export const ROLE_LABELS: Record<string, string> = {
   "docs-commit": "文档收尾",
 };
 
-export const ROLE_MODE_LABELS: Record<string, string> = {
-  auto: "自动（推荐）",
-  confirm: "确认后切换",
-  manual: "手动（直连宿主）",
-};
-
 export function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role;
-}
-
-export function roleModeLabel(mode: string): string {
-  return ROLE_MODE_LABELS[mode] ?? mode;
 }
 
 function readProperty(value: unknown, key: string): unknown {
   if (value === null || value === undefined) return undefined;
   if (typeof value !== "object" && typeof value !== "function") return undefined;
   return Reflect.get(value, key);
-}
-
-export function isRoleMode(value: unknown): value is RoleMode {
-  return isOneOf(ROLE_MODES, value);
 }
 
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
@@ -138,7 +121,6 @@ const DEFAULT_ROLE_NAME_SET: ReadonlySet<string> = new Set(DEFAULT_ROLE_NAMES);
 
 export const DEFAULT_ROLE_CONFIG: ResolvedRoleConfig = {
   schemaVersion: ROLE_CONFIG_SCHEMA_VERSION,
-  mode: DEFAULT_ROLE_MODE,
   workflowMode: DEFAULT_WORKFLOW_MODE,
   workflowExecutor: DEFAULT_WORKFLOW_EXECUTOR,
   roleModels: {},
@@ -148,6 +130,7 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 const CONFIG_METADATA_KEYS = new Set([
   "schemaVersion",
   "mode",
+  "requiresAutomaticMigration",
   "workflowMode",
   "workflowEnabled",
   "workflowExecutor",
@@ -194,7 +177,7 @@ function configObject(config: unknown): Record<string, unknown> {
 
 function validateConfigVersion(config: Record<string, unknown>): void {
   const version = config.schemaVersion;
-  if (version !== undefined && version !== 1 && version !== ROLE_CONFIG_SCHEMA_VERSION) {
+  if (version !== undefined && version !== 1 && version !== 2 && version !== ROLE_CONFIG_SCHEMA_VERSION) {
     throw configError("ROLE_CONFIG_UNSUPPORTED_VERSION", `不支持的角色模型配置版本：${version}`);
   }
 }
@@ -264,12 +247,11 @@ export function getRoleNames(config: unknown): RoleConfigResult<string[]> {
   return { ok: true, value: [...new Set([...DEFAULT_ROLE_NAMES, ...Object.keys(resolved.value.roleModels)])] };
 }
 
-export function resolveRoleMode(config: unknown): RoleConfigResult<RoleMode> {
-  const mode = readProperty(config, "mode") ?? DEFAULT_ROLE_MODE;
-  if (!isOneOf(ROLE_MODES, mode)) {
-    return failure("ROLE_MODE_INVALID", `职责切换模式无效：${mode}`);
+export function validateAutomaticSwitching(config: ResolvedRoleConfig): RoleConfigResult<ResolvedRoleConfig> {
+  if (config.requiresAutomaticMigration) {
+    return failure("AUTOMATIC_MIGRATION_REQUIRED", "旧配置限制自动切换；请在 /pi-init config 的角色与模型中显式启用全自动。加载或保存不会自动提升授权。");
   }
-  return { ok: true, value: mode };
+  return { ok: true, value: config };
 }
 
 export function resolveWorkflowMode(config: unknown): RoleConfigResult<WorkflowMode> {
@@ -388,13 +370,26 @@ export function mergeRoleConfigData(base: unknown, changes: unknown): Record<str
   const baseConfig = configObject(base);
   const changeConfig = configObject(changes);
   const merged = { ...baseConfig, ...changeConfig };
+  if (isRecord(baseConfig.autoModel) && isRecord(changeConfig.autoModel)) {
+    merged.autoModel = { ...baseConfig.autoModel, ...changeConfig.autoModel };
+  }
+  // Schema 3 is staged only by an explicit activation or canonical save.
+  if (changeConfig.schemaVersion === ROLE_CONFIG_SCHEMA_VERSION) {
+    delete merged.mode;
+    delete merged.requiresAutomaticMigration;
+  }
   const roleChanges = stagedRoleModels(changeConfig);
   if (hasOwn(baseConfig, "roleModels") || hasOwn(changeConfig, "roleModels") || Object.keys(roleChanges).length > 0) {
     merged.roleModels = {
       ...normalizeRoleModels(baseConfig),
       ...roleChanges,
     };
-    for (const role of Object.keys(merged.roleModels as Record<string, unknown>)) {
+    const models = merged.roleModels as Record<string, unknown>;
+    for (const [rawRole, rawModel] of rawRoleModelEntries(baseConfig)) {
+      const role = unwrapRoleResult(normalizeRoleId(rawRole));
+      if (isRecord(rawModel) && isRecord(models[role])) models[role] = { ...rawModel, ...models[role] };
+    }
+    for (const role of Object.keys(models)) {
       if (!CONFIG_METADATA_KEYS.has(role)) delete merged[role];
     }
   }
@@ -405,6 +400,10 @@ function parseRoleConfig(source: Record<string, unknown>): ResolvedRoleConfig {
   if (hasOwn(source, "runtime")) {
     throw configError("RUNTIME_CONFIG_RETIRED", "runtime 配置已退役；当前仅支持 local 工作流");
   }
+  if (source.mode !== undefined && !["auto", "confirm", "manual"].includes(source.mode as string)) {
+    throw configError("ROLE_MODE_INVALID", `旧版职责切换配置无效：${source.mode}`);
+  }
+  const requiresAutomaticMigration = source.requiresAutomaticMigration === true || source.mode === "confirm" || source.mode === "manual";
   const roleModels = normalizeRoleModels(source);
   const workflowExecutor = resolveWorkflowExecutor(source);
   if (!workflowExecutor.ok) throw configError(workflowExecutor.code, workflowExecutor.message);
@@ -417,7 +416,7 @@ function parseRoleConfig(source: Record<string, unknown>): ResolvedRoleConfig {
     ...(source.modelStrategy !== undefined ? { modelStrategy: source.modelStrategy } : {}),
     ...(autoModel ? { autoModel } : {}),
     schemaVersion: ROLE_CONFIG_SCHEMA_VERSION,
-    mode: unwrapRoleResult(resolveRoleMode(source)),
+    ...(requiresAutomaticMigration ? { requiresAutomaticMigration: true as const } : {}),
     workflowMode: unwrapRoleResult(resolveWorkflowMode(source)),
     workflowExecutor: workflowExecutor.value,
     roleModels,

@@ -44,7 +44,7 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
     if (state.workflowRestoreError || state.pendingWorkflowRecovery) return fail("WORKFLOW_RECOVERY", "工作流恢复尚未确认，不能通过普通交接绕过。");
     if (state.roleCompactionInFlight || state.pendingRoleCompaction || state.activeRoleCompaction) return fail("COMPACTION_PENDING", "压缩或其恢复尚未结束，请先核对结果。");
     if (state.workflowDispatchInFlight || state.internalContinuationPending) return fail("CONTINUATION_PENDING", "派发或内部续接尚未结束，请先等待执行收敛。");
-    if (state.sessionModeOverride !== undefined || Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型/模式配置；请保存所需配置或撤销覆盖后再准备交接。");
+    if (Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型配置；请保存所需配置或撤销覆盖后再准备交接。");
     if (state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status)) return fail("WORKFLOW_ACTIVE", "未结束工作流必须沿工作流安全边界交接。");
     if (!state.activeRole || !activeRoleMatches(state, ctx, pi.getThinkingLevel())) return fail("ROLE_MODEL_MISMATCH", "职责与当前模型/推理级别不匹配；请先确认职责，再重新准备交接。");
     const settlement = deps.toolsSettled(ctx);

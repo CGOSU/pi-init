@@ -4,10 +4,9 @@ import type { AutoModelConfig, ResolvedRoleConfig, ThinkingLevel } from "../src/
 import { validateAutoModelCapabilities, validateAutoSuggestion } from "../src/auto-model.ts";
 import { parseAutoAssessment, parseAutoAssessmentReason, parseAutoTaskScope, type AutoAssessment, type AutoTaskScope } from "../src/auto-assessment.ts";
 import { isRecord } from "../src/value-guards.ts";
-import { unwrapRoleResult } from "../src/roles.ts";
+import { validateAutomaticSwitching, unwrapRoleResult } from "../src/roles.ts";
 import { textOf } from "../src/error-utils.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
-import { showMenu } from "./ui.ts";
 
 const ENTRY = "pi-init-auto-model";
 type AutoState = {
@@ -76,7 +75,6 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     }
     return scope;
   }
-  function mode(config: ResolvedRoleConfig) { return state.sessionModeOverride ?? config.mode; }
   function blocked(ctx: ExtensionContext, signal?: AbortSignal) {
     const workflow = state.workflowState;
     const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
@@ -117,35 +115,30 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     return initialized && sameModel ? pi.getThinkingLevel() : fixed.initialThinkingLevel;
   }
 
-  async function ensure(ctx: ExtensionContext, config: ResolvedRoleConfig, explicit = false) {
+  async function ensure(ctx: ExtensionContext, config: ResolvedRoleConfig, explicit = false, signal?: AbortSignal) {
     if (config.modelStrategy !== "auto") return;
+    unwrapRoleResult(validateAutomaticSwitching(config));
     const fixed = config.autoModel!;
-    const requestedLevel = targetLevel(ctx, config);
     const epoch = manualEpoch;
-    const stoppedAtStart = state.userStopRequested || ctx.signal?.aborted;
+    const executionProtected = () => (!explicit && blocked(ctx, signal)) || state.userStopRequested || ctx.signal?.aborted || signal?.aborted;
+    if (executionProtected()) throw new Error("Auto 模型应用被停止或恢复保护阻止");
     const model = fixedModel(ctx, fixed);
     const sameModel = ctx.model?.provider === fixed.provider && ctx.model?.id === fixed.model;
-    if ((!sameModel || pi.getThinkingLevel() !== requestedLevel) && !explicit) {
-      if (mode(config) === "manual") throw new Error("Auto 固定模型尚未应用；手动模式请执行 /pi-init role <role>");
-      if (mode(config) === "confirm") {
-        if (!ctx.hasUI || await showMenu(ctx, "应用 Auto 固定模型？", [{ value: "accept", label: `${fixed.provider}/${fixed.model}` }, { value: "cancel", label: "取消" }]) !== "accept") throw new Error("已取消应用 Auto 固定模型");
-      }
-      if (blocked(ctx)) throw new Error("Auto 模型应用被停止或恢复保护阻止");
-    }
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) throw new Error("Auto 固定模型缺少可用凭据");
-    if (!explicit && blocked(ctx)) throw new Error("Auto 模型应用被停止或恢复保护阻止");
+    if (executionProtected()) throw new Error("Auto 模型应用被停止或恢复保护阻止");
     if (manualEpoch !== epoch) throw new Error("应用期间用户已调整强度，未覆盖手动选择");
     const latest = await readConfig(ctx);
-    if (latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== JSON.stringify(fixed) || mode(latest) !== mode(config)) throw new Error("Auto 配置在应用期间已改变，未应用旧配置");
-    if ((!explicit && blocked(ctx)) || manualEpoch !== epoch) throw new Error("应用期间执行状态或用户强度已改变");
+    if (latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== JSON.stringify(fixed) || latest.requiresAutomaticMigration) throw new Error("Auto 配置在应用期间已改变，未应用旧配置");
+    if (executionProtected() || manualEpoch !== epoch) throw new Error("应用期间执行状态或用户强度已改变");
     const level = targetLevel(ctx, config);
     if (!sameModel) {
       selectingModel = fixed;
       try { if (!await pi.setModel(model)) throw new Error("Auto 固定模型应用失败"); }
       finally { selectingModel = undefined; }
     }
-    if (manualEpoch !== epoch || (!stoppedAtStart && (state.userStopRequested || ctx.signal?.aborted))) throw new Error("模型应用期间用户已停止或手动调整，未继续调整强度");
+    if (manualEpoch !== epoch || executionProtected()) throw new Error("模型应用期间用户已停止或手动调整，未继续调整强度");
+    if (ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) throw new Error("Auto 固定模型未生效，未继续调整强度");
     if (pi.getThinkingLevel() !== level) setLevel(level, ctx);
     load(ctx, fixed).initialized = true;
     save();
@@ -157,6 +150,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (state.activeRole?.role !== role) return fail("AUTO_ROLE_MISMATCH", "强度建议必须使用当前已确认职责，不同时切换职责");
     const config = await readConfig(ctx);
     if (config.modelStrategy !== "auto") return fail("AUTO_NOT_ENABLED", "当前未启用 Auto 模型策略");
+    if (config.requiresAutomaticMigration) return fail("AUTOMATIC_MIGRATION_REQUIRED", "旧配置需由用户显式启用全自动");
     const parsedReason = parseAutoAssessmentReason(reason);
     if (!parsedReason.ok) return parsedReason;
     const fixed = config.autoModel!;
@@ -177,18 +171,14 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const inputRevision = saved.inputRevision;
     const check = validateAutoSuggestion(fixed, getSupportedThinkingLevels(model), level);
     if (!check.ok) return check;
-    if (mode(config) === "manual") return fail("AUTO_MANUAL_MODE", "手动切换方式下不自动调整强度；请手动选择或改为自动/确认方式");
     const from = pi.getThinkingLevel();
     saved.attempted = true;
     save();
-    if (from !== level && mode(config) === "confirm") {
-      if (!ctx.hasUI || await showMenu(ctx, `Auto 建议强度 ${level}`, [{ value: "accept", label: "采用建议", description: parsedReason.value }, { value: "cancel", label: "取消" }]) !== "accept") return fail("AUTO_CANCELLED", "已取消强度建议，未记录成功评估；不要自动重试确认");
-    }
-    if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "确认期间执行已停止，未调整强度");
+    if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "执行已停止，未调整强度");
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) return fail("AUTO_AUTH_UNAVAILABLE", "Auto 固定模型缺少可用凭据");
     const latest = await readConfig(ctx);
-    if (latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== saved.key || saved.manual || mode(latest) !== mode(config)) return fail("AUTO_CONFIG_CHANGED", "配置或手动强度在等待期间已变化，未应用建议");
+    if (latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== saved.key || saved.manual || latest.requiresAutomaticMigration) return fail("AUTO_CONFIG_CHANGED", "配置或手动强度在等待期间已变化，未应用建议");
     if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "执行已停止，未调整强度");
     if (saved.manual || manualEpoch !== epoch || memory !== saved || state.activeRole?.role !== role || pi.getThinkingLevel() !== from
       || !parseAutoTaskScope(scope, taskScope(saved.ordinaryTask)).ok || saved.inputRevision !== inputRevision
@@ -212,6 +202,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   async function resume(ctx: ExtensionContext) {
     const config = await readConfig(ctx);
     if (config.modelStrategy !== "auto") throw new Error("当前未启用 Auto 模型策略");
+    unwrapRoleResult(validateAutomaticSwitching(config));
     if (blocked(ctx)) throw new Error("停止或恢复保护中，恢复 Auto 不会解除任务暂停");
     const fixed = config.autoModel!;
     fixedModel(ctx, fixed);
@@ -267,7 +258,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (parseAutoTaskScope(memory.scope, taskScope(memory.ordinaryTask)).ok
       && (memory.manual || memory.assessment || memory.reminded || memory.attempted)) return;
     const config = await readConfig(ctx);
-    if (config.modelStrategy !== "auto" || mode(config) === "manual" || blocked(ctx) || !state.activeRole) return;
+    if (config.modelStrategy !== "auto" || config.requiresAutomaticMigration || blocked(ctx) || !state.activeRole) return;
     const saved = load(ctx, config.autoModel!);
     syncScope(saved);
     if (saved.manual || saved.assessment || saved.reminded || saved.attempted) return;
@@ -308,8 +299,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
           : "当前任务待显式评估：已确认职责后、开始工具执行前，调用 switch_role 提供 thinkingLevel 和非空 reason；保持当前强度也必须说明理由。简单无工具问答无需为评估新增调用。";
     const guidance = saved.manual
       ? "用户手动强度优先，自动调整暂停，只有用户在控制中心恢复 Auto 才解除。"
-      : mode(config) === "manual" ? "手动切换方式下不自动应用评估或调整，不为强度评估反复调用 switch_role；用户手动选择优先。"
-        : [
+      : [
           `本轮入口快照：${assessmentStatus}`,
           "同轮后续成功的 switch_role 评估结果优先于入口快照，不因快照未更新而重复评估；失败或取消不自动重试。",
           "评估使用当前固定模型，不额外调用分类模型；起始请求沿用起始强度，调整仅影响后续请求。",
@@ -321,8 +311,8 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     sections.pi_init_auto_model = [
       `模型策略 Auto：固定 ${fixed.provider}/${fixed.model}；允许强度 ${fixed.minThinkingLevel}–${fixed.maxThinkingLevel}；当前 ${pi.getThinkingLevel()}。`,
       guidance,
-      `职责权限、格式化、验证、文档和提交仍沿用共享流程。切换方式 ${mode(config)}；manual 不自动应用强度。`,
+      "职责权限、格式化、验证、文档和提交仍沿用共享流程；用户停止、恢复和手动接管保护始终优先。",
     ].join(" ");
   });
-  return { ensure, suggest, resume, validate: (ctx: ExtensionContext, config: ResolvedRoleConfig) => fixedModel(ctx, config.autoModel!) };
+  return { ensure, suggest, resume };
 }

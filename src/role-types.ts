@@ -1,4 +1,3 @@
-export type RoleMode = "auto" | "confirm" | "manual";
 export type WorkflowMode = "off" | "on" | "auto";
 export type WorkflowExecutor = "local";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -22,7 +21,8 @@ export type ResolvedRoleConfig = {
   modelStrategy?: "roles" | "auto";
   autoModel?: AutoModelConfig;
   schemaVersion: number;
-  mode: RoleMode;
+  /** Legacy restrictive settings need explicit user activation before automation. */
+  requiresAutomaticMigration?: true;
   workflowMode: WorkflowMode;
   workflowExecutor: WorkflowExecutor;
   roleModels: Record<string, RoleModelConfig>;

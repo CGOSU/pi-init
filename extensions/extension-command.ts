@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { ROLE_MODES } from "../src/roles.ts";
 import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
 import type { createRoleRuntime } from "./role-runtime.ts";
 import type { createWorkflowActions } from "./workflow-actions.ts";
@@ -41,7 +40,7 @@ export function registerExtensionCommand(pi: ExtensionAPI, runtimeState: Extensi
     getArgumentCompletions: (prefix) => {
       const tokens = prefix.trim().split(/\s+/).filter(Boolean);
       if (tokens.length <= 1 && !prefix.endsWith(" ")) {
-        const values = ["init", "advanced", "config", "save", "role", "mode", "workflow", "fresh", "diagnostics"];
+        const values = ["init", "advanced", "config", "save", "role", "workflow", "fresh", "diagnostics"];
         const matches = values.filter((value) => value.startsWith(tokens[0] ?? ""));
         return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
       }
@@ -50,8 +49,6 @@ export function registerExtensionCommand(pi: ExtensionAPI, runtimeState: Extensi
         ? runtimeState.configuredRoleNames
         : action === "config"
           ? [...runtimeState.configuredRoleNames, "workflow"]
-          : action === "mode"
-          ? ROLE_MODES
           : action === "workflow"
             ? ["status", "acknowledge", "resume", "retry", "cancel", "fresh"]
             : [];
@@ -70,14 +67,18 @@ export function registerExtensionCommand(pi: ExtensionAPI, runtimeState: Extensi
         }
         if (action === "init") { await (await loadScaffoldRuntime()).quickInit(tokens.join(" ") || ".", ctx); return; }
         if (action === "advanced") { await (await loadScaffoldRuntime()).advancedInit(tokens.join(" ") || ".", ctx); return; }
-        if (action === "config") { await (await loadControlCenter()).configureRole(tokens[0], ctx); return; }
+        if (action === "config") {
+          const center = await loadControlCenter();
+          if (tokens[0]) await center.configureRole(tokens[0], ctx);
+          else await center.configureRoleCenter(ctx);
+          return;
+        }
         if (action === "save") {
           const result = await roleRuntime.saveRoleConfig(ctx);
           ctx.ui.notify(result.message, result.ok ? "info" : "error");
           return;
         }
         if (action === "role") { await (await loadControlCenter()).switchRole(tokens[0], ctx); return; }
-        if (action === "mode") { await (await loadControlCenter()).setSessionMode(tokens[0], ctx); return; }
         if (action === "diagnostics") { await diagnosticsCommand(tokens.join(" ") || "menu", ctx); return; }
         if (action === "workflow") {
           const workflowAction = tokens.shift();
@@ -91,7 +92,7 @@ export function registerExtensionCommand(pi: ExtensionAPI, runtimeState: Extensi
           if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;
         }
-        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|mode|workflow|fresh|diagnostics] [参数]", "error");
+        ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|workflow|fresh|diagnostics] [参数]", "error");
       } catch (error) {
         trace(ctx, "pi-init.command_failed");
         ctx.ui.notify(textOf(error), "error");

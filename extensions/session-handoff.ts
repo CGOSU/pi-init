@@ -83,7 +83,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     if (state.workflowRestoreError) return fail(state.workflowRestoreError.code, "工作流恢复失败：" + state.workflowRestoreError.message + "；请按原恢复入口核对，不能通过交接绕过。");
     if (state.pendingWorkflowRecovery) return fail("WORKFLOW_RECOVERY_PENDING", "工作流恢复尚未持久化，请先核对恢复结果，不重试或重放业务。");
     if (state.workflowDispatchInFlight || state.internalContinuationPending) return fail("CONTINUATION_PENDING", "任务派发或内部续接尚未结束，请等待本轮结束后再交接。");
-    if (state.sessionModeOverride !== undefined || Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型或模式配置，请保存所需配置或撤销覆盖后再交接。");
+    if (Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型配置，请保存所需配置或撤销覆盖后再交接。");
     const current = state.workflowState;
     if (!current || current.sessionId !== ctx.sessionManager.getSessionId()) return fail("WORKFLOW_SESSION_MISMATCH", "工作流与当前会话不匹配，请先核对原工作流的恢复状态。");
     if (!handoffBoundary(current)) {

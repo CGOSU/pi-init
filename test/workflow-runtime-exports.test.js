@@ -21,7 +21,6 @@ function createDispatchState(workflowState) {
     sessionRoleConfigOverrides: {},
     configuredRoleNames: [],
     controlCenterGuideShown: false,
-    roleModeStatus: "auto",
     workflowModeStatus: "auto",
     roleRecoveryPending: false,
     roleRecoveryPersistenceFailed: false,

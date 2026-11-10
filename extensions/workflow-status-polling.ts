@@ -145,7 +145,7 @@ export function createWorkflowStatusPollingGuard(pi: ExtensionAPI, state: Extens
       reset(); return { stop: false as const };
     }
     const key = fingerprint({ sessionId: ctx.sessionManager.getSessionId(), workflow: state.workflowState,
- role: state.activeRole, roleModeStatus: state.roleModeStatus, contextGeneration: state.roleContextGeneration,
+      role: state.activeRole, contextGeneration: state.roleContextGeneration,
       roleTransitionGeneration: state.roleTransitionGeneration, roleRecoveryPending: state.roleRecoveryPending,
       roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: state.pendingWorkflowRecovery,
       workflowRestoreError: state.workflowRestoreError, userStopRequested: state.userStopRequested,

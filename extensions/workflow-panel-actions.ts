@@ -32,7 +32,8 @@ export function workflowPanelChoices(state: ExtensionRuntimeState): WorkflowPane
     description: imported ? "仅核对当前会话的交接导入，不再创建新会话" : "确认后冻结旧队列，创建新会话，仅交接必要来源并继续剩余任务",
     disabledReason: state.userStopRequested ? "自动执行已暂停；先按原恢复流程核对"
       : imported ? undefined : !handoffBoundary(workflow) ? "请等待当前交付物完成并到达安全任务边界"
-      : state.sessionModeOverride !== undefined || Object.keys(state.sessionRoleConfigOverrides).length ? "会话配置尚未持久化，不能直接交接" : undefined });
+        : Object.keys(state.sessionRoleConfigOverrides).length ? "会话配置尚未持久化，不能直接交接" : undefined
+  });
   const unavailable = state.runtimeDisposed ? "当前运行时已退出，请重新打开面板" : state.workflowRestoreError || state.pendingWorkflowRecovery || state.roleRecoveryPersistenceFailed ? "恢复尚未确认；先检查技术详情与恢复提示" : undefined;
   const inflight = state.roleCompactionInFlight || state.pendingRoleCompaction || state.workflowDispatchInFlight || state.internalContinuationPending || workflow.continuation?.kind !== "review" && workflow.continuation?.phase === "compacting";
   return choices.map(choice => ({ ...choice, disabledReason: unavailable

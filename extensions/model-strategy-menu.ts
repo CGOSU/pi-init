@@ -8,7 +8,7 @@ import { isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
 
 export async function configureModelStrategy(ctx: ExtensionCommandContext, config: ResolvedRoleConfig, runtime: RoleRuntime) {
   if (!ctx.hasUI) { ctx.ui.notify("模型策略配置需要交互式 UI", "error"); return; }
-  const choice = await showMenu(ctx, "模型策略（与切换确认方式独立）", [
+  const choice = await showMenu(ctx, "模型策略（全自动执行）", [
     { value: "roles", label: "按职责配置", description: "使用原职责模型和强度映射" },
     { value: "auto", label: "Auto · 固定模型，自适应强度", description: "职责映射保留但暂不使用，格式化、验证和文档提交共用原流程" },
     ...(config.modelStrategy === "auto" ? [{ value: "resume", label: "恢复 Auto 自动强度", description: "解除手动强度覆盖，不解除任务暂停或恢复保护" }] : []),
@@ -46,5 +46,5 @@ export async function configureModelStrategy(ctx: ExtensionCommandContext, confi
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok) throw new Error("Auto 固定模型缺少可用凭据，未修改策略");
   runtime.stageRoleConfig({ modelStrategy: "auto", autoModel: fixed });
-  ctx.ui.notify("Auto 已暂存，后续请求应用固定模型；职责映射已保留但暂不使用。仅显式保存才写入项目文件。手动切换方式下须手动应用模型，且不自动调整强度。", "info");
+  ctx.ui.notify("Auto 已暂存，后续请求应用固定模型；职责映射已保留但暂不使用。模型与强度自动应用；仅显式保存才写入项目文件。", "info");
 }

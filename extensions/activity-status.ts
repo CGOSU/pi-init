@@ -6,7 +6,6 @@ import type { WorkflowActionIdentity, WorkflowHandoffIdentity, WorkflowReplanIde
 export const ACTIVITY_STATUS_KEY = "pi-init-activity";
 
 export type ActivityStatusRole = {
-  mode: string;
   role?: string;
   model?: string;
 };
@@ -110,9 +109,6 @@ function roleSegments(role: ActivityStatusRole | undefined): ActivityStatusSegme
   if (!role) return [];
   const segments: ActivityStatusSegment[] = [];
   if (role.role) segments.push({ text: role.role, tone: "muted", auxiliary: true });
-  if (role.mode && (role.mode !== "自动" || !role.role)) {
-    segments.push({ text: role.mode, tone: role.mode === "自动" ? "muted" : "warning", auxiliary: true });
-  }
   return segments;
 }
 

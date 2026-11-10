@@ -132,9 +132,7 @@ export function createRoleRecovery(
     });
     const activeRole = state.activeRole?.role ? roleLabel(state.activeRole.role) : "未知";
     const activeWorkflow = Boolean(state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status));
-    const roleRecoveryAction = state.roleModeStatus === "manual"
-      ? "当前为 manual 模式：若当前角色与模型匹配，可用 switch_role 验证；否则需用户执行 /pi-init role <role>，不能反复调用 switch_role。"
-      : "需要执行前调用 switch_role(role=...) 并等待成功。";
+    const roleRecoveryAction = "需要执行前调用 switch_role(role=...) 并等待成功。";
     const recoveryToolGuidance = state.activeRole?.role === "architect"
       ? `当前角色为 architect；${roleRecoveryAction} 在确认前不得读取文件、搜索、浏览、编辑、写入、执行 shell/test、初始化项目、协作或提交完成结果。无活动工作流且无需工具或新证据的简单问答可以直接回答，但不得把回答视为职责确认。`
       : `执行类工具仍被阻断；${roleRecoveryAction} 无活动工作流且无需工具或新证据的简单问答可以直接回答，但不得把回答视为职责确认。`;

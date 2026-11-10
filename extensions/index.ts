@@ -29,7 +29,6 @@ import { registerContextCapacity } from "./role-context-capacity.ts";
 import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
 import { createRuntimeRoutingContext } from "./runtime-routing-context.ts";
 import {
-  type ResolvedRoleConfig,
   type RunTimingEntryData,
 } from "./contracts.ts";
 import { createDiagnosticControls } from "./diagnostic-controls.ts";
@@ -175,22 +174,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return renderRunTimingReport(createRunTimingView(data), theme);
   });
 
-  pi.on("model_select", async (event, ctx) => {
+  pi.on("model_select", (_event, ctx) => {
     runtimeState.currentContext = ctx;
-
-    let config: ResolvedRoleConfig;
-    try {
-      config = await roleRuntime.readSessionRoleConfig(ctx);
-    } catch {
-      roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
-      return;
-    }
-    if (roleRuntime.isManualRoleMode(config)) {
-      await roleRuntime.writeBackManualModelSelection(event, ctx, config);
-    }
-    roleRuntime.refreshRoleStatus(ctx, roleRuntime.effectiveRoleMode(config));
+    roleRuntime.refreshRoleStatus(ctx);
   });
-
   const captureWorkflowRevisionInput = createWorkflowRevisionInput(runtimeState, {
     persistWorkflowState: workflowReport.persistWorkflowState,
     scheduleWorkflow: workflowDispatch.scheduleWorkflow,
@@ -222,7 +209,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.agentRunActive = true;
     workflowTaskConsumptionRunActive = !runtimeState.userStopRequested;
     runtimeState.currentContext = ctx;
-    roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
+    roleRuntime.refreshRoleStatus(ctx);
     runtimeState.internalContinuationPending = false;
     runTimingDiagnostics.agentStart();
   });
@@ -241,7 +228,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.agentRunActive = false;
     workflowTaskConsumptionRunActive = false;
     runtimeState.currentContext = ctx;
-    roleRuntime.refreshRoleStatus(ctx, runtimeState.roleModeStatus);
+    roleRuntime.refreshRoleStatus(ctx);
     if (runtimeState.userStopRequested) { settleExternalRunTiming(); userControl.settled(); return; }
     if (assistantFailureScope === executionScope(ctx) && runtimeState.workflowState
       && ["running", "replanning"].includes(runtimeState.workflowState.status)) {
@@ -310,7 +297,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             thinkingLevel,
           }
         : undefined;
-      roleRuntime.setRoleStatus(ctx, runtimeState.sessionModeOverride ?? config.mode);
+      roleRuntime.refreshRoleStatus(ctx);
       showRoleConfigNotice(ctx, config);
       if (!runtimeState.userStopRequested) {
             await workflowDispatch.scheduleWorkflow(ctx);

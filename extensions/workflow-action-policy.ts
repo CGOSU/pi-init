@@ -1,7 +1,7 @@
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { getNextWorkflowTask } from "../src/workflow.ts";
 
-type PolicyState = Pick<ExtensionRuntimeState, "workflowState" | "pendingWorkflowRecovery" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "workflowRestoreError" | "userStopRequested"> & Partial<Pick<ExtensionRuntimeState, "roleModeStatus">>;
+type PolicyState = Pick<ExtensionRuntimeState, "workflowState" | "pendingWorkflowRecovery" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "workflowRestoreError" | "userStopRequested">;
 export type WorkflowNextAction = {
   action: "none" | "recover" | "finish-current-task" | "schedule-replan";
   recovery?: "role" | "workflow" | "wait" | "stop";
@@ -25,11 +25,7 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   if (state.userStopRequested) return { action: "recover", recovery: "stop", code: "WORKFLOW_USER_STOPPED", message: "自动执行已停止，等待用户明确继续或恢复。", nextAction: "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。" };
   const activeWorkflow = workflow && !["completed", "cancelled"].includes(workflow.status);
   const switchAction = requiredRole ? `switch_role(role="${requiredRole}")` : "switch_role";
-  const roleAction = state.roleModeStatus === "manual"
-    ? `当前为 manual 模式；若当前角色可验证，使用 ${switchAction}，否则请用户执行 /pi-init role ${requiredRole ?? "<role>"}，不要反复调用 switch_role。`
-    : state.roleModeStatus === undefined
-      ? "当前职责模式尚未确认；先核对当前模式和职责，不得猜测执行授权。"
-      : `调用 ${switchAction} 并等待成功。`;
+  const roleAction = `调用 ${switchAction} 并等待成功。`;
   const recoveryStatus = '当前工作流状态已提供；不要为恢复重复查询 task_workflow(action="status")。';
   if (state.roleRecoveryPersistenceFailed) return { action: "recover", recovery: "workflow", ...taskScope,
     code: "ROLE_RECOVERY_PERSIST_FAILED", message: "职责恢复记录持久化失败，执行仍被阻断。",

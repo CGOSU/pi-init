@@ -177,7 +177,6 @@ test("打开的进度面板按最新持久状态刷新任务集合与状态", as
         },
       ],
     }),
-    roleModeStatus: "auto",
   };
   let before = "";
   let after = "";
@@ -236,7 +235,7 @@ test("打开的进度面板按最新持久状态刷新任务集合与状态", as
 });
 
 test("Enter 打开任务详情，Esc 分层返回后才关闭", async () => {
-  const state = { workflowState: createWorkflowState({ sessionId: "test-session", summary: "交互检查", tasks: [{ id: "first", task: "需要查看的任务", files: ["src/first.ts"], acceptanceCriteria: ["展示完整验收标准"] }] }), roleModeStatus: "auto" };
+  const state = { workflowState: createWorkflowState({ sessionId: "test-session", summary: "交互检查", tasks: [{ id: "first", task: "需要查看的任务", files: ["src/first.ts"], acceptanceCriteria: ["展示完整验收标准"] }] }) };
   const harness = createExtensionHarness([], { mode: "tui", hasUI: true, custom: async (call) => {
     call.component.render(80);
     call.component.handleInput("\r");

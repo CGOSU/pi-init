@@ -97,8 +97,7 @@ test("/pi-init save 在命令面板中反馈保存成功与信任校验失败", 
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
-      schemaVersion: 2,
-      mode: "auto",
+      schemaVersion: 3,
       workflowMode: "auto",
       workflowExecutor: "local",
       roleModels: {},
@@ -120,13 +119,13 @@ test("/pi-init save 在命令面板中反馈保存成功与信任校验失败", 
   });
 });
 
-test("手动模式内部角色切换不会把目标模型写回旧角色", async () => {
+test("自动角色切换不会把目标模型写回旧角色", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(path.join(directory, ".pi"), { recursive: true });
     const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
     const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
-      mode: "manual",
+      schemaVersion: 3,
       roleModels: {
         architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
         "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
@@ -142,6 +141,7 @@ test("手动模式内部角色切换不会把目标模型写回旧角色", async
     });
     await emitExtensionEvent(harness, "session_start");
     await harness.commands.get("pi-init").handler("role architect", harness.context);
+    assert.deepEqual(harness.context.model, architect);
 
     const persisted = JSON.parse(await readFile(path.join(directory, ".pi", "role-models.json"), "utf8"));
     assert.deepEqual(persisted.roleModels.architect, {

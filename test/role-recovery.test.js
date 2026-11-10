@@ -4,7 +4,7 @@ import { ROLE_RECOVERY_ENTRY_TYPE } from "../extensions/role-recovery.ts";
 import { DEFAULT_ROLE_CONFIG } from "../src/roles.ts";
 import { createExtensionHarness, emitExtensionEvent, callToolCall } from "./support/extension-harness.js";
 import { createWorkflowState } from "./support/workflow-fixtures.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
 
@@ -211,29 +211,35 @@ test("session_tree 切换分支后必须重新确认职责，不能复用历史 
   assert.equal((await toolCall({ toolName: "write", input: { path: "README.md" } })).block, true);
 });
 
-test("manual 模式的 branch 恢复指引使用 /pi-init role，避免重复调用 switch_role", async () => {
-  const model = { provider: "test-provider", id: "manual-model" };
-  await withConfiguredHarness("manual", recoveryBranch("acknowledged"), {
-    model,
-    availableModels: [model],
-    roleModels: { "developer-test": { provider: model.provider, model: model.id, thinkingLevel: "max" } },
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    await emitExtensionEvent(harness, "session_tree", { oldLeafId: "old", newLeafId: "new" });
-    const runtime = await beforeAgentStart(harness);
-    assert.match(Object.values(runtime.systemPromptOptions.sections).join("\\n"), /manual 模式.*\/pi-init role/);
-
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await assert.rejects(
-      switchRole.execute("manual-unestablished", { role: "developer-test" }, undefined, undefined, harness.context),
-      /当前为手动模式/,
-    );
-    assert.equal(harness.branch.at(-1).data.status, "pending");
-
-    await harness.commands.get("pi-init").handler("role developer-test", harness.context);
-    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-    assert.equal(await emitExtensionEvent(harness, "tool_call", { toolName: "write", input: {} }), undefined);
-  });
+test("旧限制配置的显式迁移不解除 branch 职责恢复门", async () => {
+  for (const mode of ["manual", "confirm"]) {
+    const model = { provider: "test-provider", id: "configured" };
+    let activated = false;
+    await withConfiguredHarness(mode, recoveryBranch("acknowledged"), {
+      model, availableModels: [model],
+      roleModels: { "developer-test": { provider: model.provider, model: model.id, thinkingLevel: "max" } },
+      select: async (_title, items) => {
+        if (!activated) { activated = true; return items.find(item => item === "启用全自动并迁移旧配置"); }
+      },
+    }, async (harness) => {
+      const configPath = path.join(harness.context.cwd, ".pi", "role-models.json");
+      const original = await readFile(configPath, "utf8");
+      await emitExtensionEvent(harness, "session_start", { reason: "new" });
+      await emitExtensionEvent(harness, "session_tree", { oldLeafId: "old", newLeafId: "new" });
+      const switchRole = harness.tools.find(tool => tool.name === "switch_role");
+      await assert.rejects(
+        switchRole.execute("legacy", { role: "developer-test" }, undefined, undefined, harness.context),
+        error => error.code === "AUTOMATIC_MIGRATION_REQUIRED",
+      );
+      assert.equal(harness.branch.at(-1).data.status, "pending");
+      await harness.commands.get("pi-init").handler("config", harness.context);
+      assert.equal(harness.branch.at(-1).data.status, "pending");
+      assert.equal(await readFile(configPath, "utf8"), original);
+      await switchRole.execute("activated", { role: "developer-test" }, undefined, undefined, harness.context);
+      assert.equal(harness.branch.at(-1).data.status, "acknowledged");
+      assert.equal(await emitExtensionEvent(harness, "tool_call", { toolName: "write", input: {} }), undefined);
+    });
+  }
 });
 
 test("职责恢复门持久化失败后仍 fail-closed，必须重新成功确认", async () => {
@@ -357,97 +363,38 @@ test("未配置标准角色模型且当前会话无模型时失败并保留恢�
   });
 });
 
-test("confirm 模式的当前确认、接受、取消和失败路径统一维护恢复门", async () => {
-  const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
-  const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
-  await withConfiguredHarness("confirm", recoveryBranch(), {
-    model: developer,
-    availableModels: [developer, architect],
-    roleModels: { "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" } },
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await switchRole.execute("same", { role: "developer-test" }, undefined, undefined, harness.context);
-    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-  });
-
-  await withConfiguredHarness("confirm", recoveryBranch(), {
-    model: architect,
-    availableModels: [architect, developer],
-    select: async () => "采用建议",
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await switchRole.execute("accept", { role: "developer-test" }, undefined, undefined, harness.context);
-    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-  });
-
-  await withConfiguredHarness("confirm", recoveryBranch(), {
-    model: architect,
-    availableModels: [architect, developer],
-    select: async () => "取消",
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await assert.rejects(
-      switchRole.execute("cancel", { role: "developer-test" }, undefined, undefined, harness.context),
-      /已取消角色切换/,
-    );
-    assert.equal(harness.branch.at(-1).data.status, "pending");
-  });
-
-  await withConfiguredHarness("confirm", recoveryBranch(), {
-    model: architect,
-    availableModels: [architect, developer],
-    roleModels: { "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" } },
-    select: async () => "采用建议",
-    setModelResult: false,
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await assert.rejects(
-      switchRole.execute("failed", { role: "developer-test" }, undefined, undefined, harness.context),
-      /缺少可用凭据/,
-    );
-    assert.equal(harness.branch.at(-1).data.status, "pending");
-  });
-});
-
-test("manual 模式只在验证当前角色或显式应用角色后解除恢复门", async () => {
-  const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
-  const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
-  await withConfiguredHarness("manual", recoveryBranch(), {
-    model: developer,
-    availableModels: [developer, architect],
-    roleModels: { "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" } },
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await switchRole.execute("verified", { role: "developer-test" }, undefined, undefined, harness.context);
-    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-  });
-
-  await withConfiguredHarness("manual", recoveryBranch(), {
-    model: architect,
-    availableModels: [architect, developer],
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    const switchRole = harness.tools.find((tool) => tool.name === "switch_role");
-    await assert.rejects(
-      switchRole.execute("mismatch", { role: "developer-test" }, undefined, undefined, harness.context),
-      /当前为手动模式/,
-    );
-    assert.equal(harness.branch.at(-1).data.status, "pending");
-  });
-
-  await withConfiguredHarness("manual", recoveryBranch(), {
-    model: architect,
-    availableModels: [architect, developer],
-  }, async (harness) => {
-    await emitExtensionEvent(harness, "session_start", { reason: "new" });
-    await harness.commands.get("pi-init").handler("role developer-test", harness.context);
-    assert.equal(harness.branch.at(-1).data.status, "acknowledged");
-  });
+test("全自动职责恢复不要求交互确认，取消或凭据失败仍保留恢复门", async () => {
+  const architect = { provider: "test-provider", id: "architect" };
+  const developer = { provider: "test-provider", id: "developer" };
+  for (const scenario of ["same", "different", "aborted", "credentials"]) {
+    await withConfiguredHarness("auto", recoveryBranch(), {
+      model: scenario === "same" ? developer : architect,
+      availableModels: [architect, developer],
+      hasUI: false,
+      roleModels: { "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" } },
+      select: () => assert.fail("normal role transitions must not ask for confirmation"),
+      setModelResult: scenario !== "credentials",
+    }, async harness => {
+      await emitExtensionEvent(harness, "session_start", { reason: "new" });
+      const controller = new AbortController();
+      if (scenario === "aborted") controller.abort();
+      const operation = harness.tools.find(tool => tool.name === "switch_role").execute(
+        scenario, { role: "developer-test" }, controller.signal, undefined, harness.context,
+      );
+      if (scenario === "credentials") {
+        await assert.rejects(operation, /缺少可用凭据/);
+      } else {
+        const result = await operation;
+        if (scenario === "aborted") assert.equal(result.details.ok, false);
+        else {
+          assert.equal(result.details.model, developer.id);
+          assert.equal("mode" in result.details, false);
+        }
+      }
+      assert.equal(harness.branch.at(-1).data.status,
+        ["aborted", "credentials"].includes(scenario) ? "pending" : "acknowledged");
+    });
+  }
 });
 
 test("第三方扩展提供的压缩仍进入职责恢复门", async () => {
