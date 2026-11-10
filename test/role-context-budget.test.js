@@ -52,16 +52,36 @@ test("public recovery context applies budget and records degradation metadata, n
   const state = createExtensionRuntimeState();
   const trace = [];
   state.traceHandoff = (_ctx, event, data) => trace.push({ event, data });
-  const messages = [{ role: "user", content: "private-goal", timestamp: 0 }, ...Array.from({ length: 120 }, (_, i) => pair(i)).flat()];
+  const messages = [
+    { role: "user", content: "private-goal", timestamp: 0 },
+    { role: "custom", customType: "pi-init-role-context-view-diagnostic", content: "完整模型消息已保留", timestamp: 0 },
+    ...Array.from({ length: 120 }, (_, i) => pair(i)).flat(),
+  ];
   const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }));
   const original = { roleRecoveryPending: state.roleRecoveryPending };
   const result = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } });
   assert.ok(Buffer.byteLength(JSON.stringify(result.messages)) <= 24000);
   assert.equal(trace[0].event, "context.projected");
   assert.equal(trace[0].data.checkpointed, true);
+  assert.equal(trace[0].data.outputBytes, Buffer.byteLength(JSON.stringify(result.messages)));
   assert.ok(trace[0].data.inputBytes > trace[0].data.outputBytes);
   assert.equal(JSON.stringify(trace).includes("private-goal"), false);
   assert.equal(state.roleRecoveryPending, original.roleRecoveryPending);
+});
+
+test("recovery byte metrics remain exact for unchanged multilingual contexts", () => {
+  for (const repetitions of [1, 10000]) {
+    const state = createExtensionRuntimeState();
+    const trace = [];
+    state.traceHandoff = (_ctx, event, data) => trace.push({ event, data });
+    const messages = [{ role: "user", content: "约束 🚀".repeat(repetitions), timestamp: 0 }];
+    const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }));
+    const result = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } });
+    assert.equal(result.messages, messages);
+    assert.equal(trace[0].data.checkpointed, false);
+    assert.equal(trace[0].data.outputBytes, Buffer.byteLength(JSON.stringify(messages)));
+    assert.equal(trace[0].data.overBudget, repetitions === 10000);
+  }
 });
 
 test("oversized protected failures never starve successful work from a live task", () => {

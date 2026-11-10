@@ -120,7 +120,9 @@ export function createRoleRecovery(
       const code = diagnostic?.role === "custom" ? (diagnostic.details as { code?: string } | undefined)?.code : undefined;
       state.traceHandoff?.(ctx, "context.projected", { mode: state.workflowState?.status ?? "recovery", reasonCode: code,
         ...Object.fromEntries(Object.entries(bounded).filter(([key]) => key !== "messages")),
-        outputBytes: Buffer.byteLength(JSON.stringify(projected)) });
+        outputBytes: projected === bounded.messages && bounded.reason !== "unserializable-context"
+          ? bounded.outputBytes : Buffer.byteLength(JSON.stringify(projected))
+      });
       return { ...result, messages: projected };
     }
     if (!state.roleRecoveryPending) return finalize(view);
