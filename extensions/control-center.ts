@@ -17,7 +17,7 @@ import {
   showMenu,
 } from "./ui.ts";
 import type { WorkflowCommandResult } from "./workflow-panel-actions.ts";
-import { configureModelStrategy } from "./model-strategy-menu.ts";
+import { configureAutoModel, configureModelStrategy, stageAutoModel } from "./model-strategy-menu.ts";
 
 export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;
@@ -38,25 +38,32 @@ function roleMenuItems(config: ResolvedRoleConfig, roleNames: string[]) {
     {
       value: "strategy",
       label: config.modelStrategy === "auto" ? "● 模型策略 · Auto（固定模型）" : "● 模型策略 · 按职责配置",
-      description: config.modelStrategy === "auto" && config.autoModel
-        ? `${config.autoModel.provider}/${config.autoModel.model} · 起始 ${config.autoModel.initialThinkingLevel} · ${config.autoModel.minThinkingLevel}–${config.autoModel.maxThinkingLevel}；原职责映射暂不使用`
-        : "职责分工和格式化、验证、文档提交流程始终共用",
+      description: "选择后返回此页，再配置模型和推理强度",
     },
     ...(config.requiresAutomaticMigration ? [{
       value: "enable-automatic",
       label: "启用全自动并迁移旧配置",
       description: "旧配置限制自动切换；仅明确启用后生效，显式保存才写入文件",
     }] : []),
-    ...roleNames.map((role) => {
+    ...(config.modelStrategy === "auto" ? [
+      {
+        value: "auto-model",
+        label: `● 模型 ${config.autoModel ? shortModelName(config.autoModel.model) : "未配置"}`,
+        description: config.autoModel ? `${config.autoModel.provider}/${config.autoModel.model}` : "先选择固定模型，再调整默认强度和范围",
+      },
+      { value: "auto-initial", label: `● 默认强度：${config.autoModel?.initialThinkingLevel ?? "未配置"}` },
+      { value: "auto-range", label: `● 强度范围：${config.autoModel ? `${config.autoModel.minThinkingLevel}=>${config.autoModel.maxThinkingLevel}` : "未配置"}` },
+      ...(config.autoModel ? [{ value: "resume-auto", label: "恢复 Auto 强度控制", description: "手动接管后重新允许 Auto 调整推理强度" }] : []),
+    ] : roleNames.map((role) => {
       const model = config.roleModels[role];
       return {
         value: role,
         label: model
           ? `● ${roleLabel(role)} · ${shortModelName(model.model)}/${model.thinkingLevel}`
           : `● ${roleLabel(role)} · 会话默认模型`,
-        description: config.modelStrategy === "auto" ? "映射保留，Auto 下暂不使用" : model ? formatRoleModel(model) : "未单独配置模型时，沿用当前 Pi 会话模型和推理强度",
+        description: model ? formatRoleModel(model) : "未单独配置模型时，沿用当前 Pi 会话模型和推理强度",
       };
-    }),
+    })),
     { value: MENU_BACK, label: "← 返回上一级", description: "不修改其他设置" },
   ];
 }
@@ -221,13 +228,40 @@ export function createControlCenter(deps: ControlCenterDependencies) {
     }
 
     let config = await roleRuntime.readSessionRoleConfig(ctx);
+    let selectedStrategy = config.modelStrategy;
+    const saveOptions = {
+      onSave: async () => {
+        if (selectedStrategy === "auto" && !config.autoModel) {
+          return { ok: false, message: "请先配置 Auto 固定模型，再保存策略" };
+        }
+        return saveMenuOptions(ctx).onSave();
+      },
+    };
     while (true) {
-      const action = await showMenu(ctx, "角色与模型", roleMenuItems(config, state.configuredRoleNames), saveMenuOptions(ctx));
+      const displayConfig = { ...config, modelStrategy: selectedStrategy };
+      const action = await showMenu(ctx, "角色与模型", roleMenuItems(displayConfig, state.configuredRoleNames), saveOptions);
       if (!action || isMenuBack(action)) return;
       if (action === "strategy") {
-        try { await configureModelStrategy(ctx, config, roleRuntime); }
+        try {
+          const strategy = await configureModelStrategy(ctx, displayConfig);
+          if (strategy === "roles") roleRuntime.stageRoleConfig({ modelStrategy: "roles" });
+          if (strategy === "auto" && config.autoModel) await stageAutoModel(ctx, config.autoModel, roleRuntime);
+          if (strategy) selectedStrategy = strategy;
+        } catch (error) {
+          ctx.ui.notify(String(error instanceof Error ? error.message : error), "error");
+        }
+        config = await roleRuntime.readSessionRoleConfig(ctx);
+        continue;
+      }
+      if (action === "auto-model" || action === "auto-initial" || action === "auto-range") {
+        try { await configureAutoModel(ctx, config, action, roleRuntime); }
         catch (error) { ctx.ui.notify(String(error instanceof Error ? error.message : error), "error"); }
         config = await roleRuntime.readSessionRoleConfig(ctx);
+        continue;
+      }
+      if (action === "resume-auto") {
+        await roleRuntime.resumeAutoThinking(ctx);
+        ctx.ui.notify("Auto 自动强度已恢复；当前强度未改变，下次任务评估生效。", "info");
         continue;
       }
       if (action === "enable-automatic") {

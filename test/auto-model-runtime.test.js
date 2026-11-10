@@ -12,7 +12,7 @@ import { parseAutoModel, validateAutoModelCapabilities } from "../src/auto-model
 import { mergeRoleConfigData, resolveRoleConfig, resolveRoleModel } from "../src/roles.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { createExtensionHarness } from "./support/extension-harness.js";
-import { configureModelStrategy } from "../extensions/model-strategy-menu.ts";
+import { configureAutoModel, configureModelStrategy } from "../extensions/model-strategy-menu.ts";
 
 const fixed = { provider: "test", model: "fixed", initialThinkingLevel: "medium", minThinkingLevel: "low", maxThinkingLevel: "high" };
 const roleModels = {
@@ -508,20 +508,61 @@ test("completed workflows do not capture the next ordinary input or assessment",
   assert.equal(result.assessment.scope.kind, "ordinary");
 });
 
-test("model strategy picker stages only a complete valid selection and cancellation preserves configuration", async () => {
-  for (const cancelAt of [1, 2, 4, 5, undefined]) {
+test("strategy selection returns without opening model configuration", async () => {
+  for (const cancel of [true, false]) {
+    let calls = 0;
+    const config = { modelStrategy: "roles", roleModels };
+    const harness = createExtensionHarness([], {
+      mode: "tui", custom: async call => {
+        assert.equal(++calls, 1);
+        for (const key of cancel ? ["\u0003"] : ["\u001b[B", "\n"]) call.component.handleInput(key);
+      }
+    });
+    assert.equal(await configureModelStrategy(harness.context, config), cancel ? undefined : "auto");
+    assert.equal(config.modelStrategy, "roles");
+  }
+});
+
+test("independent Auto fields stage valid changes atomically and preserve inactive role mappings", async () => {
+  for (const [field, cancelAt, expected] of [
+    ["auto-model", 1],
+    ["auto-model", undefined, { ...fixed, maxThinkingLevel: "high" }],
+    ["auto-initial", 1],
+    ["auto-initial", undefined, { ...fixed, initialThinkingLevel: "high" }],
+    ["auto-range", 1],
+    ["auto-range", 2],
+    ["auto-range", undefined, { ...fixed, minThinkingLevel: "medium" }],
+  ]) {
     let step = 0;
-    let config = { mode: "auto", roleModels };
-    const keys = [["\u001b[B", "\n"], ["\n"], ["\u001b[B", "\u001b[B", "\u001b[B", "\n"], ["\u001b[B", "\u001b[B", "\n"], ["\u001b[B", "\n"]];
+    let config = resolveRoleConfig({ modelStrategy: "auto", autoModel: fixed, roleModels }).value;
     const harness = createExtensionHarness([], { mode: "tui", availableModels: [{ provider: "test", id: "fixed", reasoning: true }], custom: async call => {
       const current = ++step;
-      for (const key of current === cancelAt ? ["\u0003"] : keys[current - 1]) call.component.handleInput(key);
+      const keys = current === cancelAt ? ["\u0003"]
+        : field === "auto-model" || current === 2 ? ["\n"] : ["\u001b[B", "\n"];
+      for (const key of keys) call.component.handleInput(key);
     } });
-    await configureModelStrategy(harness.context, config, { stageRoleConfig(changes) { config = resolveRoleConfig(config, changes).value; } });
-    assert.equal(config.modelStrategy, cancelAt === undefined ? "auto" : undefined);
+    await configureAutoModel(harness.context, config, field, {
+      stageRoleConfig(changes) {
+        config = resolveRoleConfig(config, changes).value;
+      }
+    });
+    assert.deepEqual(config.autoModel, expected ?? fixed);
     assert.deepEqual(config.roleModels, roleModels);
-    if (cancelAt === undefined) assert.deepEqual(config.autoModel, fixed);
   }
+});
+
+test("Auto configuration does not stage a fixed model without credentials", async () => {
+  const f = fixture();
+  f.auth = false;
+  f.ctx.hasUI = true;
+  f.ctx.mode = "rpc";
+  f.ctx.scopedModels = [];
+  f.ctx.modelRegistry.getAvailable = () => [{ provider: "test", id: "fixed", reasoning: true }];
+  f.ctx.ui.input = async () => "";
+  f.ctx.ui.select = async (_title, items) => items[0];
+  await assert.rejects(configureAutoModel(f.ctx, { roleModels }, "auto-model", {
+    stageRoleConfig() { assert.fail("missing credentials must not stage changes"); },
+  }), /凭据/);
 });
 
 test("staging/save/reload retains inactive role mappings and unrelated project configuration", async () => {

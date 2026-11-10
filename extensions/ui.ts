@@ -184,7 +184,7 @@ function hasSupportedThinkingLevel(levels: readonly ThinkingLevel[], candidate: 
   return candidate !== undefined && levels.some((level) => level === candidate);
 }
 
-async function selectModelWithSearch(
+export async function selectModelWithSearch(
   ctx: ExtensionContext,
   role: string,
   models: RolePickerModel[],

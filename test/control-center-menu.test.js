@@ -7,6 +7,7 @@ import path from "node:path";
 import { MENU_BACK, selectRoleModel, showMenu } from "../extensions/ui.ts";
 import { createControlCenter } from "../extensions/control-center.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
+import { resolveRoleConfig } from "../src/roles.ts";
 
 async function waitForRoleModelConfig(directory, expected) {
   const configPath = path.join(directory, ".pi", "role-models.json");
@@ -307,6 +308,63 @@ test("没有保存能力的 TUI 菜单不拦截 Ctrl+S", async () => {
   ]);
 
   assert.equal(result, "item");
+});
+
+test("策略选择返回上级后按策略配置，未完成的 Auto 草稿不能保存", async () => {
+  const state = createExtensionRuntimeState();
+  state.configuredRoleNames = ["architect"];
+  const roleModels = { architect: { provider: "test", model: "role", thinkingLevel: "high" } };
+  let config = resolveRoleConfig({ modelStrategy: "roles", roleModels }).value;
+  const staged = [];
+  let saved = 0;
+  let step = 0;
+  const keys = [
+    ["\n"], // 打开策略选择
+    ["\u001b[B", "\n"], // 选择 Auto，不进入模型选择
+    ["\u001b[B", "\n"], // 返回上级后打开固定模型
+    ["\n"], // 选定模型，默认配置可用
+    ["\u001b[B", "\u001b[B", "\n"], // 独立配置默认强度
+    ["\u001b[B", "\n"], // medium -> high
+    ["\u001b[B", "\u001b[B", "\u001b[B", "\n"], // 独立配置范围
+    ["\u001b[B", "\n"], // low -> medium
+    ["\n"], // 保留最高 high
+    ["\n"], // 返回上级后重新选择策略
+    ["\u001b[A", "\n"], // 切回按职责配置
+    ["\u001b"],
+  ];
+  const h = createExtensionHarness([], {
+    mode: "tui", trusted: true,
+    availableModels: [{ provider: "test", id: "fixed", reasoning: true }],
+    custom: async call => {
+      const current = step++;
+      if (current === 2 || current === 9) {
+        call.component.handleInput("\u0013");
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(saved, current === 2 ? 0 : 1);
+      }
+      assert.ok(keys[current], "不应打开额外配置向导");
+      for (const key of keys[current]) call.component.handleInput(key);
+    },
+  });
+  const center = createControlCenter({
+    state, roleRuntime: {
+      async readSessionRoleConfig() { return config; },
+      stageRoleConfig(changes) {
+        const result = resolveRoleConfig(config, changes);
+        assert.equal(result.ok, true);
+        config = result.value;
+        staged.push(config);
+      },
+      async saveRoleConfig() { saved += 1; return { ok: true, message: "已保存" }; },
+    }
+  });
+  await center.configureRoleCenter(h.context);
+  assert.equal(step, keys.length);
+  assert.deepEqual(staged.map(value => value.modelStrategy), ["auto", "auto", "auto", "roles"]);
+  assert.deepEqual(config.autoModel, {
+    provider: "test", model: "fixed", initialThinkingLevel: "high", minThinkingLevel: "medium", maxThinkingLevel: "high",
+  });
+  assert.deepEqual(config.roleModels, roleModels);
 });
 
 test("fresh-session action closes the entire control-center stack before captured context is reused", async () => {
