@@ -529,7 +529,7 @@
 - 决定：在现有 `task_workflow` 中保存受身份校验的 request/report/review/clarify 协调记录，不另建执行队列或 executor；architect 只发起取证请求和审阅报告，docs-commit 核实并报告，developer-test 对关键契约缺口发起澄清。协调任务仅在关键证据已显式接受且来源版本仍有效时进入开发派发。
 - 决定：公开 Pi `context` 钩子只为当前请求形成局部消息视图，原 session/branch 记录不删除或改写；Pi 持有的 system/tool 状态不交由扩展处理。无法可靠识别 handoff、branch 或工具调用配对时保留完整输入并报告未裁剪。
 - 原因：复用已有 local 顺序执行和身份恢复保持执行权威唯一；明确证据审阅和任务契约边界，避免关键事实猜测，并让上下文裁剪不破坏恢复审计或工具协议。
-- 实施状态、协议字段、兼容、验证结果及未执行的真实 Provider/TUI/缓存费用验证见 [`docs/plans/role-coordination.md`](plans/role-coordination.md)。
+- 原实施资料路径为 `docs/plans/role-coordination.md`（历史计划未随当前仓库保留）；本条不代表旧协调协议仍可用。
 
 ### 2026-10-10：工作流启动状态绑定实际任务消息，底部活动栏不重复显示完成数
 
@@ -640,13 +640,13 @@
 
 - 决定：工作流 schema v4 为 workflow、plan、session 与 recovery generation 建立身份，并为任务 attempt/handoff 与重规划 revision 建立分离身份。状态从当前 Pi session branch 恢复；`complete`/`block`/`replan` 必须提供并匹配当前身份和相应 handoff 消息，旧 attempt、revision、session 或 branch 回调不得推进状态。
 - 原因：只有 taskId 或当前状态不足以区分同一任务的 retry、已重规划方案、session fork 与恢复前迟到结果；按活动 branch 和 generation 校验可在不信任消息文本的前提下拒绝过期结果。
-- 约束：仅当前公共 Extension API 的 `appendEntry`/SessionManager branch 用于 session 级状态持久化；不接入未导出/未确认的 AgentHarness durable operation API，不声称事务、fsync 或外部副作用 exactly-once。仅可证明尚未派发的准备态允许恢复续跑；派发/启动阶段缺少业务验收结果时暂停为未知结果，必须核对后用 `--confirm-unknown-outcome` 显式创建新 attempt。旧 local entry 不原地改写；legacy `in_progress` 暂停核对，退役 Runtime 状态继续拒绝。详见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- 约束：仅当前公共 Extension API 的 `appendEntry`/SessionManager branch 用于 session 级状态持久化；不接入未导出/未确认的 AgentHarness durable operation API，不声称事务、fsync 或外部副作用 exactly-once。仅可证明尚未派发的准备态允许恢复续跑；派发/启动阶段缺少业务验收结果时暂停为未知结果，必须核对后用 `--confirm-unknown-outcome` 显式创建新 attempt。旧 local entry 不原地改写；legacy `in_progress` 暂停核对，退役 Runtime 状态继续拒绝。原计划路径为 `docs/plans/durable-workflow.md`（历史计划未随当前仓库保留）。
 
 ### 2026-10-08：工作流状态持久化先于内存提交
 
 - 决定：更新 runtime 工作流状态前，先将新的完整快照通过 Pi Extension API `pi.appendEntry("pi-init-workflow", next)` 写入当前 session；append 同步失败时保留旧内存状态/恢复错误，不显示状态已成功推进、不派发下一任务，并释放本次临时调度锁。
 - 原因：否则一次 session entry 写入失败会让本进程状态领先于可恢复状态，完成工具或调度可能误报成功；最小可靠边界是在 API 正常返回后再提交内存状态。
-- 约束：`appendEntry` 是返回 void 的 session 数据 API，不提供本项目可用的 durable operation handle、事务或外部工具 exactly-once 保证。未发现稳定扩展公开接口可直接使用 AgentHarness durable operation records，因此不导入 Pi 内部依赖、不恢复自建 Runtime；状态结构、API 证据及剩余恢复规划见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- 约束：`appendEntry` 是返回 void 的 session 数据 API，不提供本项目可用的 durable operation handle、事务或外部工具 exactly-once 保证。未发现稳定扩展公开接口可直接使用 AgentHarness durable operation records，因此不导入 Pi 内部依赖、不恢复自建 Runtime；当时的状态结构、API 证据及恢复规划原记录于 `docs/plans/durable-workflow.md`（历史计划未随当前仓库保留）。
 
 ### 2026-10-06：退役 pi-init 自建 Runtime 工作流集成
 
@@ -792,10 +792,10 @@
 
 ### 2026-09-13：Runtime 双轨联调不等于旧调度链路可删除
 
-- 决定：`workflowExecutor: runtime` 作为第四种、创建时冻结的 authority 接入；同一 workflow 的状态、next-task、Attempt、cancel/retry 和 event cursor 只由 Runtime 负责。`local`、`subtask`、`collaboration` 继续保留，迁移清单逐符号记录在 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md)，当前不标记 `cutover-ready`。
+- 决定：`workflowExecutor: runtime` 作为第四种、创建时冻结的 authority 接入；同一 workflow 的状态、next-task、Attempt、cancel/retry 和 event cursor 只由 Runtime 负责。`local`、`subtask`、`collaboration` 继续保留，迁移清单当时记录于 `docs/plans/runtime-migration.md`（历史计划未随当前仓库保留），该阶段未标记 `cutover-ready`。
 - 原因：无模型实际 daemon fixture 已能验证 submit、role execution、事件/ack、cancel/retry、compaction、terminal restart 和 client reconnect，但这不能证明生产 external launcher、active broker recovery、历史 entry migration 或所有旧调用方已经迁出。
 - 约束：pi-init Runtime 联调只使用 development direct-host fixture，不描述为 sandbox；worker reconnect 以 agent-runtime 的无模型 worker test 为独立证据，真实 Pi 保持显式 ignored gate。不得因 Runtime 分支通过而删除旧 scheduler/transition 或添加本地 fallback。
-- 验收：联调命令、结果差异和未完成切换条件只维护在 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md) 与 [`docs/session-log.md`](session-log.md)，本条不重复维护测试明细。
+- 历史验收：联调命令、结果差异和未完成切换条件当时维护于 `docs/plans/runtime-migration.md`（未保留）与[会话记录](session-log.md)，本条不重复维护测试明细；自建 Runtime 后续已退役。
 
 ### 2026-09-13：工作流规划入口必须在调用前拒绝非架构角色
 

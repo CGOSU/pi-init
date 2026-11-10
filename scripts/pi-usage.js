@@ -1,5 +1,3 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { runCli } from "./pi-usage/cli.js";
 
 export * from "./pi-usage/version.js";
@@ -9,7 +7,7 @@ export * from "./pi-usage/report.js";
 export * from "./pi-usage/bill.js";
 export { parseArguments } from "./pi-usage/cli.js";
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+if (import.meta.main) {
   runCli().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

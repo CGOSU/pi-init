@@ -1,11 +1,12 @@
-import { appendFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { formatRuntimeIdentity, loadedRuntimeIdentity } from "./runtime-identity.ts";
 import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
-import { withDiagnosticLock } from "./diagnostic-storage.ts";
+import { diagnosticDirectory, readDiagnosticText, withDiagnosticLock } from "./diagnostic-storage.ts";
 import { createGlobalDiagnostics, isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
 import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains, formatCacheObservations } from "./runtime-diagnostics-report.ts";
 
@@ -59,23 +60,27 @@ export function createDiagnosticWriter(options: { file: string; maxBytes: number
     dropped = 0; pending++;
     const write = (queues.get(path) ?? Promise.resolve()).then(async () => {
       if (failed) return;
-      await mkdir(dirname(path), { recursive: true, mode: options.directoryMode });
+      await diagnosticDirectory(ctx.cwd, [".pi", ...dirname(options.file).split(/[\\/]/).filter(part => part !== ".")], true, undefined, options.directoryMode);
       const append = async () => {
         let size = 0;
         const expired = (mtimeMs: number) => options.retentionMs !== undefined && Date.now() - mtimeMs > options.retentionMs;
         try {
-          const info = await stat(path); size = info.size;
+          const info = await lstat(path);
+          if (!info.isFile()) throw new Error("unsafe diagnostic file");
+          size = info.size;
           if (expired(info.mtimeMs)) { await rm(path, { force: true }); size = 0; }
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        if (options.retentionMs !== undefined) {
-          try { if (expired((await stat(path + ".1")).mtimeMs)) await rm(path + ".1", { force: true }); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-        }
+        try {
+          const archive = await lstat(path + ".1");
+          if (!archive.isFile()) throw new Error("unsafe diagnostic archive");
+          if (expired(archive.mtimeMs)) await rm(path + ".1", { force: true });
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
         if (size + bytes > options.maxBytes) {
           await rm(path + ".1", { force: true });
           if (size) await rename(path, path + ".1");
         }
-        await appendFile(path, line, { mode: 0o600 });
+        const handle = await open(path, constants.O_CREAT | constants.O_WRONLY | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0), 0o600);
+        try { await handle.appendFile(line); } finally { await handle.close(); }
       };
       if (options.file === "diagnostics/runtime.jsonl") await withDiagnosticLock(dirname(path), append);
       else await append();
@@ -288,12 +293,13 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
     const cacheRequests: Data[] = [];
     let incomplete = false;
     for (const suffix of [".1", ""]) {
-      const path = join(ctx.cwd, ".pi", "diagnostics", "runtime.jsonl" + suffix);
       try {
-        const info = await stat(path);
+        const directory = await diagnosticDirectory(ctx.cwd, [".pi", "diagnostics"]);
+        const path = join(directory, "runtime.jsonl" + suffix);
+        const info = await lstat(path);
         if (Date.now() - info.mtimeMs > RETENTION_MS) continue;
         if (info.size > maxBytes) { incomplete = true; continue; }
-        for (const line of (await readFile(path, "utf8")).split("\n")) {
+        for (const line of (await readDiagnosticText(path, maxBytes)).split("\n")) {
           if (!line) continue;
           try {
             const row = JSON.parse(line);

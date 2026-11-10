@@ -123,15 +123,34 @@ export function installLaunchers({
   return true;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  try {
-    const targetDir = process.argv[2] === "--target-dir" ? process.argv[3] : undefined;
-    if (installLaunchers({ targetDir })) {
-      console.log(targetDir ? `已安装到：${targetDir}\n统计用量：pi-usage` : "已自动更新 pi-usage 启动器。");
-    } else {
-      console.warn("未找到 pi，跳过 pi-usage 启动器更新；可稍后手动运行安装脚本。");
+function parseInstallerArguments(args) {
+  if (args.length === 0) return { ok: true, value: {} };
+  if (args[0] !== "--target-dir") return { ok: false, code: "UNKNOWN_INSTALLER_OPTION", message: `未知安装参数：${args[0]}` };
+  if (args.length < 2 || !args[1].trim()) return { ok: false, code: "MISSING_TARGET_DIRECTORY", message: "--target-dir 需要非空目录路径。" };
+  if (args.length > 2) return { ok: false, code: "EXTRA_INSTALLER_ARGUMENTS", message: "--target-dir 后只能提供一个目录路径。" };
+  return { ok: true, value: { targetDir: args[1] } };
+}
+
+if (import.meta.main) {
+  const parsed = parseInstallerArguments(process.argv.slice(2));
+  if (!parsed.ok) {
+    console.error(`${parsed.code}：${parsed.message}`);
+    process.exitCode = 1;
+  } else {
+    const { targetDir } = parsed.value;
+    try {
+      if (installLaunchers({ targetDir })) {
+        console.log(targetDir ? `已安装到：${targetDir}\n统计用量：pi-usage` : "已自动更新 pi-usage 启动器。");
+      } else {
+        console.warn("未找到 pi，跳过 pi-usage 启动器更新；可稍后手动运行安装脚本。");
+      }
+    } catch (error) {
+      if (targetDir !== undefined) {
+        console.error(`pi-usage 启动器安装失败：${error.message}`);
+        process.exitCode = 1;
+      } else {
+        console.warn(`pi-usage 启动器自动更新失败，已跳过：${error.message}`);
+      }
     }
-  } catch (error) {
-    console.warn(`pi-usage 启动器自动更新失败，已跳过：${error.message}`);
   }
 }

@@ -1,6 +1,4 @@
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 const valueOptions = new Set(["--test-name-pattern", "--test-skip-pattern", "--test-reporter",
   "--test-reporter-destination", "--test-concurrency", "--test-timeout", "--test-shard"]);
@@ -30,7 +28,7 @@ function testArguments(args) {
     "--", ...(files.length ? files : ["test/**/*.test.js"])];
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (import.meta.main) {
   try {
     const child = spawn(process.execPath, testArguments(process.argv.slice(2)), { stdio: "inherit" });
     child.once("error", error => { console.error(error.message); process.exitCode = 1; });

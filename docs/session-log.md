@@ -591,7 +591,7 @@
 
 ### 2026-10-14：协调协议最小兼容简化（handoff 短引用、去重与重提指引）
 
-- 需求与决策：用户确认在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下做五项输入简化；契约与边界见 [`docs/decisions.md`](decisions.md) 的 2026-10-14 条目，实现状态见 [`docs/plans/role-coordination.md`](plans/role-coordination.md) 的“简化补充”。
+- 需求与决策：用户确认在保留职责分离、正式证据接受、防重放门控和现有状态机的前提下做五项输入简化；契约与边界见 [`docs/decisions.md`](decisions.md) 的 2026-10-14 条目，原实现资料为 `docs/plans/role-coordination.md` 的“简化补充”（历史计划未随当前仓库保留；协调协议后续已退役）。
 - 完成：`extensions/coordination-handoff-validation.ts` 新增 `assertHandoffReference`，只接受与当前运行时已签发 `handoffId` 精确匹配的非空文本，并在解析后递归复用同一条 session/协议版本/恢复代次/角色/kind/请求-报告关联/阶段/branch 守卫（缺失身份 → `COORDINATION_HANDOFF_IDENTITY_MISSING`，空值/类型 → `COORDINATION_HANDOFF_REFERENCE_INVALID`，旧引用 → `..._IDENTITY_STALE`，两种输入冲突 → `COORDINATION_HANDOFF_REFERENCE_CONFLICT`）；`extensions/contracts.ts` 新增可选 `coordinationHandoffId` 并保持 `coordinationIdentity`，`extensions/workflow-actions.ts` 向 request/report/review 透传，request-evidence 的已阻塞路径须精确匹配当前引用才允许显式新 attempt。
 - 完成：`src/coordination-validation.ts` 单条 finding 内按规范化 `id`/`location`/`version` 无损合并来源并保留首次顺序，同 `id` 不同版本/位置分别为 `COORDINATION_SOURCE_VERSION_CONFLICT`/`COORDINATION_SOURCE_LOCATION_CONFLICT`；`acceptedEvidence` 只合并完全一致三元引用；`src/coordination-types.ts`、`src/coordination.ts` 与 `extensions/coordination-runtime-protocol.ts` 仅在尚未持久化的报告输入校验失败上标记 `retryable` 并给出就地重提指引；`extensions/architect-boundary.ts` 单一导出 `ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS`/`ARCHITECT_ALLOWED_ACTIONS_TEXT`，运行时 reason、工具 description/promptGuidelines 与角色交接指导共用同一份；`extensions/contracts.ts` 与 `extensions/index.ts` 显式说明 contract 与协调状态的双向门控。未重做状态机，未新增配置/依赖/第二套协议/自动接受，未改持久化格式与版本、handoff 生成/恢复策略、内部 `details` 完整身份及 `workflowMode=auto` 2 任务阈值。
 - 测试：新增 `test/coordination-simplification.test.js`（792 行，11 项）覆盖来源无损合并与冲突、acceptedEvidence 去重与未决缺口拒绝、报告输入就地重提及旧身份不能再消费、schema 暴露 `coordinationHandoffId`、短引用 report/review 闭环与冲突/缺失/过期拒绝、短引用驱动补查后完成带契约规划、来源版本过期阻断、角色/branch/阶段守卫与跨 session 短引用，并新增 `startEvidenceHandoff`/`completeEvidenceRound`/`startCurrentHandoff`/`runtimeReport` 复用夹具；`test/architect-boundary.test.js` 新增“单一定义同时驱动运行时边界与工具/契约指导”；`test/task-contract-runtime.test.js` 新增双向门控诊断断言。
@@ -634,7 +634,7 @@
 
 ### 2026-10-12：完成架构师主导的持久化角色协作闭环
 
-- 完成：新增可恢复的取证请求/报告/审阅状态、版本化开发任务契约和证据就绪门、身份绑定的 developer 澄清/replan 回路，以及公开 Pi `context` hook 上的角色/任务局部输入视图。复用既有 Local workflow、session append/branch 和恢复身份；不增添 executor、不改写 session 原文。具体协议、模块和行为边界集中记录在 [`docs/plans/role-coordination.md`](plans/role-coordination.md)。
+- 完成：新增可恢复的取证请求/报告/审阅状态、版本化开发任务契约和证据就绪门、身份绑定的 developer 澄清/replan 回路，以及公开 Pi `context` hook 上的角色/任务局部输入视图。复用既有 Local workflow、session append/branch 和恢复身份；不增添 executor、不改写 session 原文。当时的协议、模块和行为边界原记录于 `docs/plans/role-coordination.md`（历史计划未随当前仓库保留；旧协议不作为现行入口）。
 - Context 边界：通过扩展 harness 测试实际 context 返回值、工具调用/结果配对、后续用户指令以及 session/branch 保持；不可靠边界时保留完整输入并返回诊断。Pi 的 system/tool 状态由宿主保留，未使用 `context_with_system`。
 - 验证：`npm test` 300 项通过、0 失败；`npm run typecheck` 通过；`git diff --check` 通过（Git 提示工作区文件下次写入时可能从 LF 转为 CRLF）。
 - 未验证：未调用真实 Provider/MCP，未执行 Pi TUI/E2E，未测量跨模型缓存命中或费用收益；harness 结果不代表真实宿主/provider 链路。
@@ -775,7 +775,7 @@
 ### 2026-10-08：修复工作流状态持久化失败时的提前提交
 
 - 完成内容：将 `persistWorkflowState` 的内存提交移至 `pi.appendEntry` 正常返回之后；启动状态持久化失败恢复调度标志并传播错误，暂停状态写入失败释放 dispatch 锁并明确报错。测试 harness 支持注入 append 异常，新增三个持久化一致性回归测试。
-- 持久化边界：不声称 session entry append 提供磁盘事务/外部操作 exactly-once；Pi 新 durable 执行接口和后续交接恢复范围见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- 持久化边界：不声称 session entry append 提供磁盘事务/外部操作 exactly-once；当时的 Pi durable 接口调查和后续交接恢复规划原记录于 `docs/plans/durable-workflow.md`（历史计划未随当前仓库保留，不代表已接入该接口）。
 - 验证：`node --test test/workflow-persistence.test.js`，3 项通过；`node --test test/workflow-persistence.test.js test/workflow-compaction.test.js test/workflow-protocol.test.js test/workflow-report.test.js`，16 项通过；`node scripts/check-line-count.js`、`git diff --check` 和新增测试文件的 whitespace 检查通过（仅有 LF/CRLF 转换提示）。
 - 遗留：尚未实现交接阶段持久化和 attempt/revision 旧结果隔离；全量 `npm test` 留待最终交付；未执行真实 Pi E2E、依赖升级或 push。
 

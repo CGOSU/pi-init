@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { readSources, SOURCE_LIMITS } from "./diagnostics/sources.js";
 import { summarizeRuntime } from "./diagnostics/runtime-report.js";
 import { summarizeSessions } from "./diagnostics/session-report.js";
@@ -124,7 +123,7 @@ async function main() {
   console.log(`pi-init 本地诊断已保存：${options.output}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (import.meta.main) {
   main().catch(error => {
     console.error(error?.code === "EEXIST" ? "输出目录已存在，未覆盖；请选择新的目录。"
       : error?.code ? `采集未完成（${/^[A-Z0-9_]{1,40}$/.test(error.code) ? error.code : "IO_ERROR"}）；输出目录可能包含部分文件。`

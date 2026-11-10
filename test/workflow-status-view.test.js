@@ -390,6 +390,18 @@ test("任务完成视图保留真实失败、零耗时和未声明通过的语�
   assert.deepEqual(task, before);
 });
 
+test("a zero-error check does not hide a different failure in the same verification record", () => {
+  const failures = [
+    "npm test: 2 failed; typecheck: 0 errors",
+    "no errors in typecheck; integration FAILED",
+    "检查未发现错误，但集成测试失败",
+  ];
+  const view = createWorkflowTaskCompletionView(completedTask({
+    verification: [...failures, "0 errors and 0 failures", "no errors or failures", "未发生任何错误"],
+  }));
+  assert.deepEqual(view.task.verificationFailures, failures);
+});
+
 test("缺失任务时间不伪装成零耗时，失败验证缺失时省略验证报告", () => {
   const view = createWorkflowTaskCompletionView(completedTask({
     startedAt: undefined,

@@ -32,6 +32,26 @@ export function parseReviewTarget(input: Record<string, unknown>, requireFingerp
   return { ok: true, path: input.path, fingerprint };
 }
 
+/** Attribute native output only to matching original lines of the current version. */
+export async function verifyNativeRead(
+  projectRoot: string,
+  file: FileSnapshot,
+  start: number,
+  end: number,
+  returnedText: string,
+): Promise<{ ok: true } | ReadFailure> {
+  if (!returnedText || end < start) return { ok: false, code: "NO_ORIGINAL_TEXT", message: "读取结果没有可核对的完整原文行。" };
+  const inspected = await inspectProjectFile(projectRoot, file.path);
+  if (!inspected.ok) return { ok: false, ...inspected.error };
+  if (inspected.file.fingerprint !== file.fingerprint) return { ok: false, code: "STALE_VERSION", message: "文件指纹已变化，请重新读取。" };
+  const lines = inspected.content.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? [];
+  const expected = lines.slice(start - 1, end).join("").replace(/(?:\r\n|\r|\n)$/, "").replace(/\r\n|\r/g, "\n");
+  if (!expected || !returnedText.replace(/\r\n|\r/g, "\n").startsWith(expected)) {
+    return { ok: false, code: "ORIGINAL_TEXT_MISMATCH", message: "读取结果与当前版本原文不一致，未登记覆盖。" };
+  }
+  return { ok: true };
+}
+
 /** Returns only complete, unmodified lines. A single oversized line is never credited. */
 export async function readReviewPage(
   projectRoot: string,

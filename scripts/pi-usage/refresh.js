@@ -202,17 +202,15 @@ async function refreshSessionFiles(connection, sessionsDirectory, options = {}) 
     ]) {
       affectedDates.add(event.eventDate);
     }
-    await withTransaction(connection, async () => {
-      if (!incremental) {
-        await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
-        await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
-        await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: file });
-      }
-      await insertUsageEvents(connection, parsed.events);
-      await insertActivityEvents(connection, parsed.activityEvents);
-      await insertSpeedEvents(connection, parsed.speedEvents);
-      await insertSessionCheckpoint(connection, parsed);
-    });
+    if (!incremental) {
+      await connection.run("DELETE FROM usage_events WHERE source_file = $source_file", { source_file: file });
+      await connection.run("DELETE FROM activity_events WHERE source_file = $source_file", { source_file: file });
+      await connection.run("DELETE FROM speed_events WHERE source_file = $source_file", { source_file: file });
+    }
+    await insertUsageEvents(connection, parsed.events);
+    await insertActivityEvents(connection, parsed.activityEvents);
+    await insertSpeedEvents(connection, parsed.speedEvents);
+    await insertSessionCheckpoint(connection, parsed);
     stats.filesChanged += 1;
     if (incremental) stats.filesAppended += 1;
     else stats.filesRebuilt += 1;
@@ -331,18 +329,20 @@ async function refreshUsage(connection, sessionsDirectory, range, options = {}) 
     emitRefreshProgress(options, { type: "complete", date: range.date, stats: result });
     return result;
   }
-  const { affectedDates, stats, latestUpdatedAt } = await refreshSessionFiles(connection, sessionsDirectory, options);
-  const dates = [...affectedDates].sort();
-  for (const date of dates) {
-    await refreshDerivedSummaries(connection, dateRange(date));
-  }
-  await markUsageChecked(connection);
-  const result = {
-    ...stats,
-    durationDates: dates,
-    schemaMigrated,
-    latestUpdatedAt: latestUpdatedAt?.toISOString(),
-  };
+  const result = await withTransaction(connection, async () => {
+    const { affectedDates, stats, latestUpdatedAt } = await refreshSessionFiles(connection, sessionsDirectory, options);
+    const dates = [...affectedDates].sort();
+    for (const date of dates) {
+      await refreshDerivedSummaries(connection, dateRange(date));
+    }
+    await markUsageChecked(connection);
+    return {
+      ...stats,
+      durationDates: dates,
+      schemaMigrated,
+      latestUpdatedAt: latestUpdatedAt?.toISOString(),
+    };
+  });
   emitRefreshProgress(options, { type: "complete", date: range.date, stats: result });
   return result;
 }

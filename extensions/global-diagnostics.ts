@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { withDiagnosticLock } from "./diagnostic-storage.ts";
+import { diagnosticDirectory, withDiagnosticLock } from "./diagnostic-storage.ts";
 import { loadedRuntimeIdentity } from "./runtime-identity.ts";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -47,8 +47,7 @@ export function createGlobalDiagnostics(options: {
   }
 
   async function append(line: string) {
-    const directory = join((options.agentDir ?? getAgentDir)(), "diagnostics", "pi-init");
-    await io.mkdir(directory, { recursive: true, mode: 0o700 });
+    const directory = await diagnosticDirectory((options.agentDir ?? getAgentDir)(), ["diagnostics", "pi-init"], true, io);
     await withDiagnosticLock(directory, async () => {
       const file = join(directory, "runtime.jsonl");
       const backup = file + ".1";

@@ -115,29 +115,24 @@
 
 - codemode 的异常参数拒绝只在 `tool_call` 阶段检查 code：连续至少 256 行单行空 `text()` 且占非空行至少 90% 才拒绝执行；不覆盖未到达工具调用的生成失败，不截断、改写或自动重放，也不减少已发生的生成耗时。SDK 的 `provider_stream_event` 是只读通知，`ExtensionContext.abort()` 会取消整个当前 agent operation，缺少请求专属取消句柄及可靠的流式参数拦截结果契约；当前未实现或验证生成中止。调查边界为软约束，来源路径只是优先线索而非硬白名单。实现及验证细节见 [`docs/session-log.md`](session-log.md)。
 
-- 协调证据链接在工作流统一持久化入口提交成功后同步执行代次，并在工作流/协调调度及补充取证前受限补偿同 session、同 workflowId、同 planVersion 的已有落后链接；正常 complete/block/retry 不再因遗漏同步而误报 COORDINATION_WORKFLOW_LINK_MISMATCH。工作流写入失败不先更新证据，证据写入失败保留已完成结果且暂不派发，存储恢复后只补关联、不重放任务。缺失、其他计划/session、未来代次与失效证据仍 fail-closed。
+- 工作流进度面板已分离为只读分层浏览与受保护操作：Enter 查看任务详情，Esc 分层返回，a 打开状态相关操作，d 查看技术详情；长详情滚动、刷新保留选择与滚动、窄终端固定底部提示。取消范围明确且默认返回；未知结果重试必须核对副作用。确认前后检查状态来源与会话/上下文，操作最终复用已有命令，不新增状态写入入口。
 
-- 工作流进度面板已分离为只读分层浏览与受保护操作：Enter 查看任务详情，Esc 分层返回，a 打开状态相关操作，d 查看技术详情；长详情滚动、刷新保留选择与滚动、窄终端固定底部提示。取消范围明确且默认返回；未知结果重试必须核对副作用。确认前后检查状态来源与会话/上下文，操作最终复用已有命令，不新增状态写入入口；等待 AI 审阅不可直接放行父任务。
+- 新目标采用“目标归属 + 扁平任务队列”：request-goal 只追加目标分组与任务；旧 request-child 不再作为兼容入口，所有任务保持同一 workflowId；按已满足依赖、显式 priority 和稳定顺序选择，不压入新父子运行栈。新分组默认不加急，不强行中断当前任务，完成分组不等于根目标成功。插入须明确保留原 pending 项，替换/撤销通过普通 replan；阻塞态可在安全边界直接规划，未知副作用不自动重试。旧栈和旧嵌套请求只保留退役诊断，不自动恢复、展开或重放。
 
-- 新目标采用“目标归属 + 扁平任务队列”：request-goal（request-child 兼容别名）只追加目标分组与任务，所有任务保持同一 workflowId；按已满足依赖、显式 priority 和稳定顺序选择，不压入新父子运行栈。新分组默认不加急，不强行中断当前任务，完成分组不等于根目标成功。插入须明确保留原 pending 项，替换/撤销通过普通 replan；阻塞态可在安全边界直接规划，未知副作用不自动重试。schema v7 兼容 v1–v6 原状态，旧栈和旧嵌套请求保留兼容收尾，不自动展开或重放。
+- Local 工作流的调度决策与任务/重规划交接阶段集中到 `src/workflow-orchestrator.ts`：纯事件转换返回新状态和发送效果；消息层先持久化派发意图再发送，重复派发事件、过期身份和迟到 queued 不推进状态。执行中提醒是独立事件；完成、阻塞、重试、恢复与取消通过统一生命周期事件转换，命令和工具共用提交入口。写入失败不推进已持久化状态。真实启动验收与未知结果恢复继续沿用现有安全边界；旧协调账本和嵌套协议已退役，不是现行调度前置。
 
-- Local 工作流的调度决策与任务/重规划交接阶段集中到 `src/workflow-orchestrator.ts`：纯事件转换返回新状态和发送效果；消息层先持久化派发意图再发送，重复派发事件、过期身份和迟到 queued 不推进状态。执行中提醒是独立事件；完成、阻塞、重试、恢复与取消通过统一生命周期事件转换，命令和工具共用提交入口。嵌套完成/取消只在状态持久化成功后撤销旧身份续跑，写入失败不撤销。压缩、协调就绪门、真实启动验收及未知结果恢复继续沿用现有安全边界；规划、重规划应用与协调账本尚未统一迁移。设计与验证范围见 [`docs/plans/workflow-orchestration.md`](plans/workflow-orchestration.md)。
+- 工作流状态结果默认以摘要突出阶段、进度、目标、当前任务与暂停原因；进度面板和状态摘要展示同一扁平队列中的目标分组，而不是父子工作流执行栈。展开后保留完整状态和身份。完成结果默认呈现简短任务/最终结果摘要，展开后保留验证与时间。TUI 进度面板刷新时保留仍有效的任务选择，workflowId 改变时转到新工作流当前任务；模型可见状态文本和调度/验收行为不受展示影响。详情见 [README.md](../README.md)。
 
-- 工作流状态结果默认以摘要突出阶段、进度、目标、当前任务与暂停原因；嵌套工作流的进度面板和状态摘要树状展示父目标、当前子目标、父层等待状态及已完成/取消的子目标。展开后保留完整状态、身份和嵌套历史。完成结果默认呈现简短任务/最终结果摘要，展开后保留验证与时间。TUI 进度面板刷新时保留仍有效的任务选择，workflowId 改变时转到新工作流当前任务；模型可见状态文本和调度/验收行为不受展示影响。详情见 [README.md](../README.md)。
-
-- `/pi-init coordination reopen <reportId> <reason>` 仅重开最新且明确 `block` 的证据审阅：追加关联原报告、阻塞审阅与理由的重开记录，持久化成功后才签发新的 architect 复审 handoff；原取证/审阅记录和来源版本保留，不自动接受证据、不派发开发。协调状态 schema v2 迁移读取 v1；项目不可信、Agent 忙、恢复异常或存在未完成/结果未知 handoff 时 fail-closed，旧 handoff 身份不复用。验证及真实 Pi/TUI 未覆盖项见 [`docs/session-log.md`](session-log.md)。
-
-- Local 工作流的 `complete`/`block` 到达时若交接仍为 `queued`，仅在完整 handoff 身份匹配、活动 session branch 含精确交接消息且当前角色匹配任务角色时，先持久化补记 `executing` 再进行严格验收；身份、branch 或角色不符仍 fail-closed，未知结果仍须显式核对和 retry。身份校验失败以模型可见 JSON 给出 code、差异字段、白名单 expected/received 与下一步；`status`、任务提示和重规划提示展示通过共享构造器生成的可复制 JSON 身份，`status` 保持只读。`task_workflow` TUI 将这些失败诊断按类别、代码、原因、白名单身份差异和下一步分段显示；普通错误与无法解析的诊断仍保留原始错误内容，不改变模型错误 JSON 或失败守卫。该路径不改变恢复时 queued 结果未知的策略，也不确认原始 stale identity 故障的字段根因。
-- pi-init 工作流固定为当前主会话内 local 顺序执行；缺省 executor 与旧 `workflowExecutor: "local"` 配置仍可读，执行器不再是控制中心或 schema 选项。`subagents`、`subtask`、`collaboration` 等未知值明确拒绝。当前状态持久化在 `pi.appendEntry` 正常返回后才更新内存状态；append 异常保留旧状态并停止本次调度。`architect` 不得作为执行任务角色，plan/replan 校验拒绝该角色；旧活动计划含 architect 执行任务时不持久化自动修复或派发，仅保留恢复错误供检查；用户显式取消后可另建计划。后续交接身份与恢复边界见 [`docs/plans/durable-workflow.md`](plans/durable-workflow.md)。
+- Local 工作流的 `complete`/`block` 到达时若交接仍为 `queued`，仅在完整 handoff 身份匹配、活动 session branch 含精确交接消息且当前角色匹配任务角色时，先持久化补记 `executing` 再进行严格验收；身份、branch 或角色不符仍 fail-closed，未知结果仍须显式核对和 retry。工具调用身份默认由运行时绑定，不要求模型手填；兼容显式身份仍严格校验。身份校验失败以模型可见 JSON 给出 code、差异字段、白名单 expected/received 与下一步，`status` 保持只读。`task_workflow` TUI 将这些失败诊断按类别、代码、原因、白名单身份差异和下一步分段显示；普通错误与无法解析的诊断仍保留原始错误内容，不改变模型错误 JSON 或失败守卫。该路径不改变恢复时 queued 结果未知的策略，也不确认原始 stale identity 故障的字段根因。
+- pi-init 工作流固定为当前主会话内 local 顺序执行；缺省 executor 与旧 `workflowExecutor: "local"` 配置仍可读，执行器不再是控制中心或 schema 选项。`subagents`、`subtask`、`collaboration` 等未知值明确拒绝。当前状态持久化在 `pi.appendEntry` 正常返回后才更新内存状态；append 异常保留旧状态并停止本次调度。`architect` 不得作为执行任务角色，plan/replan 校验拒绝该角色；旧活动计划含 architect 执行任务时不持久化自动修复或派发，仅保留恢复错误供检查；用户显式取消后可另建计划。后续交接身份与恢复边界见随 package 发布的 `pi-init-role-routing` Skill。
 - 工作流暂停通知和 block 工具结果使用分区摘要，突出真实原因及恢复建议；纯文本与 TUI 从同一类型化暂停视图独立渲染，不解析已格式化文案。暂停结果不以成功标记呈现，展开后显示完整任务与身份技术状态。未知结果仍须先核对外部副作用，再显式确认 retry；block 工具不另发重复通知。
 - 工作流工具 `AbortSignal` 只中止当前工具操作；业务取消需显式持久化 `cancelled`，只有持久化成功才退休所属续跑，且不等同于宿主压缩终止。`acknowledge` 是当前来源匹配告警的易失展示确认，不改变状态/守卫，身份变化、branch 切换及 reload 会重新提醒。`discard-recovery` 仅对明确不可恢复且无可读/待持久化状态的原记录，在可信项目、Agent 空闲、当前 branch 唯一且最新的原 entry ID、session/branch/error 精确匹配并确认未知副作用后，追加版本化引用处置；它不构成任务成功或取消。安全边界见 [`docs/decisions.md`](decisions.md)，用户用法见 [`README.md`](../README.md)。
 - 状态、任务完成、最终完成、普通执行计时和操作错误采用各自的只读视图及纯文本/TUI renderer。状态视图服务状态文本、状态栏、进度面板和非暂停工具结果；任务完成只报告当前任务，最终报告使用明确的最终任务并只列明确失败的验证，计时缺失保留不可用语义。`workflowPresentation` 仅附加到瞬时工具结果 `details`，旧结果缺少判别信息时回退原文，不进入 `WorkflowState`/session entry；模型错误 JSON 与 `isError` 保持原契约。详情与取舍见 [`README.md`](../README.md) 和 [`docs/decisions.md`](decisions.md)。
 - 旧配置顶层 `runtime` 字段返回 `RUNTIME_CONFIG_RETIRED`，`workflowExecutor: "runtime"` 返回 `WORKFLOW_EXECUTOR_RETIRED`；旧 Runtime executor/authority 或残留 payload 的持久状态返回 `WORKFLOW_STATE_RUNTIME_RETIRED`。状态和动作保留恢复错误，不会静默转为 local、不自动重放/迁移，也不改写或删除原始 session entry；旧配置需由用户检查并手动清理。
-- 当前不包含自建外部 Runtime backend，也未接入或核实任何官方 Runtime 接口。历史双轨实现与旧验证记录仅作为历史保留，见 [`docs/decisions.md`](decisions.md) 的退役决策及 [`docs/plans/runtime-migration.md`](plans/runtime-migration.md) 的历史标记。
-
-## 已知状态
+- 当前不包含自建外部 Runtime backend，也未接入或核实任何官方 Runtime 接口。历史双轨实现与旧验证记录仅作为历史保留，见 [`docs/decisions.md`](decisions.md) 的退役决策；未保留的旧计划不作为现行功能依据。
 
 ## 待处理
 
-- `extensions/coordination-runtime.ts`、`extensions/workflow-actions.ts`、`extensions/workflow-dispatch.ts`、`src/coordination-validation.ts`、`src/workflow-model.ts`、`src/workflow-hydration.ts`、`test/coordination-runtime.test.js` 与 `test/coordination-simplification.test.js` 的当前内容版本已通过 `file_review` 完成结构审阅并建议保留；`extensions/file-review-runtime.ts` 已对移除功能后的当前内容完整读取并登记结构 `keep`。此后修改过的 `extensions/index.ts`、`test/pi-usage.test.js`、`test/extension-lifecycle.test.js` 和 `test/file-review-runtime.test.js` 不沿用旧 fingerprint 结论；旧 `test/helpers.js` 已删除。运行中的旧 Pi 工具 schema/提示尚未通过 reload 核实，需 reload 或重启后更新。
-- Linux、macOS 的 CI 矩阵已加入但尚未在本地执行；pi-usage 的 PATH 遮蔽用例已在 macOS 宿主验证，但未在真实 Windows 宿主执行。第三方 `agent-browser` 工具在 Windows 上仍需上游修复 CLI 检测和 `.cmd` 启动兼容性，本项目只能通过 `AGENTS.md` 降低误安装和误用。
+- [全项目审计](project-audit.md)集中维护已修复问题、验证范围与待维护者确认项：最低 SDK 兼容性、真实 Windows/PowerShell 验证、scaffold 已有目录链接策略、诊断记录器恢复体验及两项结构拆分建议。结构结论仅适用于登记时指纹，不作为后续版本的自动批准。
+- 当前仓库未包含 CI workflow；不要沿用旧记录中“Linux、macOS CI 矩阵已加入”的结论。跨平台持续验证与最低 SDK 矩阵仍待安排，不能用本机通过代替。
+- 本次只修改仓库源码，未安装或同步本机 Pi package，也未 reload 验收真实宿主；现有会话中的旧 schema/提示不会因仓库提交自动更新。

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -118,6 +118,43 @@ test("pi-usage SVG 输出复用查询时间范围", () => {
   assert.throws(() => parseArguments(["--output"], "agent"), /--output 需要输出路径/);
   assert.throws(() => parseArguments(["--output", "bill.png"], "agent"), /--output 目前仅支持 \.svg 文件/);
 });
+
+test("manual installer reports failure instead of returning success", async () => {
+  await withTempDirectory(async (directory) => {
+    const file = path.join(directory, "not-a-directory");
+    await writeFile(file, "keep");
+    const result = spawnSync(process.execPath, ["scripts/install-launchers.js", "--target-dir", file], { encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.equal(await readFile(file, "utf8"), "keep");
+  });
+});
+
+for (const args of [["--unknown"], ["--target-dir"], ["--target-dir", "TARGET", "--unknown"]]) {
+  test(`invalid installer arguments are rejected before side effects: ${args.join(" ")}`, async () => {
+    await withTempDirectory(async (directory) => {
+      const result = spawnSync(process.execPath, ["scripts/install-launchers.js", ...args.map(arg => arg === "TARGET" ? directory : arg)], {
+        encoding: "utf8", env: { ...process.env, PATH: directory },
+      });
+      assert.notEqual(result.status, 0);
+      await assert.rejects(readFile(path.join(directory, "pi-usage.js")), { code: "ENOENT" });
+    });
+  });
+}
+
+for (const platform of ["win32", "linux"]) {
+  test(`installed ${platform} module tree executes without the source package`, async () => {
+    await withTempDirectory(async (directory) => {
+      installLaunchers({ targetDir: directory, platform });
+      const output = execFileSync(process.execPath, [path.join(directory, "pi-usage.js"), "--db", path.join(directory, "usage.duckdb")], {
+        encoding: "utf8", env: {
+          ...process.env, NODE_PATH: path.join(process.cwd(), "node_modules"),
+          PI_CODING_AGENT_DIR: path.join(directory, "agent"), PI_CODING_AGENT_SESSION_DIR: path.join(directory, "sessions"),
+        },
+      });
+      assert.ok(output.includes(PI_USAGE_VERSION));
+    });
+  });
+}
 
 test("POSIX 安装脚本会安装 pi-usage 所需的共享模块", { skip: process.platform === "win32" }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-usage-installer-"));

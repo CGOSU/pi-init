@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
+import { createReadTool } from '@earendil-works/pi-coding-agent';
 import os from 'node:os';
 import path from 'node:path';
-import { readReviewPage, FILE_REVIEW_READ_MAX_BYTES } from '../extensions/file-review-read.ts';
+import { readReviewPage, verifyNativeRead, FILE_REVIEW_READ_MAX_BYTES } from '../extensions/file-review-read.ts';
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 async function fixture(run) {
@@ -321,14 +322,40 @@ test('read rejects case variants of excluded inventory directories', async () =>
   });
 });
 
+test('unrelated native text cannot prove a single blank source line', async () => {
+  await fixture(async (directory, original) => {
+    await fs.writeFile(path.join(directory, 'src/large.ts'), '\n' + original);
+    const page = await readReviewPage(directory, { path: 'src/large.ts', offset: 1, limit: 1 });
+    assert.equal(page.ok, true);
+    const result = await verifyNativeRead(directory, page.file, 1, 1, 'unrelated content');
+    assert.equal(result.ok, false);
+  });
+});
+
+for (const newline of ['\n', '\r\n']) {
+  test(`actual SDK native output proves source coverage with ${newline === '\n' ? 'LF' : 'CRLF'} lines`, async () => {
+    await fixture(async (directory, original) => {
+      await fs.writeFile(path.join(directory, 'src/large.ts'), original.replaceAll('\n', newline));
+      const { harness, call, complete } = await reviewer(directory);
+      const listed = await call({ action: 'list' });
+      const input = { path: 'src/large.ts' };
+      const result = await createReadTool(directory).execute('native-proof', input, undefined);
+      await emitExtensionEvent(harness, 'tool_result', {
+        ...result, type: 'tool_result', toolCallId: 'native-proof', toolName: 'read', input, isError: false,
+      });
+      assert.equal((await complete(listed.details.candidates[0].fingerprint)).details.ok, true);
+    });
+  });
+}
+
 test('native and built-in pages share exact-version coverage without crediting gaps', async () => {
-  await fixture(async directory => {
+  await fixture(async (directory, original) => {
     const { harness, call, complete } = await reviewer(directory);
     const first = await call({ action: 'read', path: 'src/large.ts', limit: 200 });
     await emitExtensionEvent(harness, 'tool_result', {
       type: 'tool_result', toolCallId: 'native-page', toolName: 'read',
       input: { path: 'src/large.ts', offset: 201, limit: 200 },
-      content: [], details: undefined, isError: false,
+      content: [{ type: 'text', text: original.split('\n').slice(200, 400).join('\n') }], details: undefined, isError: false,
     });
     await call({ action: 'read', path: 'src/large.ts', offset: 402, limit: 200 });
     assert.equal((await complete(first.details.fingerprint)).details.code, 'FILE_NOT_FULLY_READ');

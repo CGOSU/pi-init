@@ -23,13 +23,13 @@ async function withTempDirectory(run) {
   }
 }
 
-function readEvent(filePath, input = {}) {
+function readEvent(filePath, input = {}, value = "initial") {
   return {
     type: "tool_result",
     toolCallId: "read-call",
     toolName: "read",
     input: { path: filePath, ...input },
-    content: [],
+    content: [{ type: "text", text: makeFile(value).split("\n").slice((input.offset ?? 1) - 1, (input.offset ?? 1) - 1 + (input.limit ?? 2000)).join("\n") }],
     details: undefined,
     isError: false,
   };
@@ -326,6 +326,23 @@ test("分段读取覆盖完整文件后才能确认；内容变化使旧确认�
   });
 });
 
+for (const stale of [false, true]) {
+  test(`native read ${stale ? "stale contents" : "empty contents"} cannot prove the current source was read`, async () => {
+    await withTempDirectory(async (directory) => {
+      const harness = createExtensionHarness([], { cwd: directory });
+      await emitExtensionEvent(harness, "session_start", { reason: "startup" });
+      const tool = harness.tools.find(item => item.name === "file_review");
+      const event = readEvent("src/large.ts");
+      event.content = stale ? [{ type: "text", text: makeFile("initial") }] : [];
+      if (stale) await writeFile(path.join(directory, "src/large.ts"), makeFile("changed"));
+      await emitExtensionEvent(harness, "tool_result", event);
+      const listed = await tool.execute("list-current", { action: "list" }, undefined, undefined, harness.context);
+      const result = await completeReview(harness, listed.details.candidates[0]);
+      assert.equal(result.details.code, "FILE_NOT_FULLY_READ");
+    });
+  });
+}
+
 test("审阅记录持久化失败时不标记已审", async () => {
   await withTempDirectory(async (directory) => {
     const harness = createExtensionHarness([], {
@@ -393,7 +410,7 @@ test("库存按需更新且通知按版本去重，不改变 system 前缀", asy
     assert.equal(listed.details.total, 2);
     const candidate = listed.details.candidates.find((item) => item.path === "src/new.ts");
     assert.equal(candidate.lineCount, lineCount);
-    await emitToolResult(harness, readEvent(candidate.path));
+    await emitToolResult(harness, readEvent(candidate.path, {}, "second-version"));
     assert.equal((await completeReview(harness, candidate)).details.ok, true);
     assert.equal((await tool.execute("list-reviewed", { action: "list" }, undefined, undefined, harness.context)).details.total, 1);
     assert.deepEqual(await systemSections(), baseline);
@@ -568,7 +585,7 @@ test("review delta append failure preserves memory and branch/reload restores on
     await emitExtensionEvent(h, "tool_result", readEvent(first.path));
     assert.equal((await completeReview(h, first)).details.ok, true);
     const ancestor = structuredClone(branch);
-    await emitExtensionEvent(h, "tool_result", readEvent(second.path));
+    await emitExtensionEvent(h, "tool_result", readEvent(second.path, {}, "other"));
     assert.equal((await completeReview(h, second)).details.code, "PERSIST_FAILED");
     assert.equal((await list()).details.total, 1);
     assert.equal(branch.filter(e => e.customType === "pi-init-file-review").length, 1);

@@ -280,6 +280,16 @@ export async function readByte(file, offset) {
   return undefined;
 }
 
+function parseSessionEntry(line) {
+  let value;
+  try { value = JSON.parse(line); }
+  catch { return { ok: false, code: "INVALID_SESSION_JSON", message: "Session entry is not valid JSON." }; }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, code: "INVALID_SESSION_ENTRY_TYPE", message: "Session entry must be an object." };
+  }
+  return { ok: true, value };
+}
+
 async function scanFile(file, options = {}) {
   const events = [];
   const activityEvents = [];
@@ -290,19 +300,18 @@ async function scanFile(file, options = {}) {
   let lastLineTerminated = true;
   let hasIncompleteTail = false;
   for await (const record of readJsonlLines(file, committedOffset, nextLineNumber)) {
-    let entry;
-    try {
-      entry = JSON.parse(record.line);
-    } catch {
-      if (!record.terminated) {
+    const parsed = parseSessionEntry(record.line);
+    if (!parsed.ok) {
+      if (parsed.code === "INVALID_SESSION_JSON" && !record.terminated) {
         hasIncompleteTail = true;
         break;
       }
       committedOffset = record.endOffset;
       nextLineNumber = record.lineNumber + 1;
-      lastLineTerminated = true;
+      lastLineTerminated = record.terminated;
       continue;
     }
+    const entry = parsed.value;
     if (entry.type === "session" && entry.cwd) {
       cwd = String(entry.cwd);
     }

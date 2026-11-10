@@ -242,17 +242,21 @@ export async function insertSpeedEvents(connection, speedEvents) {
 
 
 async function closeDatabase(connection, instance) {
-  connection.disconnectSync?.();
-  connection.closeSync?.();
-  instance.closeSync?.();
+  try {
+    connection?.disconnectSync?.();
+    connection?.closeSync?.();
+  } finally {
+    instance.closeSync?.();
+  }
 }
 
 export async function withDatabase(databasePath, runtimeDirectory, callback) {
   mkdirSync(path.dirname(databasePath), { recursive: true });
   const duckdb = await loadDuckDb(runtimeDirectory);
   const instance = await duckdb.DuckDBInstance.create(databasePath);
-  const connection = await instance.connect();
+  let connection;
   try {
+    connection = await instance.connect();
     await initializeDatabase(connection);
     return await callback(connection);
   } finally {

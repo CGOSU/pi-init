@@ -7,7 +7,7 @@ import {
 import type { WorkflowState, WorkflowTask } from "../src/workflow-types.ts";
 
 const VERIFICATION_FAILURE_PATTERN = /(?:失败|未通过|不通过|报错|异常|[✗✕❌]|\b(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|timed?\s*out|timeout|non[-\s]?zero|(?:exit(?:ed)?|退出)[^\d\n]{0,20}(?:[1-9]\d*|non[-\s]?zero))/iu;
-const VERIFICATION_NO_FAILURE_PATTERN = /(?:\b0\s+(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|\bno\s+(?:fail(?:ed|ure)?s?|errors?|exceptions?)\b|(?:未(?:发生|发现|出现)?|没有|无)(?:任何)?(?:错误|失败))/iu;
+const VERIFICATION_NO_FAILURE_PATTERN = /(?:\b(?:0|no)\s+(?:fail(?:ed|ure)?s?|errors?|exceptions?)(?:\s+(?:and|or)\s+(?:failures?|errors?|exceptions?))*\b|(?:未(?:发生|发现|出现)?|没有|无)(?:任何)?(?:错误|失败))/giu;
 
 export type CompletionDuration =
   | { kind: "available"; milliseconds: number }
@@ -46,7 +46,7 @@ export type WorkflowCompletionView = {
 };
 
 function isVerificationFailure(value: string) {
-  return VERIFICATION_FAILURE_PATTERN.test(value) && !VERIFICATION_NO_FAILURE_PATTERN.test(value);
+  return VERIFICATION_FAILURE_PATTERN.test(value.replace(VERIFICATION_NO_FAILURE_PATTERN, ""));
 }
 
 function completionTaskView(task: WorkflowTask): WorkflowCompletionTaskView {

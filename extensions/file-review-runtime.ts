@@ -41,7 +41,7 @@ import {
 import { registerLargeCommand, type LargeReviewSnapshot } from "./large-command.ts";
 import { hasCompleteCoverage, mergeCoverage, pathKey, type FileCoverage } from "./file-review-coverage.ts";
 import type { ActiveRole } from "./runtime-state.ts";
-import { parseReviewTarget, readReviewPage, FILE_REVIEW_READ_MAX_LINES } from "./file-review-read.ts";
+import { parseReviewTarget, readReviewPage, verifyNativeRead, FILE_REVIEW_READ_MAX_LINES } from "./file-review-read.ts";
 
 const DEFAULT_LIST_FILES = 10;
 const MAX_LIST_FILES = 50;
@@ -339,7 +339,14 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     const partialLines = truncation?.lastLinePartial ? 1 : 0;
     const currentSession = session;
     if (!currentSession) return undefined;
-    mergeCoverage(currentSession.readCoverage, current, start, Math.min(current.lineCount, start + outputLines - partialLines - 1));
+    const end = Math.min(current.lineCount, start + outputLines - partialLines - 1);
+    if (current.lineCount > FILE_REVIEW_THRESHOLD) {
+      const returnedText = event.content.filter(part => part.type === "text").map(part => part.text).join("\n");
+      const verified = await verifyNativeRead(currentSession.projectRoot, current, start, end, returnedText);
+      if (session !== currentSession) return undefined;
+      if (!verified.ok) return appendToolNotice(event, `[pi-init 大文件审阅] ${verified.code}：${verified.message}`);
+    }
+    mergeCoverage(currentSession.readCoverage, current, start, end);
     const notices = unnotifiedCandidates(currentSession, candidateQueue(currentSession));
     const notice = incrementalNotice(notices);
     if (!notice) return undefined;

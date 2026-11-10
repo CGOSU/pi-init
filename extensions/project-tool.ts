@@ -10,7 +10,7 @@ export function registerProjectTool(pi: ExtensionAPI, loadScaffoldRuntime: () =>
     name: "init_project",
     label: "Initialize Project",
     description:
-      "Generate AGENTS.md, project memory docs, and .pi/role-models.json. The package-published pi-init-role-routing Skill provides shared role semantics; project AGENTS.md references it and no project-level role Skill is generated. AGENTS.md also records the host platform and command conventions detected during initialization. Existing generated files may be overwritten after confirmation.",
+      "Generate AGENTS.md, project memory docs, and .pi/role-models.json. The package-published pi-init-role-routing Skill provides shared role semantics; project AGENTS.md references it and no project-level role Skill is generated. AGENTS.md also records the host platform and command conventions detected during initialization. Only missing files are created; existing files and symlinks are preserved unchanged.",
     promptSnippet: "Initialize project context files and use the package-published pi-init-role-routing Skill",
     promptGuidelines: [
       "Use init_project when the user asks to initialize a project with AI Coding collaboration context.",

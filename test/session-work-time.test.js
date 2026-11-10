@@ -97,17 +97,19 @@ test("空闲 UI 将累计工作时间放入统一活动 widget，下一轮开始
   assert.equal(harness.widgets.size, 1);
 });
 
-test("session 生命周期在 TUI 空闲时显示累计工作时间", async () => {
+test("session 生命周期保存累计工作时间，关闭时不重复累计", async (t) => {
+  let now = 1_000;
+  t.mock.method(Date, "now", () => now);
   const harness = createExtensionHarness([], { mode: "tui" });
   await emitExtensionEvent(harness, "session_start");
   await emitExtensionEvent(harness, "agent_start");
-  assert.equal(harness.widgets.size, 1);
-  assert.ok(harness.widgets.has("pi-init-activity"));
+  now += 1_000;
   await emitExtensionEvent(harness, "agent_settled");
-  assert.equal(harness.widgets.size, 1);
-  assert.ok(harness.widgets.has("pi-init-activity"));
-  assert.equal(harness.entries.filter(({ type }) => type === "pi-init-session-work-time").length, 1);
+  const saved = harness.entries.filter(({ type }) => type === "pi-init-session-work-time");
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].data, { totalMilliseconds: 1_000, lastStartedAt: 1_000, lastCompletedAt: 2_000 });
 
+  now += 5_000;
   await emitExtensionEvent(harness, "session_shutdown");
-  assert.equal(harness.widgets.size, 0);
+  assert.deepEqual(harness.entries.filter(({ type }) => type === "pi-init-session-work-time"), saved);
 });

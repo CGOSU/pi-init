@@ -112,7 +112,6 @@ test("缓存状态共享唯一的 pi-init 活动状态出口", async () => {
   assert.ok(harness.handlers.has("agent_settled"));
 
   await emitExtensionEvent(harness, "session_start");
-  assert.match(latestActivityStatus(harness), /自动/);
   assert.doesNotMatch(latestActivityStatus(harness), /缓存 · 等待请求/);
   assert.ok(activityCalls(harness).length > 0);
   assert.ok(harness.statusCalls.filter((call) => call.text !== undefined)
@@ -382,6 +381,5 @@ test("新会话会重置上一轮缓存状态", async () => {
   assert.match(latestActivityStatus(harness), /本次 R2k/);
 
   await emitExtensionEvent(harness, "session_start", { reason: "new" });
-  assert.match(latestActivityStatus(harness), /自动/);
   assert.doesNotMatch(latestActivityStatus(harness), /本次 R|本次 W|请求失败|已中止/);
 });

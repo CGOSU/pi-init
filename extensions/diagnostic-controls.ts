@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { getAgentDir, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { diagnosticDirectory, diagnosticErrorCode, withDiagnosticLock } from "./diagnostic-storage.ts";
+import { diagnosticDirectory, diagnosticErrorCode, readDiagnosticText, withDiagnosticLock } from "./diagnostic-storage.ts";
 import { isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
 import { showMenu, isMenuBack, MENU_BACK } from "./ui.ts";
 
@@ -89,25 +89,13 @@ export function createDiagnosticControls(deps: {
     return operate(ctx, scope, async directory => {
       const records: Record<string, unknown>[] = [];
       for (const file of await regularFiles(directory)) {
-        const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-        try {
-          if ((await handle.stat()).size > 2 * 1024 * 1024) throw Object.assign(new Error("诊断文件超过读取上限"), { code: "DIAGNOSTIC_TOO_LARGE" });
-          const buffer = Buffer.alloc(2 * 1024 * 1024 + 1);
-          let length = 0;
-          while (length < buffer.length) {
-            const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
-            if (!bytesRead) break;
-            length += bytesRead;
-          }
-          if (length === buffer.length) throw Object.assign(new Error("诊断文件超过读取上限"), { code: "DIAGNOSTIC_TOO_LARGE" });
-          const text = buffer.subarray(0, length).toString("utf8");
-          for (const line of text.split("\n").filter(Boolean)) {
-            const record = safeRecord(line);
-            if (!record.ok) throw Object.assign(new Error(record.message), { code: record.code });
-            records.push(record.value);
-            if (records.length > 256) records.shift();
-          }
-        } finally { await handle.close(); }
+        const text = await readDiagnosticText(file, 2 * 1024 * 1024);
+        for (const line of text.split("\n").filter(Boolean)) {
+          const record = safeRecord(line);
+          if (!record.ok) throw Object.assign(new Error(record.message), { code: record.code });
+          records.push(record.value);
+          if (records.length > 256) records.shift();
+        }
       }
       if (!records.length) throw Object.assign(new Error("没有可导出的诊断"), { code: "NO_DIAGNOSTIC_DATA" });
       const path = resolve(ctx.cwd, target);
@@ -120,7 +108,7 @@ export function createDiagnosticControls(deps: {
   async function clear(ctx: ExtensionCommandContext, scope: Scope): Promise<Result<{ count: number }> | undefined> {
     if (scope !== "project" && scope !== "global") return { ok: false, code: "INVALID_SCOPE", message: "请选择当前项目或本机全局范围。" };
     if (!ctx.isProjectTrusted() || !ctx.hasUI) return { ok: false, code: "CONFIRMATION_REQUIRED", message: "清理需要受信任项目和交互式确认，未删除文件。" };
-    if (!await ctx.ui.confirm(`清理${labels[scope]}诊断？`, `目标：${location(ctx, scope).path} 及 .1 备份。删除后不可恢复，不影响工作流状态和会话文件；后续故障仍会重新记录。不处理旧版详细日志。是否确认？`)) return undefined;
+    if (!await ctx.ui.confirm(`清理${labels[scope]}诊断？`, `目标：${location(ctx, scope).path} 及 .1 备份。删除后不可恢复，不影响工作流状态和会话文件；记录器正常时后续故障会重新记录，已停用的记录器需重载后恢复。不处理旧版详细日志。是否确认？`)) return undefined;
     return operate(ctx, scope, async directory => {
       const files = await regularFiles(directory);
       for (const file of files) await fs.unlink(file);

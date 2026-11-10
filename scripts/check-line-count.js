@@ -1,5 +1,4 @@
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   FILE_REVIEW_THRESHOLD,
   countPhysicalLines,
@@ -44,8 +43,7 @@ export async function main(rootDir = process.cwd(), reviewThreshold = REVIEW_THR
   return 0;
 }
 
-const invokedScript = process.argv[1];
-if (invokedScript && pathToFileURL(resolve(invokedScript)).href === import.meta.url) {
+if (import.meta.main) {
   try {
     process.exitCode = await main();
   } catch (error) {
