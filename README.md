@@ -12,9 +12,52 @@
 
 ## 安装
 
+### Git 精简安装（推荐）
+
+维护者首次运行下述分发工作流、生成远端 `dist` 分支后，可通过该分支安装：
+
+```bash
+pi install git:github.com/CGOSU/pi-init@dist
+```
+
+`dist` 分支只包含 npm 白名单中的运行文件，不含 `test/`、测试运行脚本或开发依赖声明；测试仍保留在开发分支。Git 本身不会按 npm 白名单过滤，因此必须显式指定 `@dist`。已有完整仓库安装可先执行 `pi remove https://github.com/CGOSU/pi-init`，再执行上述命令切换。
+
+维护者可在 GitHub Actions 中手动运行 **Update dist branch**；推送 `v*` 标签时也会触发。工作流先验证安装包，再构建、提交并推送 `dist`，保留该分支已有历史，不强推；内容未变时不创建提交。首次运行需要仓库允许 Actions 写入内容；若 `dist` 受分支保护限制，需配置对应写入权限。
+
+本地只构建、不推送：
+
+```bash
+npm run build:dist
+# 或指定一个不存在或为空的输出目录
+npm run build:dist -- /tmp/pi-init-dist
+```
+
+构建需要 Bash、Node/npm 和 tar；默认输出 `dist/`，不会覆盖非空目录，也不会安装依赖或同步本机插件。生成的分发目录没有开发依赖及开发命令，Pi 安装时仍会安装运行依赖并执行启动器安装脚本。
+
+### 精简安装包（不含测试）
+
+在源码仓库运行以下命令，生成按 `package.json` 的 `files` 白名单打包的 `pi-init-<版本号>.tgz`；测试目录和测试运行脚本不会包含在内：
+
+```bash
+npm run pack:plugin
+```
+
+将安装包复制到目标机器后，在其所在目录执行（文件名替换为实际版本；下例适用于 Bash）：
+
+```bash
+npm install --prefix "$HOME/.pi/agent/local-packages" --omit=dev --omit=peer ./pi-init-2.0.11.tgz
+pi install "$HOME/.pi/agent/local-packages/node_modules/pi-init"
+```
+
+首次安装需联网下载运行依赖。升级时安装新版 `.tgz` 到同一前缀目录，然后重启 Pi。此方式不会自动从 Git 更新，需重新生成或取得新版安装包。
+
+### Git 安装（完整仓库）
+
 ```bash
 pi install https://github.com/CGOSU/pi-init
 ```
+
+此入口用于开发，会克隆包含 `test/` 的默认分支，不受 npm `files` 白名单影响。日常使用请选择上述 `@dist` 分支。
 
 当前运行时以 Pi SDK 1.5.0 为基线：`pi-ai`、`pi-coding-agent`、`pi-tui` 的 peer 范围均为 `^1.5.0`；Node 引擎声明为 `>=22.19.0`。本轮在 Pi SDK 1.5.0、Node 26.13.0 的宿主执行验证；不声明旧 SDK/Node 的兼容性，也未运行旧版本矩阵或真实 Windows 验收。
 

@@ -1,0 +1,50 @@
+name: Update dist branch
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pi-init-dist
+  cancel-in-progress: false
+
+jobs:
+  distribute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - name: Verify distribution
+        run: node --test test/package-distribution.test.js
+      - name: Build distribution
+        run: npm run build:dist
+      - name: Update dist branch without rewriting history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name CGOSU
+          git config user.email dev@cgosu.com
+          export GIT_INDEX_FILE="$RUNNER_TEMP/pi-init-dist-index"
+          git read-tree --empty
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE/dist" -C "$GITHUB_WORKSPACE/dist" add --all -- .
+          tree="$(git write-tree)"
+          set -- "$tree"
+          remote="$(git ls-remote --heads origin refs/heads/dist)"
+          if [[ -n "$remote" ]]; then
+            git fetch --no-tags origin refs/heads/dist:refs/remotes/origin/dist
+            previous="$(git rev-parse refs/remotes/origin/dist)"
+            if [[ "$tree" == "$(git rev-parse "$previous^{tree}")" ]]; then
+              echo "dist 内容未变化，无需提交"
+              exit 0
+            fi
+            set -- "$tree" -p "$previous"
+          fi
+          commit="$(printf '更新插件分发：%s\n' "$GITHUB_SHA" | git commit-tree "$@")"
+          git push origin "$commit:refs/heads/dist"

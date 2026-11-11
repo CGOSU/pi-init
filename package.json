@@ -13,12 +13,17 @@
     "templates",
     "skills",
     "scripts",
+    "!scripts/test.js",
+    "!scripts/test-bootstrap.js",
+    "!scripts/build-dist.sh",
     "CHANGELOG.md",
     "README.md",
     "THIRD-PARTY-NOTICES"
   ],
   "scripts": {
     "test": "node ./scripts/test.js",
+    "pack:plugin": "npm pack",
+    "build:dist": "bash scripts/build-dist.sh",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/install-launchers.js"
   },
