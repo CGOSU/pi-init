@@ -259,6 +259,83 @@ test("manual choice or stop during an awaited credential check wins over an Auto
   }
 });
 
+test("switch_role reports assessment rejections with their cause, correction and unchanged execution state", async () => {
+  for (const code of ["AUTO_ROLE_MISMATCH", "AUTO_NOT_ENABLED"]) {
+    const f = fixture();
+    await f.start();
+    if (code === "AUTO_NOT_ENABLED") f.config = { ...f.config, modelStrategy: "roles" };
+    const before = { ...f.state.activeRole };
+    const branchLength = f.branch.length;
+    const config = structuredClone(f.config);
+    registerRoleTool(f.pi, f.state, {
+      roleRuntime: { suggestThinking: f.auto.suggest },
+      roleHandoff: { checkSwitchRole: () => ({ allowed: true }) },
+      userControl: {}, observeRejection() { assert.fail("assessment rejection must not enter the role-switch retry guard"); },
+    });
+    const tool = f.tools.get("switch_role");
+    const result = await tool.execute("rejected", {
+      role: code === "AUTO_ROLE_MISMATCH" ? "architect" : "developer-test",
+      thinkingLevel: "high", reason: "Task risk assessment",
+    }, undefined, undefined, f.ctx);
+    assert.equal(result.details.ok, false);
+    assert.equal(result.details.code, code);
+    assert.equal(result.details.operation, "auto-thinking");
+    assert.deepEqual(result.details.stateChange.before, result.details.stateChange.after);
+    assert.deepEqual(f.state.activeRole, before);
+    assert.deepEqual(f.config, config);
+    assert.equal(f.branch.length, branchLength, "a rejected assessment must not create a handoff or assessment record");
+    assert.equal(f.thinking, "medium");
+    assert.equal(result.terminate, undefined);
+    const feedback = result.content[0].text;
+    assert.match(feedback, /Auto 强度评估被拒绝/);
+    assert.match(feedback, /仅传 role/);
+    assert.match(feedback, /职责未变化/);
+    const view = tool.renderResult(result, { expanded: false }, { fg: (_color, text) => text }, { args: {} }).render(160).join("\n");
+    assert.match(view, new RegExp(code));
+    assert.match(view, /仅传 role/);
+    assert.doesNotMatch(view, /角色切换失败/);
+  }
+});
+
+test("switch_role does not claim unchanged strength when the applied assessment cannot be saved", async () => {
+  const f = fixture();
+  await f.start();
+  const append = f.pi.appendEntry;
+  f.pi.appendEntry = (type, data) => {
+    if (data.assessment) throw new Error("assessment storage unavailable");
+    append(type, data);
+  };
+  registerRoleTool(f.pi, f.state, {
+    roleRuntime: { suggestThinking: f.auto.suggest },
+    roleHandoff: { checkSwitchRole: () => ({ allowed: true }) },
+    userControl: {}, observeRejection() { assert.fail("not a role-switch rejection"); },
+  });
+  const result = await f.tools.get("switch_role").execute("persist-failed", {
+    role: "developer-test", thinkingLevel: "high", reason: "Recovery risk",
+  }, undefined, undefined, f.ctx);
+  assert.equal(result.details.code, "AUTO_ASSESSMENT_PERSIST_FAILED");
+  assert.equal(result.details.stateChange.before.thinkingLevel, "medium");
+  assert.equal(result.details.stateChange.after.thinkingLevel, "high");
+  assert.equal(f.thinking, "high");
+  assert.match(result.content[0].text, /强度已变化：medium → high/);
+  assert.equal(result.terminate, undefined);
+});
+
+test("runtime strategy guidance follows the effective session strategy without stale Auto instructions", async () => {
+  const f = fixture();
+  const auto = await f.start();
+  assert.match(auto.pi_init_model_strategy, /auto/);
+  f.config = { ...f.config, modelStrategy: "roles" };
+  const next = await f.runner.emitBeforeAgentStart({ prompt: "Next task", messageType: "user" }, {
+    sections: { ...auto }, selectedTools: [],
+  });
+  const roles = next.systemPromptOptions.sections;
+  assert.match(roles.pi_init_model_strategy, /roles/);
+  assert.match(roles.pi_init_model_strategy, /仅传 role/);
+  assert.equal(roles.pi_init_auto_model, undefined);
+  assert.equal(f.config.modelStrategy, "roles");
+});
+
 test("switch_role strength entry does not capture a role handoff or terminate/replay the current run", async () => {
   const f = fixture();
   await f.start();

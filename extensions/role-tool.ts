@@ -33,10 +33,18 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
     ],
     parameters: switchRoleParameters,
     renderCall(args, theme) {
-      return new Text(theme.fg("toolTitle", theme.bold("角色切换 ")) + theme.fg("muted", roleLabel(args.role)), 0, 0);
+      const label = args.thinkingLevel !== undefined ? "Auto 强度评估 " : "角色切换 ";
+      return new Text(theme.fg("toolTitle", theme.bold(label)) + theme.fg("muted", roleLabel(args.role)), 0, 0);
     },
     renderResult(result, _options, theme, context) {
-      if (context.isError || (result.details as { ok?: boolean } | undefined)?.ok === false) return new Text(theme.fg("error", "角色切换失败"), 0, 0);
+      const failure = result.details as { ok?: boolean; operation?: string; code?: string } | undefined;
+      if (context.isError || failure?.ok === false) {
+        const text = result.content.filter((item) => item.type === "text").map((item) => item.text).join("\n");
+        const label = context.args?.thinkingLevel !== undefined ? "Auto 强度评估被拒绝" : "角色切换失败";
+        const feedback = failure?.operation ? text
+          : `${label}${failure?.code ? ` [${failure.code}]` : ""}\n${text}\n状态变化未核实，请核对当前职责、模型和强度；不自动重试。`;
+        return new Text(theme.fg("error", feedback), 0, 0);
+      }
       const details = result.details as { role?: string; model?: string; thinkingLevel?: string } | undefined;
       return new Text(
         theme.fg("success", "✓ ") + theme.fg("accent", roleLabel(details?.role ?? "")) +
@@ -47,10 +55,32 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
     },
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      if (signal?.aborted) {
-        return { content: [{ type: "text", text: "角色切换已取消。" }], details: { ok: false, code: "ROLE_SWITCH_CANCELLED" } };
-      }
-      if (runtimeState.userStopRequested) return { content: [{ type: "text", text: "自动执行已停止；切换职责不会恢复任务。请由用户明确继续。" }], details: { ok: false, code: "WORKFLOW_USER_STOPPED" }, terminate: true };
+      const operation = params.thinkingLevel !== undefined ? "auto-thinking" : "role-switch";
+      const snapshot = () => ({
+        role: runtimeState.activeRole?.role,
+        provider: ctx.model?.provider,
+        model: ctx.model?.id,
+        thinkingLevel: pi.getThinkingLevel(),
+      });
+      const before = snapshot();
+      const fail = (code: string, message: string) => {
+        const after = snapshot();
+        const describe = (label: string, from: string | undefined, to: string | undefined) => from === to
+          ? `${label}未变化（${to ?? "未确认"}）` : `${label}已变化：${from ?? "未确认"} → ${to ?? "未确认"}`;
+        const modelName = (value: typeof before) => value.model ? `${value.provider}/${value.model}` : undefined;
+        const status = [
+          describe("职责", before.role, after.role),
+          describe("模型", modelName(before), modelName(after)),
+          describe("强度", before.thinkingLevel, after.thinkingLevel),
+        ].join("；");
+        const label = operation === "auto-thinking" ? "Auto 强度评估被拒绝" : "角色切换失败";
+        return {
+          content: [{ type: "text" as const, text: `${label} [${code}]\n${message}\n${status}。` }],
+          details: { ok: false as const, code, operation, stateChange: { before, after } },
+        };
+      };
+      if (signal?.aborted) return fail("ROLE_SWITCH_CANCELLED", "请求已取消；不自动重试。");
+      if (runtimeState.userStopRequested) return { ...fail("WORKFLOW_USER_STOPPED", "自动执行已停止；切换职责不会恢复任务。请由用户明确继续。"), terminate: true };
       const boundary = roleHandoff.checkSwitchRole(params.role);
       if (!boundary.allowed) {
         runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: "switch_role", code: boundary.code, requiredRole: boundary.requiredRole });
@@ -59,13 +89,18 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
           userControl.suspend(ctx, "repeated-rejection");
           runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: _toolCallId, code: rejection.code });
         }
-        return { content: [{ type: "text", text: boundary.message + "\n" + (rejection.stop ? "同一身份的角色切换已连续被拒绝；当前回合结束，自动续跑已停止，等待用户明确处理。工作流未被完成、取消或重试。" : boundary.nextAction) }], details: { ok: false, ...boundary, rejectionStopped: rejection.stop }, ...(rejection.stop ? { terminate: true } : {}) };
+        const failure = fail(boundary.code, boundary.message + "\n" + (rejection.stop ? "同一身份的角色切换已连续被拒绝；当前回合结束，自动续跑已停止，等待用户明确处理。工作流未被完成、取消或重试。" : boundary.nextAction));
+        return { ...failure, details: { ...failure.details, ...boundary, rejectionStopped: rejection.stop }, ...(rejection.stop ? { terminate: true } : {}) };
       }
       if (params.thinkingLevel !== undefined) {
-        if (!isThinkingLevel(params.thinkingLevel)) return { content: [{ type: "text", text: "建议的推理强度不合法" }], details: { ok: false, code: "AUTO_THINKING_LEVEL_INVALID" } };
+        if (!isThinkingLevel(params.thinkingLevel)) return fail("AUTO_THINKING_LEVEL_INVALID", "建议的推理强度不合法");
         const result = roleRuntime.suggestThinking
           ? await roleRuntime.suggestThinking(params.role, params.thinkingLevel, params.reason, ctx, signal, params.taskBoundary)
           : { ok: false as const, code: "AUTO_NOT_AVAILABLE", message: "Auto 强度入口不可用" };
+        if (!result.ok) {
+          const failure = fail(result.code, result.message);
+          return { ...failure, details: { ...result, ...failure.details } };
+        }
         return { content: [{ type: "text", text: result.message }], details: result };
       }
       const source = roleHandoff.capture(ctx);

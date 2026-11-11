@@ -127,4 +127,15 @@ test("工具渲染器保留错误状态而不显示成功", () => {
     { isError: true },
   ).render(80).join("\n");
   assert.match(roleError, /角色切换失败/);
+
+  const assessmentError = switchRole.renderResult(
+    { content: [{ type: "text", text: "credential lookup failed" }] },
+    { expanded: false, isPartial: false },
+    harness.context.ui.theme,
+    { isError: true, args: { role: "developer-test", thinkingLevel: "high" } },
+  ).render(120).join("\n");
+  assert.match(assessmentError, /Auto 强度评估被拒绝/);
+  assert.match(assessmentError, /credential lookup failed/);
+  assert.match(assessmentError, /状态变化未核实/);
+  assert.doesNotMatch(assessmentError, /未变化|✓/);
 });

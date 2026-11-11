@@ -147,9 +147,9 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   async function suggest(role: string, level: ThinkingLevel, reason: string | undefined, ctx: ExtensionContext, signal?: AbortSignal, taskBoundary = false) {
     const fail = (code: string, message: string) => ({ ok: false as const, code, message });
     if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "停止、恢复、暂停或未知结果保护中，不能调整强度");
-    if (state.activeRole?.role !== role) return fail("AUTO_ROLE_MISMATCH", "强度建议必须使用当前已确认职责，不同时切换职责");
+    if (state.activeRole?.role !== role) return fail("AUTO_ROLE_MISMATCH", `强度评估必须使用当前已确认职责（${state.activeRole?.role ?? "未确认"}），不能同时切换职责。如需切换，先仅传 role 确认目标职责；仅在 Auto 策略下再以当前职责评估强度。失败不自动重试。`);
     const config = await readConfig(ctx);
-    if (config.modelStrategy !== "auto") return fail("AUTO_NOT_ENABLED", "当前未启用 Auto 模型策略");
+    if (config.modelStrategy !== "auto") return fail("AUTO_NOT_ENABLED", "当前模型策略为 roles（按职责配置），未启用 Auto。职责切换请仅传 role，移除 Auto 专用参数 thinkingLevel、reason、taskBoundary；如确需 Auto，请由用户在控制中心选择，不自动切换策略或重试。");
     if (config.requiresAutomaticMigration) return fail("AUTOMATIC_MIGRATION_REQUIRED", "旧配置需由用户显式启用全自动");
     const parsedReason = parseAutoAssessmentReason(reason);
     if (!parsedReason.ok) return parsedReason;
@@ -273,9 +273,13 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     let config: ResolvedRoleConfig;
     try { config = await readConfig(ctx); }
     catch (error) { ctx.ui.notify(textOf(error), "error"); ctx.abort(); return; }
+    const sections = event.systemPromptOptions?.sections;
+    if (sections) sections.pi_init_model_strategy = config.modelStrategy === "auto"
+      ? "当前模型策略：auto（Auto，固定模型、自适应强度）。职责切换仅传 role；职责已确认后，才以当前 role 配合 thinkingLevel、reason 评估强度，不同时换角。失败不自动重试。"
+      : "当前模型策略：roles（按职责配置），不是 Auto。switch_role 切换职责时仅传 role，不传 Auto 专用参数 thinkingLevel、reason、taskBoundary；模型及强度由职责配置决定，不自动切换策略。";
     if (config.modelStrategy !== "auto") {
       memory = undefined;
-      if (event.systemPromptOptions?.sections) delete event.systemPromptOptions.sections.pi_init_auto_model;
+      if (sections) delete sections.pi_init_auto_model;
       return;
     }
     const fixed = config.autoModel!;
@@ -290,7 +294,6 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
       return;
     }
     syncScope(saved);
-    const sections = event.systemPromptOptions?.sections;
     if (!sections) return;
     const assessmentStatus = saved.pendingBoundary && saved.scope.kind === "ordinary" && saved.assessment
       ? "新用户输入仅为可能的新任务边界，上一评估只适用于原任务。先判断是否独立任务；若是，以 taskBoundary=true 显式评估；若是继续或补充，复用原决定，不重复评估。"
