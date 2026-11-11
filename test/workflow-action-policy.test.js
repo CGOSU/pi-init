@@ -42,7 +42,7 @@ test('running task retains executor authority with and without pending replan', 
 });
 test('safe completion uses existing scheduler replan; ordinary switching stays valid', () => {
   const workflow = requestWorkflowReplan(running(), { direction: 'new direction' });
-  const completed = completeWorkflowTask(workflow, { taskId: 'rust-crossfile', completionSummary: 'done', implementationRationale: 'verified', verification: ['tests pass'] });
+  const completed = completeWorkflowTask(workflow, { taskId: 'rust-crossfile', completionSummary: 'done', implementationRationale: 'verified', verification: [{ check: "fixture check", status: "passed", details: 'tests pass' }] });
   const state = { ...createExtensionRuntimeState(), workflowState: completed };
   assert.equal(nextWorkflowAction(state).action, 'schedule-replan');
   assert.equal(handoff(state).checkSwitchRole('docs-commit').allowed, true);
@@ -174,7 +174,7 @@ test('complete and block require the assigned role before changing lifecycle sta
       reason: 'cannot block from another role',
       completionSummary: 'cannot complete from another role',
       implementationRationale: 'role guard regression',
-      verification: ['not run'],
+      verification: [{ check: "fixture check", status: "passed", details: 'not run' }],
     }, undefined, harness.context), (error) => {
       assert.equal(error.code, 'WORKFLOW_TASK_ROLE_MISMATCH');
       assert.equal(error.details.requiredRole, 'developer-test');

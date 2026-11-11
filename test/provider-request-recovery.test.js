@@ -189,7 +189,7 @@ test("settled request-only failure preserves executing identity and one user con
     assert.deepEqual(latest(h), before);
     assert.equal(h.sentMessages.length, sent);
     await emitExtensionEvent(h, "agent_start");
-    await h.tools.find(t => t.name === "task_workflow").execute("done", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "完成", implementationRationale: "沿原身份完成", verification: ["通过"] }, undefined, undefined, h.context);
+    await h.tools.find(t => t.name === "task_workflow").execute("done", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "完成", implementationRationale: "沿原身份完成", verification: [{ check: "fixture check", status: "passed", details: "通过" }] }, undefined, undefined, h.context);
     assert.equal(latest(h).tasks[0].status, "completed");
     await emitExtensionEvent(h, "session_shutdown");
   });
@@ -426,7 +426,7 @@ test("an incomplete nested result annotation remains unsafe even when the outer 
 test("a final report request failure never reopens or retries an already completed workflow", async () => {
   await withTempDirectory(async cwd => {
     const h = await fixture(cwd, { taskCount: 1 });
-    await h.tools.find(t => t.name === "task_workflow").execute("done", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "完成", implementationRationale: "已经验收", verification: ["通过"] }, undefined, undefined, h.context);
+    await h.tools.find(t => t.name === "task_workflow").execute("done", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "完成", implementationRationale: "已经验收", verification: [{ check: "fixture check", status: "passed", details: "通过" }] }, undefined, undefined, h.context);
     const before = structuredClone(latest(h));
     const sent = h.sentMessages.length;
     await failure(h);

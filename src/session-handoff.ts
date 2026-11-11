@@ -139,7 +139,9 @@ export function importedWorkflow(packet: SessionHandoffSnapshot, sessionId: stri
   next.taskPauseReason = "新会话交接待核对；执行 /pi-init workflow fresh 完成激活，不会再次创建session";
   for (const task of next.tasks) {
     delete task.verificationEvidenceIds;
-    if (task.status === "completed") task.verification = task.verification?.map(check => check.startsWith("[历史验证") ? check : "[历史验证，源session " + packet.workflow.sessionId + "] " + check);
+    if (task.status === "completed") task.verification = task.verification?.map(check => typeof check === "string"
+      ? check.startsWith("[历史验证") ? check : "[历史验证，源session " + packet.workflow.sessionId + "] " + check
+      : { ...check, sourceSessionId: check.sourceSessionId ?? packet.workflow.sessionId });
   }
   const parsed = hydrateWorkflowState(next);
   if (!parsed.ok) throw new Error(parsed.message);

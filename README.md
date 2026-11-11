@@ -16,6 +16,8 @@
 pi install https://github.com/CGOSU/pi-init
 ```
 
+当前运行时以 Pi SDK 1.5.0 为基线：`pi-ai`、`pi-coding-agent`、`pi-tui` 的 peer 范围均为 `^1.5.0`；Node 引擎声明为 `>=22.19.0`。本轮在 Pi SDK 1.5.0、Node 26.13.0 的宿主执行验证；不声明旧 SDK/Node 的兼容性，也未运行旧版本矩阵或真实 Windows 验收。
+
 安装后重启 Pi，在项目中运行 `/pi-init` 打开控制中心。Pi 1.5.0 及以上版本会在此扩展更新后的下次新启动时，显示 `CHANGELOG.md` 中比上次已见版本更新的条目；首次安装只记录版本，不显示历史更新。也可以直接在本仓库试用：
 
 ```bash
@@ -50,6 +52,7 @@ JS/TS项目无既定工具链时默认使用pnpm。快速/高级初始化推断�
 | `/pi-init fresh` | 预览并确认交接后创建新会话；普通会话与工作流统一入口 |
 | `/pi-init workflow status\|resume\|retry\|cancel\|fresh\|stop` | 查看或管理当前工作流；`workflow fresh` 保留为兼容入口 |
 | `/pi-init diagnostics`、`/blackbox` | 打开运行诊断 |
+| `/blackbox resume <scope>` | 检查后仅恢复 `project`、`global` 或 `handoff` 记录器的后续采集；不重放任务 |
 | `/large [--scope 目录] [--exclude 目录] [--include-temporary]` | 按范围扫描大型代码文件并启动建议审阅 |
 
 标准职责包括 `architect`（规划）、`developer-test`（实现与验证）和 `docs-commit`（文档与交付）；项目也可以配置自定义角色。角色职责仍按路由规则交接；模型和推理强度策略只有以下两种，均自动应用，不再提供 `auto`/`confirm`/`manual` 角色切换方式，也不在模型或强度变化时额外询问确认。

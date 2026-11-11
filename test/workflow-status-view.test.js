@@ -241,7 +241,7 @@ test("暂停、重规划、无当前任务和终态不携带活动任务位置",
     taskId: "task-a",
     completionSummary: "首项完成",
     implementationRationale: "推进重规划边界",
-    verification: ["状态测试"],
+    verification: [{ check: "fixture check", status: "passed", details: "状态测试" }],
   }, 140);
   const replanning = createWorkflowStatusView(replanningState, idleRuntime, 150);
   assert.equal(replanning.kind === "workflow" ? replanning.progress.completed : -1, 1);
@@ -361,7 +361,7 @@ function completedTask(overrides = {}) {
     completedAt: 100,
     completionSummary: "已完成",
     implementationRationale: "遵循现有模式",
-    verification: ["node --test：通过", "npm test：失败：1 个测试失败", "0 errors"],
+    verification: [{ check: "fixture check", status: "passed", details: "node --test：通过" }, { check: "fixture check", status: "failed", details: "npm test：失败：1 个测试失败" }, { check: "fixture check", status: "passed", details: "0 errors" }],
     ...overrides,
   };
 }
@@ -371,7 +371,7 @@ test("任务完成视图保留真实失败、零耗时和未声明通过的语�
   const before = structuredClone(task);
   const view = createWorkflowTaskCompletionView(task);
   assert.deepEqual(view.duration, { kind: "available", milliseconds: 0 });
-  assert.deepEqual(view.task.verificationFailures, ["npm test：失败：1 个测试失败"]);
+  assert.deepEqual(view.task.verificationFailures, ["[失败] fixture check：npm test：失败：1 个测试失败"]);
   const text = formatWorkflowTaskCompletionSummaryText(view);
   assert.match(text, /已完成：完成最终任务/);
   assert.match(text, /结果：已完成/);
@@ -397,16 +397,19 @@ test("a zero-error check does not hide a different failure in the same verificat
     "检查未发现错误，但集成测试失败",
   ];
   const view = createWorkflowTaskCompletionView(completedTask({
-    verification: [...failures, "0 errors and 0 failures", "no errors or failures", "未发生任何错误"],
+    verification: [...failures.map(details => ({ check: "mixed outcomes", status: "failed", details })),
+    { check: "diagnostic parser", status: "passed", details: "expected failure case: no errors or failures" },
+    { check: "人工验收", status: "not-run", details: "未执行，不代表失败或副作用结果未知" }],
   }));
-  assert.deepEqual(view.task.verificationFailures, failures);
+  assert.deepEqual(view.task.verificationFailures, failures.map(details => "[失败] mixed outcomes：" + details));
+  assert.equal(view.task.verificationPending.length, 1);
 });
 
 test("缺失任务时间不伪装成零耗时，失败验证缺失时省略验证报告", () => {
   const view = createWorkflowTaskCompletionView(completedTask({
     startedAt: undefined,
     completedAt: 150,
-    verification: ["node --test：通过"],
+    verification: [{ check: "fixture check", status: "passed", details: "node --test：通过" }],
   }));
   assert.deepEqual(view.duration, { kind: "unavailable", reason: "missing-or-invalid-time" });
   const text = formatWorkflowTaskCompletionDetailsText(view);

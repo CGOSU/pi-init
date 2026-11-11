@@ -117,7 +117,8 @@ test("高级初始化确认菜单支持显式取消", async () => {
       call.component.handleInput("\n");
     } });
     const result = await runScaffold(harness.context, ".", { projectName: "p", language: "zh-CN" }, "always", true);
-    assert.equal(result.cancelled, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.value.cancelled, true);
   });
 });
 
@@ -284,13 +285,13 @@ test("task_workflow 报告区分任务级别并筛选验证结果", () => {
   const firstStarted = markWorkflowTaskStarted(startWorkflowTask(planned, "schema", 110), "schema", 115);
   const intermediate = completeWorkflowTask(
     firstStarted,
-    { taskId: "schema", completionSummary: "结构完成", implementationRationale: "先固定结构以保持后续改动可控", verification: ["npm test：通过", "node --check：失败：类型错误"] },
+    { taskId: "schema", completionSummary: "结构完成", implementationRationale: "先固定结构以保持后续改动可控", verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }, { check: "fixture check", status: "failed", details: "node --check：失败：类型错误" }] },
     125,
   );
   const finalStarted = markWorkflowTaskStarted(startWorkflowTask(intermediate, "docs", 150), "docs", 155);
   const completed = completeWorkflowTask(
     finalStarted,
-    { taskId: "docs", completionSummary: "文档完成", implementationRationale: "让最终说明与已验证行为一致", verification: ["git diff --check：通过", "npm test：失败：1 个测试失败"] },
+    { taskId: "docs", completionSummary: "文档完成", implementationRationale: "让最终说明与已验证行为一致", verification: [{ check: "fixture check", status: "passed", details: "git diff --check：通过" }, { check: "fixture check", status: "failed", details: "npm test：失败：1 个测试失败" }] },
     175,
   );
 
@@ -302,12 +303,13 @@ test("task_workflow 报告区分任务级别并筛选验证结果", () => {
 
   const workflowReport = report.formatWorkflowCompletion(completed, completed.tasks[1]);
   assert.match(workflowReport, /npm test：失败：1 个测试失败/);
-  assert.match(workflowReport, /验证记录：git diff --check：通过/);
+  assert.match(workflowReport, /验证未通过：.*node --check：失败：类型错误/);
+  assert.match(workflowReport, /验证记录：\[通过\].*git diff --check：通过/);
   assert.match(workflowReport, /总耗时：60 毫秒/);
 
   const passedOnlyReport = report.formatWorkflowTaskCompletion({
     ...intermediate.tasks[0],
-    verification: ["npm test：通过"],
+    verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }],
   });
   assert.doesNotMatch(passedOnlyReport, /^验证：/m);
 });

@@ -158,7 +158,7 @@ function makeWorkflow() {
       taskId,
       completionSummary: `${taskId} completed result`,
       implementationRationale: `rationale for ${taskId}`,
-      verification: [`node --test test/${taskId}.test.js → passed`],
+      verification: [{ check: "fixture check", status: "passed", details: `node --test test/${taskId}.test.js → passed` }],
     }, 12);
   }
   workflow = startWorkflowTask(workflow, "current", 13);
@@ -377,7 +377,7 @@ test("task handoff packages retain only direct dependency results", () => {
     taskId: "current",
     completionSummary: "current completed result",
     implementationRationale: "finished before applying the new direction",
-    verification: ["node --test test/current.test.js → passed"],
+    verification: [{ check: "fixture check", status: "passed", details: "node --test test/current.test.js → passed" }],
   }, 15);
   replanState = ensureWorkflowReplanHandoff(replanState);
   state.workflowState = replanState;

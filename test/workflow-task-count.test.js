@@ -175,7 +175,7 @@ test("单次新增超过 12 个任务且总数超过 12 的重规划可应用并
       taskId: "task-0",
       completionSummary: "完成首个任务",
       implementationRationale: "保留真实完成结果与验证",
-      verification: ["node --test test/workflow-core.test.js"],
+      verification: [{ check: "fixture check", status: "passed", details: "node --test test/workflow-core.test.js" }],
     },
     110,
   );
@@ -193,7 +193,7 @@ test("单次新增超过 12 个任务且总数超过 12 的重规划可应用并
   assert.equal(completed.status, "completed");
   assert.equal(completed.completionSummary, "完成首个任务");
   assert.equal(completed.implementationRationale, "保留真实完成结果与验证");
-  assert.deepEqual(completed.verification, ["node --test test/workflow-core.test.js"]);
+  assert.deepEqual(completed.verification, [{ check: "fixture check", status: "passed", details: "node --test test/workflow-core.test.js" }]);
   assert.equal(applied.tasks.filter((task) => task.status === "pending").length, 26);
   assert.equal(applied.tasks.length, 27);
   assert.equal(applied.planVersion, 1);
@@ -257,7 +257,7 @@ test("超过 12 个任务时重规划仍拒绝复用历史 ID 并保留未提交
   const planned = [...manyTasks(13), { id: "done", task: "已完成", files: ["src/done.js"], acceptanceCriteria: ["完成"] }];
   const completedState = completeWorkflowTask(
     markWorkflowTaskStarted(startWorkflowTask(createWorkflowState({ summary: "复用历史 ID", tasks: planned }, 100), "task-0"), "task-0"),
-    { taskId: "task-0", completionSummary: "完成", implementationRationale: "保留历史 ID 校验", verification: ["通过"] },
+    { taskId: "task-0", completionSummary: "完成", implementationRationale: "保留历史 ID 校验", verification: [{ check: "fixture check", status: "passed", details: "通过" }] },
     110,
   );
   const requested = requestWorkflowReplan(completedState, { revisionId: "revision-reuse", direction: "复用" }, 120);
@@ -288,7 +288,7 @@ test("超过 12 个任务时重规划仍拒绝复用历史 ID 并保留未提交
         taskId: "task-0",
         completionSummary: "完成",
         implementationRationale: "身份校验不被放宽",
-        verification: ["通过"],
+        verification: [{ check: "fixture check", status: "passed", details: "通过" }],
       }, undefined, undefined, harness.context),
       /WORKFLOW_ACTION_IDENTITY_MISSING/,
     );

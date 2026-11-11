@@ -70,7 +70,7 @@ function taskResult(identity) {
     taskId: "first",
     completionSummary: "第一项完成",
     implementationRationale: "验证当前 handoff 的真实启动证据",
-    verification: ["针对性生命周期测试通过"],
+    verification: [{ check: "fixture check", status: "passed", details: "针对性生命周期测试通过" }],
   };
 }
 

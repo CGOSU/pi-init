@@ -40,7 +40,7 @@ test("same-role and cross-role task boundaries dispatch without summary generati
       const h = await fixture(directory, role);
       await emitExtensionEvent(h, "agent_start");
       const tool = h.tools.find(t => t.name === "task_workflow");
-      await tool.execute("complete", { ...workflowMessageIdentity(h), action: "complete", taskId: "first", completionSummary: "完成", implementationRationale: "保留原生压缩", verification: ["通过"] }, undefined, undefined, h.context);
+      await tool.execute("complete", { ...workflowMessageIdentity(h), action: "complete", taskId: "first", completionSummary: "完成", implementationRationale: "保留原生压缩", verification: [{ check: "fixture check", status: "passed", details: "通过" }] }, undefined, undefined, h.context);
       await emitExtensionEvent(h, "agent_settled");
       assert.equal(h.compactions.length, 0);
       assert.equal(latest(h).tasks[0].status, "completed");
@@ -77,7 +77,7 @@ test("replanning never generates a boundary summary", async () => {
     await emitExtensionEvent(h, "message_start", { message: { role: "custom", ...taskMessages(h)[0].message } });
     h.persistSentMessage(taskMessages(h)[0].message);
     await tool.execute("direction", { ...workflowMessageIdentity(h), action: "request-replan", summary: "调整后续任务" }, undefined, undefined, h.context);
-    await tool.execute("complete", { ...workflowMessageIdentity(h), action: "complete", taskId: "first", completionSummary: "完成", implementationRationale: "后续重规划", verification: ["通过"] }, undefined, undefined, h.context);
+    await tool.execute("complete", { ...workflowMessageIdentity(h), action: "complete", taskId: "first", completionSummary: "完成", implementationRationale: "后续重规划", verification: [{ check: "fixture check", status: "passed", details: "通过" }] }, undefined, undefined, h.context);
     await emitExtensionEvent(h, "agent_settled");
     assert.equal(h.compactions.length, 0);
     assert.equal(latest(h).status, "replanning");
@@ -91,7 +91,7 @@ test("legacy interrupted boundary resumes explicitly without recompressing or re
   await withTempDirectory(async directory => {
     const h = await fixture(directory);
     await emitExtensionEvent(h, "agent_start");
-    await h.tools.find(t => t.name === "task_workflow").execute("complete", { ...workflowMessageIdentity(h), action: "complete", taskId: "first", completionSummary: "完成", implementationRationale: "旧边界", verification: ["通过"] }, undefined, undefined, h.context);
+    await h.tools.find(t => t.name === "task_workflow").execute("complete", { ...workflowMessageIdentity(h), action: "complete", taskId: "first", completionSummary: "完成", implementationRationale: "旧边界", verification: [{ check: "fixture check", status: "passed", details: "通过" }] }, undefined, undefined, h.context);
     const saved = structuredClone(latest(h));
     saved.continuation = { kind: "schedule", phase: "compacting", reason: "task-completed" };
     await emitExtensionEvent(h, "session_shutdown");

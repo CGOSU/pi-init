@@ -5,9 +5,10 @@ import { lstat, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolveRoleConfig, unwrapRoleResult } from "./roles.ts";
+import { resolveRoleConfig } from "./roles.ts";
+import { textOf } from "./error-utils.ts";
 
-import type { EnvironmentFormatOptions, RenderedTemplateFile, ScaffoldOptions, ScaffoldResult, TemplateFileDefinition, TemplateLanguage, TemplateVariables } from "./scaffold-types.ts";
+import type { EnvironmentFormatOptions, RenderedTemplateFile, ScaffoldOptions, ScaffoldOperationResult, TemplateFileDefinition, TemplateLanguage, TemplateVariables } from "./scaffold-types.ts";
 
 const TEMPLATE_ROOT = fileURLToPath(new URL("../templates/", import.meta.url));
 const SUPPORTED_LANGUAGES: ReadonlySet<string> = new Set(["zh-CN", "en"]);
@@ -30,30 +31,56 @@ const TEMPLATE_FILES: readonly TemplateFileDefinition[] = [
   ["docs/pitfalls.md", () => "docs/pitfalls.md"],
 ];
 
-function validateSingleLine(value: unknown, label: string): string {
+function validateSingleLine(value: unknown, label: string, code: string): ScaffoldOperationResult<string> {
   if (typeof value !== "string") {
-    throw new Error(`${label}必须是文本`);
+    return { ok: false, code: `${code}_TYPE`, message: `${label}必须是文本` };
   }
   const normalized = value.trim();
-  if (!normalized || /[\r\n]/.test(normalized)) {
-    throw new Error(`${label}不能为空或包含换行符`);
-  }
-  return normalized;
-}
-
-function validateProjectName(value: unknown): string {
-  return validateSingleLine(value, "项目名称");
+  if (!normalized) return { ok: false, code: `${code}_EMPTY`, message: `${label}不能为空` };
+  if (/[\r\n]/.test(normalized)) return { ok: false, code: `${code}_MULTILINE`, message: `${label}不能包含换行符` };
+  return { ok: true, value: normalized };
 }
 
 function isTemplateLanguage(value: unknown): value is TemplateLanguage {
   return typeof value === "string" && SUPPORTED_LANGUAGES.has(value);
 }
 
-function resolveLanguage(value: unknown = "zh-CN"): TemplateLanguage {
+function resolveLanguage(value: unknown = "zh-CN"): ScaffoldOperationResult<TemplateLanguage> {
   if (!isTemplateLanguage(value)) {
-    throw new Error("模板语言仅支持 zh-CN 或 en");
+    return { ok: false, code: "SCAFFOLD_LANGUAGE_INVALID", message: "模板语言仅支持 zh-CN 或 en" };
   }
-  return value;
+  return { ok: true, value };
+}
+
+async function validateOutputDirectories(target: string, outputs: string[]): Promise<ScaffoldOperationResult<void>> {
+  const directories = new Set<string>();
+  for (const output of outputs) {
+    let directory = path.dirname(output);
+    while (directory !== ".") {
+      directories.add(directory);
+      directory = path.dirname(directory);
+    }
+  }
+  for (const directory of [...directories].sort()) {
+    try {
+      const info = await lstat(path.join(target, directory));
+      if (info.isSymbolicLink()) {
+        return { ok: false, code: "SCAFFOLD_OUTPUT_DIRECTORY_LINK", message: `初始化输出目录不允许使用链接：${directory}` };
+      }
+      if (!info.isDirectory()) {
+        return { ok: false, code: "SCAFFOLD_OUTPUT_NOT_DIRECTORY", message: `初始化输出路径不是目录：${directory}` };
+      }
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") continue;
+      return {
+        ok: false,
+        code: "SCAFFOLD_OUTPUT_INSPECTION_FAILED",
+        message: `无法检查初始化输出目录 ${directory}：${textOf(error)}`,
+        causeCode: isRecord(error) && typeof error.code === "string" ? error.code : undefined,
+      };
+    }
+  }
+  return { ok: true, value: undefined };
 }
 
 export function formatEnvironmentInstructions(
@@ -153,79 +180,92 @@ async function renderTemplateFiles(
 
 
 /** Create missing project-owned files only; existing entries are never overwritten. */
-export async function createScaffold(targetDir: string, options: ScaffoldOptions = {}): Promise<ScaffoldResult> {
-  const absoluteTarget = path.resolve(targetDir);
-
-  if (await pathExists(absoluteTarget)) {
-    const targetStat = await stat(absoluteTarget);
-    if (!targetStat.isDirectory()) {
-      throw new Error(`目标路径不是目录：${absoluteTarget}`);
-    }
+export async function createScaffold(targetDir: string, options: ScaffoldOptions = {}): Promise<ScaffoldOperationResult> {
+  const targetInput = validateSingleLine(targetDir, "目标目录", "SCAFFOLD_TARGET");
+  if (!targetInput.ok) return targetInput;
+  if (!isRecord(options)) return { ok: false, code: "SCAFFOLD_OPTIONS_TYPE", message: "初始化选项必须是对象" };
+  if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+    return { ok: false, code: "SCAFFOLD_DRY_RUN_TYPE", message: "dryRun 必须是布尔值" };
   }
-
-  const inferredName = path.basename(absoluteTarget);
-  const projectName = validateProjectName(options.projectName ?? inferredName);
-  const language = resolveLanguage(options.language);
-  const projectDescription = options.description
-    ? validateSingleLine(options.description, "项目描述")
-    : language === "en"
-      ? "To be completed by the project maintainer."
-      : "待项目维护者补充。";
-  const requestedTestCommand = options.testCommand === undefined
-    ? (await readProjectMetadata(absoluteTarget)).testCommand
-    : options.testCommand;
-  const testCommand = requestedTestCommand
-    ? validateSingleLine(requestedTestCommand, "测试命令")
-    : language === "en"
-      ? "To be completed by the project maintainer."
-      : "待项目维护者补充。";
-  const roleConfig = unwrapRoleResult(resolveRoleConfig(options.roleModels));
-  const variables: TemplateVariables = {
-    PROJECT_NAME: projectName,
-    PROJECT_DESCRIPTION: projectDescription,
-    TEST_COMMAND: escapeInlineCode(testCommand),
-    ENVIRONMENT_CONTEXT: formatEnvironmentInstructions(language),
-  };
-
-  const files: RenderedTemplateFile[] = await renderTemplateFiles(absoluteTarget, language, variables);
-  const roleConfigPath = ".pi/role-models.json";
-  files.push({
-    relativePath: roleConfigPath,
-    absolutePath: path.join(absoluteTarget, roleConfigPath),
-    content: `${JSON.stringify(roleConfig, null, 2)}\n`,
-  });
-
-
-  const preserved: string[] = [];
-  const created: string[] = [];
-  const dryRun = options.dryRun === true;
-  for (const file of files) {
-    if (await pathExists(file.absolutePath)) {
-      preserved.push(file.relativePath);
-      continue;
-    }
-    if (!dryRun) {
-      await mkdir(path.dirname(file.absolutePath), { recursive: true });
-      try {
-        await writeFile(file.absolutePath, file.content, { encoding: "utf8", flag: "wx" });
-      } catch (error) {
-        if (isRecord(error) && error.code === "EEXIST") {
-          preserved.push(file.relativePath);
-          continue;
-        }
-        throw error;
+  const absoluteTarget = path.resolve(targetDir);
+  try {
+    if (await pathExists(absoluteTarget)) {
+      const targetStat = await stat(absoluteTarget);
+      if (!targetStat.isDirectory()) {
+        return { ok: false, code: "SCAFFOLD_TARGET_NOT_DIRECTORY", message: `目标路径不是目录：${absoluteTarget}` };
       }
     }
-    created.push(file.relativePath);
-  }
+    const roleConfigPath = ".pi/role-models.json";
+    const outputs = [...TEMPLATE_FILES.map(([, output]) => output()), roleConfigPath];
+    const boundary = await validateOutputDirectories(absoluteTarget, outputs);
+    if (!boundary.ok) return boundary;
 
-  return {
-    targetDir: absoluteTarget,
-    projectName,
-    language,
-    dryRun,
-    conflicts: [],
-    preserved,
-    files: created,
-  };
+    const projectName = validateSingleLine(options.projectName === undefined ? path.basename(absoluteTarget) : options.projectName, "项目名称", "SCAFFOLD_PROJECT_NAME");
+    if (!projectName.ok) return projectName;
+    const language = resolveLanguage(options.language);
+    if (!language.ok) return language;
+    const placeholder = language.value === "en" ? "To be completed by the project maintainer." : "待项目维护者补充。";
+    const description = options.description === undefined || options.description === "" ? placeholder : options.description;
+    const projectDescription = validateSingleLine(description, "项目描述", "SCAFFOLD_DESCRIPTION");
+    if (!projectDescription.ok) return projectDescription;
+    const requestedTestCommand = options.testCommand === undefined ? (await readProjectMetadata(absoluteTarget)).testCommand : options.testCommand;
+    const testCommand = validateSingleLine(requestedTestCommand === undefined || requestedTestCommand === "" ? placeholder : requestedTestCommand, "测试命令", "SCAFFOLD_TEST_COMMAND");
+    if (!testCommand.ok) return testCommand;
+    const roleConfig = resolveRoleConfig(options.roleModels);
+    if (!roleConfig.ok) return roleConfig;
+    const variables: TemplateVariables = {
+      PROJECT_NAME: projectName.value,
+      PROJECT_DESCRIPTION: projectDescription.value,
+      TEST_COMMAND: escapeInlineCode(testCommand.value),
+      ENVIRONMENT_CONTEXT: formatEnvironmentInstructions(language.value),
+    };
+    const files = await renderTemplateFiles(absoluteTarget, language.value, variables);
+    files.push({
+      relativePath: roleConfigPath,
+      absolutePath: path.join(absoluteTarget, roleConfigPath),
+      content: `${JSON.stringify(roleConfig.value, null, 2)}\n`,
+    });
+
+    const preserved: string[] = [];
+    const created: string[] = [];
+    const dryRun = options.dryRun === true;
+    for (const file of files) {
+      const currentBoundary = await validateOutputDirectories(absoluteTarget, outputs);
+      if (!currentBoundary.ok) return currentBoundary;
+      if (await pathExists(file.absolutePath)) {
+        preserved.push(file.relativePath);
+        continue;
+      }
+      if (!dryRun) {
+        await mkdir(path.dirname(file.absolutePath), { recursive: true });
+        const createdBoundary = await validateOutputDirectories(absoluteTarget, outputs);
+        if (!createdBoundary.ok) return createdBoundary;
+        try {
+          await writeFile(file.absolutePath, file.content, { encoding: "utf8", flag: "wx" });
+        } catch (error) {
+          if (isRecord(error) && error.code === "EEXIST") {
+            preserved.push(file.relativePath);
+            continue;
+          }
+          throw error;
+        }
+      }
+      created.push(file.relativePath);
+    }
+    return {
+      ok: true,
+      value: {
+        targetDir: absoluteTarget,
+        projectName: projectName.value,
+        language: language.value,
+        dryRun,
+        conflicts: [],
+        preserved,
+        files: created,
+      },
+    };
+  } catch (error) {
+    if (!isRecord(error) || typeof error.code !== "string") throw error;
+    return { ok: false, code: "SCAFFOLD_IO_ERROR", causeCode: error.code, message: `无法生成项目初始化文件：${textOf(error)}` };
+  }
 }

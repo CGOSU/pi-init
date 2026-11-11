@@ -37,7 +37,7 @@ function createCompletedWorkflow() {
       taskId: "completed",
       completionSummary: "重复展示时应隐藏的完整完成摘要",
       implementationRationale: "保持报告审阅价值",
-      verification: ["针对性测试通过"],
+      verification: [{ check: "fixture check", status: "passed", details: "针对性测试通过" }],
     },
     120,
   );

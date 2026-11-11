@@ -352,7 +352,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const diagnostics = createHandoffDiagnostics(pi, runtimeState);
   const diagnosticControls = createDiagnosticControls(diagnostics);
   pi.registerCommand("blackbox", {
-    description: "查看运行诊断；menu 打开面板，export 受控导出，clear 确认清理（不上传）",
+    description: "运行诊断：menu 面板，export 有限脱敏导出，clear 确认清理，resume 显式恢复后续记录（project/global/handoff；不上传）",
     handler: async (args, ctx) => { await diagnosticControls.command(args, ctx); },
   });
 }

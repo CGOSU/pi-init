@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
 import { createDiagnosticWriter, createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
+import type { DiagnosticScope, DiagnosticResumeResult } from "./diagnostic-storage.ts";
 import { createCacheRequestDiagnostics } from "./cache-request-diagnostics.ts";
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
@@ -57,6 +58,10 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   const blackbox = createRuntimeDiagnostics(() => handoffSnapshot(state), { maxBytes: options.maxBytes });
   const flush = async () => { await writer.flush(); await blackbox.flush(); };
   const report = (ctx: ExtensionContext) => mode === "off" ? Promise.resolve("运行黑匣子已关闭。") : blackbox.report(ctx);
+  async function resume(ctx: ExtensionContext, scope: DiagnosticScope): Promise<DiagnosticResumeResult> {
+    if (mode === "off" || scope === "handoff" && !enabled) return { ok: false, code: "DIAGNOSTIC_RECORDER_DISABLED", message: "该记录器未启用；恢复操作不会开启已关闭或详细诊断模式" };
+    return scope === "handoff" ? writer.resume(ctx) : blackbox.resume(ctx, scope);
+  }
 
   const writer = createDiagnosticWriter({ file: "logs/handoff.jsonl", maxBytes: options.maxBytes ?? MAX_LOG_BYTES, maxPending: MAX_PENDING, warning: "角色交接诊断日志写入失败；已停用日志，不影响任务执行。" });
   const cache = createCacheRequestDiagnostics(state, (ctx, event, data) => trace(ctx, event, data));
@@ -109,7 +114,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
     }
   }
 
-  if (mode === "off") return { trace, flush, report };
+  if (mode === "off") return { trace, flush, report, resume };
   state.traceHandoff = trace;
   pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
   pi.on("before_agent_start", (_event, ctx) => { cache.boundary(ctx, "new-run"); pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
@@ -230,7 +235,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   pi.on("session_tree", (_event, ctx) => { cache.boundary(ctx, "branch-change"); providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.tree"); });
   pi.on("model_select", (_event, ctx) => { cache.boundary(ctx, "model-change"); trace(ctx, "role.model_selected"); });
   pi.on("session_shutdown", async (_event, ctx) => { cache.boundary(ctx, "shutdown"); pendingProviderHeaders = undefined; trace(ctx, "session.shutdown"); await flush(); });
-  return { trace, flush, report };
+  return { trace, flush, report, resume };
 }
 function providerErrorHint(value: unknown) {
   if (value && typeof value === "object") {

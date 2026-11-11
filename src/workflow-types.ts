@@ -20,6 +20,15 @@ export type WorkflowTaskDelegation = {
   stopRequestedAt?: number;
   completedAt?: number;
 };
+export type WorkflowVerification = {
+  check: string;
+  status: "passed" | "failed" | "not-run";
+  details: string;
+  sourceSessionId?: string;
+};
+/** Strings are preserved historical facts, never newly accepted verification. */
+export type WorkflowVerificationRecord = WorkflowVerification | string;
+
 export type WorkflowTask = {
   id: string;
   task: string;
@@ -35,7 +44,7 @@ export type WorkflowTask = {
   completedAt?: number;
   completionSummary?: string;
   implementationRationale?: string;
-  verification?: string[];
+  verification?: WorkflowVerificationRecord[];
   verificationEvidenceIds?: string[];
   blockReason?: string;
   outcomeUnknown?: boolean;

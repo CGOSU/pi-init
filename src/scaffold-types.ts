@@ -12,6 +12,10 @@ export type ScaffoldOptions = {
 export type TemplateVariables = Record<string, string>;
 export type RenderedTemplateFile = { relativePath: string; absolutePath: string; content: string };
 
+export type ScaffoldOperationResult<T = ScaffoldResult> =
+  | { ok: true; value: T }
+  | { ok: false; code: string; message: string; causeCode?: string };
+
 export type ScaffoldResult = {
   targetDir: string;
   projectName: string;

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseWorkflowVerification } from "./workflow-verification.ts";
 import {
   WORKFLOW_MAX_NUDGES,
   cloneState,
@@ -123,7 +124,9 @@ export function completeWorkflowTask(
 
   const summary = requireText(completionSummary, "任务完成摘要");
   const rationale = requireText(implementationRationale, "实现原因");
-  const checks = normalizeTextList(verification, "任务验证结果", { required: true });
+  const parsed = parseWorkflowVerification(verification);
+  if (!parsed.ok) throw Object.assign(new Error(parsed.message), { code: parsed.code });
+  const checks = parsed.value;
   const result = cloneState(state, now);
   const task = getWorkflowTask(result, taskId);
   if (!task) throw new Error(`只能完成当前任务 ${state.currentTaskId ?? "（无）"}`);

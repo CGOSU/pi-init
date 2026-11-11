@@ -60,7 +60,7 @@ async function completeCurrentTask(harness, taskId, summary) {
     ...identity,
     completionSummary: summary,
     implementationRationale: "按当前工作流层级推进，保留父层计划，不重复既有副作用。",
-    verification: ["node --test test/workflow-nested-lifecycle.test.js → pass"],
+    verification: [{ check: "fixture check", status: "passed", details: "node --test test/workflow-nested-lifecycle.test.js → pass" }],
   });
   return identity;
 }
@@ -103,7 +103,7 @@ test("新目标与原任务共用扁平队列，完成目标分组不等于完�
     assert.equal(latestWorkflow(harness).workflowId, rootWorkflowId);
     assert.equal(latestWorkflow(harness).pendingRevision, undefined);
     assert.equal(latestWorkflow(harness).subworkflowHistory, undefined);
-    await assert.rejects(execute(harness, { action: "complete", ...oldGoalAttempt, completionSummary: "旧结果", implementationRationale: "不能覆盖新状态", verification: ["旧验证"] }), error => error.code === "WORKFLOW_ACTION_IDENTITY_STALE");
+    await assert.rejects(execute(harness, { action: "complete", ...oldGoalAttempt, completionSummary: "旧结果", implementationRationale: "不能覆盖新状态", verification: [{ check: "fixture check", status: "passed", details: "旧验证" }] }), error => error.code === "WORKFLOW_ACTION_IDENTITY_STALE");
     await emitExtensionEvent(harness, "agent_settled");
     assert.equal(workflowMessageIdentity(harness, "pi-init-workflow-task").taskId, "parent-second");
     await completeCurrentTask(harness, "parent-second", "原计划第二项已验证");

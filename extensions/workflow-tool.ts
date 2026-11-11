@@ -60,7 +60,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
       const contentText = firstContent?.type === "text" ? firstContent.text : "";
       if (context.isError) return renderWorkflowOperationFailure(contentText, theme);
       const presentation = workflowPresentationFromDetails(result.details);
-      if (presentation) return renderWorkflowPresentation(presentation, expanded, theme);
+      if (presentation.ok) return renderWorkflowPresentation(presentation.value, expanded, theme);
       if (!expanded && (result.details as { checkpointSaved?: boolean } | undefined)?.checkpointSaved === true) {
         return new Text("任务记忆已保存；任务未暂停", 0, 0);
       }

@@ -41,7 +41,7 @@ async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = fal
     h.branch.splice(0, h.branch.length, ...manager.getBranch());
   }
   h.evidenceIds = evidenceIds;
-  await h.tools.find(t => t.name === "task_workflow").execute("complete-first", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "第一项完成", implementationRationale: "复用既有模块", verification: ["定向测试通过"], evidenceIds }, undefined, undefined, h.context);
+  await h.tools.find(t => t.name === "task_workflow").execute("complete-first", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "第一项完成", implementationRationale: "复用既有模块", verification: [{ check: "fixture check", status: "passed", details: "定向测试通过" }], evidenceIds }, undefined, undefined, h.context);
   await emitExtensionEvent(h, "agent_end");
   // Expose the actual completed-task boundary before the next scheduler tick.
   // Manual fresh tests act here; capacity must no longer pause the scheduler.
@@ -175,7 +175,8 @@ test("confirmed fresh session imports only remaining execution, preserves histor
     assert.notEqual(latest(target).sessionId, h.manager.getSessionId());
     assert.equal(latest(target).workflowId, latest(h).workflowId);
     assert.equal(latest(target).tasks[0].status, "completed");
-    assert.match(latest(target).tasks[0].verification[0], /历史验证/);
+    assert.equal(latest(target).tasks[0].verification[0].sourceSessionId, h.manager.getSessionId());
+    assert.equal(latest(target).tasks[0].verification[0].status, "passed");
     assert.equal(latest(target).tasks[0].verificationEvidenceIds, undefined);
     assert.equal(latest(target).currentTaskId, "second", JSON.stringify(target.notifications));
     assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
@@ -186,7 +187,7 @@ test("confirmed fresh session imports only remaining execution, preserves histor
     assert.equal(evidence.sourceSessionId, h.manager.getSessionId());
     assert.match(evidence.text, /declared verification source/);
     const tools = target.tools.find(t => t.name === "task_workflow");
-    await assert.rejects(tools.execute("forged-verification", { action: "complete", ...workflowMessageIdentity(target), completionSummary: "不能冒充本次验证", implementationRationale: "历史来源只读", verification: ["历史"], evidenceIds: h.evidenceIds }, undefined, undefined, target.context));
+    await assert.rejects(tools.execute("forged-verification", { action: "complete", ...workflowMessageIdentity(target), completionSummary: "不能冒充本次验证", implementationRationale: "历史来源只读", verification: [{ check: "fixture check", status: "passed", details: "历史" }], evidenceIds: h.evidenceIds }, undefined, undefined, target.context));
     await emitExtensionEvent(target, "session_shutdown");
   });
 });
@@ -588,7 +589,7 @@ test("successive handoffs keep the original declared evidence read-only without 
     const middle = original.target;
     middle.context.getContextUsage = () => ({ tokens: 90000, contextWindow: 100000, percent: 90 });
     await emitExtensionEvent(middle, "agent_start");
-    await middle.tools.find(t => t.name === "task_workflow").execute("complete-second", { action: "complete", ...workflowMessageIdentity(middle), completionSummary: "第二项完成", implementationRationale: "复用原历史", verification: ["第二项定向验证通过"] }, undefined, undefined, middle.context);
+    await middle.tools.find(t => t.name === "task_workflow").execute("complete-second", { action: "complete", ...workflowMessageIdentity(middle), completionSummary: "第二项完成", implementationRationale: "复用原历史", verification: [{ check: "fixture check", status: "passed", details: "第二项定向验证通过" }] }, undefined, undefined, middle.context);
     await emitExtensionEvent(middle, "agent_end");
     assert.equal(latest(middle).pauseReason, undefined);
     middle.context.newSession = options => replaceSession(middle, options);

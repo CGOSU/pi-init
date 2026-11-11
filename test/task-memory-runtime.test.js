@@ -265,7 +265,7 @@ test("registered extension records SDK results and binds checkpoint without inje
       assert.match(JSON.stringify(messages), /91 passed/);
       assert.match(JSON.stringify(messages), /generate patch/);
       assert.equal(h.branch.findLast(entry => entry.customType === "pi-init-workflow").data.tasks[0].status, "in_progress");
-      const complete = { action: "complete", completionSummary: "patch produced", implementationRationale: "minimal change", verification: ["historical command result checked"], evidenceIds: ["sdk-result"] };
+      const complete = { action: "complete", completionSummary: "patch produced", implementationRationale: "minimal change", verification: [{ check: "fixture check", status: "passed", details: "historical command result checked" }], evidenceIds: ["sdk-result"] };
       await emitExtensionEvent(h, "before_provider_request");
       const finishMessage = { role: "assistant", timestamp: 5, content: [{ type: "toolCall", id: "complete-memory", name: "task_workflow", arguments: complete }] };
       await emitExtensionEvent(h, "message_start", { message: finishMessage });

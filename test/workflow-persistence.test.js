@@ -42,7 +42,7 @@ function completeParams(harness) {
     taskId: "first",
     completionSummary: "第一项完成",
     implementationRationale: "测试持久化失败不推进完成状态",
-    verification: ["针对性测试通过"],
+    verification: [{ check: "fixture check", status: "passed", details: "针对性测试通过" }],
   };
 }
 

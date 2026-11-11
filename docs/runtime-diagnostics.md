@@ -41,6 +41,20 @@ pi-init 在受信任项目中默认启用本地运行诊断，帮助查看扩展
 
 测试使用独立的临时 Pi Agent 目录。`npm test` 运行全量，`npm test -- test/runtime-diagnostics.test.js` 可运行定向回归；统一预加载与扩展测试 harness 隔离全局日志，退出只清理测试自己创建的目录，不删除继承的用户目录。
 
+## 恢复停录记录器
+
+诊断存储、轮转或目录锁失败会停用对应记录器。排除存储故障后，可在受信任项目显式执行：
+
+```text
+/blackbox resume project
+/blackbox resume global
+/blackbox resume handoff
+```
+
+恢复会先排空本进程待写，使用同一目录级跨进程 `runtime.lock` 检查文件与存储，再复核项目、session 和 branch 身份。只恢复所选记录器接收后续新事件；失败期间被丢弃的记录不会补写，不重放日志或任务，也不更改 `PI_INIT_HANDOFF_LOG` 模式。`handoff` 详细记录仅在详细模式启用时可恢复；关闭模式不会被 resume 打开。锁仍忙或文件不可用时保持停录并报告失败。崩溃遗留锁不自动删除/抢占，须人工核对进程及目录后处理。
+
+状态或恢复成功只表示本次检查通过，不构成长期、跨进程健康保证；诊断采集不参与任务执行和恢复授权。
+
 ## 导出与清理
 
 - `/blackbox export <project|global> <新文件路径>`：导出所选范围最多最近 256 条脱敏记录。只写入新文件，不覆盖已有文件，也不会上传。

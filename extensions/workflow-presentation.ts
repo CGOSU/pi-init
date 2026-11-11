@@ -120,23 +120,53 @@ function isWorkflowCompletionView(value: unknown): value is WorkflowCompletionVi
     && isCompletionDuration(value.duration);
 }
 
-export function workflowPresentationFromDetails(details: unknown): WorkflowPresentation | undefined {
-  if (!isRecord(details) || !isRecord(details.workflowPresentation)) return undefined;
+type PresentationResult = { ok: true; value: WorkflowPresentation } | { ok: false; code: string; message: string };
+function invalidPresentation(code: string, message: string): { ok: false; code: string; message: string } {
+  return { ok: false, code: "WORKFLOW_PRESENTATION_" + code, message };
+}
+
+function validateVerificationView(value: unknown): { ok: true; value: NonNullable<WorkflowCompletionView["finalTask"]> } | { ok: false; code: string; message: string } {
+  if (!isCompletionTaskView(value)) return invalidPresentation("TASK_TYPE", "完成任务视图字段无效");
+  for (const field of ["verification", "verificationFailures", "verificationPending", "verificationUnclassified"]) {
+    const records = value[field as keyof typeof value];
+    if (!Array.isArray(records) || !records.every(item => typeof item === "string")) {
+      return invalidPresentation("VERIFICATION_FIELD", "缺少或非法的完成视图字段：" + field);
+    }
+  }
+  return { ok: true, value };
+}
+
+export function workflowPresentationFromDetails(details: unknown): PresentationResult {
+  if (!isRecord(details) || !isRecord(details.workflowPresentation)) return invalidPresentation("MISSING", "未记录结构化展示");
   const presentation = details.workflowPresentation;
+  if (presentation.kind === "task-completion") {
+    const error = validateVerificationView(isRecord(presentation.view) ? presentation.view.task : undefined);
+    if (!error.ok) return error;
+  }
+  if (presentation.kind === "workflow-completion") {
+    if (!isRecord(presentation.view) || !Array.isArray(presentation.view.tasks)) return invalidPresentation("TASKS_TYPE", "完成报告缺少任务数组");
+    for (const task of [...presentation.view.tasks, ...(presentation.view.finalTask ? [presentation.view.finalTask] : [])]) {
+      const error = validateVerificationView(task);
+      if (!error.ok) return error;
+    }
+  }
   if (presentation.kind === "workflow-status" && isWorkflowStatusView(presentation.view)) {
-    return { kind: "workflow-status", view: presentation.view };
+    return { ok: true, value: { kind: "workflow-status", view: presentation.view } };
   }
   if (presentation.kind === "task-completion"
     && isWorkflowTaskCompletionView(presentation.view)
     && (presentation.continuation === "next-task" || presentation.continuation === "awaiting-replan")) {
     return {
-      kind: "task-completion",
-      view: presentation.view,
-      continuation: presentation.continuation,
+      ok: true,
+      value: {
+        kind: "task-completion",
+        view: presentation.view,
+        continuation: presentation.continuation,
+      },
     };
   }
   if (presentation.kind === "workflow-completion" && isWorkflowCompletionView(presentation.view)) {
-    return { kind: "workflow-completion", view: presentation.view };
+    return { ok: true, value: { kind: "workflow-completion", view: presentation.view } };
   }
-  return undefined;
+  return invalidPresentation("INVALID", "展示记录类型或字段无效，保留原始工具文本");
 }

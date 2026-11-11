@@ -1,4 +1,11 @@
 import { textOf } from "./error-utils.ts";
+import { restoreWorkflowVerification } from "./workflow-verification.ts";
+
+function unwrapSavedVerification(value: unknown) {
+  const result = restoreWorkflowVerification(value);
+  if (!result.ok) throw Object.assign(new Error(result.message), { code: result.code });
+  return result.value;
+}
 import { hasOwn, isRecord, isUnknownArray } from "./value-guards.ts";
 import {
   WORKFLOW_STATE_VERSION,
@@ -202,8 +209,8 @@ function normalizeHydratedTask(
       ? { supersededBy: normalizeRevisionId(task.supersededBy, `已保存的工作流任务 ${task.id} 的 supersededBy`) }
       : {}),
     ...(task.verificationEvidenceIds !== undefined ? { verificationEvidenceIds: normalizeTextList(task.verificationEvidenceIds, "已保存的验证来源ID", { required: true }) } : {}),
-    ...(task.verification
-      ? { verification: normalizeTextList(task.verification, `已保存的工作流任务 ${task.id} 的 verification`) }
+    ...(task.verification !== undefined
+      ? { verification: unwrapSavedVerification(task.verification) }
       : {}),
     ...(task.delegation ? { delegation: normalizeDelegation(task.delegation) } : {}),
   };

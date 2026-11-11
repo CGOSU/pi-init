@@ -148,7 +148,11 @@ export const taskWorkflowParameters = Type.Object({
   confirmUnknownOutcome: Type.Optional(Type.Boolean({ description: "模型布尔值不构成未知结果重放授权，必须由用户命令或面板确认" })),
   completionSummary: Type.Optional(Type.String()),
   implementationRationale: Type.Optional(Type.String()),
-  verification: Type.Optional(Type.Array(Type.String(), { description: "complete时必填且非空，记录当前确认验收所需的实际检查及结果；只读调查可填写静态核对。后续系统/人工验收另列待办，不得将未执行检查描述为通过" })),
+  verification: Type.Optional(Type.Array(Type.Object({
+    check: Type.String({ minLength: 1, description: "可识别的实际检查项或完整验证命令" }),
+    status: StringEnum(["passed", "failed", "not-run"] as const),
+    details: Type.String({ minLength: 1, description: "真实结果、失败原因或未执行原因；不得用说明文字覆盖 status" }),
+  }, { additionalProperties: false }), { minItems: 1, description: "complete时必填的结构化验证记录。passed=通过，failed=失败，not-run=未执行；仅按status识别结果。后续人工/系统验收可明确未执行，不等同副作用结果未知，也不新增所有记录均须通过的规则。历史文字不能作为新验证输入。" })),
   outcomeUnknown: Type.Optional(Type.Boolean({ description: "block时报告已执行操作或副作用结果未知；尚未验证或等待人工验收不属于此状态。仅增加保护，不授权清除未知状态或自动重试" })),
   reason: Type.Optional(Type.String()),
 });

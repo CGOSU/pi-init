@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_ROLE_NAMES } from "../src/roles.ts";
 import { createScaffold } from "../src/scaffold.ts";
-import type { ScaffoldOptions, TemplateLanguage } from "../src/scaffold-types.ts";
+import type { ScaffoldOptions, ScaffoldOperationResult, ScaffoldResult, TemplateLanguage } from "../src/scaffold-types.ts";
 import type { RoleModelConfig } from "./contracts.ts";
 import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
 
@@ -20,15 +20,9 @@ async function readProjectMetadata(ctx: ExtensionContext, targetDir: string) {
   return readMetadata(resolve(ctx.cwd, normalizeTargetDir(targetDir) || "."));
 }
 
-export function formatResult(result: {
-  targetDir: string;
-  projectName: string;
-  files: string[];
-  conflicts: string[];
-  preserved?: string[];
-  dryRun: boolean;
-  cancelled?: boolean;
-}) {
+export function formatResult(outcome: ScaffoldOutcome) {
+  if (!outcome.ok) return `初始化失败（${outcome.code}）：${outcome.message}`;
+  const result = outcome.value;
   if (result.cancelled) {
     return "已取消，没有写入文件。";
   }
@@ -49,15 +43,16 @@ export function formatResult(result: {
   return lines.join("\n");
 }
 
-function formatCompactResult(result: ScaffoldOutcome) {
+function formatCompactResult(outcome: ScaffoldOutcome) {
+  if (!outcome.ok) return formatResult(outcome);
+  const result = outcome.value;
   if (result.cancelled) return "已取消初始化";
   const prefix = result.dryRun ? "预览" : "✓ 已生成";
   const conflicts = ` · 保留 ${result.preserved.length} 个已有文件`;
   return `${prefix} ${result.files.length} 个文件${conflicts}\n${result.targetDir}`;
 }
 
-type ScaffoldResult = Awaited<ReturnType<typeof createScaffold>>;
-export type ScaffoldOutcome = ScaffoldResult & { cancelled?: boolean; backedOut?: boolean };
+export type ScaffoldOutcome = ScaffoldOperationResult<ScaffoldResult & { cancelled?: boolean; backedOut?: boolean }>;
 type AdvancedOptions = {
   projectName: string;
   language: TemplateLanguage;
@@ -115,18 +110,18 @@ export async function runScaffold(
   const absoluteTarget = resolve(ctx.cwd, normalizeTargetDir(targetDir) || ".");
 
   return withFileMutationQueue(absoluteTarget, async () => {
-    const preview = await createScaffold(absoluteTarget, { ...options, dryRun: true });
-
-    if (options.dryRun === true) {
-      return preview;
+    if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+      return { ok: false, code: "SCAFFOLD_DRY_RUN_TYPE", message: "dryRun 必须是布尔值" };
     }
-
-    if (preview.files.length === 0) return { ...preview, dryRun: false };
+    const previewResult = await createScaffold(absoluteTarget, { ...options, dryRun: true });
+    if (!previewResult.ok || options.dryRun === true) return previewResult;
+    const preview = previewResult.value;
+    if (preview.files.length === 0) return { ok: true, value: { ...preview, dryRun: false } };
     const needsConfirmation =
       confirmation === "always" || (confirmation === "conflicts" && preview.conflicts.length > 0);
     if (needsConfirmation) {
       if (!ctx.hasUI) {
-        return { ...preview, cancelled: true };
+        return { ok: true, value: { ...preview, cancelled: true } };
       }
       const message = [
         `项目：${preview.projectName}`,
@@ -142,10 +137,10 @@ export async function runScaffold(
       ].join("\n");
       const decision = await confirmScaffold(ctx, message, allowBack);
       if (decision === MENU_BACK) {
-        return { ...preview, backedOut: true };
+        return { ok: true, value: { ...preview, backedOut: true } };
       }
       if (decision !== "confirm") {
-        return { ...preview, cancelled: true };
+        return { ok: true, value: { ...preview, cancelled: true } };
       }
     }
 
@@ -261,11 +256,13 @@ function scaffoldOptions(options: AdvancedOptions) {
 }
 
 function notifyResult(ctx: ExtensionContext, result: ScaffoldOutcome) {
-  ctx.ui.notify(formatCompactResult(result), result.cancelled ? "warning" : "info");
+  ctx.ui.notify(formatCompactResult(result), !result.ok ? "error" : result.value.cancelled ? "warning" : "info");
 }
 
-export async function finishScaffold(ctx: ExtensionCommandContext, result: ScaffoldOutcome) {
-  notifyResult(ctx, result);
+export async function finishScaffold(ctx: ExtensionCommandContext, outcome: ScaffoldOutcome) {
+  notifyResult(ctx, outcome);
+  if (!outcome.ok) return;
+  const result = outcome.value;
   const isCurrentProject = result.targetDir === resolve(ctx.cwd, ".");
   if (isCurrentProject && !result.dryRun && !result.cancelled && result.files.length > 0) {
     ctx.ui.notify("当前项目已更新，正在重新加载 Skill。", "info");
@@ -305,7 +302,7 @@ export async function advancedInit(targetDir: string, ctx: ExtensionCommandConte
       "always",
       true,
     );
-    if (result.backedOut) {
+    if (result.ok && result.value.backedOut) {
       draft = options;
       continue;
     }

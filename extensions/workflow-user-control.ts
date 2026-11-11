@@ -1,3 +1,4 @@
+import { formatWorkflowVerification } from "../src/workflow-verification.ts";
 import { constants } from "node:fs";
 import { open, lstat } from "node:fs/promises";
 import { join } from "node:path";
@@ -80,7 +81,7 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
       for (const task of workflow.tasks.slice(0, 64)) {
         lines.push("- [" + (task.status === "completed" ? "x" : " ") + "] " + bounded(task.id, 128) + " · " + task.status + " · " + bounded(task.task, 300) + (task.outcomeUnknown ? "（结果未知；不得自动重试）" : ""));
         if (task.completionSummary) lines.push("  已登记成果：" + bounded(task.completionSummary));
-        for (const check of task.verification?.slice(0, 3) ?? []) lines.push("  已登记验证（未重新执行）：" + bounded(check, 300));
+        for (const check of task.verification?.slice(0, 3) ?? []) lines.push("  已登记验证（未重新执行）：" + bounded(formatWorkflowVerification(check), 300));
       }
       if (workflow.tasks.length > 64) lines.push("其余 " + (workflow.tasks.length - 64) + " 项未展开，请查看当前工作流状态。");
     }

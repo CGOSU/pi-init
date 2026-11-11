@@ -19,7 +19,8 @@ function fixture(overrides = {}) {
     plan: { summary: "Whole goal", constraints: ["No unrelated edits"] },
     tasks: [1, 2].map(id => ({ id: String(id), task: `Task ${id}`, status: "completed",
       completionSummary: `Result ${id}`, implementationRationale: `Reason ${id}`,
-      verification: [`pass ${id}`, `failure ${id}`, `skipped ${id}`] })),
+      verification: [{ check: "fixture check", status: "passed", details: `pass ${id}` }, { check: "fixture check", status: "failed", details: `failure ${id}` }, { check: "fixture check", status: "not-run", details: `skipped ${id}` }]
+    })),
   };
   const pi = { on(name, fn) { hooks.set(name, fn); }, sendMessage(...args) { sent.push(args); }, ...overrides };
   const controller = createWorkflowDelivery(pi, state);

@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { formatWorkflowVerification } from "../src/workflow-verification.ts";
 import { ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
 import {
   getWorkflowTask,
@@ -40,7 +41,7 @@ function taskDirectionGuidance(role: string) {
 
 function taskCompletionGuidance(role: string) {
   if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
-  return '需要保留阶段进展时按需用task_workflow(checkpoint)，它只保存进展、不暂停任务，也不是complete、block或交接的新增前置条件；缺少有效来源ID时一次status(detail=full)取得任务记忆observations[].id和revision，已有有效来源及当前revision可复用，不猜ID或循环查询。达到当前确认的验收标准并完成适用检查后调用complete，提供completionSummary、implementationRationale和verification；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞或用户明确要求暂停（含准备会话交接）时如实block并保留未知结果；工具与回合结束后由fresh核验交接条件。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
+  return '需要保留阶段进展时按需用task_workflow(checkpoint)，它只保存进展、不暂停任务，也不是complete、block或交接的新增前置条件；缺少有效来源ID时一次status(detail=full)取得任务记忆observations[].id和revision，已有有效来源及当前revision可复用，不猜ID或循环查询。达到当前确认的验收标准并完成适用检查后调用complete，提供completionSummary、implementationRationale和verification；verification须为{check,status,details}对象数组，status仅passed/failed/not-run，不接受文字数组、不以说明文字猜测状态；可用evidenceIds引用本任务真实成功工具结果，已完成直接依赖的来源仅供只读历史复用，不证明当前版本或需求全部满足。确有阻塞或用户明确要求暂停（含准备会话交接）时如实block并保留未知结果；工具与回合结束后由fresh核验交接条件。身份由运行时绑定，不重做已完成调查、不重放未知副作用。';
 }
 
 export type WorkflowMessageDependencies = {
@@ -65,7 +66,7 @@ export function createWorkflowMessages(
     const dependencyIds = new Set(task.dependsOn);
     const completed = workflowState.tasks
       .filter((item) => item.status === "completed" && dependencyIds.has(item.id))
-      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}${item.implementationRationale ? `；取舍：${item.implementationRationale}` : ""}${(item.verification ?? []).length ? `；验证：${(item.verification ?? []).join("；")}` : ""}${item.verificationEvidenceIds?.length ? `；历史验证来源ID（status可读，不证明当前版本）：${item.verificationEvidenceIds.join(", ")}` : ""}`);
+      .map((item) => `- ${item.id}: ${item.completionSummary ?? "已完成"}${item.implementationRationale ? `；取舍：${item.implementationRationale}` : ""}${(item.verification ?? []).length ? `；验证：${(item.verification ?? []).map(formatWorkflowVerification).join("；")}` : ""}${item.verificationEvidenceIds?.length ? `；历史验证来源ID（status可读，不证明当前版本）：${item.verificationEvidenceIds.join(", ")}` : ""}`);
 
     return [
       "[PI-INIT 自动任务工作流]",

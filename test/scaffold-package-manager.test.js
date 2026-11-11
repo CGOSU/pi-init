@@ -117,7 +117,8 @@ test("底层脚手架与工具运行入口自动推断测试命令", async t => 
   ]) {
     await t.test(entry, async () => {
       await withProject({ manifest: { scripts: { test: "node --test" } } }, async directory => {
-        await initialize(directory);
+        const result = await initialize(directory);
+        assert.equal(result.ok, true, result.message);
         assert.equal(await generatedTestCommand(directory), "pnpm test");
       });
     });

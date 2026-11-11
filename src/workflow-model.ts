@@ -191,7 +191,7 @@ export function cloneTask(task: WorkflowTask): WorkflowTask {
     files: [...task.files],
     acceptanceCriteria: [...task.acceptanceCriteria],
     dependsOn: [...task.dependsOn],
-          ...(task.verification ? { verification: [...task.verification] } : {}),
+    ...(task.verification ? { verification: task.verification.map(check => typeof check === "string" ? check : { ...check }) } : {}),
     ...(task.verificationEvidenceIds ? { verificationEvidenceIds: [...task.verificationEvidenceIds] } : {}),
     ...(task.delegation ? { delegation: { ...task.delegation } } : {}),
   };

@@ -17,10 +17,12 @@ function durationText(duration: CompletionDuration, unavailableText: string) {
   );
 }
 
-function verificationText(task: WorkflowCompletionTaskView) {
-  return task.verificationFailures.length > 0
-    ? `验证：${task.verificationFailures.join("；")}`
-    : undefined;
+function verificationWarnings(task: WorkflowCompletionTaskView) {
+  return [
+    ...(task.verificationFailures.length ? ["验证未通过：" + task.verificationFailures.join("；")] : []),
+    ...(task.verificationPending.length ? ["验证未执行：" + task.verificationPending.join("；")] : []),
+    ...(task.verificationUnclassified.length ? ["历史验证未判定：" + task.verificationUnclassified.join("；")] : []),
+  ];
 }
 
 function taskReportLines(task: WorkflowCompletionTaskView) {
@@ -41,15 +43,12 @@ export function formatWorkflowTaskCompletionSummaryText(view: WorkflowTaskComple
     "任务完成报告",
     `已完成：${view.task.task}`,
     ...(view.task.completionSummary ? [`结果：${view.task.completionSummary}`] : []),
-    ...(view.task.verificationFailures.length > 0
-      ? [`验证未通过：${view.task.verificationFailures.join("；")}`]
-      : []),
+    ...verificationWarnings(view.task),
   ].join("\n");
 }
 
 /** Full tool text preserves completion data for the model and for expanded inspection. */
 export function formatWorkflowTaskCompletionText(view: WorkflowTaskCompletionView) {
-  const verification = verificationText(view.task);
   return [
     "任务完成报告",
     "",
@@ -63,7 +62,7 @@ export function formatWorkflowTaskCompletionText(view: WorkflowTaskCompletionVie
     "",
     "3. 执行结果",
     `   - 耗时：${durationText(view.duration, TASK_DURATION_UNAVAILABLE)}`,
-    ...(verification ? [`   - ${verification}`] : []),
+    ...verificationWarnings(view.task).map(warning => "   - " + warning),
   ].join("\n");
 }
 
@@ -75,9 +74,7 @@ export function formatWorkflowCompletionSummaryText(view: WorkflowCompletionView
     `目标：${view.summary}`,
     `已完成任务：${view.progress.completed}/${view.progress.total}`,
     ...(finalResult ? [`最终结果：${finalResult}`] : []),
-    ...(view.finalTask && view.finalTask.verificationFailures.length > 0
-      ? [`验证未通过：${view.finalTask.verificationFailures.join("；")}`]
-      : []),
+    ...view.tasks.flatMap(task => verificationWarnings(task).map(warning => warning + "（" + task.task + "）")),
   ].join("\n");
 }
 

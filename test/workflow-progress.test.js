@@ -127,7 +127,7 @@ test("verified task completion resets the suspicion window and records real prog
   tracker.observe(state);
   state.tasks[0].status = "completed";
   state.tasks[0].completionSummary = "Feature implemented";
-  state.tasks[0].verification = ["npm test -- test/workflow-progress.test.js: passed"];
+  state.tasks[0].verification = [{ check: "npm test -- test/workflow-progress.test.js", status: "passed", details: "passed" }];
   const completed = tracker.observe(state);
   assert.equal(completed.status, "observing");
   assert.deepEqual(completed.lastVerifiedProgress, { kind: "task-completion", taskId: "task-a", summary: "Feature implemented" });

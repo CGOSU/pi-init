@@ -49,7 +49,7 @@ function completeParams(identity) {
     taskId: "first",
     completionSummary: "第一项完成",
     implementationRationale: "按当前 attempt 验收",
-    verification: ["node --test 通过"],
+    verification: [{ check: "fixture check", status: "passed", details: "node --test 通过" }],
   };
 }
 
@@ -482,7 +482,7 @@ test("新用户方向使旧 revision handoff 失效，只有最新身份能应�
 test("真实模型消息可只提交业务结果，由运行时绑定派发身份完成任务", async () => {
   await withTempDirectory(async directory => {
     const harness = await taskHarness(directory);
-    const params = { action: "complete", completionSummary: "真实完成", implementationRationale: "复用已确认方案", verification: ["定向验证实际通过"] };
+    const params = { action: "complete", completionSummary: "真实完成", implementationRationale: "复用已确认方案", verification: [{ check: "fixture check", status: "passed", details: "定向验证实际通过" }] };
     const message = { role: "assistant", content: [{ type: "toolCall", id: "runtime-bound-complete", name: "task_workflow", arguments: params }] };
     await emitExtensionEvent(harness, "before_provider_request");
     await emitExtensionEvent(harness, "message_start", { message });

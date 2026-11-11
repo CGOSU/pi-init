@@ -1,3 +1,4 @@
+import { hasCurrentWorkflowVerification } from "./workflow-verification.ts";
 import { isRecord } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
 import { assertAcyclic, cloneState, cloneTask, normalizeIdentityToken, normalizeTask, normalizeTaskIds, normalizeTextList, requireText, requireTimestamp } from "./workflow-model.ts";
@@ -84,7 +85,7 @@ export function workflowGoalProgress(state: WorkflowState) {
     while (size !== ids.size) { size = ids.size; for (const child of state.goals ?? []) if (ids.has(child.parentId)) ids.add(child.id); }
     const tasks = state.tasks.filter(task => task.goalId && ids.has(task.goalId) && task.status !== "superseded");
     const completed = tasks.filter(task => task.status === "completed").length;
-    const status = !tasks.length ? "inactive" : completed === tasks.length ? (tasks.every(task => task.verification?.length) ? "completed" : "review-required") : tasks.some(task => task.status === "blocked") ? "blocked" : tasks.some(task => task.status === "in_progress") ? "in_progress" : "pending";
+    const status = !tasks.length ? "inactive" : completed === tasks.length ? (tasks.every(task => hasCurrentWorkflowVerification(task.verification)) ? "completed" : "review-required") : tasks.some(task => task.status === "blocked") ? "blocked" : tasks.some(task => task.status === "in_progress") ? "in_progress" : "pending";
     return { ...goal, completed, total: tasks.length, status };
   });
 }

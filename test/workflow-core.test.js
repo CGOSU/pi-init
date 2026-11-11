@@ -49,14 +49,14 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   assert.throws(
     () => completeWorkflowTask(
       firstStarted,
-      { taskId: "schema", completionSummary: "结构和迁移已完成", verification: ["npm test：通过"] },
+      { taskId: "schema", completionSummary: "结构和迁移已完成", verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }] },
       120,
     ),
     /实现原因不能为空/,
   );
   const second = completeWorkflowTask(
     firstStarted,
-    { taskId: "schema", completionSummary: "结构和迁移已完成", implementationRationale: "保留兼容边界并覆盖迁移路径", verification: ["npm test：通过"] },
+    { taskId: "schema", completionSummary: "结构和迁移已完成", implementationRationale: "保留兼容边界并覆盖迁移路径", verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }] },
     120,
   );
   assert.equal(second.currentTaskId, undefined);
@@ -68,14 +68,14 @@ test("架构工作流按依赖顺序推进并在完成后选择下一任务", ()
   const secondStarted = markWorkflowTaskStarted(startWorkflowTask(second, "service", 130), "service", 135);
   const third = completeWorkflowTask(
     secondStarted,
-    { taskId: "service", completionSummary: "服务已切换", implementationRationale: "沿用现有服务接口以降低改动范围", verification: ["npm test：通过"] },
+    { taskId: "service", completionSummary: "服务已切换", implementationRationale: "沿用现有服务接口以降低改动范围", verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }] },
     140,
   );
   assert.equal(getNextWorkflowTask(third).id, "docs");
   const finishedStarted = markWorkflowTaskStarted(startWorkflowTask(third, "docs", 150), "docs", 155);
   const finished = completeWorkflowTask(
     finishedStarted,
-    { taskId: "docs", completionSummary: "文档已同步", implementationRationale: "让文档与已验证行为保持一致", verification: ["git diff --check：通过"] },
+    { taskId: "docs", completionSummary: "文档已同步", implementationRationale: "让文档与已验证行为保持一致", verification: [{ check: "fixture check", status: "passed", details: "git diff --check：通过" }] },
     160,
   );
   assert.equal(finished.status, "completed");
@@ -116,7 +116,7 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
   }, 100);
   const completed = completeWorkflowTask(
     markWorkflowTaskStarted(startWorkflowTask(planned, "schema", 110), "schema", 115),
-    { taskId: "schema", completionSummary: "结构已完成", implementationRationale: "先固定数据结构再推进后续变更", verification: ["npm test：通过"] },
+    { taskId: "schema", completionSummary: "结构已完成", implementationRationale: "先固定数据结构再推进后续变更", verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }] },
     120,
   );
   const completedSnapshot = JSON.parse(JSON.stringify(getWorkflowTask(completed, "schema")));
@@ -222,7 +222,7 @@ test("工作流重规划在当前任务结束后才切换状态并拒绝过期�
   );
   const finished = completeWorkflowTask(
     requested,
-    { taskId: "current", completionSummary: "当前任务完成", implementationRationale: "先完成当前边界再等待架构重规划", verification: ["npm test：通过"] },
+    { taskId: "current", completionSummary: "当前任务完成", implementationRationale: "先完成当前边界再等待架构重规划", verification: [{ check: "fixture check", status: "passed", details: "npm test：通过" }] },
     220,
   );
   assert.equal(finished.status, "replanning");
@@ -257,7 +257,7 @@ test("工作流重规划拒绝复用任务 ID、悬空依赖和循环", () => {
   });
   const completed = completeWorkflowTask(
     markWorkflowTaskStarted(startWorkflowTask(base, "done"), "done"),
-    { taskId: "done", completionSummary: "完成", implementationRationale: "保持完成任务与后续重规划边界清晰", verification: ["通过"] },
+    { taskId: "done", completionSummary: "完成", implementationRationale: "保持完成任务与后续重规划边界清晰", verification: [{ check: "fixture check", status: "passed", details: "通过" }] },
   );
   const requested = requestWorkflowReplan(completed, { revisionId: "revision-validation", direction: "验证" });
   const apply = (tasks, extra = {}) => applyWorkflowReplan(requested, {

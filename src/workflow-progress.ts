@@ -1,3 +1,4 @@
+import { hasCurrentWorkflowVerification } from "./workflow-verification.ts";
 import type { WorkflowState, WorkflowTask } from "./workflow-types.ts";
 
 export type WorkflowProgressSuspicion = {
@@ -68,7 +69,7 @@ function semanticState(workflow: WorkflowState): SemanticState {
 function taskHasVerifiedCompletion(task: WorkflowTask | undefined): task is WorkflowTask {
   return Boolean(task && task.status === "completed" && !task.outcomeUnknown
     && task.completionSummary?.trim()
-    && task.verification?.some(item => item.trim()));
+    && hasCurrentWorkflowVerification(task.verification));
 }
 
 function verifiedCompletion(previous: WorkflowState, next: WorkflowState) {

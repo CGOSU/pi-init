@@ -2,6 +2,15 @@
 
 本文件仅保留后续需要复用且难以重建的调查或验证依据，按日期倒序排列，不要求每次任务追加。不记录敏感信息或未经验证的结果；收尾规则见[协作指南](../AGENTS.md#会话收尾)。
 
+### 2026-11-11：按当前运行时测量审计后续并统一验证
+
+- 范围：以 027aaac 为实现起点，按维护者确认收紧支持基线到当前 Pi SDK 1.5.0，不兼容/测试旧版；Peer 下限 `^1.5.0`，Node engines `>=22.19.0`，本机 Node v26.13.0 / Darwin arm64。不增加 GitHub Actions/CI，不做真实 Windows、真实 Pi reload/TUI 或真实业务数据迁移。初始化单项目输出链接检查、诊断显式恢复/统一跨进程锁、结构化验证、运行时模块拆分均已完成；细节和限制见[全项目审计](project-audit.md)。
+- 指纹基准方法：运行 `node --expose-gc /tmp/pi-init-fingerprint-benchmark.mjs`。以临时隔离目录和合成 payload 调用真实摘要函数、缓存观察器和 handoff handler；10 次预热、9 批，每批 80 次（缓存请求 40 次、1 MiB handler 24 次），每项另记录 CPU。每批前 GC、计时区间外 flush handler 写队列；采样每项墙钟/CPU 用时，9 个 batch mean 排序后的中位数和最近秩 p95（n=9 因而等于最大 batch mean）。无真实 Provider、会话或生产日志。合成命令/结果文本为 1 KiB、64 KiB、1 MiB；文件 stat 读取临时 1 行 fixture；缓存场景 system 约 1.9 KiB，context 分别为 4×1 KiB、16×4 KiB、32×40 KiB messages；handler 比较 automatic/verbose 下 1 MiB 结果。
+- 测量结果（每操作墙钟中位数）：输入摘要 2.66/73.15/1126.28 μs；结果摘要（无哈希）0.37/0.36/0.32 μs；完整哈希 1.65/36.54/563.40 μs（以上均为 1/64/1024 KiB）；文件 stat 13.38 μs；缓存 small/medium/large-partial 37.02/141.54/679.89 μs；1 MiB handler automatic/verbose 3.94/568.70 μs。该合成测量只表示指定宿主/负载，不代表 Provider 端到端延迟或单事件尾延迟。
+- 优化决定：试验逐段 HMAC 合批，对照命令为 `node --expose-gc /tmp/pi-init-fingerprint-parity.mjs`，相同 VM、固定合成 key、交替配对批次，22 个边界/状态对照（预算、循环、Unicode、getter、可变输入）输出一致。small/medium/40 KiB/节点预算分别约快 7.1%/0.9%、慢 1.7%、快 16.3%；收益不一致且需要额外临时缓冲，已撤回。生产源码与试验前逐字节一致，不声明优化或提速。临时脚本及 JSON 原始结果仅存 `/tmp`，上述负载、命令和数值是长期证据，不依赖该临时文件存在。
+- 最终验证：`npm test > /tmp/pi-init-followup-full-test.log 2>&1` 为 **1051/1051 通过**，0 失败/取消/跳过；首次 1050/1051 暴露一处测试仍读取 init_project 旧平铺 details，已按真实 `details.ok/value` 迁移直接调用断言后重跑通过。此前一次定向诊断测试组出现 branch 窗口计数（期望 3、观察 2）及多进程轮转数量断言失败；随后同一版本全量套件通过，未确认其独立根因，故不将首次失败描述成已修复。`npm run typecheck`、`git diff --check` 通过；63 个修改代码/测试文件使用现有 TypeScript language-service formatter，计划 0 edits；`npm pack --dry-run --ignore-scripts --json --cache /tmp/pi-init-followup-npm-cache` 退出 0，174 条目含全部 6 个新源码模块（missing=[]）。没有 build 脚本，不宣称构建通过。
+- 边界：只用隔离 fixture；不测试旧 SDK/Node、真实 Windows/PowerShell、GitHub Actions/CI，不访问真实 Provider、session 或生产日志，不安装/同步本机 Pi package，不 push/部署/发布。文档/Git 统一收尾及最终归属检查见本次交付。
+
 ### 2026-11-06：补清精确编辑的原文与失败恢复规则
 
 - 完成：按用户确认收窄公共Skill中的edit指导，规则及范围见[设计决策](decisions.md#2026-11-06补清精确编辑的原文与失败恢复规则)。核对运行时完整加载公共Skill，角色与模板仅引用，不新增重复规则或修改原生edit包装器；独立只读审阅后将整文件覆盖限制明确限定在绕过零匹配的恢复场景。

@@ -22,11 +22,11 @@ test("host validation rejects missing required fields and incompatible argument 
   }
 });
 
-test("host normalizes numeric strings and scalar arrays without mutating transcript arguments", () => {
-  const args = { action: "complete", planVersion: "2", recoveryGeneration: "3", verification: "targeted checks passed" };
+test("host normalizes numeric strings while preserving structured verification and transcript arguments", () => {
+  const args = { action: "complete", planVersion: "2", recoveryGeneration: "3", verification: [{ check: "targeted checks", status: "passed", details: "passed" }] };
   const original = structuredClone(args);
   assert.deepEqual(validate(taskWorkflowParameters, args), {
-    action: "complete", planVersion: 2, recoveryGeneration: 3, verification: ["targeted checks passed"],
+    action: "complete", planVersion: 2, recoveryGeneration: 3, verification: [{ check: "targeted checks", status: "passed", details: "passed" }],
   });
   assert.deepEqual(args, original);
 });

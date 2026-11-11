@@ -1,4 +1,5 @@
 import { DynamicBorder, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { formatWorkflowVerification } from "../src/workflow-verification.ts";
 import { Box, Key, matchesKey, SelectList, Text, truncateToWidth, type SelectItem } from "@earendil-works/pi-tui";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
@@ -95,7 +96,7 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
       const detailText = () => {
         const task = state.workflowState?.tasks.find((item) => item.id === detailId);
         if (!task) return "当前没有任务详情。";
-        return ["任务 ID：" + task.id, "任务：" + task.task, "状态：" + ({ pending: "待处理", in_progress: "进行中", completed: "已完成", blocked: "已阻塞", superseded: "已替换" }[task.status]), "角色：" + task.role, "范围：" + task.files.join("、"), "验收标准：", ...task.acceptanceCriteria.map((item) => "- " + item), task.blockReason ? "阻塞原因：" + task.blockReason : "", task.outcomeUnknown ? "结果未知：先核对副作用，不可直接重试。" : "", task.completionSummary ? "完成结果：" + task.completionSummary : "", task.implementationRationale ? "实现原因：" + task.implementationRationale : "", "实际验证：", ...(task.verification?.length ? task.verification : ["尚未记录实际验证"] )].filter(Boolean).join("\n");
+        return ["任务 ID：" + task.id, "任务：" + task.task, "状态：" + ({ pending: "待处理", in_progress: "进行中", completed: "已完成", blocked: "已阻塞", superseded: "已替换" }[task.status]), "角色：" + task.role, "范围：" + task.files.join("、"), "验收标准：", ...task.acceptanceCriteria.map((item) => "- " + item), task.blockReason ? "阻塞原因：" + task.blockReason : "", task.outcomeUnknown ? "结果未知：先核对副作用，不可直接重试。" : "", task.completionSummary ? "完成结果：" + task.completionSummary : "", task.implementationRationale ? "实现原因：" + task.implementationRationale : "", "实际验证：", ...(task.verification?.length ? task.verification.map(formatWorkflowVerification) : ["尚未记录实际验证"])].filter(Boolean).join("\n");
       };
       let pageSize = 8;
       refresh();

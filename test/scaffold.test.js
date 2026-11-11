@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createScaffold } from "../src/scaffold.ts";
+import { createScaffold as createScaffoldResult } from "../src/scaffold.ts";
 import { DEFAULT_ROLE_CONFIG, resolveRoleConfig, unwrapRoleResult } from "../src/roles.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
+
+async function createScaffold(...args) {
+  const result = await createScaffoldResult(...args);
+  assert.equal(result.ok, true, result.message);
+  return result.value;
+}
 
 test("默认脚手架生成约定文件并替换项目变量", async () => {
   await withTempDirectory(async (directory) => {
@@ -92,10 +98,9 @@ test("无效职责模型配置失败且不生成配置文件", async () => {
       architect: { provider: "provider", model: "model", thinkingLevel: "invalid" },
     };
 
-    await assert.rejects(
-      createScaffold(target, { roleModels }),
-      { code: "ROLE_MODEL_THINKING_LEVEL_INVALID" },
-    );
+    const result = await createScaffoldResult(target, { roleModels });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "ROLE_MODEL_THINKING_LEVEL_INVALID");
     await assert.rejects(readFile(path.join(target, ".pi/role-models.json"), "utf8"), { code: "ENOENT" });
   });
 });

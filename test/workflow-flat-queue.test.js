@@ -27,7 +27,7 @@ function insert(state = root(), options = {}) {
 }
 function complete(state, id, now = 110) {
   const started = markWorkflowTaskStarted(setWorkflowHandoffPhase(startWorkflowTask(state, id, now), "queued", now + 1), id, now + 2);
-  return completeWorkflowTask(started, { taskId: id, completionSummary: "已交付", implementationRationale: "按共享队列执行", verification: ["实际验证通过"] }, now + 3);
+  return completeWorkflowTask(started, { taskId: id, completionSummary: "已交付", implementationRationale: "按共享队列执行", verification: [{ check: "fixture check", status: "passed", details: "实际验证通过" }] }, now + 3);
 }
 test("插入目标保留工作流身份、原任务和父计划，不创建运行栈", () => {
   const original = root(); const snapshot = structuredClone(original);

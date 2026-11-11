@@ -99,7 +99,8 @@ test("SDK completion-report projection preserves tool declarations and system ch
     workflowId: "completed-workflow", sessionId: "system-history", planVersion: 1, recoveryGeneration: 0, status: "completed",
     plan: { summary: "Deliver the whole result", constraints: ["Keep the original instructions"] },
     tasks: [{ id: "task", task: "Implement the result", status: "completed", completionSummary: "Result ready",
-      implementationRationale: "Local change", verification: ["Targeted check passed"] }],
+      implementationRationale: "Local change", verification: [{ check: "fixture check", status: "passed", details: "Targeted check passed" }]
+    }],
   };
   const delivery = createWorkflowDelivery(f.pi, f.state);
   delivery.prepare("complete");

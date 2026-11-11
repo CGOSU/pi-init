@@ -69,7 +69,7 @@ function executingState(initial = flatState()) {
 function completionEvent(state) {
   return {
     type: "task-completed", identity: workflowHandoffIdentity(state),
-    completionSummary: "目标完成", implementationRationale: "保留父层进度，不重复副作用", verification: ["测试通过"],
+    completionSummary: "目标完成", implementationRationale: "保留父层进度，不重复副作用", verification: [{ check: "fixture check", status: "passed", details: "测试通过" }],
   };
 }
 

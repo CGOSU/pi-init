@@ -10,7 +10,7 @@ export function registerProjectTool(pi: ExtensionAPI, loadScaffoldRuntime: () =>
     name: "init_project",
     label: "Initialize Project",
     description:
-      "Generate AGENTS.md, project memory docs, and .pi/role-models.json. The package-published pi-init-role-routing Skill provides shared role semantics; project AGENTS.md references it and no project-level role Skill is generated. AGENTS.md also records the host platform and command conventions detected during initialization. Only missing files are created; existing files and symlinks are preserved unchanged.",
+      "Generate AGENTS.md, project memory docs, and .pi/role-models.json. The package-published pi-init-role-routing Skill provides shared role semantics; project AGENTS.md references it and no project-level role Skill is generated. AGENTS.md also records the host platform and command conventions detected during initialization. Only missing files are created; existing files and file symlinks are preserved unchanged. Linked output directories are rejected before generation to keep project context unshared.",
     promptSnippet: "Initialize project context files and use the package-published pi-init-role-routing Skill",
     promptGuidelines: [
       "Use init_project when the user asks to initialize a project with AI Coding collaboration context.",
@@ -28,8 +28,12 @@ export function registerProjectTool(pi: ExtensionAPI, loadScaffoldRuntime: () =>
       );
     },
     renderResult(result, { expanded }, theme) {
-      const details = result.details as ScaffoldOutcome | undefined;
-      if (!details || !Array.isArray(details.files)) return new Text(theme.fg("error", "初始化失败"), 0, 0);
+      const outcome = result.details as ScaffoldOutcome | undefined;
+      if (!outcome || !outcome.ok) {
+        const message = outcome && !outcome.ok ? `初始化失败（${outcome.code}）：${outcome.message}` : "初始化失败";
+        return new Text(theme.fg("error", message), 0, 0);
+      }
+      const details = outcome.value;
       if (details.cancelled) return new Text(theme.fg("warning", "已取消初始化"), 0, 0);
       const prefix = details.dryRun ? "预览" : "已生成";
       const lines = [
@@ -59,6 +63,7 @@ export function registerProjectTool(pi: ExtensionAPI, loadScaffoldRuntime: () =>
 
       return {
         content: [{ type: "text", text }],
+        isError: !result.ok,
         details: result,
       };
     },

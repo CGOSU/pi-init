@@ -51,7 +51,7 @@ test('profitable task history does not trigger proactive compaction', async () =
     await emitExtensionEvent(h, 'before_provider_request', { payload: {} });
     await h.tools.find(tool => tool.name === 'task_workflow').execute('complete-first', {
       ...workflowMessageIdentity(h), action: 'complete', taskId: 'task-0', completionSummary: 'implemented',
-      implementationRationale: 'verified task boundary', verification: ['targeted checks passed'],
+      implementationRationale: 'verified task boundary', verification: [{ check: "fixture check", status: "passed", details: 'targeted checks passed' }],
     }, undefined, undefined, h.context);
     await emitExtensionEvent(h, 'agent_settled');
     assert.equal(callbacks, undefined, 'profitable history never makes pi-init request compaction');

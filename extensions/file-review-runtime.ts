@@ -1,80 +1,16 @@
-import { createFileReviewJournalEntry, restoreFileReviewJournal } from "../src/file-review-journal.ts";
-import { reviewPathSelected, type FileReviewScanScope, type FileReviewExclusion } from "../src/file-review-scope.ts";
 import { Type } from "typebox";
-import {
-  isBashToolResult,
-  isEditToolResult,
-  isPowerShellToolResult,
-  isReadToolResult,
-  isWriteToolResult,
-  type ExtensionAPI,
-  type ExtensionContext,
-  type ToolResultEvent,
-  type ToolResultEventResult,
-} from "@earendil-works/pi-coding-agent";
-import {
-  FILE_REVIEW_ENTRY_TYPE,
-  FILE_REVIEW_POLICY_VERSION,
-  FILE_REVIEW_THRESHOLD,
-  normalizeFileReviewError,
-  inspectProjectFile,
-  normalizeReviewPath,
-  recordFileReview,
-  scanProjectFiles,
-  type FileReviewListScope,
-  type FileScanError,
-  type FileScanResult,
-  type FileSnapshot,
-  type PersistedFileReviewState,
-  type StateReadResult,
-} from "../src/file-review.ts";
-import { buildReviewCandidateQueue, type ReviewCandidateQueueError } from "../src/review-candidates.ts";
-import {
-  createIncrementalReviewState,
-  markIncrementalReviewNotified,
-  observeIncrementalReviewFiles,
-  refreshIncrementalReviewCandidates,
-  unnotifiedIncrementalReviewCandidates,
-  type IncrementalReviewCandidate,
-  type IncrementalReviewState,
-} from "../src/review-incremental.ts";
-import { registerLargeCommand, type LargeReviewSnapshot } from "./large-command.ts";
-import { hasCompleteCoverage, mergeCoverage, pathKey, type FileCoverage } from "./file-review-coverage.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { reviewPathSelected } from "../src/file-review-scope.ts";
+import { FILE_REVIEW_ENTRY_TYPE, FILE_REVIEW_THRESHOLD, normalizeReviewPath, type FileReviewListScope, type FileSnapshot } from "../src/file-review.ts";
+import { registerLargeCommand } from "./large-command.ts";
 import type { ActiveRole } from "./runtime-state.ts";
-import { parseReviewTarget, readReviewPage, verifyNativeRead, FILE_REVIEW_READ_MAX_LINES } from "./file-review-read.ts";
+import { parseReviewTarget, readReviewPage, FILE_REVIEW_READ_MAX_LINES } from "./file-review-read.ts";
+import { branchEntryIds, createFileReviewSession, type ReviewSession } from "./file-review-session.ts";
+import { createFileReviewObserver, incrementalNotice, STRUCTURE_REVIEW_GUIDANCE } from "./file-review-observer.ts";
 
 const DEFAULT_LIST_FILES = 10;
 const MAX_LIST_FILES = 50;
 
-function branchEntryIds(ctx: ExtensionContext) {
-  return ctx.sessionManager.getBranch().map((entry) => entry.id);
-}
-
-function branchIdsContinue(currentIds: readonly string[], previousIds: readonly string[]) {
-  return previousIds.length <= currentIds.length
-    && previousIds.every((entryId, index) => currentIds[index] === entryId);
-}
-
-function branchContinuesFrom(ctx: ExtensionContext, previousIds: readonly string[]) {
-  return branchIdsContinue(branchEntryIds(ctx), previousIds);
-}
-
-type ReviewDiagnostic = { code: string; path: string; message: string };
-type ReviewSession = {
-  generation: number;
-  projectRoot: string;
-  sessionId: string;
-  branchIds: string[];
-  inventory: Map<string, FileSnapshot>;
-  errors: ReviewDiagnostic[];
-  scanErrors: FileScanError[];
-  fileReviewState: StateReadResult;
-  readCoverage: Map<string, FileCoverage>;
-  reviewRevision: number;
-  scanScope: FileReviewScanScope;
-  excluded: FileReviewExclusion[];
-  incremental: IncrementalReviewState;
-};
 type ReviewDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
   canReview: () => boolean;
@@ -111,288 +47,10 @@ function success(message: string, details: Record<string, unknown>) {
   return { content: content(message), details: { ok: true, ...details } };
 }
 
-function persistedState(session: ReviewSession): PersistedFileReviewState {
-  return {
-    schemaVersion: 1,
-    policyVersion: FILE_REVIEW_POLICY_VERSION,
-    projectRoot: session.projectRoot,
-    sessionId: session.sessionId,
-    decisions: session.fileReviewState.ok ? session.fileReviewState.value.decisions : [],
-  };
-}
-
-function emptyFileReviewState(projectRoot: string, sessionId: string): StateReadResult {
-  return {
-    ok: true,
-    value: {
-      schemaVersion: 1,
-      policyVersion: FILE_REVIEW_POLICY_VERSION,
-      projectRoot,
-      sessionId,
-      decisions: [],
-    },
-  };
-}
-
 export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependencies) {
-  let session: ReviewSession | undefined;
-  let generation = 0;
-
-  function candidateQueue(current = session) {
-    if (!current) return undefined;
-    const scan: FileScanResult = {
-      ok: true,
-      projectRoot: current.projectRoot,
-      files: [...current.inventory.values()],
-      errors: [...current.scanErrors],
-    };
-    const queue = buildReviewCandidateQueue(scan, current.fileReviewState);
-    refreshIncrementalReviewCandidates(current.incremental, queue, FILE_REVIEW_POLICY_VERSION);
-    return queue;
-  }
-
-  function candidateErrorDiagnostics(errors: readonly ReviewCandidateQueueError[]): ReviewDiagnostic[] {
-    return errors.map((error) => ({
-      code: error.code,
-      path: "cause" in error ? error.cause.path : "diagnostics" in error ? error.diagnostics[0]?.path ?? "." : ".",
-      message: error.message,
-    }));
-  }
-
-  function pending(current = session) {
-    return candidateQueue(current)?.structuralCandidates ?? [];
-  }
-
-  function unnotifiedCandidates(current: ReviewSession, queue: ReturnType<typeof candidateQueue>) {
-    return unnotifiedIncrementalReviewCandidates(current.incremental, Boolean(queue?.structuralConfirmed));
-  }
-
-  function formatIncrementalCandidate(candidate: IncrementalReviewCandidate) {
-    return `[结构] ${candidate.file.path} · ${candidate.file.lineCount} 行 · version ${candidate.file.fingerprint}`;
-  }
-
-  function incrementalNotice(candidates: readonly IncrementalReviewCandidate[]) {
-    if (candidates.length === 0) return undefined;
-    return `[pi-init 增量审阅候选]\n${candidates.map(formatIncrementalCandidate).join("\n")}\n${STRUCTURE_REVIEW_GUIDANCE}`;
-  }
-
-  function markNotified(current: ReviewSession, candidates: readonly IncrementalReviewCandidate[]) {
-    markIncrementalReviewNotified(current.incremental, candidates);
-  }
-
-  function persist(sessionToSave: ReviewSession, previous: PersistedFileReviewState) {
-    try {
-      pi.appendEntry(FILE_REVIEW_ENTRY_TYPE, createFileReviewJournalEntry(previous, persistedState(sessionToSave), sessionToSave.reviewRevision + 1));
-      return { ok: true as const };
-    } catch (error) {
-      return {
-        ok: false as const,
-        code: "PERSIST_FAILED",
-        message: normalizeFileReviewError(error),
-      };
-    }
-  }
-
-  async function scanCurrent(
-    ctx: ExtensionContext,
-    forcePaths: readonly string[] = [],
-    forceAll = false,
-    requestedScope?: FileReviewScanScope,
-  ): Promise<{ ok: true; added: FileSnapshot[] } | { ok: false; code: string; message: string; added: FileSnapshot[] }> {
-    const current = session;
-    if (!current || current.generation !== generation) {
-      return { ok: false, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描", added: [] };
-    }
-    const previousFiles = [...current.inventory.values()];
-    const branchIds = branchEntryIds(ctx);
-    if (!branchIdsContinue(branchIds, current.branchIds)) {
-      return { ok: false, code: "STALE_SESSION", message: "当前 session branch 已变化，扫描结果未应用", added: [] };
-    }
-    const before = new Set(pending(current).map((file) => pathKey(file.path, file.fingerprint)));
-    const scanScope = requestedScope ?? current.scanScope;
-    const result = await scanProjectFiles(current.projectRoot, { previous: previousFiles, forcePaths, forceAll, ...scanScope });
-    if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
-      || !branchContinuesFrom(ctx, branchIds) || !branchContinuesFrom(ctx, current.branchIds)) {
-      return { ok: false, code: "STALE_SESSION", message: "扫描期间 Pi session 已变化，结果未应用", added: [] };
-    }
-    if (!result.ok) {
-      current.errors = [result.error];
-      current.scanErrors = [result.error];
-      return { ok: false, code: result.error.code, message: result.error.message, added: [] };
-    }
-
-    if (requestedScope && JSON.stringify(requestedScope) !== JSON.stringify(current.scanScope)) current.readCoverage.clear();
-    current.scanScope = scanScope;
-    current.excluded = result.excluded ?? [];
-    const next = new Map([...current.inventory].filter(([path]) => reviewPathSelected(path, scanScope)));
-    if (result.errors.length === 0) next.clear();
-    for (const file of result.files) {
-      const previous = current.inventory.get(file.path);
-      if (previous && previous.fingerprint !== file.fingerprint) current.readCoverage.delete(file.path);
-      next.set(file.path, file);
-    }
-    current.inventory = next;
-    current.errors = result.errors;
-    current.scanErrors = result.errors;
-    observeIncrementalReviewFiles(current.incremental, result.files, result.errors.length === 0);
-    const added = pending(current).filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
-    return result.errors.length === 0
-      ? { ok: true, added }
-      : {
-        ok: false, code: "PARTIAL_SCAN",
-        message: `${result.errors.length} 个路径无法扫描：\n${result.errors.slice(0, 3)
-          .map((error) => `${error.path || "."} [${error.code}] ${error.message}`).join("\n")}${result.errors.length > 3 ? `\n另有 ${result.errors.length - 3} 个错误，可通过 /large 查看。` : ""}`,
-        added,
-      };
-  }
-
-  async function restore(ctx: ExtensionContext, preserveScope = false) {
-    const thisGeneration = ++generation;
-    const scanScope = preserveScope && session?.sessionId === ctx.sessionManager.getSessionId() ? session.scanScope : {};
-    session = undefined;
-    const sessionId = ctx.sessionManager.getSessionId();
-    const branchIds = branchEntryIds(ctx);
-    const scan = await scanProjectFiles(ctx.cwd, scanScope);
-    if (thisGeneration !== generation || ctx.sessionManager.getSessionId() !== sessionId
-      || !branchContinuesFrom(ctx, branchIds)) return;
-    if (!scan.ok) {
-      session = {
-        generation: thisGeneration,
-        projectRoot: ctx.cwd,
-        sessionId,
-        branchIds,
-        inventory: new Map(),
-        errors: [scan.error],
-        scanErrors: [scan.error],
-        fileReviewState: emptyFileReviewState(ctx.cwd, sessionId),
-        readCoverage: new Map(),
-        reviewRevision: 0, scanScope, excluded: [],
-        incremental: createIncrementalReviewState([], false),
-      };
-      return;
-    }
-
-    const branch = ctx.sessionManager.getBranch();
-    const journal = restoreFileReviewJournal(branch.filter(item => item.type === "custom" && item.customType === FILE_REVIEW_ENTRY_TYPE)
-      .map(item => item.type === "custom" ? item.data : undefined), scan.projectRoot, sessionId);
-    const fileReviewState = journal.state;
-    session = {
-      generation: thisGeneration,
-      projectRoot: scan.projectRoot,
-      sessionId,
-      branchIds,
-      inventory: new Map(scan.files.map((file) => [file.path, file])),
-      fileReviewState,
-      errors: [
-        ...scan.errors,
-        ...(!fileReviewState.ok ? [{ code: fileReviewState.code, path: ".", message: fileReviewState.message }] : []),
-      ],
-      scanErrors: scan.errors,
-      readCoverage: new Map(),
-      reviewRevision: journal.revision, scanScope, excluded: scan.excluded ?? [],
-      incremental: createIncrementalReviewState(scan.files, scan.errors.length === 0),
-    };
-  }
-
-  async function refreshSpecificFile(ctx: ExtensionContext, pathInput: string) {
-    const current = session;
-    if (!current || current.generation !== generation) {
-      return { ok: false as const, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描", added: [] as FileSnapshot[] };
-    }
-    const branchIds = branchEntryIds(ctx);
-    if (!branchIdsContinue(branchIds, current.branchIds)) {
-      return { ok: false as const, code: "STALE_SESSION", message: "当前 session branch 已变化，检查结果未应用", added: [] as FileSnapshot[] };
-    }
-    const inspected = await inspectProjectFile(current.projectRoot, pathInput);
-    if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
-      || !branchContinuesFrom(ctx, branchIds) || !branchContinuesFrom(ctx, current.branchIds)) {
-      return { ok: false as const, code: "STALE_SESSION", message: "检查期间 Pi session 已变化，结果未应用", added: [] as FileSnapshot[] };
-    }
-    if (!inspected.ok) {
-      current.errors = [...current.errors.filter((error) => error.path !== inspected.error.path), inspected.error];
-      current.scanErrors = [...current.scanErrors.filter((error) => error.path !== inspected.error.path), inspected.error];
-      return { ok: false as const, code: inspected.error.code, message: inspected.error.message, added: [] as FileSnapshot[] };
-    }
-    const before = new Set(pending().map((file) => pathKey(file.path, file.fingerprint)));
-    if (reviewPathSelected(inspected.file.path, current.scanScope)) applyFileSnapshot(current, inspected.file);
-    const added = pending().filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
-    return { ok: true as const, added, file: inspected.file };
-  }
-
-  async function handleReadResult(
-    event: Extract<ToolResultEvent, { toolName: "read" }>,
-    ctx: ExtensionContext,
-  ): Promise<ToolResultEventResult | undefined> {
-    if (event.isError || !session || typeof event.input.path !== "string") return undefined;
-    if (!normalizeReviewPath(session.projectRoot, event.input.path).ok) return undefined;
-    const refreshed = await refreshSpecificFile(ctx, event.input.path);
-    if (!refreshed.ok) {
-      return appendToolNotice(event, `[pi-init 大文件审阅] 文件读取状态未确认 ${refreshed.code}：${refreshed.message}`);
-    }
-    const current = refreshed.file;
-    const truncation = event.details?.truncation;
-    const start = Number.isInteger(event.input.offset) && Number(event.input.offset) > 0 ? Number(event.input.offset) : 1;
-    const requestedLimit = Number.isInteger(event.input.limit) && Number(event.input.limit) > 0
-      ? Number(event.input.limit)
-      : truncation?.maxLines ?? 2000;
-    const outputLines = truncation?.outputLines ?? Math.min(requestedLimit, current.lineCount - start + 1);
-    const partialLines = truncation?.lastLinePartial ? 1 : 0;
-    const currentSession = session;
-    if (!currentSession) return undefined;
-    const end = Math.min(current.lineCount, start + outputLines - partialLines - 1);
-    if (current.lineCount > FILE_REVIEW_THRESHOLD) {
-      const returnedText = event.content.filter(part => part.type === "text").map(part => part.text).join("\n");
-      const verified = await verifyNativeRead(currentSession.projectRoot, current, start, end, returnedText);
-      if (session !== currentSession) return undefined;
-      if (!verified.ok) return appendToolNotice(event, `[pi-init 大文件审阅] ${verified.code}：${verified.message}`);
-    }
-    mergeCoverage(currentSession.readCoverage, current, start, end);
-    const notices = unnotifiedCandidates(currentSession, candidateQueue(currentSession));
-    const notice = incrementalNotice(notices);
-    if (!notice) return undefined;
-    const result = appendToolNotice(event, notice);
-    markNotified(currentSession, notices);
-    return result;
-  }
-
-  async function handleToolResult(event: ToolResultEvent, ctx: ExtensionContext) {
-    if (isReadToolResult(event)) return handleReadResult(event, ctx);
-    const isMutationOrShell = isEditToolResult(event) || isWriteToolResult(event)
-      || isBashToolResult(event) || isPowerShellToolResult(event);
-    if (!isMutationOrShell || !session) return undefined;
-
-    const isDirectFileTool = isEditToolResult(event) || isWriteToolResult(event);
-    if (isDirectFileTool && typeof event.input.path === "string"
-      && !normalizeReviewPath(session.projectRoot, event.input.path).ok) return undefined;
-    const result = isDirectFileTool && typeof event.input.path === "string"
-      ? await refreshSpecificFile(ctx, event.input.path)
-      : await scanCurrent(ctx, [], true);
-    if (!result.ok && result.code !== "PARTIAL_SCAN") {
-      return appendToolNotice(event, `[pi-init 大文件审阅] 扫描失败 ${result.code}：${result.message}；状态未标记为已审。`);
-    }
-    const notices: string[] = [];
-    if (!result.ok) notices.push(`[pi-init 大文件审阅] 扫描不完整：${result.message}；候选列表可能不完整。`);
-    const current = session;
-    const queue = current ? candidateQueue(current) : undefined;
-    const incrementalCandidates = current ? unnotifiedCandidates(current, queue) : [];
-    const incremental = incrementalNotice(incrementalCandidates);
-    if (incremental) notices.push(incremental);
-    if (notices.length === 0) return undefined;
-    const output = appendToolNotice(event, notices.join("\n\n"));
-    if (current && incrementalCandidates.length > 0) markNotified(current, incrementalCandidates);
-    return output;
-  }
-
-  function appendToolNotice(event: ToolResultEvent, notice: string) {
-    const nextContent = [...event.content, { type: "text" as const, text: notice }];
-    return event.structuredContent === undefined
-      ? { content: nextContent }
-      : { content: nextContent, structuredContent: event.structuredContent };
-  }
-
-  function completeReadEvidence(file: FileSnapshot) {
-    return hasCompleteCoverage(session?.readCoverage.get(file.path), file);
-  }
+  const sessions = createFileReviewSession(entry => pi.appendEntry(FILE_REVIEW_ENTRY_TYPE, entry));
+  const { candidateQueue, pending, scanCurrent, restore, unnotifiedCandidates, markNotified, applyFileSnapshot, completeReadEvidence } = sessions;
+  const handleToolResult = createFileReviewObserver(sessions);
 
   function hasUnsupportedReviewKind(input: Record<string, unknown>) {
     return input.reviewKind !== undefined && input.reviewKind !== "structure";
@@ -432,7 +90,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     if (!current.fileReviewState.ok && current.fileReviewState.code !== "POLICY_MISMATCH") {
       return failure(current.fileReviewState.code, `结构审阅状态无法确认：${current.fileReviewState.message}`);
     }
-    const file = session?.inventory.get(normalized.path);
+    const file = sessions.getState()?.inventory.get(normalized.path);
     if (!file) return failure("FILE_NOT_FOUND", "文件不存在或不在当前项目的审阅范围内。");
     if (file.lineCount <= FILE_REVIEW_THRESHOLD) return failure("BELOW_THRESHOLD", "该文件当前不超过审阅阈值。");
     if (file.fingerprint !== target.fingerprint) return failure("STALE_VERSION", "文件内容已变化；请读取最新版本并重新审阅。");
@@ -441,12 +99,8 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     )) return failure("ALREADY_REVIEWED", "该内容版本已经审阅；只有内容变化后才需要重新提交结论。");
     if (!completeReadEvidence(file)) return failure("FILE_NOT_FULLY_READ", "尚未通过 Pi read 或 file_review(action=read) 读取该版本的全部原文行；分页读全后再提交审阅结论。");
 
-    const next = recordFileReview(persistedState(current), file, conclusion, rationale);
-    const saved = persist({ ...current, fileReviewState: { ok: true, value: next } }, persistedState(current));
+    const saved = sessions.recordReview(current, file, conclusion, rationale);
     if (!saved.ok) return failure(saved.code, `审阅结果未保存：${saved.message}`, true);
-    current.fileReviewState = { ok: true, value: next };
-    current.reviewRevision += 1;
-    current.readCoverage.delete(file.path);
     return success(`${file.path} 已记录为 ${conclusion === "keep" ? "保留" : "建议拆分"}；该结果只适用于当前内容版本。`, {
       reviewKind: "structure",
       path: file.path,
@@ -457,26 +111,15 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     });
   }
 
-  function applyFileSnapshot(current: ReviewSession, file: FileSnapshot) {
-    const previous = current.inventory.get(file.path);
-    if (previous && previous.fingerprint !== file.fingerprint) current.readCoverage.delete(file.path);
-    current.inventory.set(file.path, file);
-    observeIncrementalReviewFiles(current.incremental, [file], false);
-    current.errors = current.errors.filter((error) => error.path !== file.path);
-    current.scanErrors = current.scanErrors.filter((error) => error.path !== file.path);
-  }
-
   async function readStructurePage(input: Record<string, unknown>, ctx: ExtensionContext, current: ReviewSession, signal?: AbortSignal) {
     if (signal?.aborted) return failure("READ_ABORTED", "读取已取消，未读取或登记覆盖。");
     const branchIds = branchEntryIds(ctx);
-    if (current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
-      || !branchIdsContinue(branchIds, current.branchIds)) {
+    if (!sessions.isCurrent(current, ctx, branchIds)) {
       return failure("STALE_SESSION", "当前 session 或 branch 已变化，未读取或登记覆盖。");
     }
     const page = await readReviewPage(current.projectRoot, input);
     if (signal?.aborted) return failure("READ_ABORTED", "读取已取消，原文与覆盖均未返回。");
-    if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
-      || !branchContinuesFrom(ctx, branchIds) || !branchContinuesFrom(ctx, current.branchIds)) {
+    if (!sessions.isCurrent(current, ctx, branchIds)) {
       return failure("STALE_SESSION", "读取期间 session 或 branch 已变化，原文与覆盖均未返回。");
     }
     if (!deps.canReview() || deps.getActiveRole(ctx)?.role === "architect") {
@@ -485,7 +128,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     if (!page.ok) return failure(page.code, page.message);
     if (!reviewPathSelected(page.file.path, current.scanScope)) return failure("OUTSIDE_SCAN_SCOPE", "文件不在当前扫描范围；请用 /large --scope 或 --include-temporary 明确纳入。");
     applyFileSnapshot(current, page.file);
-    mergeCoverage(current.readCoverage, page.file, page.offset, page.endLine);
+    sessions.recordRead(current, page.file, page.offset, page.endLine);
     const pagination = { fingerprint: page.file.fingerprint, totalLines: page.file.lineCount,
       offset: page.offset, endLine: page.endLine, nextOffset: page.nextOffset,
       eof: page.eof, outputBytes: page.outputBytes, byteLimited: page.byteLimited };
@@ -494,7 +137,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   }
 
   async function executeReviewTool(input: Record<string, unknown>, ctx: ExtensionContext, signal?: AbortSignal) {
-    const current = session;
+    const current = sessions.getState();
     if (!current) return failure("SESSION_NOT_READY", "当前 Pi session 尚未完成大文件扫描", true);
     if (!deps.canReview()) {
       return failure("ROLE_RECOVERY_PENDING", "职责恢复或工具安全门尚未解除；请先完成角色确认。");
@@ -561,30 +204,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
 
   registerLargeCommand(pi, {
     scan: (ctx, scope) => scanCurrent(ctx, [], true, scope),
-    getSnapshot: (): LargeReviewSnapshot | undefined => {
-      const current = session;
-      if (!current) return undefined;
-      const files = [...current.inventory.values()]
-        .filter((file) => file.lineCount > FILE_REVIEW_THRESHOLD)
-        .sort((left, right) => left.path.localeCompare(right.path));
-      const queue = candidateQueue(current);
-      const errors = [...current.errors];
-      for (const error of candidateErrorDiagnostics(queue?.errors ?? [])) {
-        if (!errors.some((existing) => existing.code === error.code && existing.path === error.path && existing.message === error.message)) {
-          errors.push(error);
-        }
-      }
-      return {
-        generation: current.generation,
-        sessionId: current.sessionId,
-        files,
-        candidates: queue?.candidates ?? [],
-        structuralConfirmed: queue?.structuralConfirmed ?? false,
-        scanScope: current.scanScope,
-        excluded: current.excluded,
-        errors,
-      };
-    },
+    getSnapshot: sessions.getSnapshot,
     getActiveRole: deps.getActiveRole,
     roleRecoveryPending: deps.roleRecoveryPending,
     canReview: deps.canReview,
@@ -616,10 +236,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   pi.on("session_tree", async (event, ctx) => {
     if (event.oldLeafId !== event.newLeafId) await restore(ctx, true);
   });
-  pi.on("session_shutdown", () => {
-    generation += 1;
-    session = undefined;
-  });
+  pi.on("session_shutdown", sessions.shutdown);
   pi.on("tool_result", handleToolResult);
   pi.on("agent_settled", async (_event, ctx) => {
     const result = await scanCurrent(ctx, [], true);
@@ -637,7 +254,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       const error = queue.structuralError;
       notices.push(`结构候选无法确认${error ? `（${error.code}）：${error.message}` : ""}；不会推断为没有结构候选。`);
     }
-    const current = session;
+    const current = sessions.getState();
     const incrementalCandidates = current ? unnotifiedCandidates(current, queue) : [];
     const incremental = incrementalNotice(incrementalCandidates);
     if (incremental) notices.push(incremental);
@@ -650,9 +267,8 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
   return {
     getPending: pending,
     executeReviewTool,
-    getState: () => session,
+    getState: sessions.getState,
   };
 }
 
 export type FileReviewRuntime = ReturnType<typeof createFileReviewRuntime>;
-const STRUCTURE_REVIEW_GUIDANCE = "行数只标记候选，不等于本次任务必须审阅。明确局部、低风险且不改变职责结构的展示默认值/文案调整，不必仅因行数触发全文件读取或新增结构审阅；候选保持未审。新增职责、跨模块耦合、结构复杂度变化、用户明确要求或验收确需时再审阅，不能借小改动掩盖结构问题。";

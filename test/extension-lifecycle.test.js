@@ -269,9 +269,11 @@ test("init_project 首次使用按需加载脚手架并支持 dryRun", async () 
     const first = await initProject.execute("first", params, undefined, undefined, harness.context);
     const second = await initProject.execute("second", params, undefined, undefined, harness.context);
 
-    assert.equal(first.details.dryRun, true);
-    assert.equal(first.details.projectName, "Lazy Project");
-    assert.deepEqual(second.details.files, first.details.files);
+    assert.equal(first.details.ok, true);
+    assert.equal(second.details.ok, true);
+    assert.equal(first.details.value.dryRun, true);
+    assert.equal(first.details.value.projectName, "Lazy Project");
+    assert.deepEqual(second.details.value.files, first.details.value.files);
     await assert.rejects(readFile(path.join(directory, "AGENTS.md")), /ENOENT/);
   });
 });
