@@ -440,9 +440,6 @@ test("最终报告使用本次明确验收任务而不从 currentTaskId 选择�
   assert.deepEqual(view.progress, { completed: 1, total: 2 });
   assert.deepEqual(view.duration, { kind: "available", milliseconds: 60 });
   const text = formatWorkflowCompletionSummaryText(view);
-  assert.match(text, /目标：最终交付/);
-  assert.match(text, /已完成任务：1\/2/);
-  assert.match(text, /最终结果：已完成/);
   assert.doesNotMatch(text, /task-final|task-later/);
   assert.match(text, /开始时间：[\s\S]*结束时间：[\s\S]*总耗时：60 毫秒（不含暂停）/);
   const details = formatWorkflowCompletionDetailsText(view);
@@ -467,7 +464,6 @@ test("缺失整体时间保留不可用原因且没有完成任务时不捏造�
   const view = createWorkflowCompletionView({ ...state, status: "completed" });
   const text = formatWorkflowCompletionSummaryText(view);
   assert.equal(view.finalTask, undefined);
-  assert.match(text, /工作流完成报告/);
   assert.match(text, /开始时间：不可用[\s\S]*结束时间：不可用[\s\S]*总耗时：不可用/);
   const details = formatWorkflowCompletionDetailsText(view);
   assert.match(details, /内容：待执行/);

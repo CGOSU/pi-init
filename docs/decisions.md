@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-11-11：工作流完成默认报告压缩为摘要
+
+- 决定：默认完成摘要仅呈现目标、最终结果与任务进度、开始/结束时间和有效耗时；仅在验证失败/未执行/未记录、阻塞或未知结果时显示简短计数提醒。目标和结果摘要有界截断；完整任务 ID、逐项验证、实现原因、约束及处理细节保留在展开详情与模型只读依据中。
+- 最终回复若没有包含记录的计时项，确定性兜底只补一条时间摘要，不重发整份报告、不触发新模型回合，也不重跑任务。结果未知和禁止重放等安全提醒仍保留。
+- 原因：默认完成报告把约束及逐项任务证据直接铺开，用户确认压缩格式后，保留关键结果、总进度、时间和例外提醒即可快速判断，其余信息仍可展开审计。
+- 验证：`pnpm test test/workflow-status-view.test.js test/workflow-delivery.test.js test/workflow-report.test.js test/context-system-preservation.test.js test/workflow-handoff.test.js test/workflow-timing.test.js test/workflow-runtime-exports.test.js` 60 项通过；`pnpm run typecheck` 通过。未做真实 Pi/TUI 人工验收。
+
 ### 2026-11-11：工作流运行耗时排除暂停区间并报告最终时间
 
 - 决定：新工作流从创建起持久化 `pausedMilliseconds`；每次从 paused 状态迁移时将至今暂停区间累加，状态栏与根完成报告共享“开始到结束减已知暂停时间”的运行耗时。最终简报必须包含开始时间、结束时间和总耗时；模型回复漏掉这些记录项时，只补发时间，不重发整份已完成报告或重跑任务。

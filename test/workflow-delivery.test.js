@@ -3,7 +3,7 @@ import test from "node:test";
 import { createWorkflowDelivery } from "../extensions/workflow-delivery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
-import { formatWorkflowCompletionText, formatWorkflowCompletionTimingLines } from "../extensions/workflow-completion-renderer.ts";
+import { formatWorkflowCompletionSummaryText, formatWorkflowCompletionText, formatWorkflowCompletionTimingLines } from "../extensions/workflow-completion-renderer.ts";
 import { hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 
 function fixture(overrides = {}) {
@@ -44,10 +44,30 @@ test("root-only prepare and immutable whole-workflow evidence", () => {
       const [message, options] = f.sent[0];
       assert.equal(message.display, true);
       assert.deepEqual(options, { triggerTurn: false });
-      for (const text of ["Whole goal", "No unrelated edits", "Result 1", "Result 2", "Reason 1", "pass 1", "failure 1", "skipped 2"]) assert.ok(message.content.includes(text));
+      assert.equal(message.content, formatWorkflowCompletionSummaryText(createWorkflowCompletionView(f.state.workflowState)));
+      assert.match(message.content, /2项验证失败/);
+      assert.match(message.content, /2项验证未执行/);
     }
     assert.deepEqual(f.state.workflowState, before);
   }
+});
+
+test("默认工作流摘要有界，展开详情保留完整目标和逐项记录", () => {
+  const f = fixture();
+  const longGoal = "整体目标内容".repeat(20);
+  const longResult = "最终结果内容".repeat(40);
+  f.state.workflowState.plan.summary = longGoal;
+  f.state.workflowState.tasks[1].completionSummary = longResult;
+  const view = createWorkflowCompletionView(f.state.workflowState);
+  const summary = formatWorkflowCompletionSummaryText(view);
+  const lines = summary.split("\n");
+  assert.equal(lines.length, 4);
+  assert.ok(Array.from(lines[0]).length <= 80 + "工作流完成：".length + 1);
+  assert.ok(Array.from(lines[1]).length <= 160 + "结果： · 任务 2/2".length + 1);
+  assert.match(summary, /需注意：2项验证失败；2项验证未执行/);
+  const details = formatWorkflowCompletionText(view);
+  assert.ok(details.includes(longGoal));
+  assert.ok(details.includes(longResult));
 });
 
 test("context preserves all users/system and whole completing call group plus suffix", () => {
@@ -79,7 +99,7 @@ test("completion preserves assistant reports and supplements omitted timing exac
     const f = fixture();
     f.controller.prepare("complete");
     const event = final(kind === "empty" ? "  " : kind === "timed"
-      ? formatWorkflowCompletionText(createWorkflowCompletionView(f.state.workflowState)) : "Whole report");
+      ? formatWorkflowCompletionSummaryText(createWorkflowCompletionView(f.state.workflowState)) : "Whole report");
     if (kind === "error") event.message.stopReason = "error";
     if (kind === "tool") event.message.content.push({ type: "toolCall", id: "x" });
     f.emit("message_end", event);
@@ -90,7 +110,7 @@ test("completion preserves assistant reports and supplements omitted timing exac
     assert.equal(f.sent.length, kind === "timed" ? 0 : 1);
     if (kind === "normal") {
       const timing = formatWorkflowCompletionTimingLines(createWorkflowCompletionView(f.state.workflowState));
-      assert.equal(f.sent[0][0].content, timing.join("\n"));
+      for (const line of timing) assert.ok(f.sent[0][0].content.includes(line));
       assert.deepEqual(f.sent[0][1], { triggerTurn: false });
     }
   }
@@ -103,7 +123,7 @@ test("timing supplement uses recorded timestamps and active duration, not model 
   f.controller.prepare("complete");
   f.emit("message_end", final("All done. Total time: 30 seconds."));
   await f.emit("agent_settled");
-  assert.equal(f.sent[0][0].content, timing.join("\n"));
+  for (const line of timing) assert.ok(f.sent[0][0].content.includes(line));
   assert.match(f.sent[0][0].content, /总耗时：20 秒（不含暂停）/);
   assert.doesNotMatch(f.sent[0][0].content, /Result 1/);
 });
@@ -155,7 +175,7 @@ test("fallback dispatch rejection is observed once without false success or auto
   assert.equal(attempts, 1);
   assert.ok(events.includes("workflow.delivery.fallback_failed"));
   assert.equal(events.includes("workflow.delivery.fallback_delivered"), false);
-  assert.match(f.notifications[0], /Result 1/);
+  assert.match(f.notifications[0], /Result 2/);
 });
 
 test("flat cancelled work and unknown effects remain visible without replay", async () => {
@@ -164,21 +184,26 @@ test("flat cancelled work and unknown effects remain visible without replay", as
     blockReason: "Cancelled: Needs review", outcomeUnknown: true });
   f.controller.prepare("complete");
   await f.emit("agent_settled");
-  assert.match(f.sent[0][0].content, /Cancelled/);
-  assert.match(f.sent[0][0].content, /Needs review/);
-  assert.match(f.sent[0][0].content, /副作用结果未知/);
+  assert.match(f.sent[0][0].content, /1项阻塞记录待核对/);
+  assert.match(f.sent[0][0].content, /1项任务结果未知，禁止重放/);
+  const details = formatWorkflowCompletionText(createWorkflowCompletionView(f.state.workflowState));
+  assert.match(details, /Cancelled/);
+  assert.match(details, /Needs review/);
+  assert.match(details, /副作用结果未知/);
 });
 
 
-test("model basis and fallback share the immutable completion renderer", async () => {
+test("model basis preserves full immutable evidence while fallback uses its concise projection", async () => {
   const f = fixture();
-  const report = formatWorkflowCompletionText(createWorkflowCompletionView(f.state.workflowState));
+  const view = createWorkflowCompletionView(f.state.workflowState);
+  const report = formatWorkflowCompletionText(view);
+  const summary = formatWorkflowCompletionSummaryText(view);
   f.controller.prepare("complete");
   f.state.workflowState.tasks[0].completionSummary = "Later mutation";
   const basis = f.emit("context_with_system", { messages: [] }).messages.at(-1).content;
   assert.ok(basis.endsWith(report));
   await f.emit("agent_settled");
-  assert.equal(f.sent[0][0].content, report);
+  assert.equal(f.sent[0][0].content, summary);
   assert.doesNotMatch(report, /Later mutation/);
   assert.match(report, /未记录的验证、提交及推送状态均未知/);
   assert.match(report, /不会自动续跑或重放/);

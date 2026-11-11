@@ -74,23 +74,44 @@ export function formatWorkflowCompletionTimingLines(view: WorkflowCompletionView
   ];
 }
 
-/** Timing is part of the user-facing completion contract, not only expanded details. */
+function summaryText(text: string, limit: number) {
+  const characters = Array.from(text.replace(/\s+/gu, " ").trim());
+  return characters.length > limit ? characters.slice(0, limit).join("") + "…" : characters.join("");
+}
+
+function completionAttention(view: WorkflowCompletionView) {
+  const counts = [
+    ["项验证失败", view.tasks.reduce((total, task) => total + task.verificationFailures.length, 0)],
+    ["项验证未执行", view.tasks.reduce((total, task) => total + task.verificationPending.length, 0)],
+    ["项历史验证未判定", view.tasks.reduce((total, task) => total + task.verificationUnclassified.length, 0)],
+    ["项任务未记录验证", view.tasks.filter(task => !task.verification.length).length],
+    ["项阻塞记录待核对", view.tasks.filter(task => task.blockReason).length],
+    ["项任务结果未知，禁止重放", view.tasks.filter(task => task.outcomeUnknown).length],
+  ] as const;
+  const warnings = counts.filter(([, count]) => count > 0).map(([label, count]) => `${count}${label}`);
+  return warnings.length ? `需注意：${warnings.join("；")}（详见展开详情）` : undefined;
+}
+
+/** Default completion is bounded; detailed evidence remains available in the expanded report. */
 export function formatWorkflowCompletionSummaryText(view: WorkflowCompletionView) {
   const finalResult = view.finalTask?.completionSummary ?? view.finalTask?.task;
+  const attention = completionAttention(view);
   return [
-    "工作流完成报告",
-    `目标：${view.summary}`,
-    `已完成任务：${view.progress.completed}/${view.progress.total}`,
-    ...(finalResult ? [`最终结果：${finalResult}`] : []),
-    ...view.tasks.flatMap(task => verificationWarnings(task).map(warning => warning + "（" + task.task + "）")),
-    ...formatWorkflowCompletionTimingLines(view),
+    `工作流完成：${summaryText(view.summary, 80)}`,
+    `结果：${finalResult ? summaryText(finalResult, 160) : "未记录最终结果"} · 任务 ${view.progress.completed}/${view.progress.total}`,
+    `时间：${formatWorkflowCompletionTimingLines(view).join(" · ")}`,
+    ...(attention ? [attention] : []),
   ].join("\n");
 }
 
 /** Shared recorded basis for model reports, expanded inspection, and deterministic delivery. */
 export function formatWorkflowCompletionText(view: WorkflowCompletionView) {
   return [
-    formatWorkflowCompletionSummaryText(view),
+    "工作流完成报告",
+    `目标：${view.summary}`,
+    `已完成任务：${view.progress.completed}/${view.progress.total}`,
+    ...(view.finalTask ? [`最终结果：${view.finalTask.completionSummary ?? view.finalTask.task}`] : []),
+    ...formatWorkflowCompletionTimingLines(view),
     `状态：${view.status}`,
     `约束与限制：${view.constraints.join("；") || "未记录额外约束"}`,
     "",
@@ -148,15 +169,13 @@ export function renderWorkflowCompletion(view: WorkflowCompletionView, theme: Re
       theme.fg("text", formatWorkflowCompletionDetailsText(view)),
     ].join("\n"), 0, 0);
   }
-  const summaryLines = formatWorkflowCompletionSummaryText(view).split("\n").slice(1);
+  const [heading, ...summaryLines] = formatWorkflowCompletionSummaryText(view).split("\n");
   return new Text([
-    section(theme, "◆ 工作流完成报告"),
-    ...summaryLines.map((line) => line.startsWith("验证未通过：")
-      ? theme.fg("error", line)
-      : line.startsWith("结果：")
-        ? theme.fg("success", line)
-        : line.startsWith("已完成任务：")
-          ? theme.fg("muted", line)
-          : theme.fg("text", line)),
+    section(theme, "◆ " + heading),
+    ...summaryLines.map((line) => line.startsWith("需注意：")
+      ? theme.fg("warning", line)
+      : line.startsWith("时间：")
+        ? theme.fg("muted", line)
+        : theme.fg("text", line)),
   ].join("\n"), 0, 0);
 }

@@ -111,7 +111,6 @@ test("queued handoff 可在匹配的结果调用中补记开始，重复或缺�
       harness.context.ui.theme,
       { isError: false },
     ).render(300).join("\n");
-    assert.match(completionTui, /工作流完成报告/);
     assert.match(completionTui, /第一项完成/);
     assert.equal(completed.details.tasks[0].executionStartedAt !== undefined, true);
     assert.equal(completed.details.recoveryGeneration, identity.recoveryGeneration + 1);
