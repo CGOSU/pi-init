@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createExtensionHarness, emitExtensionEvent, callToolCall } from "./support/extension-harness.js";
+import { withTempDirectory } from "./support/temp-directory.js";
 import {
   ARCHITECT_ALLOWED_ACTIONS_TEXT,
   ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS,
@@ -10,10 +11,11 @@ import {
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
-function architectHarness() {
+function architectHarness(options = {}) {
   return createExtensionHarness([], {
     model: architect,
     availableModels: [architect, developer],
+    ...options,
   });
 }
 
@@ -21,7 +23,7 @@ function assertArchitectBlocked(result, toolName) {
   assert.equal(result?.block, true, toolName);
 }
 
-test("architect 仅允许职责切换与扁平队列规划", async () => {
+test("architect 允许职责切换与扁平队列规划但拒绝执行动作", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
   await harness.tools.find((tool) => tool.name === "switch_role").execute(
@@ -40,21 +42,31 @@ test("architect 仅允许职责切换与扁平队列规划", async () => {
   assertArchitectBlocked(await callToolCall(harness, "task_workflow", null), "task_workflow:null-input");
 });
 
-test("architect 对取证、执行、MCP、协作和未知工具全部 fail-closed", async () => {
+test("architect 只允许明确的本地只读工具，对执行、MCP、协作和未知工具 fail-closed", async () => {
   const harness = architectHarness();
   await emitExtensionEvent(harness, "session_start");
   await harness.tools.find((tool) => tool.name === "switch_role").execute(
     "architect", { role: "architect" }, undefined, undefined, harness.context,
   );
 
+  for (const [toolName, input] of [
+    ["read", { path: "src/roles.ts" }],
+    ["grep", { pattern: "role", path: "src" }],
+    ["find", { pattern: "*.ts", path: "src" }],
+    ["ls", { path: "src" }],
+    ["ffgrep", { pattern: "role", path: "src/" }],
+    ["fffind", { pattern: "role", path: "src/" }],
+    ["graph_locate", { query: "role configuration", scope: "src" }],
+    ["graph_inspect", { id: "known-local-symbol" }],
+    ["obs_recall", { id: "known-observation" }],
+  ]) {
+    assert.equal(await callToolCall(harness, toolName, input), undefined, toolName);
+  }
+
   for (const toolName of [
-    "read",
-    "grep",
-    "find",
-    "ffgrep",
-    "fffind",
     "browser",
-    "ls",
+    "codemode",
+    "file_review",
     "shell",
     "bash",
     "powershell",
@@ -68,6 +80,9 @@ test("architect 对取证、执行、MCP、协作和未知工具全部 fail-clos
     "subtask",
     "agent_message",
     "future-exploration-tool",
+    "read_file",
+    "mcp__read",
+    "functions.read",
   ]) {
     assertArchitectBlocked(await callToolCall(harness, toolName), toolName);
   }
@@ -76,6 +91,31 @@ test("architect 对取证、执行、MCP、协作和未知工具全部 fail-clos
     await callToolCall(harness, "browser", { command: "open https://example.com" }),
     "browser-command",
   );
+  assertArchitectBlocked(
+    await callToolCall(harness, "codemode", { code: 'await tools.read({ path: "src/roles.ts" })' }),
+    "codemode-read-wrapper",
+  );
+  assertArchitectBlocked(
+    await callToolCall(harness, "file_review", { action: "complete", path: "src/roles.ts" }),
+    "review-registration",
+  );
+});
+
+test("architect 本地只读白名单不绕过用户停止，恢复后才可继续规划", async () => {
+  await withTempDirectory(async (cwd) => {
+    const harness = architectHarness({ cwd, trusted: true });
+    await emitExtensionEvent(harness, "session_start");
+    await harness.tools.find((tool) => tool.name === "switch_role").execute(
+      "architect", { role: "architect" }, undefined, undefined, harness.context,
+    );
+    await emitExtensionEvent(harness, "input", { source: "interactive", text: "停止工作" });
+    assert.equal(await callToolCall(harness, "read", { path: "src/roles.ts" }), undefined);
+    assertArchitectBlocked(await callToolCall(harness, "task_workflow", { action: "plan" }), "stopped-plan");
+    assertArchitectBlocked(await callToolCall(harness, "graph_locate", { query: "roles" }), "stopped-graph");
+    await emitExtensionEvent(harness, "input", { source: "interactive", text: "继续" });
+    assert.equal(await callToolCall(harness, "task_workflow", { action: "plan" }), undefined);
+    assert.equal(await callToolCall(harness, "graph_locate", { query: "roles" }), undefined);
+  });
 });
 
 test("非 architect 角色和未知角色不触发 architect 守卫", async () => {

@@ -143,7 +143,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return failure("ROLE_RECOVERY_PENDING", "职责恢复或工具安全门尚未解除；请先完成角色确认。");
     }
     if (deps.getActiveRole(ctx)?.role === "architect") {
-      return failure("ARCHITECT_CANNOT_REVIEW", "architect 不读取或审阅代码；请交给 developer-test 或 docs-commit。");
+      return failure("ARCHITECT_CANNOT_REVIEW", "architect 不使用 file_review 执行结构审阅或登记；决策补查可用白名单 read/搜索工具，完整审阅交给 developer-test 或 docs-commit。");
     }
     if (hasUnsupportedReviewKind(input)) {
       return failure("TEST_VALUE_REVIEW_REMOVED", "测试价值审阅已退役；file_review 仅支持结构审阅。");

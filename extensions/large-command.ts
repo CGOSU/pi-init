@@ -101,7 +101,7 @@ function reviewRequest(snapshot: LargeReviewSnapshot, ctx: ExtensionContext, dep
       ? "当前 developer-test 职责与恢复状态已确认；直接开始局部审阅，不重复 switch_role。"
       : "局部审阅先按公共 pi-init-role-routing Skill 确认并切换到 developer-test，再读取源码；若为 manual 模式，停止并请用户执行 /pi-init role developer-test，不要反复调用 switch_role。恢复门未确认时必须先完成角色确认，不得绕过。",
     "完整读取当前文件版本，结合职责和维护边界给出有理由的 keep 或 recommend-split；仅在完整读取后用当前 fingerprint 调用 file_review(action=\"complete\")。行数不是拆分要求。",
-    "同一审阅由 developer-test 连续读取、分析和登记 keep/recommend-split 建议，不为逐文件读取、结论或登记机械换角。跨模块分析本身不是架构决定；仅需冻结公共契约、职责边界等真实设计决定时，按模块汇总已有来源与关键未知，集中交 architect 决策。缺事实由适当执行者补查，不默认重复 docs-commit 调查；architect 不读取源码或调用 file_review。",
+    "同一审阅由 developer-test 连续读取、分析和登记 keep/recommend-split 建议，不为逐文件读取、结论或登记机械换角。跨模块分析本身不是架构决定；仅需冻结公共契约、职责边界等真实设计决定时，按模块汇总已有来源与关键未知，集中交 architect 决策。缺事实由适当执行者补查，不默认重复 docs-commit 调查；architect 可为当前决策用白名单本地只读工具补查，但不调用 file_review 或接管结构审阅登记。",
     "不因任何建议而自动实施；如需实际修改，等待用户提出独立实现请求。",
   ].join("\n");
 }

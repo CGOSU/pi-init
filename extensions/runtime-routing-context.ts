@@ -8,7 +8,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const SECTION_KEY = "pi_init_runtime";
-const CONTINUITY_POLICY = "职责连续性：活动工作流的显式任务角色优先于模型自行判断；无活动任务时优先遵循用户明确指定的任务角色，否则按交付物选择职责。承接切换前已说明且与当前职责匹配的交付物，同一交付物内连续调查、实现和验证，不为重新确认分工往返切角；职责确实不匹配、独立交付物或必要架构决策仍按边界路由。复用上下文中可见且来源版本、范围仍有效的规则和结果，只因切角不整批预读，缺失或变化时定向补读。architect 不执行；权限、身份、恢复、停止与未知副作用守卫始终优先。无工作流的连续性是路由指导，不代表运行时硬绑定。";
 
 type RuntimeRoutingDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
@@ -59,27 +58,27 @@ export function createRuntimeRoutingContext(
   state: ExtensionRuntimeState,
   deps: RuntimeRoutingDependencies,
 ) {
-    const policyRoot = new URL("../skills/pi-init-role-routing/", import.meta.url);
-      const source = readFileSync(new URL("SKILL.md", policyRoot), "utf8");
-      const frontmatterEnd = source.startsWith("---\n") ? source.indexOf("\n---", 4) : -1;
-      const commonPolicy = frontmatterEnd < 0 ? source : source.slice(frontmatterEnd + 4).trim();
-      const rolePolicies = new Map<string, string | undefined>();
-      function rolePolicy(role: string | undefined) {
-        if (!role || !isValidRoleId(role)) return undefined;
-        if (!rolePolicies.has(role)) {
-          try { rolePolicies.set(role, readFileSync(new URL("roles/" + role + ".md", policyRoot), "utf8")); }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            rolePolicies.set(role, undefined);
-          }
-        }
-        return rolePolicies.get(role);
+  const policyRoot = new URL("../skills/pi-init-role-routing/", import.meta.url);
+  const source = readFileSync(new URL("SKILL.md", policyRoot), "utf8");
+  const frontmatterEnd = source.startsWith("---\n") ? source.indexOf("\n---", 4) : -1;
+  const commonPolicy = frontmatterEnd < 0 ? source : source.slice(frontmatterEnd + 4).trim();
+  const rolePolicies = new Map<string, string | undefined>();
+  function rolePolicy(role: string | undefined) {
+    if (!role || !isValidRoleId(role)) return undefined;
+    if (!rolePolicies.has(role)) {
+      try { rolePolicies.set(role, readFileSync(new URL("roles/" + role + ".md", policyRoot), "utf8")); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        rolePolicies.set(role, undefined);
       }
+    }
+    return rolePolicies.get(role);
+  }
   function beforeAgentStart(event: BeforeAgentStartEvent, ctx: ExtensionContext) {
     if (!event.systemPromptOptions?.sections) return;
     const sections = event.systemPromptOptions.sections;
     sections.pi_init_policy = "[pi-init 插件自有规范，已加载，无需重复读取SKILL.md]\n来源：" + fileURLToPath(new URL("SKILL.md", policyRoot))
-      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。\n" + commonPolicy + "\n\n" + CONTINUITY_POLICY;
+      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。\n" + commonPolicy;
     // Keep static policy ahead of dynamic sections; let the host append section deltas.
     // Never replace the full prompt or copy authority into a conversation message.
     delete sections.pi_init_role_policy;

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatWorkflowVerification } from "../src/workflow-verification.ts";
-import { ARCHITECT_ALLOWED_ACTIONS_TEXT } from "./architect-boundary.ts";
+import { ARCHITECT_ALLOWED_ACTIONS_TEXT, ARCHITECT_READ_ONLY_TOOLS_TEXT } from "./architect-boundary.ts";
 import {
   getWorkflowTask,
   markWorkflowTaskOutcomeUnknown,
@@ -18,7 +18,7 @@ import { transitionWorkflowDispatch } from "../src/workflow-orchestrator.ts";
 import { handoffSnapshotPrompt } from "./handoff-snapshot.ts";
 
 const GENERIC_TASK_TOOL_GUIDANCE = "遵循职责与安全边界，只修改当前任务范围。关键需求、事实或权限缺失时用block说明阻塞；普通可逆工程细节自主处理。复用仍有效的调查和验证，如实报告结果，不重放未知副作用。";
-const ARCHITECT_RUNTIME_GUIDANCE = `architect 不直接取证、不执行代码、不连接 MCP；只思考、分析、决策、规划和安排；运行时仅可调用 switch_role，以及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}。已有调查与任务工作记忆可以复用；确需新事实时安排普通 docs-commit 调查任务，不建立正式证据协议。`;
+const ARCHITECT_RUNTIME_GUIDANCE = `architect 负责分析、决策、规划和安排；当前决策需要时仅可用 ${ARCHITECT_READ_ONLY_TOOLS_TEXT} 本地只读补查，另可调用 switch_role 及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}。复用已有调查；独立调查可交 docs-commit。不执行代码、不连接 MCP、不写入、不提交执行任务结果；恢复、停止和未知结果保护仍优先。`;
 
 function taskRoleGuidance(role: string) {
     if (role === "architect") return ARCHITECT_RUNTIME_GUIDANCE;
@@ -31,7 +31,7 @@ function taskRoleGuidance(role: string) {
 
 function taskToolGuidance(role: string) {
   return role === "architect"
-    ? `${ARCHITECT_RUNTIME_GUIDANCE} 不得调用 read、grep、find、ls、ffgrep、fffind、browser、shell、edit、write、init_project、subtask、agent_message、MCP/mcpScript 或任何未知工具。`
+    ? `${ARCHITECT_RUNTIME_GUIDANCE} 不得调用 browser、shell/bash、codemode、file_review、edit/write、init_project、subtask、agent_message、MCP/mcpScript 或任何未知工具。`
     : GENERIC_TASK_TOOL_GUIDANCE;
 }
 
@@ -80,8 +80,8 @@ export function createWorkflowMessages(
       `定位与预估涉及的文件或目录：${task.files.join(", ")}`,
       `验收标准：\n${task.acceptanceCriteria.map((item) => `- ${item}`).join("\n")}`,
       taskRoleGuidance(task.role),
-      "围绕当前可验收交付物连续调查、实现和验证，不按操作步骤反复换角。files通常是定位与预估范围；目标、验收和公共契约不变时，可自主补充必要直接关联的helper、调用方、测试或构建接线，不因文件未列出就阻塞或重规划。明确禁止修改、隔离与权限边界仍须遵守，不借此扩展业务目标；目标、验收、公共契约或硬边界确需改变时才走原重规划与确认流程。",
-      "验证按当前确认验收和风险覆盖相关行为与失败边界；真实指实际执行，不默认真机、人工浏览器或全链路。目标环境决定关键行为时做最小验证；明确安排后续的系统/人工验收记录待办，不扩大当前任务，也不自行降级已有必需验收。未测试不是outcomeUnknown。来源及配置未变时复用有效结果，不因收尾重跑全仓检查；命令和管道须保留被验证程序的真实退出码。",
+      "围绕当前可验收交付物连续调查、实现、验证及必要直接关联说明；已授权的整项 Git 收尾可由同一实现责任人完成，但不得夺取其他显式任务，不按操作步骤反复换角。files通常是定位与预估范围；目标、验收和公共契约不变时，可自主补充必要直接关联的helper、调用方、测试或构建接线，不因文件未列出就阻塞或重规划。明确禁止修改、隔离与权限边界仍须遵守，不借此扩展业务目标；目标、验收、公共契约或硬边界确需改变时才走原重规划与确认流程。",
+      "验证按当前确认验收和风险覆盖相关行为与失败边界；真实指实际执行，不默认真机、人工浏览器或全链路。复杂集成/迁移优先最小代表性贯通链路，尽早验证关键假设再扩展；目标环境决定关键行为时做最小验证，不自动触发生产操作或真机全链路。明确安排后续的系统/人工验收记录待办，不扩大当前任务，也不自行降级已有必需验收。未测试不是outcomeUnknown。来源及配置未变时复用有效结果，不因收尾重跑全仓检查；命令和管道须保留被验证程序的真实退出码。",
       note ? `调度提示：${note}` : "",
       taskToolGuidance(task.role),
 

@@ -9,6 +9,7 @@ import type { createRoleHandoff } from "./role-handoff.ts";
 import type { createWorkflowUserControl } from "./workflow-user-control.ts";
 import type { createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
 import { nextWorkflowAction } from "./workflow-action-policy.ts";
+import { ARCHITECT_READ_ONLY_TOOLS_TEXT } from "./architect-boundary.ts";
 
 export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntimeState, dependencies: {
   roleRuntime: Pick<ReturnType<typeof createRoleRuntime>, "automaticRole"> & Partial<Pick<ReturnType<typeof createRoleRuntime>, "suggestThinking">>;
@@ -28,7 +29,7 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
       "Keep one execution responsibility throughout a structure review: reading, analysis, recommendations and recording findings are one deliverable. Batch only genuine architecture decisions for a separate handoff; do not switch roles for each file or repeat already established evidence.",
       "A real role/model change during an active run ends that run; the runtime resumes unfinished work in a fresh run with the new role system prompt. Do not continue the old-role run after switching.",
       "After context compaction, reload, or session recovery, confirm the task boundary again instead of inheriting the previous role from the summary; call switch_role before resuming implementation, tests, docs, or shell work when the role is not already re-established.",
-      "Use the role ID required by the current task; architect only thinks, analyzes, decides, plans, and arranges responsibilities, while other configured role IDs may execute their assigned work. Architect must not gather evidence, execute commands, or connect to MCP.",
+      `Use the role required by the current task. Keep implementation, tests, directly necessary explanations and authorized whole-task Git wrap-up with one execution owner; independent docs/version deliverables remain docs-commit. Architect may inspect local facts for current decisions only through ${ARCHITECT_READ_ONLY_TOOLS_TEXT}; no shell, codemode, MCP, writes or execution-task completion. Recovery, stop and unknown-outcome guards still take precedence.`,
     ],
     parameters: switchRoleParameters,
     renderCall(args, theme) {

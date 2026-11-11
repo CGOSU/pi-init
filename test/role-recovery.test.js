@@ -101,8 +101,9 @@ test("架构师恢复门只允许工作流状态和职责切换", async () => {
   });
   await emitExtensionEvent(harness, "session_start");
 
-  assert.equal((await callToolCall(harness, "read"))?.block, true);
-  assert.equal((await callToolCall(harness, "agent_message"))?.block, true);
+  for (const toolName of ["read", "grep", "find", "ls", "ffgrep", "fffind", "graph_locate", "graph_inspect", "obs_recall", "agent_message"]) {
+    assert.equal((await callToolCall(harness, toolName))?.block, true, toolName);
+  }
   assert.equal(await callToolCall(harness, "task_workflow", { action: "status" }), undefined);
   assert.equal((await callToolCall(harness, "task_workflow", { action: "plan" }))?.block, true);
   assert.equal(await callToolCall(harness, "switch_role", { role: "docs-commit" }), undefined);

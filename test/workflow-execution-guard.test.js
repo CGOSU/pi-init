@@ -23,6 +23,27 @@ test("确认角色不会解除暂停工作流的执行门", () => {
   assert.equal(recovery.guardToolCall({ toolName: "task_workflow", input: { action: "status" } }), undefined);
 });
 
+test("architect 本地只读权限不解除未知结果暂停或授予重试执行权", () => {
+  const { state, recovery } = fixture();
+  state.activeRole.role = "architect";
+  state.roleRecoveryPending = true;
+  recovery.acknowledge("architect");
+  assert.equal(state.roleRecoveryPending, false);
+  for (const toolName of ["read", "grep", "find", "ls"]) {
+    assert.equal(recovery.guardToolCall({ toolName, input: {} }), undefined, toolName);
+  }
+  for (const toolName of ["ffgrep", "fffind", "graph_locate", "graph_inspect", "obs_recall", "edit", "write", "bash", "codemode"]) {
+    assert.equal(recovery.guardToolCall({ toolName, input: {} })?.block, true, toolName);
+  }
+  assert.equal(state.workflowState.status, "paused");
+  assert.equal(state.workflowState.tasks[0].outcomeUnknown, true);
+  for (const action of ["complete", "block", "retry", "replan"]) {
+    assert.equal(recovery.guardToolCall({ toolName: "task_workflow", input: { action, confirmUnknownOutcome: true } })?.block, true, action);
+  }
+  assert.equal(recovery.guardToolCall({ toolName: "task_workflow", input: { action: "status" } }), undefined);
+  assert.equal(recovery.guardToolCall({ toolName: "switch_role", input: { role: "developer-test" } }), undefined);
+});
+
 test("模型自行填写确认布尔值不能授权结果未知的任务重放", () => {
   const { recovery } = fixture();
   const result = recovery.guardToolCall({ toolName: "task_workflow", input: { action: "retry", taskId: "task", confirmUnknownOutcome: true } });

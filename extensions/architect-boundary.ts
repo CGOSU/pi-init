@@ -6,8 +6,13 @@ const ARCHITECT_ROLE = "architect";
 export const ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS = ["plan", "replan", "status", "request-replan", "request-goal"] as const;
 export const ARCHITECT_ALLOWED_ACTIONS_TEXT = ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS.join("、");
 const ALLOWED_TASK_WORKFLOW_ACTIONS = new Set<string>(ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS);
+export const ARCHITECT_READ_ONLY_TOOLS = [
+  "read", "grep", "find", "ls", "ffgrep", "fffind", "graph_locate", "graph_inspect", "obs_recall",
+] as const;
+export const ARCHITECT_READ_ONLY_TOOLS_TEXT = ARCHITECT_READ_ONLY_TOOLS.join("、");
+const READ_ONLY_TOOLS = new Set<string>(ARCHITECT_READ_ONLY_TOOLS);
 const ARCHITECT_BOUNDARY_REASON =
-  `[pi-init-architect-boundary] 架构师不取证、不执行、不连接 MCP，只负责思考、分析、决策、规划和安排；运行时仅允许调用 switch_role，以及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}。执行、验收及已退役协议动作不允许 architect 调用。read/grep/find/ffgrep/fffind/browser、shell、edit/write、subagent/agent_message、MCP/mcpScript、直连 MCP 和未知工具均被阻断；需要其他职责时请先调用 switch_role。`;
+  `[pi-init-architect-boundary] 架构师只负责分析、决策、规划和安排；为当前决策可用的本地只读工具仅限 ${ARCHITECT_READ_ONLY_TOOLS_TEXT}，另可调用 switch_role 及 task_workflow 的 ${ARCHITECT_ALLOWED_ACTIONS_TEXT}。恢复、停止和未知结果守卫仍优先。执行、验收、file_review 登记、shell/bash、codemode、browser、edit/write、初始化、协作、MCP（含只读包装）及未知工具均被阻断；需要执行时请交给匹配角色。`;
 const TASK_WORKFLOW_BOUNDARY_REASON =
   `${ARCHITECT_BOUNDARY_REASON} task_workflow 的其他动作（包括 complete、block、resume、retry、cancel）均被阻断。`;
 const NON_ARCHITECT_WORKFLOW_PLAN_REASON =
@@ -25,6 +30,7 @@ function isTaskWorkflowAction(input: unknown): boolean {
 
 function isAllowedArchitectToolCall(toolName: unknown, input: unknown): boolean {
   if (toolName === "switch_role") return true;
+  if (typeof toolName === "string" && READ_ONLY_TOOLS.has(toolName)) return true;
   return toolName === "task_workflow" && isTaskWorkflowAction(input);
 }
 
