@@ -469,7 +469,10 @@ export function recoverWorkflowState(
     };
   }
 
-  return { ok: true, value: cloneState(migrated), changed: true };
+  // Time since the last saved snapshot is unobserved after reload, not confirmed execution.
+  const recovered = cloneState({ ...migrated, status: "paused" });
+  recovered.status = migrated.status;
+  return { ok: true, value: recovered, changed: true };
 }
 
 export function ensureWorkflowReplanHandoff(state: WorkflowState | undefined): WorkflowState | undefined {

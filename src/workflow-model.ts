@@ -429,6 +429,7 @@ export function createWorkflowState(input: unknown, now = Date.now()): WorkflowS
     revisions: [],
     createdAt: now,
     updatedAt: now,
+    pausedMilliseconds: 0,
   };
 }
 
@@ -470,15 +471,27 @@ export function getWorkflowExecutionBounds(state: WorkflowState | null | undefin
   };
 }
 
-export function getWorkflowExecutionDuration(state: WorkflowState | null | undefined): number | undefined {
+export function getWorkflowExecutionDuration(state: WorkflowState | null | undefined, now?: number): number | undefined {
+  if (!state || typeof state.pausedMilliseconds !== "number"
+    || !Number.isFinite(state.pausedMilliseconds) || state.pausedMilliseconds < 0) return undefined;
   const { startedAt, completedAt } = getWorkflowExecutionBounds(state);
-  if (startedAt === undefined || completedAt === undefined || completedAt < startedAt) return undefined;
-  return completedAt - startedAt;
+  const endAt = state.status === "completed" ? completedAt
+    : state.status === "paused" || state.status === "cancelled" ? state.updatedAt : now ?? completedAt;
+  if (startedAt === undefined || endAt === undefined || !Number.isFinite(endAt) || endAt < startedAt) return undefined;
+  const duration = endAt - startedAt - state.pausedMilliseconds;
+  return duration >= 0 ? duration : undefined;
 }
 
 export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.updatedAt ?? Date.now()): WorkflowStateCore {
+  const { startedAt } = getWorkflowExecutionBounds(state);
+  const pauseStart = Math.max(startedAt ?? now, state.updatedAt ?? now);
+  const pausedMilliseconds = state.pausedMilliseconds === undefined ? undefined
+    : state.status === "paused" && startedAt !== undefined
+      ? state.pausedMilliseconds + Math.max(0, now - pauseStart)
+      : state.pausedMilliseconds;
   return {
     ...state,
+    ...(pausedMilliseconds !== undefined ? { pausedMilliseconds } : {}),
     version: WORKFLOW_STATE_VERSION,
     planVersion: state.planVersion ?? 0,
     recoveryGeneration: state.recoveryGeneration ?? 0,

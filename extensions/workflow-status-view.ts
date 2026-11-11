@@ -1,5 +1,6 @@
 import {
   getWorkflowExecutionBounds,
+  getWorkflowExecutionDuration,
   getWorkflowTaskDuration,
   workflowActionIdentity,
   workflowHandoffIdentity,
@@ -196,20 +197,10 @@ function activityFor(
 }
 
 function elapsedFor(state: WorkflowState, now: number) {
-  const { startedAt, completedAt } = getWorkflowExecutionBounds(state);
-  const endAt = state.status === "completed"
-    ? completedAt
-    : state.status === "running"
-      ? now
-      : state.updatedAt;
-  if (
-    typeof startedAt !== "number"
-    || typeof endAt !== "number"
-    || !Number.isFinite(startedAt)
-    || !Number.isFinite(endAt)
-    || endAt < startedAt
-  ) return { kind: "unavailable" as const };
-  return { kind: "available" as const, milliseconds: endAt - startedAt };
+  const milliseconds = getWorkflowExecutionDuration(state, now);
+  return milliseconds === undefined
+    ? { kind: "unavailable" as const }
+    : { kind: "available" as const, milliseconds };
 }
 
 export function createWorkflowStatusView(

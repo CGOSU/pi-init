@@ -25,9 +25,10 @@ export function workflowStatusActivityLabel(activity: WorkflowStatusActivity) {
 }
 
 function elapsedText(view: Extract<WorkflowStatusView, { kind: "workflow" }>) {
+  const unavailable = "不可用（工作流缺少有效的开始时间或暂停计时记录）";
   return view.elapsed.kind === "available"
-    ? formatWorkflowDuration(view.elapsed.milliseconds, ELAPSED_UNAVAILABLE)
-    : ELAPSED_UNAVAILABLE;
+    ? formatWorkflowDuration(view.elapsed.milliseconds, unavailable)
+    : unavailable;
 }
 
 export function workflowIdentityLines(view: Extract<WorkflowStatusView, { kind: "workflow" }>) {

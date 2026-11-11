@@ -66,7 +66,15 @@ export function formatWorkflowTaskCompletionText(view: WorkflowTaskCompletionVie
   ].join("\n");
 }
 
-/** Concise user-facing text; task records and timing stay in expanded details. */
+export function formatWorkflowCompletionTimingLines(view: WorkflowCompletionView) {
+  return [
+    `开始时间：${formatWorkflowTimestamp(view.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
+    `结束时间：${formatWorkflowTimestamp(view.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
+    `总耗时：${durationText(view.duration, "不可用（工作流缺少有效的起止时间或暂停计时记录）")}${view.duration.kind === "available" ? "（不含暂停）" : ""}`,
+  ];
+}
+
+/** Timing is part of the user-facing completion contract, not only expanded details. */
 export function formatWorkflowCompletionSummaryText(view: WorkflowCompletionView) {
   const finalResult = view.finalTask?.completionSummary ?? view.finalTask?.task;
   return [
@@ -75,6 +83,7 @@ export function formatWorkflowCompletionSummaryText(view: WorkflowCompletionView
     `已完成任务：${view.progress.completed}/${view.progress.total}`,
     ...(finalResult ? [`最终结果：${finalResult}`] : []),
     ...view.tasks.flatMap(task => verificationWarnings(task).map(warning => warning + "（" + task.task + "）")),
+    ...formatWorkflowCompletionTimingLines(view),
   ].join("\n");
 }
 
@@ -88,10 +97,6 @@ export function formatWorkflowCompletionText(view: WorkflowCompletionView) {
     "任务结果：",
     ...view.tasks.flatMap(task => taskReportLines(task).map(line => `   - ${line}`)),
     "",
-    "时间：",
-    `   - 开始时间：${formatWorkflowTimestamp(view.startedAt, "不可用（工作流未记录有效的开始时间）")}`,
-    `   - 结束时间：${formatWorkflowTimestamp(view.completedAt, "不可用（工作流未记录有效的结束时间）")}`,
-    `   - 总耗时：${durationText(view.duration, "不可用（工作流缺少有效的整体开始或结束时间）")}`,
     "限制：以上仅依据已记录的事实；未记录的验证、提交及推送状态均未知，不能推断为成功。不会自动续跑或重放任务。",
   ].join("\n");
 }

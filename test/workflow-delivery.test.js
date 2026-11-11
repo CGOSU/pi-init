@@ -3,7 +3,7 @@ import test from "node:test";
 import { createWorkflowDelivery } from "../extensions/workflow-delivery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
-import { formatWorkflowCompletionText } from "../extensions/workflow-completion-renderer.ts";
+import { formatWorkflowCompletionText, formatWorkflowCompletionTimingLines } from "../extensions/workflow-completion-renderer.ts";
 import { hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
 
 function fixture(overrides = {}) {
@@ -74,11 +74,12 @@ test("unsafe or missing call boundary keeps original context intact", () => {
   }
 });
 
-test("nonempty normal assistant stop delivers; empty/error/tool reports do not", () => {
-  for (const kind of ["normal", "empty", "error", "tool"]) {
+test("completion preserves assistant reports and supplements omitted timing exactly once", () => {
+  for (const kind of ["normal", "timed", "empty", "error", "tool"]) {
     const f = fixture();
     f.controller.prepare("complete");
-    const event = final(kind === "empty" ? "  " : "Whole report");
+    const event = final(kind === "empty" ? "  " : kind === "timed"
+      ? formatWorkflowCompletionText(createWorkflowCompletionView(f.state.workflowState)) : "Whole report");
     if (kind === "error") event.message.stopReason = "error";
     if (kind === "tool") event.message.content.push({ type: "toolCall", id: "x" });
     f.emit("message_end", event);
@@ -86,8 +87,25 @@ test("nonempty normal assistant stop delivers; empty/error/tool reports do not",
     f.emit("agent_settled");
     f.controller.prepare("complete");
     f.emit("agent_settled");
-    assert.equal(f.sent.length, kind === "normal" ? 0 : 1);
+    assert.equal(f.sent.length, kind === "timed" ? 0 : 1);
+    if (kind === "normal") {
+      const timing = formatWorkflowCompletionTimingLines(createWorkflowCompletionView(f.state.workflowState));
+      assert.equal(f.sent[0][0].content, timing.join("\n"));
+      assert.deepEqual(f.sent[0][1], { triggerTurn: false });
+    }
   }
+});
+
+test("timing supplement uses recorded timestamps and active duration, not model claims", async () => {
+  const f = fixture();
+  Object.assign(f.state.workflowState, { startedAt: 1000, completedAt: 31000, pausedMilliseconds: 10000 });
+  const timing = formatWorkflowCompletionTimingLines(createWorkflowCompletionView(f.state.workflowState));
+  f.controller.prepare("complete");
+  f.emit("message_end", final("All done. Total time: 30 seconds."));
+  await f.emit("agent_settled");
+  assert.equal(f.sent[0][0].content, timing.join("\n"));
+  assert.match(f.sent[0][0].content, /总耗时：20 秒（不含暂停）/);
+  assert.doesNotMatch(f.sent[0][0].content, /Result 1/);
 });
 
 test("real inputs and lifecycle clear but extension reminders/provider requests do not", () => {

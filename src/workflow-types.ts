@@ -141,6 +141,8 @@ export type WorkflowStateCore = {
   startedAt?: number;
   completedAt?: number;
   legacySourceVersion?: number;
+  /** Accumulated paused time through updatedAt; absent on unmeasured historical workflows. */
+  pausedMilliseconds?: number;
 };
 export type WorkflowState = WorkflowStateCore;
 

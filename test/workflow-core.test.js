@@ -331,7 +331,7 @@ test("工作流状态从 version 1 迁移到本地执行器并保留任务进度
     tasks: [{ ...legacy.tasks[0], status: "completed", startedAt: 40, completedAt: 70 }],
   }).value;
   assert.deepEqual(getWorkflowExecutionBounds(legacyCompleted), { startedAt: 40, completedAt: 70 });
-  assert.equal(getWorkflowExecutionDuration(legacyCompleted), 30);
+  assert.equal(getWorkflowExecutionDuration(legacyCompleted), undefined);
   assert.equal(getWorkflowExecutionDuration({ startedAt: 80, completedAt: 70, tasks: [] }), undefined);
   assert.equal(
     hydrateWorkflowState({ ...legacy, startedAt: 80, completedAt: 70 }).code,
