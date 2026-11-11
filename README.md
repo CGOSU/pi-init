@@ -136,10 +136,10 @@ pi-usage 2026-08-01 2026-08-25 --output usage.svg
 开发期直接修改源码，默认不安装或同步本机 Pi package 副本。日常按改动选择测试文件，避免把普通任务收尾当作全量测试触发条件：
 
 ```sh
-npm test -- test/runtime-diagnostics.test.js test/handoff-diagnostics.test.js
-npm test -- --test-name-pattern='故障风暴' test/global-diagnostics.test.js
+pnpm test test/runtime-diagnostics.test.js test/handoff-diagnostics.test.js
+pnpm test --test-name-pattern='故障风暴' test/global-diagnostics.test.js
 # 需要整体回归时运行；默认只发现 test/**/*.test.js
-npm test
+pnpm test
 ```
 
 无文件参数时，包括仅提供名称过滤选项时，使用上述受限发现范围；`test/support` 中的普通辅助模块不会被当作独立测试入口。Node 负责文件匹配和执行，[项目最低版本 Node 22.19 已支持测试 glob 与 mock timers](https://nodejs.org/download/release/v22.19.0/docs/api/test.html)。启动器保留隔离预加载与真实退出码，不解析改动来猜测应该跳过哪些测试。

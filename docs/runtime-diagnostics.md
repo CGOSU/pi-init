@@ -39,7 +39,7 @@ pi-init 在受信任项目中默认启用本地运行诊断，帮助查看扩展
 
 项目与全局记录携带扩展版本、SDK 版本、来源 commit（可用时）、源码指纹、PID 和加载时间；`/blackbox` 也显示当前实例身份。身份在模块加载时捕获，不在每次写入时读取磁盘新 HEAD 冒充已加载代码。指纹表示加载时对有界包文件的观察，不能证明热 reload 的所有模块原子更新；缺少 Git 或指纹时显示不可用，不影响插件运行。
 
-测试使用独立的临时 Pi Agent 目录。`npm test` 运行全量，`npm test -- test/runtime-diagnostics.test.js` 可运行定向回归；统一预加载与扩展测试 harness 隔离全局日志，退出只清理测试自己创建的目录，不删除继承的用户目录。
+测试使用独立的临时 Pi Agent 目录。`pnpm test` 运行全量，`pnpm test test/runtime-diagnostics.test.js` 可运行定向回归；统一预加载与扩展测试 harness 隔离全局日志，退出只清理测试自己创建的目录，不删除继承的用户目录。
 
 ## 恢复停录记录器
 
