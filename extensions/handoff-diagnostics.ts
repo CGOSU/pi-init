@@ -1,0 +1,249 @@
+import { randomUUID } from "node:crypto";
+import { isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
+import { createDiagnosticWriter, createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
+import type { DiagnosticScope, DiagnosticResumeResult } from "./diagnostic-storage.ts";
+import { createCacheRequestDiagnostics } from "./cache-request-diagnostics.ts";
+
+const MAX_LOG_BYTES = 2 * 1024 * 1024;
+const MAX_PENDING = 128;
+const routingTools = new Set(["switch_role", "task_workflow"]);
+
+function routingFields(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return {};
+  const source = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of ["action", "role", "workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "taskId", "attemptId", "handoffId", "requestId", "questionId", "reportId", "reviewId", "decision", "code"]) {
+    const item = source[key];
+    if (typeof item === "string") result[key] = item.slice(0, 256);
+    else if (typeof item === "number" || typeof item === "boolean") result[key] = item;
+  }
+  for (const key of ["question", "scope", "gaps", "reason", "direction", "clarification", "error"]) {
+    if (source[key] !== undefined) result[key + "Hash"] = fingerprint(source[key]);
+  }
+  for (const key of ["request", "report", "review", "identity"]) {
+    if (source[key] && typeof source[key] === "object") result[key] = routingFields(source[key]);
+  }
+  return result;
+}
+
+function handoffSnapshot(state: ExtensionRuntimeState) {
+  const workflow = state.workflowState;
+  return {
+    role: state.activeRole?.role,
+    model: state.activeRole ? { provider: state.activeRole.provider, id: state.activeRole.model, thinkingLevel: state.activeRole.thinkingLevel } : undefined,
+    contextGeneration: state.roleContextGeneration,
+    roleTransitionGeneration: state.roleTransitionGeneration,
+    workflow: workflow ? {
+      workflowId: workflow.workflowId, planVersion: workflow.planVersion, recoveryGeneration: workflow.recoveryGeneration,
+      status: workflow.status, pauseReason: workflow.pauseReason, taskPauseReasonHash: fingerprint(workflow.taskPauseReason),
+      currentTaskId: workflow.currentTaskId, nudgeCount: workflow.nudgeCount,
+      tasks: workflow.tasks.slice(0, 64).map((item) => ({ id: item.id, role: item.role, status: item.status, outcomeUnknown: item.outcomeUnknown, executionStartedAt: item.executionStartedAt })),
+      taskCount: workflow.tasks.length,
+      handoff: workflow.handoff, continuation: workflow.continuation,
+      revisionId: workflow.pendingRevision?.revisionId, directionHash: fingerprint(workflow.pendingRevision?.direction), revisionCount: workflow.revisions.length,
+    } : undefined,
+    compaction: { phase: state.roleCompactionPhase, operationId: state.roleCompactionOperationId, startedAt: state.roleCompactionStartedAt,
+      pending: state.pendingRoleCompaction ? { fromRole: state.pendingRoleCompaction.fromRole, toRole: state.pendingRoleCompaction.toRole, continuationKind: state.pendingRoleCompaction.continuation?.kind } : undefined },
+    locks: { dispatch: state.workflowDispatchInFlight, compaction: state.roleCompactionInFlight, continuationPending: state.internalContinuationPending, roleRecovery: state.roleRecoveryPending, roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: Boolean(state.pendingWorkflowRecovery) },
+    restoreErrorCode: state.workflowRestoreError?.code,
+  };
+}
+
+export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRuntimeState, options: { enabled?: boolean; mode?: "automatic" | "verbose" | "off"; maxBytes?: number } = {}) {
+  const mode = options.mode ?? (options.enabled !== undefined ? options.enabled ? "verbose" : "off" : process.env.PI_INIT_HANDOFF_LOG === "0" ? "off" : process.env.PI_INIT_HANDOFF_LOG === "1" ? "verbose" : "automatic");
+  const enabled = mode === "verbose";
+  const blackbox = createRuntimeDiagnostics(() => handoffSnapshot(state), { maxBytes: options.maxBytes });
+  const flush = async () => { await writer.flush(); await blackbox.flush(); };
+  const report = (ctx: ExtensionContext) => mode === "off" ? Promise.resolve("运行黑匣子已关闭。") : blackbox.report(ctx);
+  async function resume(ctx: ExtensionContext, scope: DiagnosticScope): Promise<DiagnosticResumeResult> {
+    if (mode === "off" || scope === "handoff" && !enabled) return { ok: false, code: "DIAGNOSTIC_RECORDER_DISABLED", message: "该记录器未启用；恢复操作不会开启已关闭或详细诊断模式" };
+    return scope === "handoff" ? writer.resume(ctx) : blackbox.resume(ctx, scope);
+  }
+
+  const writer = createDiagnosticWriter({ file: "logs/handoff.jsonl", maxBytes: options.maxBytes ?? MAX_LOG_BYTES, maxPending: MAX_PENDING, warning: "角色交接诊断日志写入失败；已停用日志，不影响任务执行。" });
+  const cache = createCacheRequestDiagnostics(state, (ctx, event, data) => trace(ctx, event, data));
+  const runtimeId = randomUUID();
+  let sequence = 0;
+  let run = 0;
+  let requestNumber = 0;
+  let pendingProviderHeaders: string | undefined;
+  let providerRequest: { requestNumber: number; startedAt: number; cwd: string; sessionId: string; run: number; headersObserved?: boolean; responseObserved?: boolean; status?: number } | undefined;
+
+  let lastRuntimeFailure: string | undefined;
+  let lastLoop: string | undefined;
+
+  function observeSignals(ctx: ExtensionContext) {
+    const code = state.workflowRestoreError?.code ?? (state.roleRecoveryPersistenceFailed ? "ROLE_RECOVERY_PERSISTENCE_FAILED" : undefined);
+    const failure = code ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), code]) : undefined;
+    if (failure && failure !== lastRuntimeFailure) blackbox.observe(ctx, "runtime.failure", { code });
+    lastRuntimeFailure = failure;
+    const progress = state.workflowProgressObservation;
+    const suspicion = progress?.status === "suspected-loop" ? progress.suspicion : undefined;
+    const workflow = suspicion ? state.workflowState : undefined;
+    const loop = suspicion && workflow && ["running", "replanning"].includes(workflow.status) ? JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), workflow.workflowId, suspicion.kind, progress?.lastVerifiedProgress?.taskId]) : undefined;
+    if (loop && loop !== lastLoop) {
+      const codes = { "repeated-state": "WORKFLOW_REPEATED_STATE", "repeated-revision": "WORKFLOW_REPEATED_REVISION", "state-cycle": "WORKFLOW_STATE_CYCLE" };
+      blackbox.observe(ctx, "workflow.suspected_loop", { code: codes[suspicion!.kind], workflowId: workflow!.workflowId, suspicionKind: suspicion!.kind, windowSize: progress?.windowSize, historyLimit: progress?.historyLimit });
+    }
+    lastLoop = loop;
+  }
+
+  function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
+    try {
+      if (mode === "off" || !ctx.isProjectTrusted()) return;
+      if (event === "context.view.observed") { cache.projection(ctx, data); return; }
+      if (enabled && isGlobalDiagnosticEvent(event)) blackbox.observe(ctx, event, data);
+      if (enabled && writer.failed) return;
+      if (!enabled) {
+        if (event === "session.start" || event === "session.tree") { lastLoop = undefined; lastRuntimeFailure = undefined; }
+        const closing = event === "agent.settled" || event === "session.shutdown";
+        if (closing) observeSignals(ctx);
+        const profile = { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" };
+        blackbox.observe(ctx, event, { ...data, profile });
+        if (!closing) observeSignals(ctx);
+        return;
+      }
+      if (event === "cache.request") blackbox.observe(ctx, event, data);
+      writer.write(ctx, dropped => ({ version: 1, timestamp: new Date().toISOString(), runtimeId, sequence: ++sequence,
+        sessionId: ctx.sessionManager.getSessionId(), run, event, dropped, data, snapshot: handoffSnapshot(state) }));
+    } catch {
+      // Diagnostics must never change routing or task execution.
+    }
+  }
+
+  if (mode === "off") return { trace, flush, report, resume };
+  state.traceHandoff = trace;
+  pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
+  pi.on("before_agent_start", (_event, ctx) => { cache.boundary(ctx, "new-run"); pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
+  pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
+  pi.on("turn_start", (_event, ctx) => { cache.boundary(ctx, "turn-change"); });
+  pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
+  function providerFields(ctx: ExtensionContext) {
+    if (providerRequest?.cwd !== ctx.cwd || providerRequest?.sessionId !== ctx.sessionManager.getSessionId() || providerRequest?.run !== run) providerRequest = undefined;
+    return providerRequest ? { requestNumber: providerRequest.requestNumber, observedElapsedMs: Math.max(0, performance.now() - providerRequest.startedAt) } : {};
+  }
+  function finishProvider(ctx: ExtensionContext, outcome: string, errorCodeHint?: string) {
+    const fields = providerFields(ctx);
+    if (!providerRequest) return;
+    if (!enabled) trace(ctx, "provider.request_summary", { ...fields, status: providerRequest.status,
+      headersObserved: providerRequest.headersObserved === true, responseObserved: providerRequest.responseObserved === true,
+      assistantObserved: outcome === "assistant", outcome, errorCodeHint });
+    providerRequest = undefined;
+  }
+  pi.on("before_provider_request", (event, ctx) => {
+    try {
+      if (writer.failed || !ctx.isProjectTrusted()) { cache.boundary(ctx, "unavailable"); pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      providerFields(ctx);
+      if (providerRequest) { trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" }); finishProvider(ctx, "superseded"); }
+      providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), run,
+        headersObserved: pendingProviderHeaders === JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]) };
+      pendingProviderHeaders = undefined;
+      cache.request(ctx, event.payload, requestNumber, pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown");
+      trace(ctx, "provider.request", { requestNumber });
+    } catch {}
+  });
+  try { pi.on("provider_stream_event", (event, ctx) => { cache.stream(ctx, event); }); }
+  catch { cache.streamUnavailable(); }
+  pi.on("before_provider_headers", (_event, ctx) => {
+    try {
+      if (writer.failed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      const fields = providerFields(ctx);
+      if (providerRequest) providerRequest.headersObserved = true;
+      else pendingProviderHeaders = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]);
+      trace(ctx, "provider.headers", fields);
+    } catch {}
+  });
+  pi.on("after_provider_response", (event, ctx) => {
+    try { cache.response(ctx, event.status); const fields = providerFields(ctx); if (providerRequest) { providerRequest.responseObserved = true; providerRequest.status = event.status; } trace(ctx, "provider.response", { ...fields, status: event.status }); } catch {}
+  });
+  pi.on("agent_settled", (event, ctx) => {
+    try {
+      cache.settle(ctx, event.aborted);
+      if (providerRequest) trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: event.aborted ? "aborted" : "settled-without-assistant" });
+      finishProvider(ctx, event.aborted ? "aborted" : "settled-without-assistant");
+      pendingProviderHeaders = undefined;
+      trace(ctx, "agent.settled", { aborted: event.aborted });
+    } catch {}
+  });
+  async function observeTool(ctx: ExtensionContext, event: string, toolName: string, toolCallId: string, input: unknown, extra: Record<string, unknown> = {}, inspectFiles = false) {
+    try {
+      if (writer.failed || !ctx.isProjectTrusted()) return;
+      const summary = enabled ? await summarizeToolInput(ctx.cwd, input, inspectFiles) : {};
+      trace(ctx, event, { toolName, toolCallId, ...summary, ...extra });
+    } catch {
+      // A malformed diagnostic payload must not interrupt a tool.
+    }
+  }
+  pi.on("tool_call", async (event, ctx) => {
+    await observeTool(ctx, routingTools.has(event.toolName) ? "routing.tool_call" : "tool.call", event.toolName, event.toolCallId, event.input,
+      { parentToolCallId: event.parentToolCallId, ...(routingTools.has(event.toolName) ? routingFields(event.input) : {}) }, true);
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    await observeTool(ctx, routingTools.has(event.toolName) ? "routing.tool_result" : "tool.result", event.toolName, event.toolCallId, event.input,
+      { parentToolCallId: event.parentToolCallId, isError: event.isError, ...summarizeToolResult(event, enabled), ...(routingTools.has(event.toolName) ? routingFields(event.details) : {}) }, true);
+  });
+  pi.on("tool_execution_start", async (event, ctx) => {
+    await observeTool(ctx, "tool.execution_start", event.toolName, event.toolCallId, event.args, { parentToolCallId: event.parentToolCallId });
+  });
+  pi.on("tool_execution_end", (event, ctx) => {
+    try {
+      trace(ctx, "tool.execution_end", { toolName: event.toolName, toolCallId: event.toolCallId, parentToolCallId: event.parentToolCallId,
+        durationMs: event.durationMs, isError: event.isError, ...summarizeToolResult(event.result, enabled) });
+    } catch {
+      // Diagnostics must never change execution results.
+    }
+  });
+  pi.on("message_start", (event, ctx) => {
+    const message = event.message as unknown as Record<string, unknown>;
+    cache.assistantStart(ctx, message);
+    if (message.role === "custom" && typeof message.customType === "string" && message.customType.startsWith("pi-init-")) {
+      trace(ctx, "handoff.message_consumed", { customType: message.customType, ...routingFields(message.details) });
+    }
+  });
+  pi.on("message_end", async (event, ctx) => {
+    const message = event.message as unknown as Record<string, unknown>;
+    if (message.role !== "assistant") return;
+    cache.assistant(ctx, message);
+    try {
+      const usage = message.usage && typeof message.usage === "object" ? message.usage as Record<string, unknown> : {};
+      const tokens: Record<string, number> = {};
+      for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
+        if (typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0) tokens[key] = usage[key];
+      }
+      trace(ctx, "assistant.result", { ...providerFields(ctx),
+        stopReason: ["stop", "length", "toolUse", "error", "aborted"].includes(String(message.stopReason)) ? message.stopReason : undefined,
+        errorHash: enabled ? fingerprint(message.errorMessage) : undefined,
+        errorCodeHint: providerErrorHint(message.errorMessage),
+        durationMs: typeof message.durationMs === "number" && Number.isFinite(message.durationMs) && message.durationMs >= 0 ? message.durationMs : undefined,
+        tokens });
+      finishProvider(ctx, "assistant", providerErrorHint(message.errorMessage));
+    } catch {}
+    if (!Array.isArray(message.content)) return;
+    for (const item of message.content) {
+      if (item.type === "toolCall") {
+        await observeTool(ctx, routingTools.has(item.name) ? "routing.model_proposed" : "tool.model_proposed", item.name, item.id, item.arguments,
+          routingTools.has(item.name) ? routingFields(item.arguments) : {});
+      }
+    }
+  });
+  pi.on("session_before_compact", (_event, ctx) => { cache.boundary(ctx, "compaction"); trace(ctx, "compaction.before"); });
+  pi.on("session_compact", (_event, ctx) => { cache.boundary(ctx, "compaction"); trace(ctx, "compaction.event"); });
+  pi.on("session_start", (event, ctx) => { cache.boundary(ctx, "session-start"); providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.start", { reason: event.reason }); });
+  pi.on("session_tree", (_event, ctx) => { cache.boundary(ctx, "branch-change"); providerRequest = undefined; pendingProviderHeaders = undefined; trace(ctx, "session.tree"); });
+  pi.on("model_select", (_event, ctx) => { cache.boundary(ctx, "model-change"); trace(ctx, "role.model_selected"); });
+  pi.on("session_shutdown", async (_event, ctx) => { cache.boundary(ctx, "shutdown"); pendingProviderHeaders = undefined; trace(ctx, "session.shutdown"); await flush(); });
+  return { trace, flush, report, resume };
+}
+function providerErrorHint(value: unknown) {
+  if (value && typeof value === "object") {
+    const error = value as Record<string, unknown>;
+    return providerErrorHint(error.code);
+  }
+  if (typeof value !== "string") return undefined;
+  const words = new Set(value.toUpperCase().split(/[^A-Z0-9_]+/));
+  return ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]
+    .find(code => words.has(code));
+}

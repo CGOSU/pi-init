@@ -1,0 +1,290 @@
+import { lstat } from "node:fs/promises";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { fingerprint } from "./handoff-tool-diagnostics.ts";
+import { formatRuntimeIdentity, loadedRuntimeIdentity } from "./runtime-identity.ts";
+import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
+import { captureDiagnosticScope, diagnosticDirectory, matchesDiagnosticScope, readDiagnosticText, withDiagnosticLock, type DiagnosticScope, type DiagnosticResumeResult } from "./diagnostic-storage.ts";
+import { createDiagnosticWriter } from "./diagnostic-writer.ts";
+export { createDiagnosticWriter } from "./diagnostic-writer.ts";
+import { createGlobalDiagnostics, isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
+import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains, formatCacheObservations } from "./runtime-diagnostics-report.ts";
+
+const extensionVersion = loadedRuntimeIdentity.extensionVersion;
+
+type Data = Record<string, unknown>;
+type Observation = { sequence: number; timestamp: string; event: string; data: Data };
+type Issue = { id: string; category: string; code: string; stage: string; toolName?: string; count: number; firstSeen: string; lastSeen: string; events: Observation[]; snapshot: unknown; latestSnapshot: unknown; latestTrigger: Observation; evidenceTruncated: boolean; incomplete: boolean; dirty: boolean; remainingEvents: number };
+
+const RETENTION_MS = 7 * 86400000;
+const MAX_RING_BYTES = 32 * 1024;
+const MAX_ISSUES = 24;
+const MAX_PENDING = 32;
+const fields = new Set(["diagnosticEventId", "diagnosticProjectId", "diagnosticSessionId", "toolName", "toolCallId", "parentToolCallId", "action", "code", "status", "isError", "businessOk", "exitCode", "durationMs", "observedElapsedMs", "requestNumber", "stopReason", "errorCodeHint", "source", "aborted", "failed", "operationId", "workflowId", "taskId", "handoffId", "recoveryGeneration", "suspicionKind", "windowSize", "historyLimit", "baselineSamples", "baselineP95Ms", "tokens", "contextWindow", "percent", "reason", "decision", "headersObserved", "responseObserved", "assistantObserved", "outcome", "mode", "reasonCode", "inputBytes", "outputBytes", "budgetBytes", "checkpointed", "omittedMessages", "overBudget", ...cacheDiagnosticFields]);
+function metadata(data: Data): Data {
+  const result: Data = {};
+  for (const key of fields) {
+    const value = data[key];
+    if (typeof value === "string") result[key] = value.slice(0, 128);
+    else if (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) result[key] = value;
+  }
+  return result;
+}
+function classify(event: string, data: Data) {
+  const code = typeof data.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(data.code) ? data.code : "UNKNOWN";
+  if (event === "workflow.action_rejected" || data.businessOk === false) return { category: "business-rejection", code };
+  if ((event === "tool.result" || event === "routing.tool_result" || event === "tool.execution_end") && (data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0)) return { category: "tool-failure", code };
+  if (event === "provider.response" && typeof data.status === "number" && data.status >= 400) return { category: "provider-http", code: "HTTP_" + data.status };
+  if (event === "assistant.result" && data.stopReason === "error") return { category: "assistant-failure", code: typeof data.errorCodeHint === "string" ? data.errorCodeHint : "UNKNOWN" };
+  if (event === "compaction.settled" && data.failed === true) return { category: "compaction-failure", code };
+  if (event === "workflow.suspected_loop") return { category: "suspected-loop", code };
+  if (event === "runtime.slow_round") return { category: "suspected-slow", code };
+  if (event === "context.budget_checked" && ["failed", "error"].includes(String(data.decision))) return { category: "context-budget", code: "BUDGET_DECISION" };
+  if (event === "runtime.failure" || event.startsWith("pi-init.") && isGlobalDiagnosticEvent(event)) return { category: "runtime-failure", code };
+  if (event === "role.handoff_dispatch_unknown") return { category: "outcome-unknown", code: "HANDOFF_DISPATCH_UNKNOWN" };
+  if (event === "workflow.delivery.fallback_failed") return { category: "delivery-failure", code: "FALLBACK_FAILED" };
+  if (event === "compaction.long_wait") return { category: "suspected-stall", code: "COMPACTION_LONG_WAIT" };
+  return undefined;
+}
+
+export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number; global?: Parameters<typeof createGlobalDiagnostics>[0] } = {}) {
+  const global = createGlobalDiagnostics(options.global);
+  const maxBytes = Math.max(128 * 1024, Math.min(options.maxBytes ?? 2 * 1024 * 1024, 2 * 1024 * 1024));
+  const runtimeId = randomUUID();
+  const nowMs = options.now ?? (() => performance.now());
+  let profile: RuntimeProfile | undefined;
+  let profileChanged = false;
+  let degraded = false;
+  let stopReason: unknown;
+  let baselineCwd = "";
+  const baselines = new Map<string, number[]>();
+  let scope = "";
+  let captureId = randomUUID();
+  let sequence = 0;
+  let run = 0;
+  let ring: Observation[] = [];
+  let ringBytes = 0;
+  let issues = new Map<string, Issue>();
+
+  let startedAt: number | undefined;
+  let toolCalls = 0;
+  let providerRequests = 0;
+  let tokens: Record<string, number> = {};
+  let issueOccurrences = 0;
+  let overflow = 0;
+  let budget: { checks: number; decisions: Record<string, number>; last?: Data } = { checks: 0, decisions: {} };
+  const emptyProviderObservations = () => ({ requests: 0, missing: 0, missingByHook: { headers: 0, response: 0, assistant: 0 } });
+  let providerObservations = emptyProviderObservations();
+  const emptyProjection = () => ({ checks: 0, checkpointed: 0, overBudget: 0, last: undefined as Data | undefined });
+  let contextProjection = emptyProjection();
+  const seen = new Set<string>();
+  // Only explicit workflow rejection observations establish result correlation.
+  const rejectedCalls = new Map<string, string>();
+  const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes, maxPending: MAX_PENDING, retentionMs: RETENTION_MS, rejectOversize: true, directoryMode: 0o700, warning: "运行黑匣子写入失败；已停用记录，不影响任务执行。" });
+  function write(ctx: ExtensionContext, record: Data) {
+    writer.write(ctx, dropped => ({ version: 1, extensionVersion, runtimeIdentity: loadedRuntimeIdentity, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }));
+  }
+  function save(ctx: ExtensionContext, issue: Issue) {
+    if (!issue.dirty) return;
+    write(ctx, { kind: "issue", ...issue, dirty: undefined, remainingEvents: undefined });
+    issue.dirty = false;
+  }
+  function captureSnapshot() {
+    let state: unknown;
+    try { state = snapshot(); } catch { state = { omitted: true, reason: "snapshot-unavailable" }; }
+    if (Buffer.byteLength(JSON.stringify(state) ?? "") > 8192) state = { omitted: true, reason: "snapshot-budget" };
+    return state;
+  }
+  function observe(ctx: ExtensionContext, event: string, raw: Data = {}) {
+    const correlation = global.observe(ctx, event);
+    if (correlation) raw = { ...raw, ...correlation };
+    try {
+      if (writer.failed || writer.recovering || !ctx.isProjectTrusted()) { ring = []; ringBytes = 0; issues.clear(); rejectedCalls.clear(); scope = ""; return; }
+      if (baselineCwd !== ctx.cwd) { baselines.clear(); baselineCwd = ctx.cwd; }
+      const nextScope = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]);
+      if (scope !== nextScope || event === "session.tree" || event === "session.start") {
+        ring = []; ringBytes = 0; issues = new Map(); seen.clear(); rejectedCalls.clear(); startedAt = undefined; tokens = {}; toolCalls = 0; providerRequests = 0; issueOccurrences = 0; overflow = 0;
+        budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
+        scope = nextScope; captureId = randomUUID(); profile = undefined; profileChanged = false; stopReason = undefined;
+      }
+      const now = new Date().toISOString();
+      const row = { sequence: ++sequence, timestamp: now, event, data: metadata(raw) };
+      const bytes = Buffer.byteLength(JSON.stringify(row));
+      ring.push(row); ringBytes += bytes;
+      while (ring.length > 64 || ringBytes > MAX_RING_BYTES) ringBytes -= Buffer.byteLength(JSON.stringify(ring.shift()));
+      for (const issue of issues.values()) {
+        if (issue.remainingEvents === 0) continue;
+        issue.events.push(row); issue.remainingEvents--; issue.dirty = true;
+        if (issue.remainingEvents === 0) { issue.incomplete = true; issue.evidenceTruncated = true; }
+        if (event === "agent.settled" || event === "session.shutdown") issue.remainingEvents = 0;
+      }
+      if (event === "agent.before_start") {
+        run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear(); rejectedCalls.clear();
+        profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
+        budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
+      }
+      const currentProfile = normalizeProfile(raw.profile);
+      if (profile && (currentProfile && JSON.stringify(profile) !== JSON.stringify(currentProfile) || !ctx.model || profile.provider !== ctx.model.provider || profile.model !== ctx.model.id)) profileChanged = true;
+      if (event === "assistant.result") stopReason = raw.stopReason;
+      if (event === "tool.call" || event === "routing.tool_call") toolCalls++;
+      if (event === "provider.request") providerRequests++;
+      if (event === "assistant.result" && raw.tokens && typeof raw.tokens === "object") {
+        for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
+          const value = (raw.tokens as Data)[key];
+          if (typeof value === "number" && Number.isFinite(value) && value >= 0) tokens[key] = (tokens[key] ?? 0) + value;
+        }
+      }
+      if (event === "context.budget_checked") {
+        budget.checks++; budget.last = row.data;
+        const decision = typeof raw.decision === "string" && /^(?:guard|inflight|unavailable|mode|cooldown|threshold|started|failed|error)$/.test(raw.decision) ? raw.decision : "other";
+        budget.decisions[decision] = (budget.decisions[decision] ?? 0) + 1;
+      }
+      if (event === "context.projected") {
+        contextProjection.checks++;
+        if (raw.checkpointed === true) contextProjection.checkpointed++;
+        if (raw.overBudget === true) contextProjection.overBudget++;
+        contextProjection.last = row.data;
+      }
+      if (event === "cache.request") write(ctx, { kind: "cache-request", timestamp: now, ...row.data });
+      if (event === "provider.request_summary") {
+        const missingObservations = ["headers", "response", "assistant"].filter(name => raw[name + "Observed"] !== true);
+        providerObservations.requests++;
+        for (const hook of ["headers", "response", "assistant"] as const) if (raw[hook + "Observed"] !== true) providerObservations.missingByHook[hook]++;
+        if (missingObservations.length) providerObservations.missing++;
+        if (raw.outcome !== "assistant" || stopReason === "error" || stopReason === "aborted" || typeof raw.errorCodeHint === "string" || typeof raw.status === "number" && raw.status >= 400) {
+          write(ctx, { kind: "provider-request", timestamp: now, ...row.data, missingObservations });
+        }
+      }
+      const classified = classify(event, raw);
+      // Compare full IDs, not the truncated display metadata; oversized IDs fail open.
+      const callId = typeof raw.toolCallId === "string" && raw.toolCallId.length > 0 && raw.toolCallId.length <= 512 ? raw.toolCallId : undefined;
+      const rejectionCode = callId ? rejectedCalls.get(callId) : undefined;
+      const correlatedResult = (event === "tool.result" || event === "routing.tool_result" || event === "tool.execution_end")
+        && rejectionCode !== undefined && classified !== undefined
+        && (classified.code === "UNKNOWN" || classified.code === rejectionCode)
+        && (classified.category === "tool-failure" || classified.category === "business-rejection");
+      // The real row is already retained above as evidence, without another occurrence.
+      // A distinct structured failure code remains an independent failure.
+      const problem = correlatedResult ? undefined : classified;
+      if (event === "workflow.action_rejected" && callId && classified) {
+        rejectedCalls.delete(callId);
+        rejectedCalls.set(callId, classified.code);
+        if (rejectedCalls.size > 128) rejectedCalls.delete(rejectedCalls.keys().next().value!);
+      }
+      if (problem) {
+        const stage = problem.category === "business-rejection" ? "business" : problem.category === "tool-failure" ? "tool" : event;
+        const toolName = typeof row.data.toolName === "string" ? row.data.toolName : raw.action === "switch_role" ? "switch_role" : event === "workflow.action_rejected" ? "task_workflow" : undefined;
+        const id = fingerprint([problem.category, problem.code, stage, toolName])!;
+        const occurrence = raw.toolCallId ? JSON.stringify([raw.toolCallId, problem.category, problem.code]) : undefined;
+        const existing = issues.get(id);
+        if (existing && toolName && !existing.toolName) { existing.toolName = toolName; existing.dirty = true; }
+        if (!occurrence || !seen.has(occurrence)) {
+          if (occurrence) { seen.add(occurrence); if (seen.size > 128) seen.delete(seen.values().next().value!); }
+          issueOccurrences++;
+          let issue = issues.get(id);
+          if (!issue && issues.size < MAX_ISSUES) {
+            const state = captureSnapshot();
+            issue = { id, ...problem, stage, toolName, count: 0, firstSeen: now, lastSeen: now, events: ring.slice(-16), snapshot: state, latestSnapshot: state, latestTrigger: row, evidenceTruncated: ring.length > 16, incomplete: ring.length > 16, dirty: true, remainingEvents: 16 };
+            issues.set(id, issue);
+            try { ctx.ui.notify("运行黑匣子已发现新问题：" + problem.category + "/" + problem.code + "。使用 /blackbox 查看。", "info"); } catch {}
+          }
+          if (issue) {
+            issue.count++; issue.lastSeen = now; issue.latestTrigger = row;
+            issue.latestSnapshot = issue.count === 1 ? issue.snapshot : captureSnapshot();
+            // A genuine recurrence reopens a bounded window around its own trigger.
+            // The first snapshot/time remain available, but unrelated future rounds do not.
+            if (issue.count > 1) {
+              issue.events = issue.events.slice(0, 16);
+              if (!issue.events.some(event => event.sequence === row.sequence)) issue.events.push(row);
+              issue.evidenceTruncated = issue.incomplete = true;
+            }
+            issue.remainingEvents = Math.min(16, 32 - issue.events.length);
+            issue.dirty = true;
+            if (issue.count === 1) save(ctx, issue);
+          }
+          else overflow++;
+        }
+      }
+      if (event === "agent.settled" || event === "session.shutdown") {
+        rejectedCalls.clear();
+        let summary: Data | undefined;
+        if (startedAt !== undefined) {
+          const durationMs = Math.max(0, nowMs() - startedAt);
+          summary = { kind: "summary", timestamp: now, durationMs, toolCalls, providerRequests, tokens, profile, profileChanged, degraded, budget, contextProjection, providerObservations, issueOccurrences, overflow, aborted: raw.aborted === true, incomplete: event !== "agent.settled", outcome: raw.aborted === true ? "aborted" : stopReason === "stop" ? "normal-stop" : stopReason === "error" ? "error" : "unknown", dropped: writer.dropped };
+          if (profile && profile.thinkingLevel !== "unknown" && isHealthySample(summary)) {
+            const key = JSON.stringify(profile);
+            const history = baselines.get(key) ?? [];
+            const baseline = durationStats(history);
+            if (baseline.count >= 8 && durationMs > Math.max(1000, baseline.p95! * 2)) {
+              observe(ctx, "runtime.slow_round", { code: "ROUND_DURATION_OUTLIER", durationMs, baselineP95Ms: baseline.p95, baselineSamples: baseline.count });
+              summary.issueOccurrences = issueOccurrences;
+            } else {
+              history.push(durationMs);
+              if (history.length > 64) history.shift();
+              baselines.set(key, history);
+              if (baselines.size > 8) baselines.delete(baselines.keys().next().value!);
+            }
+          }
+          startedAt = undefined;
+        }
+        for (const issue of issues.values()) save(ctx, issue);
+        if (summary) { delete summary.dropped; write(ctx, summary); }
+      }
+    } catch {
+      // Observation must never affect task execution.
+    }
+  }
+  async function report(ctx: ExtensionContext) {
+    if (!ctx.isProjectTrusted()) return "运行黑匣子：未信任项目，不读取诊断。";
+    const initial = captureDiagnosticScope(ctx);
+    await Promise.all([writer.flush(), global.flush()]);
+    if (!matchesDiagnosticScope(ctx, initial)) return "运行黑匣子：项目、会话或分支已变化，未读取诊断。";
+    const latest = new Map<string, Data>();
+    const summaries: Data[] = [];
+    const requests: Data[] = [];
+    const cacheRequests: Data[] = [];
+    let incomplete = false;
+    try {
+      const directory = await diagnosticDirectory(ctx.cwd, [".pi", "diagnostics"]);
+      await withDiagnosticLock(directory, async () => {
+        if (!matchesDiagnosticScope(ctx, initial) || await diagnosticDirectory(initial.cwd, [".pi", "diagnostics"]) !== directory) throw new Error("diagnostic scope changed");
+        for (const suffix of [".1", ""]) {
+          try {
+            const path = join(directory, "runtime.jsonl" + suffix);
+            const info = await lstat(path);
+            if (Date.now() - info.mtimeMs > RETENTION_MS) continue;
+            if (info.size > maxBytes) { incomplete = true; continue; }
+            for (const line of (await readDiagnosticText(path, maxBytes)).split("\n")) {
+              if (!line) continue;
+              try {
+                const row = JSON.parse(line);
+                if (row && row.kind === "summary") summaries.push(row);
+                if (row && row.kind === "provider-request") requests.push(row);
+                if (row && row.kind === "cache-request") cacheRequests.push(row);
+                if (row.dropped > 0 || row.overflow > 0 || row.incomplete === true) incomplete = true;
+                if (row.version === 1 && row.kind === "issue" && typeof row.id === "string" && typeof row.runtimeId === "string" && Number.isSafeInteger(row.count) && row.count > 0) latest.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.id]), row);
+              } catch { incomplete = true; }
+            }
+          } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") incomplete = true; }
+        }
+      });
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") incomplete = true; }
+    const grouped = new Map<string, { label: string; count: number }>();
+    for (const row of latest.values()) {
+      const label = [row.category, row.code, row.toolName].filter(value => typeof value === "string").join(" / ").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 200);
+      const item = grouped.get(String(row.id)) ?? { label, count: 0 };
+      item.count += Number(row.count); grouped.set(String(row.id), item);
+    }
+    const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
+    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", formatRuntimeIdentity(), global.report(), ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+  }
+  async function resume(ctx: ExtensionContext, target: DiagnosticScope): Promise<DiagnosticResumeResult> {
+    if (target === "global") return global.resume(ctx);
+    if (target !== "project") return { ok: false, code: "INVALID_SCOPE", message: "请选择项目或全局黑匣子记录器" };
+    const result = await writer.resume(ctx);
+    if (result.ok) { scope = ""; ring = []; ringBytes = 0; issues.clear(); rejectedCalls.clear(); }
+    return result;
+  }
+  return { observe, report, resume, flush: async () => { await Promise.all([writer.flush(), global.flush()]); } };
+}

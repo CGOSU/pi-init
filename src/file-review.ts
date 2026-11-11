@@ -1,0 +1,406 @@
+import { textOf } from "./error-utils.ts";
+import { isRecord } from "./value-guards.ts";
+import { isReviewPathWithin, isTemporaryReviewDirectory, type FileReviewScanScope, type FileReviewExclusion } from "./file-review-scope.ts";
+import { createHash } from "node:crypto";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+
+export const FILE_REVIEW_POLICY_VERSION = 1;
+export const FILE_REVIEW_THRESHOLD = 500;
+export const FILE_REVIEW_ENTRY_TYPE = "pi-init-file-review";
+
+export const FILE_REVIEW_CODE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx",
+  ".rs", ".go", ".py", ".pyi", ".php", ".phtml",
+]);
+export const FILE_REVIEW_EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set([
+  ".git", "node_modules", "dist", "coverage", ".next", "out", "target", "vendor", ".venv", "venv", "__pycache__", ".tox", ".pi-graph",
+]);
+
+function isExcludedReviewDirectory(segments: readonly string[]): boolean {
+  return segments.some((segment, index) =>
+    FILE_REVIEW_EXCLUDED_DIRECTORIES.has(segment.toLowerCase())
+    || (segment.toLowerCase() === "diagnostics" && segments[index - 1]?.toLowerCase() === ".pi"));
+}
+
+export type FileSnapshot = {
+  path: string;
+  lineCount: number;
+  fingerprint: string;
+  size: string;
+  modifiedAt: string;
+};
+
+export type FileScanError = {
+  code: "PROJECT_ROOT_UNREADABLE" | "PROJECT_ROOT_NOT_DIRECTORY" | "DIRECTORY_UNREADABLE" | "FILE_UNREADABLE" | "FILE_NOT_FOUND" | "UNSUPPORTED_FILE" | "PATH_OUTSIDE_PROJECT" | "SYMLINK_UNSUPPORTED" | "FILE_CHANGED_DURING_READ" | "UNSUPPORTED_ENCODING";
+  path: string;
+  message: string;
+};
+
+export type FileScanResult =
+  | { ok: false; error: FileScanError }
+  | { ok: true; projectRoot: string; files: FileSnapshot[]; errors: FileScanError[]; excluded?: FileReviewExclusion[] };
+
+// List uses project-relative coordinates within the current /large scan scope; path does not filter a page.
+export type FileReviewListScope = {
+  scope: "project";
+  ignoredPath?: string;
+};
+
+export type FileReviewConclusion = "keep" | "recommend-split";
+
+export type FileReviewDecision = {
+  path: string;
+  lineCount: number;
+  fingerprint: string;
+  conclusion: FileReviewConclusion;
+  rationale: string;
+  reviewedAt: number;
+};
+
+export type PersistedFileReviewState = {
+  schemaVersion: 1;
+  policyVersion: number;
+  projectRoot: string;
+  sessionId: string;
+  decisions: FileReviewDecision[];
+};
+
+export type StateReadResult =
+  | { ok: true; value: PersistedFileReviewState }
+  | { ok: false; code: "INVALID_STATE" | "PROJECT_MISMATCH" | "SESSION_MISMATCH" | "POLICY_MISMATCH"; message: string };
+
+export function countPhysicalLines(content: string) {
+  if (content.length === 0) return 0;
+  const lines = content.split(/\r\n|\r|\n/);
+  return lines.length - (/[\r\n]$/.test(content) ? 1 : 0);
+}
+
+export function normalizeReviewPath(rootDir: string, candidate: string):
+  | { ok: false; code: "PATH_OUTSIDE_PROJECT" | "UNSUPPORTED_FILE"; message: string }
+  | { ok: true; absolutePath: string; path: string } {
+  const absolutePath = resolve(rootDir, candidate);
+  const pathFromRoot = relative(rootDir, absolutePath);
+  if (
+    pathFromRoot === ".." ||
+    pathFromRoot.startsWith(`..${sep}`) ||
+    isAbsolute(pathFromRoot) ||
+    pathFromRoot === ""
+  ) {
+    return { ok: false as const, code: "PATH_OUTSIDE_PROJECT", message: "文件路径必须位于当前项目内" };
+  }
+  const normalizedPath = pathFromRoot.split(sep).join("/");
+  if (!FILE_REVIEW_CODE_EXTENSIONS.has(extname(normalizedPath).toLowerCase())
+    || isExcludedReviewDirectory(normalizedPath.split("/").slice(0, -1))) {
+    return { ok: false as const, code: "UNSUPPORTED_FILE", message: "该路径不是受审阅策略覆盖的代码文件" };
+  }
+  return { ok: true as const, absolutePath, path: normalizedPath };
+}
+
+function scanError(code: FileScanError["code"], path: string, error: unknown): FileScanError {
+  return {
+    code,
+    path,
+    message: textOf(error),
+  };
+}
+
+export async function scanProjectFiles(
+  rootDir: string,
+  options: { previous?: readonly FileSnapshot[]; forcePaths?: readonly string[]; forceAll?: boolean } & FileReviewScanScope = {},
+): Promise<FileScanResult> {
+  let projectRoot: string;
+  try {
+    projectRoot = await realpath(resolve(rootDir));
+  } catch (error) {
+    return { ok: false, error: scanError("PROJECT_ROOT_UNREADABLE", resolve(rootDir), error) };
+  }
+
+  try {
+    if (!(await stat(projectRoot)).isDirectory()) {
+      return {
+        ok: false,
+        error: { code: "PROJECT_ROOT_NOT_DIRECTORY", path: projectRoot, message: "项目路径不是目录" },
+      };
+    }
+  } catch (error) {
+    return { ok: false, error: scanError("PROJECT_ROOT_UNREADABLE", projectRoot, error) };
+  }
+
+  if (options.scope && isExcludedReviewDirectory(options.scope.split("/"))) {
+    return { ok: false, error: { code: "UNSUPPORTED_FILE", path: options.scope,
+      message: "扫描范围属于审阅策略排除的依赖、生成或诊断目录，不能作为完整源码范围扫描" } };
+  }
+
+  const previous = new Map((options.previous ?? []).map((file) => [file.path, file]));
+  const forced = new Set(options.forcePaths ?? []);
+  const files: FileSnapshot[] = [];
+  const errors: FileScanError[] = [];
+  const excluded: FileReviewExclusion[] = [];
+  let scopeFound = !options.scope || options.scope === ".";
+
+  async function visit(directory: string) {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      errors.push(scanError("DIRECTORY_UNREADABLE", relative(projectRoot, directory).split(sep).join("/"), error));
+      return;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const entry of entries) {
+      const absolutePath = resolve(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      const entryPath = relative(projectRoot, absolutePath).split(sep).join("/");
+      if (options.exclude?.some(prefix => isReviewPathWithin(entryPath, prefix))) {
+        excluded.push({ path: entryPath, reason: "explicit" }); continue;
+      }
+      if (!options.includeTemporary && entry.isDirectory() && isTemporaryReviewDirectory(entryPath)) {
+        excluded.push({ path: entryPath, reason: "temporary-source" }); continue;
+      }
+      if (entry.isDirectory()) {
+        const withinScope = !options.scope || isReviewPathWithin(entryPath, options.scope)
+          || isReviewPathWithin(options.scope, entryPath);
+        if (withinScope && !isExcludedReviewDirectory(entryPath.split("/"))) {
+          if (options.scope === entryPath) scopeFound = true;
+          await visit(absolutePath);
+        }
+        continue;
+      }
+      if (options.scope && !isReviewPathWithin(entryPath, options.scope)) continue;
+      if (!entry.isFile() || !FILE_REVIEW_CODE_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
+
+      const path = relative(projectRoot, absolutePath).split(sep).join("/");
+      try {
+        const fileStat = await lstat(absolutePath, { bigint: true });
+        if (fileStat.isSymbolicLink() || !fileStat.isFile()) continue;
+        const size = fileStat.size.toString();
+        const modifiedAt = fileStat.mtimeNs.toString();
+        const cached = previous.get(path);
+        if (cached && cached.size === size && cached.modifiedAt === modifiedAt && !options.forceAll && !forced.has(path)) {
+          files.push(cached);
+          continue;
+        }
+        const content = await readFile(absolutePath, "utf8");
+        const after = await lstat(absolutePath, { bigint: true });
+        if (after.isSymbolicLink() || after.size.toString() !== size || after.mtimeNs.toString() !== modifiedAt) {
+          errors.push({ code: "FILE_CHANGED_DURING_READ", path, message: "读取期间文件发生变化，请重试" });
+          continue;
+        }
+        files.push({
+          path,
+          lineCount: countPhysicalLines(content),
+          fingerprint: createHash("sha256").update(content).digest("hex"),
+          size,
+          modifiedAt,
+        });
+      } catch (error) {
+        errors.push(scanError("FILE_UNREADABLE", path, error));
+      }
+    }
+  }
+
+  await visit(projectRoot);
+  if (!scopeFound) errors.push({ code: "FILE_NOT_FOUND", path: options.scope!, message: "扫描范围目录不存在、被排除或为符号链接" });
+  files.sort((left, right) => left.path.localeCompare(right.path));
+  errors.sort((left, right) => left.path.localeCompare(right.path));
+  return { ok: true, projectRoot, files, errors, excluded };
+}
+
+function sameFileVersion(left: BigIntStats, right: BigIntStats) {
+  return left.isFile() && right.isFile() && left.dev === right.dev && left.ino === right.ino
+    && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+export async function inspectProjectFile(rootDir: string, candidate: string): Promise<
+  | { ok: true; projectRoot: string; file: FileSnapshot; content: string }
+  | { ok: false; error: FileScanError }
+> {
+  let projectRoot: string;
+  try {
+    projectRoot = await realpath(resolve(rootDir));
+  } catch (error) {
+    return { ok: false, error: scanError("PROJECT_ROOT_UNREADABLE", resolve(rootDir), error) };
+  }
+  const normalized = normalizeReviewPath(projectRoot, candidate);
+  if (!normalized.ok) {
+    return { ok: false, error: { code: normalized.code, path: candidate, message: normalized.message } };
+  }
+  try {
+    const segments = normalized.path.split("/");
+    let currentPath = projectRoot;
+    let beforePath: Awaited<ReturnType<typeof lstat>> | undefined;
+    for (const [index, segment] of segments.entries()) {
+      currentPath = resolve(currentPath, segment);
+      const component = await lstat(currentPath);
+      if (component.isSymbolicLink()) {
+        return { ok: false, error: { code: "SYMLINK_UNSUPPORTED", path: normalized.path, message: "不跟随符号链接读取项目代码" } };
+      }
+      if (index < segments.length - 1 && !component.isDirectory()) {
+        return { ok: false, error: { code: "FILE_NOT_FOUND", path: normalized.path, message: "文件父路径不是目录" } };
+      }
+      if (index === segments.length - 1) beforePath = component;
+    }
+    if (!beforePath?.isFile()) {
+      return { ok: false, error: { code: "FILE_NOT_FOUND", path: normalized.path, message: "路径不是普通文件" } };
+    }
+    if (await realpath(normalized.absolutePath) !== normalized.absolutePath) {
+      return { ok: false, error: { code: "SYMLINK_UNSUPPORTED", path: normalized.path, message: "不跟随符号链接读取项目代码" } };
+    }
+    const before = await lstat(normalized.absolutePath, { bigint: true });
+    if (!before.isFile() || before.isSymbolicLink()) {
+      return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "读取前文件类型发生变化，请重试" } };
+    }
+    // Bind returned bytes to the checked inode, not a path that can be swapped while awaiting I/O.
+    const handle = await open(normalized.absolutePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    let bytes: Buffer;
+    try {
+      const opened = await handle.stat({ bigint: true });
+      if (!sameFileVersion(before, opened)) {
+        return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "打开的文件与路径快照不符，未读取原文。" } };
+      }
+      bytes = await readFile(handle);
+      const read = await handle.stat({ bigint: true });
+      if (!sameFileVersion(opened, read)) {
+        return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "读取期间文件发生变化，请重试" } };
+      }
+    } finally {
+      await handle.close();
+    }
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      return { ok: false, error: { code: "UNSUPPORTED_ENCODING", path: normalized.path, message: "文件不是有效 UTF-8，未返回原文。" } };
+    }
+    const after = await lstat(normalized.absolutePath, { bigint: true });
+    if (!sameFileVersion(before, after) || await realpath(normalized.absolutePath) !== normalized.absolutePath) {
+      return { ok: false, error: { code: "FILE_CHANGED_DURING_READ", path: normalized.path, message: "读取期间文件发生变化，请重试" } };
+    }
+    return {
+      ok: true,
+      projectRoot,
+      content,
+      file: {
+        path: normalized.path,
+        lineCount: countPhysicalLines(content),
+        fingerprint: createHash("sha256").update(content).digest("hex"),
+        size: after.size.toString(),
+        modifiedAt: after.mtimeNs.toString(),
+      },
+    };
+  } catch (error) {
+    const systemCode = error instanceof Error && "code" in error ? error.code : undefined;
+    const code = systemCode === "ENOENT" ? "FILE_NOT_FOUND" : systemCode === "ELOOP" ? "SYMLINK_UNSUPPORTED" : "FILE_UNREADABLE";
+    return { ok: false, error: scanError(code, normalized.path, error) };
+  }
+}
+
+export function createFileReviewState(projectRoot: string, sessionId: string): PersistedFileReviewState {
+  return {
+    schemaVersion: 1,
+    policyVersion: FILE_REVIEW_POLICY_VERSION,
+    projectRoot,
+    sessionId,
+    decisions: [],
+  };
+}
+
+function validReviewPath(value: unknown) {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\\") || isAbsolute(value)) return false;
+  const parts = value.split("/");
+  return !parts.includes("..") && !parts.includes("") && FILE_REVIEW_CODE_EXTENSIONS.has(extname(value).toLowerCase());
+}
+
+export function readFileReviewState(value: unknown, projectRoot: string, sessionId: string): StateReadResult {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.decisions)) {
+    return { ok: false, code: "INVALID_STATE", message: "保存的大文件审阅状态格式无效" };
+  }
+  if (value.policyVersion !== FILE_REVIEW_POLICY_VERSION) {
+    return { ok: false, code: "POLICY_MISMATCH", message: "保存的大文件审阅状态使用了旧策略版本" };
+  }
+  if (value.projectRoot !== projectRoot) {
+    return { ok: false, code: "PROJECT_MISMATCH", message: "保存的审阅状态属于其他项目" };
+  }
+  if (value.sessionId !== sessionId) {
+    return { ok: false, code: "SESSION_MISMATCH", message: "保存的审阅状态属于其他 Pi 会话" };
+  }
+
+  const decisions: FileReviewDecision[] = [];
+  const seenPaths = new Set<string>();
+  for (const item of value.decisions) {
+    if (
+      !isRecord(item) ||
+      !validReviewPath(item.path) ||
+      !Number.isInteger(item.lineCount) ||
+      Number(item.lineCount) <= FILE_REVIEW_THRESHOLD ||
+      typeof item.fingerprint !== "string" ||
+      !/^[0-9a-f]{64}$/.test(item.fingerprint) ||
+      (item.conclusion !== "keep" && item.conclusion !== "recommend-split") ||
+      typeof item.rationale !== "string" ||
+      !item.rationale.trim() ||
+      item.rationale.trim().length > 2000 ||
+      !Number.isFinite(item.reviewedAt)
+    ) {
+      return { ok: false, code: "INVALID_STATE", message: "保存的大文件审阅结果包含无效字段" };
+    }
+    if (seenPaths.has(item.path as string)) {
+      return { ok: false, code: "INVALID_STATE", message: "保存的大文件审阅状态包含重复路径" };
+    }
+    seenPaths.add(item.path as string);
+    decisions.push({
+      path: item.path as string,
+      lineCount: Number(item.lineCount),
+      fingerprint: item.fingerprint as string,
+      conclusion: item.conclusion,
+      rationale: item.rationale.trim(),
+      reviewedAt: Number(item.reviewedAt),
+    });
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: 1,
+      policyVersion: FILE_REVIEW_POLICY_VERSION,
+      projectRoot,
+      sessionId,
+      decisions,
+    },
+  };
+}
+
+export function pendingFileReviews(files: readonly FileSnapshot[], decisions: readonly FileReviewDecision[]) {
+  const reviewed = new Map(decisions.map((decision) => [decision.path, decision.fingerprint]));
+  return files.filter((file) =>
+    file.lineCount > FILE_REVIEW_THRESHOLD && reviewed.get(file.path) !== file.fingerprint,
+  );
+}
+
+export function recordFileReview(
+  state: PersistedFileReviewState,
+  file: FileSnapshot,
+  conclusion: FileReviewConclusion,
+  rationale: string,
+  reviewedAt = Date.now(),
+): PersistedFileReviewState {
+  const decision: FileReviewDecision = {
+    path: file.path,
+    lineCount: file.lineCount,
+    fingerprint: file.fingerprint,
+    conclusion,
+    rationale: rationale.trim(),
+    reviewedAt,
+  };
+  return {
+    ...state,
+    decisions: [...state.decisions.filter((item) => item.path !== file.path), decision],
+  };
+}
+
+export function normalizeFileReviewError(error: unknown) {
+  return textOf(error);
+}
+
+export type { FileScanError as FileReviewDiagnostic };
