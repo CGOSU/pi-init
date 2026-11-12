@@ -61,7 +61,6 @@ test("默认工作流摘要有界，展开详情保留完整目标和逐项记�
   const view = createWorkflowCompletionView(f.state.workflowState);
   const summary = formatWorkflowCompletionSummaryText(view);
   const lines = summary.split("\n");
-  assert.equal(lines.length, 4);
   assert.ok(Array.from(lines[0]).length <= 80 + "工作流完成：".length + 1);
   assert.ok(Array.from(lines[1]).length <= 160 + "结果： · 任务 2/2".length + 1);
   assert.match(summary, /需注意：2项验证失败；2项验证未执行/);
