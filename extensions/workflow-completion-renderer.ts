@@ -99,7 +99,7 @@ export function formatWorkflowCompletionSummaryText(view: WorkflowCompletionView
   return [
     `工作流完成：${summaryText(view.summary, 80)}`,
     `结果：${finalResult ? summaryText(finalResult, 160) : "未记录最终结果"} · 任务 ${view.progress.completed}/${view.progress.total}`,
-    `时间：${formatWorkflowCompletionTimingLines(view).join(" · ")}`,
+    ...formatWorkflowCompletionTimingLines(view),
     ...(attention ? [attention] : []),
   ].join("\n");
 }
@@ -174,7 +174,7 @@ export function renderWorkflowCompletion(view: WorkflowCompletionView, theme: Re
     section(theme, "◆ " + heading),
     ...summaryLines.map((line) => line.startsWith("需注意：")
       ? theme.fg("warning", line)
-      : line.startsWith("时间：")
+      : /^(?:开始时间|结束时间|总耗时)：/u.test(line)
         ? theme.fg("muted", line)
         : theme.fg("text", line)),
   ].join("\n"), 0, 0);
