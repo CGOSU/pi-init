@@ -3,6 +3,8 @@ name: Update dist branch
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
     tags:
       - "v*"
 
