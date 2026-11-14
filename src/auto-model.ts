@@ -39,3 +39,14 @@ export function validateAutoSuggestion(config: AutoModelConfig, supported: reado
   if (!supported.includes(level as string)) return { ok: false, code: "AUTO_THINKING_UNSUPPORTED", message: "固定模型不支持建议的推理强度" };
   return { ok: true, value: level as ThinkingLevel };
 }
+
+/** Map role entry to its Auto baseline within the configured [min, max] range. */
+export function autoBaselineForRole(role: string, config: AutoModelConfig): ThinkingLevel {
+  if (role === "architect") return config.maxThinkingLevel;
+  if (role === "docs-commit") return config.minThinkingLevel;
+  return config.initialThinkingLevel;
+}
+
+export function hasAutoBoundaryBaseline(role: string): boolean {
+  return role === "architect" || role === "docs-commit";
+}

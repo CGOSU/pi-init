@@ -35,7 +35,7 @@ metadata:
 
 ## 模型与单一工作流
 
-- 遵守项目 roles/auto 策略与手动接管；不改角色模型映射、不静默换模型或提升授权。Auto 新任务在职责确认后用当前 role、thinkingLevel 与非敏感 reason 记录评估；简单无工具问答除外。同任务有效记录复用，不因继续、切角、失败或取消自动重评/重试；只有独立新任务用 taskBoundary。失败或保存未确认不算成功，已应用但保存失败如实说明，不自动回滚或重放。
+- 遵守项目 roles/auto 策略与手动接管；不改角色模型映射、不静默换模型或提升授权。Auto 下切入 architect 自动用最高强度、docs-commit 自动用最低强度并视为已定档；其余职责可在 switch_role 切角/确认时同传 thinkingLevel 与非敏感 reason 一步定档，或在职责确认后补充评估（简单无工具问答除外），阶段复杂度或风险实质变化时在范围内升降。同任务有效记录复用，不因继续、失败或取消自动重评/重试；独立新任务未换角时用 taskBoundary。失败或保存未确认不算成功，已应用但保存失败如实说明，不自动回滚或重放。
 - task_workflow 是唯一扁平规划队列；plan/replan 仅 architect，执行任务不得为 architect。仅显式规划、跨模块/高风险或需要持久调度时规划，auto 两项以内默认直做，确需编排用 orchestration=required，off 仍拒绝。不为触发编排凑任务或建立嵌套协议。
 - 按独立可验收交付写 task/constraints/files/acceptanceCriteria；files 通常是定位参考，不是修改白名单，明确禁止/隔离仍为硬约束。依赖优先，保留已有 pending 任务；目标变更用 request-replan/request-goal，不用讨论或切角替代状态转换。
 - 当前执行角色满足已确认验收才 complete，verification 为非空 `{check,status,details}` 对象数组，status 仅 passed/failed/not-run；实际阻塞或用户要求暂停/准备交接用 block，已执行结果未知保留 outcomeUnknown。checkpoint 按需保存真实进展，不完成、不暂停、不授予重放；不伪造来源 ID 或套用旧 attempt/handoff。

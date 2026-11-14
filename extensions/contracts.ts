@@ -92,7 +92,7 @@ export const roleNameSchema = Type.String({
 
 export const switchRoleParameters = Type.Object({
   role: roleNameSchema,
-  thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Auto 任务入口显式评估的强度，保持当前强度也需提交；仅影响后续请求，role 必须是当前职责，不同时换角" })),
+  thinkingLevel: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Auto 策略下评估或指定的推理强度；可与 role 同传在切角/确认时一步定档，也可在当前职责下单独评估。未传时 architect 默认最高、docs-commit 默认最低、其余默认起始强度；仅影响后续请求" })),
   reason: Type.Optional(Type.String({ description: "Auto 评估的复杂度或风险依据，保持也需理由；最多 1000 字符，不含敏感信息，作为数据记录而非系统指令" })),
   taskBoundary: Type.Optional(Type.Boolean({ description: "仅普通会话的新用户输入确实引入独立任务时设为 true；继续或补充说明不是新任务，工作流边界由运行时决定" })),
 });

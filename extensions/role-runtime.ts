@@ -1,5 +1,7 @@
 import { isRecord, hasOwn } from "../src/value-guards.ts";
-import { createAutoModelRuntime } from "./auto-model-runtime.ts";
+import { createAutoModelRuntime, type AutoRoleAssessmentInput } from "./auto-model-runtime.ts";
+import type { AutoAssessment } from "../src/auto-assessment.ts";
+import type { ThinkingLevel } from "../src/role-types.ts";
 import {
     CONFIG_DIR_NAME,
     withFileMutationQueue,
@@ -198,7 +200,16 @@ export function createRoleRuntime(
     try { return await applyRoleModel(role, ctx, resolvedConfig, signal); }
     catch (error) { state.traceHandoff?.(ctx, "pi-init.role_failed"); throw error; }
   }
-  async function applyRoleModel(role: string, ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig, signal?: AbortSignal) {
+  async function executeRoleModel(
+    role: string,
+    ctx: ExtensionContext,
+    resolvedConfig?: ResolvedRoleConfig,
+    signal?: AbortSignal,
+    assessmentInput?: AutoRoleAssessmentInput,
+  ): Promise<
+    | { ok: true; result: NonNullable<ExtensionRuntimeState["activeRole"]>; assessment?: AutoAssessment; persistFailed?: boolean }
+    | { ok: false; code: string; message: string }
+  > {
     const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
     const generation = state.roleContextGeneration;
     const checkExecution = () => {
@@ -208,13 +219,16 @@ export function createRoleRuntime(
     };
     checkExecution();
     const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
-    unwrapRoleResult(validateAutomaticSwitching(config));
+    if (!assessmentInput) unwrapRoleResult(validateAutomaticSwitching(config));
     state.workflowModeStatus = config.workflowMode;
     let target: RoleModelConfig;
     let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+    let autoOutcome: Extract<Awaited<ReturnType<typeof autoModel.applyForRole>>, { ok: true }> | undefined;
     const verifiedDuringEnsure = config.modelStrategy === "auto";
-    if (verifiedDuringEnsure) {
-      await autoModel.ensure(ctx, config, true, signal);
+    if (verifiedDuringEnsure || assessmentInput) {
+      const outcome = await autoModel.applyForRole(ctx, config, normalizedRole, signal, assessmentInput);
+      if (!outcome.ok) return outcome;
+      autoOutcome = outcome;
       const fixed = config.autoModel!;
       target = { provider: fixed.provider, model: fixed.model, thinkingLevel: pi.getThinkingLevel() };
     } else {
@@ -236,7 +250,7 @@ export function createRoleRuntime(
       && !state.roleRecoveryPersistenceFailed && !state.pendingWorkflowRecovery) {
       refreshRoleStatus(ctx);
       state.traceHandoff?.(ctx, "role.reused", { role: normalizedRole });
-      return current;
+      return { ok: true, result: current, assessment: autoOutcome?.assessment, persistFailed: autoOutcome?.persistFailed };
     }
     if (!verifiedDuringEnsure) {
       const sameModel = ctx.model?.provider === target.provider && ctx.model?.id === target.model;
@@ -277,7 +291,12 @@ export function createRoleRuntime(
     state.roleTransitionGeneration += 1;
     refreshRoleStatus(ctx);
     deps.acknowledgeRoleRecovery(result.role);
-    return result;
+    return { ok: true, result, assessment: autoOutcome?.assessment, persistFailed: autoOutcome?.persistFailed };
+  }
+  async function applyRoleModel(role: string, ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig, signal?: AbortSignal) {
+    const outcome = await executeRoleModel(role, ctx, resolvedConfig, signal);
+    if (!outcome.ok) throw Object.assign(new Error(outcome.message), { code: outcome.code });
+    return outcome.result;
   }
 
   function currentRole(role: string, ctx: ExtensionContext) {
@@ -297,6 +316,26 @@ export function createRoleRuntime(
     const result = await applyRole(normalizedRole, ctx, config, signal);
     return { requestedRole: normalizedRole, result };
   }
+
+  async function automaticRoleWithThinking(
+    role: string,
+    thinkingLevel: ThinkingLevel,
+    reason: string | undefined,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+    taskBoundary = false,
+  ) {
+    const normalizedRole = unwrapRoleResult(normalizeRoleId(role));
+    try {
+      const outcome = await executeRoleModel(normalizedRole, ctx, undefined, signal, { thinkingLevel, reason, taskBoundary });
+      if (!outcome.ok) return outcome;
+      return { ok: true as const, requestedRole: normalizedRole, result: outcome.result, assessment: outcome.assessment, persistFailed: outcome.persistFailed };
+    } catch (error) {
+      state.traceHandoff?.(ctx, "pi-init.role_failed");
+      const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "AUTO_ROLE_SWITCH_FAILED";
+      return { ok: false as const, code, message: textOf(error) };
+    }
+  }
   return {
     activeRoleFor,
     suggestThinking: autoModel.suggest,
@@ -313,6 +352,7 @@ export function createRoleRuntime(
 
     applyRole,
     automaticRole,
+    automaticRoleWithThinking,
     currentRole,
     workflowStateLabel,
   };
