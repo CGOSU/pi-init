@@ -43,8 +43,8 @@ test("重规划交接携带完整身份并保留 architect 取证边界", async 
       revisionId: latest.pendingRevision.revisionId,
       handoffId: latest.continuation.handoffId,
     });
-    assert.match(message.message.content, /architect 不直接取证、不执行代码、不连接 MCP/);
-    assert.match(message.message.content, /普通 docs-commit 调查任务/);
+    assert.match(message.message.content, /本地只读补查.*不执行代码、不连接 MCP、不写入、不提交执行任务结果/);
+    assert.match(message.message.content, /独立调查可交 docs-commit/);
   });
 });
 

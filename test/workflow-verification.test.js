@@ -6,7 +6,7 @@ import { taskWorkflowParameters } from "../extensions/contracts.ts";
 import { parseWorkflowVerification, restoreWorkflowVerification, formatWorkflowVerification, hasCurrentWorkflowVerification } from "../src/workflow-verification.ts";
 import { createWorkflowState, startWorkflowTask, completeWorkflowTask, hydrateWorkflowState, requestWorkflowReplan } from "../src/workflow.ts";
 import { createWorkflowTaskCompletionView, createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
-import { formatWorkflowTaskCompletionSummaryText, formatWorkflowCompletionSummaryText } from "../extensions/workflow-completion-renderer.ts";
+import { formatWorkflowTaskCompletionSummaryText, formatWorkflowCompletionSummaryText, formatWorkflowCompletionText } from "../extensions/workflow-completion-renderer.ts";
 import { workflowPresentationFromDetails } from "../extensions/workflow-presentation.ts";
 
 function running() {
@@ -49,7 +49,9 @@ test("statuses alone determine failure, pending and success even when descriptio
   assert.equal(view.task.verificationPending.length, 1);
   assert.deepEqual(view.task.verificationUnclassified, []);
   assert.ok(formatWorkflowTaskCompletionSummaryText(view).includes("未执行"));
-  assert.ok(formatWorkflowCompletionSummaryText(createWorkflowCompletionView(state, state.tasks[0])).includes("no errors, 0 failures"));
+  const completionView = createWorkflowCompletionView(state, state.tasks[0]);
+  assert.ok(formatWorkflowCompletionSummaryText(completionView).includes("1项验证失败"));
+  assert.ok(formatWorkflowCompletionText(completionView).includes("no errors, 0 failures"));
   assert.equal(state.tasks[0].status, "completed");
   assert.equal(state.tasks[0].outcomeUnknown, undefined);
 });
