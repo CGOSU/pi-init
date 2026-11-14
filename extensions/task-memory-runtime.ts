@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-works/pi-coding-agent";
-import { createTaskMemory, recordTaskObservations, checkpointTaskMemory, parseTaskMemory, parseTaskCheckpoint, taskMemoryScope, taskMemoryError, type TaskMemory, type TaskObservation, type TaskSourceVersion, parseTaskMemoryIdentity } from "../src/task-memory.ts";
+import { applyParsedTaskCheckpoint, createTaskMemory, recordTaskObservations, parseTaskMemory, parseTaskCheckpoint, taskMemoryScope, taskMemoryError, type TaskMemory, type TaskObservation, type TaskSourceVersion, parseTaskMemoryIdentity } from "../src/task-memory.ts";
 import { workflowHandoffIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { WorkflowHandoffIdentity } from "../src/workflow-types.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
@@ -126,17 +126,18 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       return taskMemoryError("TASK_MEMORY_WRITE_FAILED", "任务记忆未保存，不能确认进展已持久化");
     }
   }
+  function fileApplicability(ctx: ExtensionContext, memory: TaskMemory): TaskMemoryView["applicability"] {
+    if (!memory.checkpoint?.files?.length) return "historical";
+    try { return JSON.stringify(files(ctx, memory.checkpoint.files.map(item => item.path))) === JSON.stringify(memory.checkpoint.files) ? "matches-checkpoint-files" : "changed"; }
+    catch { return "unverified"; }
+  }
   function read(ctx: ExtensionContext, evidenceIds: string[] = []): TaskMemoryView {
     const current = identity(ctx);
     if (!current) return { status: "legacy" };
     try {
       if (failures.has(scope(ctx, current))) return { status: "unavailable", reason: "TASK_MEMORY_WRITE_FAILED" };
       const { memory, found } = load(ctx, current);
-      let applicability: TaskMemoryView["applicability"] = "historical";
-      if (memory.checkpoint?.files?.length) {
-        try { applicability = JSON.stringify(files(ctx, memory.checkpoint.files.map(item => item.path))) === JSON.stringify(memory.checkpoint.files) ? "matches-checkpoint-files" : "changed"; }
-        catch { applicability = "unverified"; }
-      }
+      const applicability = fileApplicability(ctx, memory);
       if (evidenceIds.length > 8) return taskMemoryError("TASK_MEMORY_SOURCE_LIMIT", "一次最多读取8项来源");
       const evidence = evidenceIds.map(id => {
         const branch = ctx.sessionManager.getBranch();
@@ -197,7 +198,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       : state.userStopRequested || state.runtimeDisposed || task.outcomeUnknown ? "execution-stopped"
       : state.activeRole?.role !== task.role ? "role-mismatch" : undefined;
     if (blocked) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆只能由当前真实执行者登记，不能沿用旧身份或解除恢复门：" + blocked);
-    const { memory } = load(ctx, current);
+    const { memory, found } = load(ctx, current);
     if (expectedRevision === undefined) return taskMemoryError("TASK_MEMORY_REVISION_REQUIRED", "checkpoint缺少expectedMemoryRevision；当前可用expectedMemoryRevision=" + memory.revision + "。提交时仍会校验版本，不必为缺失字段重复查询status。");
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return taskMemoryError("TASK_MEMORY_REVISION_INVALID", "expectedMemoryRevision必须是非负整数");
     if (expectedRevision !== memory.revision) return taskMemoryError("TASK_MEMORY_REVISION_STALE", "任务记忆已更新，checkpoint未保存；按需一次task_workflow(action=\"status\", detail=\"full\")核对最新checkpoint、剩余工作与revision，合并仍有效的进展后再提交，不只替换revision覆盖较新进展。");
@@ -210,12 +211,19 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     const restored = references.some(item => !memory.observations.some(previous => previous.id === item!.id))
       ? { ...memory, observations: [...memory.observations.filter(item => !ids.includes(item.id)).slice(-16), ...references as TaskObservation[]] } : memory;
     const versions = paths.length ? files(ctx, paths) : memory.checkpoint?.files;
-    const next = checkpointTaskMemory(restored, { ...parsed, files: versions }, checkpointHistory(ctx, current), excludedProgressSources(ctx.sessionManager.getBranch()));
+    const checkpointData = versions ? { ...parsed, files: versions } : (() => { const { files: _omitted, ...rest } = parsed; return rest; })();
+    const next = applyParsedTaskCheckpoint(restored, checkpointData, checkpointHistory(ctx, current), excludedProgressSources(ctx.sessionManager.getBranch()));
     if (next !== memory) {
       persist(ctx, { ...next, identity: current });
       if (next.progressRevision > memory.progressRevision) onProgress?.(ctx);
     }
-    return read(ctx);
+    const applicability: TaskMemoryView["applicability"] = !next.checkpoint?.files?.length
+      ? "historical"
+      : paths.length
+        ? "matches-checkpoint-files"
+        : fileApplicability(ctx, next);
+    const status: TaskMemoryView["status"] = found || next !== memory || next.observations.length ? "available" : "legacy";
+    return { status, memory: next, applicability };
   }
   pi.on("turn_end", (event: TurnEndEvent, ctx) => {
     if (!ctx.isProjectTrusted() || state.runtimeDisposed || state.userStopRequested) return;

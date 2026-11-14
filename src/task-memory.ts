@@ -107,15 +107,23 @@ function checkpointHasProgress(memory: TaskMemory, checkpoint: TaskCheckpoint, h
   });
   return newFact || changedFile;
 }
-export function checkpointTaskMemory(memory: TaskMemory, input: TaskCheckpoint, history: readonly TaskMemory[] = [], excludedSources: ReadonlySet<string> = new Set()): TaskMemory {
-  const checkpoint = parseTaskCheckpoint(input);
-  if (!checkpoint) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "任务记忆内容无效或超出边界");
+export function applyParsedTaskCheckpoint(
+  memory: TaskMemory,
+  checkpoint: TaskCheckpoint,
+  history: readonly TaskMemory[] = [],
+  excludedSources: ReadonlySet<string> = new Set(),
+): TaskMemory {
   const evidence = new Set(checkpoint.accomplished.flatMap(item => item.evidenceIds));
   if (evidence.size > 32) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "关键证据引用不能超过32项");
   if ([...evidence].some(id => !memory.observations.some(item => item.id === id))) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "成果引用缺少真实工具结果，不能保存为已有进展");
   if (JSON.stringify(memory.checkpoint) === JSON.stringify(checkpoint)) return memory;
   const progressed = checkpointHasProgress(memory, checkpoint, history, excludedSources);
   return { ...memory, checkpoint, revision: memory.revision + 1, progressRevision: memory.progressRevision + (progressed ? 1 : 0) };
+}
+export function checkpointTaskMemory(memory: TaskMemory, input: TaskCheckpoint, history: readonly TaskMemory[] = [], excludedSources: ReadonlySet<string> = new Set()): TaskMemory {
+  const checkpoint = parseTaskCheckpoint(input);
+  if (!checkpoint) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "任务记忆内容无效或超出边界");
+  return applyParsedTaskCheckpoint(memory, checkpoint, history, excludedSources);
 }
 export function parseTaskMemoryIdentity(value: unknown): WorkflowHandoffIdentity | undefined {
   if (!validIdentity(value)) return undefined;

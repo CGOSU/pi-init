@@ -269,3 +269,15 @@ test("缓存 usage 未报告时不推断磁盘或网络 I/O", () => {
   assert.match(harness.statusCalls.at(-1).text, /本次 未报/);
   assert.doesNotMatch(harness.statusCalls.at(-1).text, /磁盘|网络|命中/);
 });
+
+test("clear 后清除未定义的 cacheMissCount 不再回填快照或触发重绘", () => {
+  const harness = createExtensionHarness([], { mode: "rpc" });
+  const status = createActivityStatus();
+  status.setCacheMissCount(harness.context, 2, 1.5);
+  status.clear(harness.context);
+  assert.deepEqual(status.getSnapshot(), {});
+  const callsAfterClear = harness.statusCalls.length;
+  status.setCacheMissCount(harness.context, undefined);
+  assert.deepEqual(status.getSnapshot(), {});
+  assert.equal(harness.statusCalls.length, callsAfterClear);
+});

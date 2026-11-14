@@ -132,7 +132,7 @@ export function createWorkflowDispatch(
     }
   }
 
-  function restoreWorkflowState(ctx: ExtensionContext) {
+  function restoreWorkflowState(ctx: ExtensionContext, options?: { updateStatus?: boolean }) {
     deps.setCurrentContext(ctx);
 
     state.workflowDispatchInFlight = false;
@@ -145,6 +145,7 @@ export function createWorkflowDispatch(
     const source = latestWorkflowRecoverySource(branch);
     const { entry, entryId: sourceEntryId } = source;
     const sessionId = ctx.sessionManager.getSessionId();
+    let statusUpdated = false;
     if (entry) {
       const data = "data" in entry ? entry.data : undefined;
       const restored = hydrateWorkflowState(data);
@@ -180,6 +181,7 @@ export function createWorkflowDispatch(
           } else {
             try {
               deps.report.persistWorkflowState(recovered.value, ctx);
+              statusUpdated = true;
             } catch (error) {
               state.workflowState = undefined;
               state.pendingWorkflowRecovery = recovered.value;
@@ -196,7 +198,7 @@ export function createWorkflowDispatch(
       }
     }
     if (state.workflowState) deps.guardSessionHandoff?.(ctx);
-    deps.report.updateWorkflowStatus(ctx);
+    if (!statusUpdated && options?.updateStatus !== false) deps.report.updateWorkflowStatus(ctx);
   }
 
   function currentTaskStartCandidate(ctx: ExtensionContext) {
@@ -259,7 +261,7 @@ export function createWorkflowDispatch(
     const task = before ? getWorkflowTask(before, taskId) : undefined;
     if (!before || !identity || !task || before.currentTaskId !== taskId) return;
     try {
-      if (["prepared", "waiting-role", "compacting"].includes(before.handoff?.phase ?? "")) {
+      if (["prepared", "compacting"].includes(before.handoff?.phase ?? "")) {
         deps.report.persistWorkflowState(setWorkflowHandoffPhase(before, "waiting-role"), ctx);
       }
       const selection = await deps.roleRuntime.automaticRole(task.role, ctx);
@@ -362,7 +364,7 @@ export function createWorkflowDispatch(
     }
 
     state.workflowDispatchInFlight = true;
-    const started = startWorkflowTask(current, effect.taskId);
+    const started = setWorkflowHandoffPhase(startWorkflowTask(current, effect.taskId), "waiting-role");
     try {
       deps.report.persistWorkflowState(started, ctx);
     } catch (error) {

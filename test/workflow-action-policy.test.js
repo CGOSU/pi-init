@@ -201,3 +201,37 @@ test('blocked task reaches requested replan without becoming completed or replay
   assert.equal(unknown.status, 'paused');
   assert.equal(unknown.continuation, undefined);
 });
+
+test('complete and block on a queued task persist once without writing an intermediate executing entry', async () => {
+  const { createWorkflowActions } = await import('../extensions/workflow-actions.ts');
+  const { workflowHandoffIdentity, setWorkflowHandoffPhase } = await import('../src/workflow.ts');
+  for (const action of ['complete', 'block']) {
+    const harness = createExtensionHarness([], { trusted: true });
+    const base = running();
+    const workflow = setWorkflowHandoffPhase({ ...base, tasks: base.tasks.map((t) => ({ ...t, startedAt: undefined, executionStartedAt: undefined })) }, 'queued');
+    const identity = workflowHandoffIdentity(workflow);
+    harness.persistSentMessage({ role: 'assistant', customType: 'pi-init-workflow-task', details: identity });
+    const state = { ...createExtensionRuntimeState(), workflowState: workflow };
+    const persisted = [];
+    let markedStarted = 0;
+    const actions = createWorkflowActions(state, {
+      report: {
+        persistWorkflowState(next) { persisted.push(next.status); state.workflowState = next; return next; },
+        formatWorkflowPauseSummary() { return 'paused'; },
+      },
+      coordination: {},
+      dispatch: { markCurrentTaskStarted() { markedStarted++; } },
+      roleRuntime: { activeRoleFor: () => ({ role: 'developer-test' }), retireWorkflowContinuation() {} },
+    });
+    await actions.runTaskWorkflowAction({
+      action,
+      ...identity,
+      reason: 'blocked in queued test',
+      completionSummary: 'done directly from queued',
+      implementationRationale: 'single atomic transition',
+      verification: [{ check: 'fixture check', status: 'passed', details: 'ok' }],
+    }, undefined, harness.context);
+    assert.equal(markedStarted, 0);
+    assert.deepEqual(persisted, [action === 'complete' ? 'completed' : 'paused']);
+  }
+});

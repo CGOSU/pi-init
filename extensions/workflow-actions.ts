@@ -143,19 +143,6 @@ export function createWorkflowActions(
     });
   }
 
-  function markCurrentTaskStarted(ctx: ExtensionContext) {
-    const current = state.workflowState;
-    if (current?.handoff?.phase !== "queued") return;
-    const task = current.currentTaskId
-      ? current.tasks.find((item) => item.id === current.currentTaskId)
-      : undefined;
-    if (!task) throw new Error("queued handoff 找不到当前任务，拒绝补记任务开始");
-    if (deps.roleRuntime.activeRoleFor(ctx)?.role !== task.role) {
-      throw new Error(`queued handoff 要求角色 ${task.role}，当前角色不匹配；拒绝补记任务开始`);
-    }
-    deps.dispatch.markCurrentTaskStarted(ctx);
-  }
-
   const workflowCommand = createWorkflowCommand(state, { ...deps, recoveryActions, commitLifecycleTransition });
 
   async function runTaskWorkflowAction(
@@ -322,7 +309,6 @@ export function createWorkflowActions(
         requireTaskRole(task, ctx);
         const verificationEvidenceIds = params.evidenceIds === undefined ? undefined : deps.taskMemory?.verificationSources(ctx, params.evidenceIds);
         if (params.evidenceIds !== undefined && !verificationEvidenceIds) throw Object.assign(new Error("验证来源运行时不可用"), { code: "TASK_MEMORY_UNAVAILABLE" });
-        markCurrentTaskStarted(ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, {
           type: "task-completed", verificationEvidenceIds, identity,
           completionSummary: params.completionSummary,
@@ -362,7 +348,6 @@ export function createWorkflowActions(
         const task = state.workflowState.tasks.find((item) => item.id === identity.taskId);
         if (!task) throw new Error(`工作流任务不存在：${identity.taskId}`);
         requireTaskRole(task, ctx);
-        markCurrentTaskStarted(ctx);
         const transition = transitionWorkflowLifecycle(state.workflowState, { type: "task-blocked", identity, reason: params.reason, outcomeUnknown: params.outcomeUnknown }, Date.now());
         commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(transition.state) }], details: statusDetails(transition.state), terminate: true };

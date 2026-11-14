@@ -280,7 +280,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       runtimeState.activeRole = undefined;
       runtimeState.workflowNoticeAcknowledgement = undefined;
       roleRecovery.restore(ctx, event.reason);
-      runtimeState.currentContext = ctx;
       workflowDispatch.restoreWorkflowState(ctx);
       userControl.restore(ctx);
       workflowProgressObserver.observe();
@@ -312,7 +311,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     runtimeState.agentRunActive = false;
     roleHandoff.reset();
     workflowTaskConsumptionRunActive = false;
-    workflowDispatch.restoreWorkflowState(ctx);
+    workflowDispatch.restoreWorkflowState(ctx, { updateStatus: false });
     userControl.restore(ctx);
     workflowProgressObserver.observe();
     if (event.oldLeafId !== event.newLeafId) {

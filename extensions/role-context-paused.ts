@@ -101,9 +101,8 @@ export function pausedContextView(
       // Persisted paused state is the trust anchor; ancient markers may be absent.
       if (anchorIndex < 0) {
         if (messages.some(isManagedHandoffMessage)) return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "当前观察边界缺失但仍有其他交接");
-        const observations = pausedStatusObservations(messages);
-        if (!observations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
-        selected = messages.filter((message) => protectedContextMessage(message) || observations.has(message));
+        if (!allObservations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
+        selected = messages.filter((message) => protectedContextMessage(message) || allObservations.has(message));
       } else {
         if (messages.slice(anchorIndex + 1).some(isManagedHandoffMessage)) {
           return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "最新观察边界之后存在其他交接消息");
@@ -115,9 +114,8 @@ export function pausedContextView(
       }
     } else {
       if (messages.some(isManagedHandoffMessage)) return fail("ROLE_CONTEXT_VIEW_BRANCH_MISMATCH", "无历史记录但存在交接消息");
-      const observations = pausedStatusObservations(messages);
-      if (!observations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
-      selected = messages.filter((message) => protectedContextMessage(message) || observations.has(message));
+      if (!allObservations) return fail("ROLE_CONTEXT_VIEW_TOOL_PAIR_UNSAFE", "只读状态观察配对不完整");
+      selected = messages.filter((message) => protectedContextMessage(message) || allObservations.has(message));
     }
     // A persisted recovery summary is an observation, even when compaction removed the old handoff.
     const memory = messages.findLast(message => messageRecord(message)?.customType === "pi-init-task-memory-view");

@@ -29,7 +29,6 @@ import {
     type ExtensionRuntimeState,
     type WorkflowState
 } from "./runtime-state.ts";
-import { shortModelName } from "./ui.ts";
 import { formatWorkflowControlCenterLabel } from "./workflow-status-renderer.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 
@@ -185,13 +184,7 @@ export function createRoleRuntime(
 
   function refreshRoleStatus(ctx: ExtensionContext) {
     const role = activeRoleFor(ctx);
-    const model = ctx.model
-      ? `${shortModelName(ctx.model.id)}/${pi.getThinkingLevel()}`
-      : undefined;
-    deps.activityStatus.setRole(ctx, {
-      ...(role ? { role: roleLabel(role.role) } : {}),
-      ...(model ? { model } : {}),
-    });
+    deps.activityStatus.setRole(ctx, role ? { role: roleLabel(role.role) } : {});
   }
 
   async function enableAutomaticSwitching(ctx: ExtensionCommandContext) {
@@ -217,19 +210,24 @@ export function createRoleRuntime(
     const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
     unwrapRoleResult(validateAutomaticSwitching(config));
     state.workflowModeStatus = config.workflowMode;
-    const target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
-    if (config.modelStrategy === "auto") {
+    let target: RoleModelConfig;
+    let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+    const verifiedDuringEnsure = config.modelStrategy === "auto";
+    if (verifiedDuringEnsure) {
       await autoModel.ensure(ctx, config, true, signal);
-      target.thinkingLevel = pi.getThinkingLevel();
-    }
-    const hasExplicitModel = config.modelStrategy === "auto" || hasOwn(config.roleModels, normalizedRole);
-    const model = hasExplicitModel ? ctx.modelRegistry.find(target.provider, target.model) : undefined;
-    if (hasExplicitModel && !model) {
-      const error = new Error(
-        `角色 ${roleLabel(normalizedRole)} 显式配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
-      );
-      Object.assign(error, { code: "ROLE_MODEL_NOT_AVAILABLE" });
-      throw error;
+      const fixed = config.autoModel!;
+      target = { provider: fixed.provider, model: fixed.model, thinkingLevel: pi.getThinkingLevel() };
+    } else {
+      target = unwrapRoleResult(resolveRoleModel(config, normalizedRole, sessionDefaultModel(ctx)));
+      const hasExplicitModel = hasOwn(config.roleModels, normalizedRole);
+      model = hasExplicitModel ? ctx.modelRegistry.find(target.provider, target.model) : undefined;
+      if (hasExplicitModel && !model) {
+        const error = new Error(
+          `角色 ${roleLabel(normalizedRole)} 显式配置的模型不存在：${target.provider}/${target.model}；请在 /pi-init config 中修改`,
+        );
+        Object.assign(error, { code: "ROLE_MODEL_NOT_AVAILABLE" });
+        throw error;
+      }
     }
     checkExecution();
     const current = activeRoleFor(ctx);
@@ -240,31 +238,33 @@ export function createRoleRuntime(
       state.traceHandoff?.(ctx, "role.reused", { role: normalizedRole });
       return current;
     }
-    const sameModel = ctx.model?.provider === target.provider && ctx.model?.id === target.model;
-    if (model && sameModel) {
-      const thinkingBeforeAuth = pi.getThinkingLevel();
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      checkExecution();
-      if (ctx.model?.provider !== target.provider || ctx.model?.id !== target.model || pi.getThinkingLevel() !== thinkingBeforeAuth) {
-        throw Object.assign(new Error("等待凭据期间用户已改变模型或强度，未覆盖宿主选择"), { code: "ROLE_CONTEXT_CHANGED" });
+    if (!verifiedDuringEnsure) {
+      const sameModel = ctx.model?.provider === target.provider && ctx.model?.id === target.model;
+      if (model && sameModel) {
+        const thinkingBeforeAuth = pi.getThinkingLevel();
+        const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+        checkExecution();
+        if (ctx.model?.provider !== target.provider || ctx.model?.id !== target.model || pi.getThinkingLevel() !== thinkingBeforeAuth) {
+          throw Object.assign(new Error("等待凭据期间用户已改变模型或强度，未覆盖宿主选择"), { code: "ROLE_CONTEXT_CHANGED" });
+        }
+        if (!auth.ok) {
+          const error = new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
+          Object.assign(error, { code: "ROLE_MODEL_AUTH_UNAVAILABLE" });
+          throw error;
+        }
       }
-      if (!auth.ok) {
+      if (model && !sameModel && !(await pi.setModel(model))) {
         const error = new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
         Object.assign(error, { code: "ROLE_MODEL_AUTH_UNAVAILABLE" });
         throw error;
       }
+      checkExecution();
+      if (model && pi.getThinkingLevel() !== target.thinkingLevel) {
+        pi.setThinkingLevel(target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
+      }
+      checkExecution();
     }
-    if (model && !sameModel && !(await pi.setModel(model))) {
-      const error = new Error(`角色 ${roleLabel(normalizedRole)} 无法使用模型 ${target.provider}/${target.model}：缺少可用凭据`);
-      Object.assign(error, { code: "ROLE_MODEL_AUTH_UNAVAILABLE" });
-      throw error;
-    }
-    checkExecution();
-    if (model && pi.getThinkingLevel() !== target.thinkingLevel) {
-      pi.setThinkingLevel(target.thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
-    }
-    checkExecution();
-    if (model && (ctx.model?.provider !== target.provider || ctx.model?.id !== target.model || pi.getThinkingLevel() !== target.thinkingLevel)) {
+    if ((verifiedDuringEnsure || model) && (ctx.model?.provider !== target.provider || ctx.model?.id !== target.model || pi.getThinkingLevel() !== target.thinkingLevel)) {
       throw Object.assign(new Error("角色模型或推理强度未按配置生效，未确认职责"), { code: "ROLE_MODEL_NOT_APPLIED" });
     }
     const result = {

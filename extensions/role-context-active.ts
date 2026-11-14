@@ -47,10 +47,6 @@ function hasManagedWork(state: ExtensionRuntimeState) {
     return Boolean(state.workflowRestoreError || state.workflowState && ["running", "replanning"].includes(state.workflowState.status));
 }
 
-function needsManagedView(state: ExtensionRuntimeState, sessionId: string) {
-    return Boolean(state.workflowRestoreError || state.workflowState?.sessionId === sessionId && ["running", "replanning"].includes(state.workflowState.status));
-}
-
 export function activeContextView(state: ExtensionRuntimeState, event: ContextEvent, ctx: ExtensionContext): ContextEventResult | undefined {
   let managedWork: boolean;
   try {
@@ -80,13 +76,6 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
   if (activeWorkflow && state.workflowState?.sessionId !== sessionId) {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_SESSION_MISMATCH", "当前 workflow 属于其他 session；完整输入保留且不隔离");
   }
-  let managedForSession: boolean;
-  try {
-    managedForSession = needsManagedView(state, sessionId);
-  } catch {
-    return failOpen(event.messages, "ROLE_CONTEXT_VIEW_STATE_INVALID", "持久化工作流或协调状态结构损坏；完整输入保留且不隔离");
-  }
-  if (!managedForSession) return undefined;
   if (event.messages.some((message) => messageRecord(message)?.role === "system")) {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_SYSTEM_MESSAGE_PRESENT", "context 输入包含 Pi 管理的 system message；为避免触碰 system/tool 状态而保留完整输入");
   }

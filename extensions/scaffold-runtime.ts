@@ -113,35 +113,34 @@ export async function runScaffold(
     if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
       return { ok: false, code: "SCAFFOLD_DRY_RUN_TYPE", message: "dryRun 必须是布尔值" };
     }
+    if (options.dryRun === true || confirmation !== "always") {
+      return createScaffold(absoluteTarget, options);
+    }
     const previewResult = await createScaffold(absoluteTarget, { ...options, dryRun: true });
-    if (!previewResult.ok || options.dryRun === true) return previewResult;
+    if (!previewResult.ok) return previewResult;
     const preview = previewResult.value;
     if (preview.files.length === 0) return { ok: true, value: { ...preview, dryRun: false } };
-    const needsConfirmation =
-      confirmation === "always" || (confirmation === "conflicts" && preview.conflicts.length > 0);
-    if (needsConfirmation) {
-      if (!ctx.hasUI) {
-        return { ok: true, value: { ...preview, cancelled: true } };
-      }
-      const message = [
-        `项目：${preview.projectName}`,
-        `语言：${preview.language}`,
-        ...(typeof options.testCommand === "string" && options.testCommand
-          ? [`测试：${options.testCommand}`]
-          : []),
-        `目录：${preview.targetDir}`,
-        `将生成 ${preview.files.length} 个文件。`,
-        ...(preview.preserved.length > 0
-          ? [`已有文件将保留：${preview.preserved.join(", ")}`]
-          : ["只创建缺失文件"]),
-      ].join("\n");
-      const decision = await confirmScaffold(ctx, message, allowBack);
-      if (decision === MENU_BACK) {
-        return { ok: true, value: { ...preview, backedOut: true } };
-      }
-      if (decision !== "confirm") {
-        return { ok: true, value: { ...preview, cancelled: true } };
-      }
+    if (!ctx.hasUI) {
+      return { ok: true, value: { ...preview, cancelled: true } };
+    }
+    const message = [
+      `项目：${preview.projectName}`,
+      `语言：${preview.language}`,
+      ...(typeof options.testCommand === "string" && options.testCommand
+        ? [`测试：${options.testCommand}`]
+        : []),
+      `目录：${preview.targetDir}`,
+      `将生成 ${preview.files.length} 个文件。`,
+      ...(preview.preserved.length > 0
+        ? [`已有文件将保留：${preview.preserved.join(", ")}`]
+        : ["只创建缺失文件"]),
+    ].join("\n");
+    const decision = await confirmScaffold(ctx, message, allowBack);
+    if (decision === MENU_BACK) {
+      return { ok: true, value: { ...preview, backedOut: true } };
+    }
+    if (decision !== "confirm") {
+      return { ok: true, value: { ...preview, cancelled: true } };
     }
 
     return createScaffold(absoluteTarget, options);

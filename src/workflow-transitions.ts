@@ -250,14 +250,6 @@ export function retryWorkflowTask(
 
 export function resumeWorkflow(state: WorkflowState, now = Date.now()): WorkflowState {
   if (!state || state.status !== "paused") throw new Error("工作流当前不在暂停状态");
-    if (state.pauseReason === "child-result-review" && state.pendingRevision) {
-      const next = cloneState(state, now);
-      next.status = "replanning";
-      delete next.taskPauseReason;
-      next.recoveryGeneration += 1;
-      next.continuation = { kind: "replan", revisionId: state.pendingRevision.revisionId, phase: "pending", reason: "resume" };
-      return next;
-    }
   if (["boundary-compaction-failed", "boundary-compaction-interrupted"].includes(state.pauseReason ?? "")) {
     const result = cloneState(state, now);
     if (!result.continuation || result.continuation.kind === "review") throw new Error("任务边界缺少可恢复的交接身份");
