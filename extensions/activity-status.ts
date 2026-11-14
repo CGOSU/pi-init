@@ -113,9 +113,9 @@ function roleSegments(role: ActivityStatusRole | undefined): ActivityStatusSegme
 }
 
 function cacheResultSegment(cache: ActivityStatusCache | undefined): ActivityStatusSegment | undefined {
-  if (!cache) return undefined;
-  const source = cache.phase === "requesting" ? "上次" : "本次";
-  const result = cache.phase === "requesting" ? cache.previous : cache.current;
+  if (!cache || cache.phase === "requesting") return undefined;
+  const source = "本次";
+  const result = cache.current;
   if (!result) return undefined;
   if (result.kind === "request-error") return { text: `✕ ${source}请求失败`, tone: "error" };
   if (result.kind === "aborted") return { text: `! ${source}请求已中止`, tone: "warning" };
@@ -359,7 +359,12 @@ export function createActivityStatus(options: ActivityStatusOptions = {}) {
     setAlert: (ctx: ExtensionContext, value: ActivityStatusAlert | undefined) => update(ctx, "alert", value),
     setCache: (ctx: ExtensionContext, value: ActivityStatusCache | undefined) => update(ctx, "cache", value),
     setCacheMissCount: (ctx: ExtensionContext, value: number | undefined, totalUsd?: number) => {
-      snapshot = { ...snapshot, cacheMissCount: value, cacheMissTotalUsd: totalUsd };
+      if (snapshot.cacheMissCount === value && snapshot.cacheMissTotalUsd === totalUsd) return;
+      snapshot = { ...snapshot };
+      if (value === undefined) delete snapshot.cacheMissCount;
+      else snapshot.cacheMissCount = value;
+      if (totalUsd === undefined) delete snapshot.cacheMissTotalUsd;
+      else snapshot.cacheMissTotalUsd = totalUsd;
       render(ctx);
     },
     setWorkTime: (ctx: ExtensionContext, value: number | undefined) => update(ctx, "workTimeMilliseconds", value),

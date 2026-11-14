@@ -8,8 +8,8 @@ import type { ActiveRole } from "./runtime-state.ts";
 const MAX_REPORT_FILES = 50;
 
 export type LargeScanResult =
-  | { ok: true; added: FileSnapshot[] }
-  | { ok: false; code: string; message: string; added: FileSnapshot[] };
+  | { ok: true }
+  | { ok: false; code: string; message: string };
 
 export type LargeReviewSnapshot = {
   generation: number;

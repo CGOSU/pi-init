@@ -68,9 +68,7 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     input: Record<string, unknown>,
     ctx: ExtensionContext,
     current: ReviewSession,
-    refreshed: { ok: true; added: FileSnapshot[] } | { ok: false; code: string; message: string; added: FileSnapshot[] },
   ) {
-    if (!refreshed.ok) return failure(refreshed.code, `${refreshed.message}；保留队列但不能登记完成审阅。`, true);
     const target = parseReviewTarget(input, true);
     if (!target.ok) return failure(target.code, target.message);
     const conclusion = input.conclusion;
@@ -85,8 +83,11 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
     const normalized = normalizeReviewPath(current.projectRoot, target.path);
     if (!normalized.ok) return failure(normalized.code, normalized.message);
 
-    const latest = await scanCurrent(ctx, [normalized.path]);
-    if (!latest.ok) return failure(latest.code, latest.message);
+    const latest = await scanCurrent(ctx, [normalized.path], true);
+    if (!latest.ok) {
+      const message = latest.code === "PARTIAL_SCAN" ? `${latest.message}；保留队列但不能登记完成审阅。` : latest.message;
+      return failure(latest.code, message, latest.code === "PARTIAL_SCAN");
+    }
     if (!current.fileReviewState.ok && current.fileReviewState.code !== "POLICY_MISMATCH") {
       return failure(current.fileReviewState.code, `结构审阅状态无法确认：${current.fileReviewState.message}`);
     }
@@ -149,57 +150,54 @@ export function createFileReviewRuntime(pi: ExtensionAPI, deps: ReviewDependenci
       return failure("TEST_VALUE_REVIEW_REMOVED", "测试价值审阅已退役；file_review 仅支持结构审阅。");
     }
     if (input.action === "read") return readStructurePage(input, ctx, current, signal);
-    if (input.action !== "list" && input.action !== "complete") return failure("INVALID_ACTION", "仅支持 list/read/complete。");
+    if (input.action === "complete") return completeStructureReview(input, ctx, current);
+    if (input.action !== "list") return failure("INVALID_ACTION", "仅支持 list/read/complete。");
     const refreshed = await scanCurrent(ctx, [], true);
     if (!refreshed.ok && refreshed.code !== "PARTIAL_SCAN") return failure(refreshed.code, refreshed.message, true);
     const queue = candidateQueue(current);
     if (!queue) return failure("SESSION_NOT_READY", "结构审阅候选状态无法确认", true);
     const candidates = queue.structuralCandidates;
 
-    if (input.action === "list") {
-      const offset = input.offset ?? 0;
-      const limit = input.limit ?? DEFAULT_LIST_FILES;
-      if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
-        || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_FILES) {
-        return failure("INVALID_PAGINATION", "list 的 offset 为从 0 开始的安全整数，limit 为 1-50 的整数。");
-      }
-      const items = structureListItems(offset, limit, candidates);
-      const scanStatus = refreshed.ok ? "" : "扫描不完整；以下仅为已发现候选。";
-      const summary = !queue.structuralConfirmed
-        ? `结构候选状态无法确认；当前已发现 ${candidates.length} 个候选。`
-        : items.length > 0
-          ? `结构待审 ${offset + 1}-${offset + items.length}/${candidates.length}`
-          : `没有该页已发现的结构候选；总数 ${candidates.length}`;
-      const scope: FileReviewListScope = {
-        scope: "project",
-        ...(typeof input.path === "string" ? { ignoredPath: input.path } : {}),
-      };
-      const scopeNotice = scope.ignoredPath !== undefined
-        ? `path=${JSON.stringify(scope.ignoredPath)} ignored: list returns the current scan inventory (project-relative, constrained by /large scope/exclude), not path-specific results. `
-        : "Current scan inventory (project-relative, constrained by /large scope/exclude). ";
-      const nextOffset = offset + items.length < candidates.length ? offset + items.length : null;
-      const body = [ `${scopeNotice}${scanStatus}${summary}`,
-        `offset=${offset}; limit=${limit}; nextOffset=${nextOffset}; eof=${nextOffset === null}`,
-        `扫描范围：${current.scanScope.scope ?? "."}；排除：${current.excluded.slice(0, 20).map(item => JSON.stringify(item.path)).join(", ") || "无额外排除"}`,
-        ...items.map(item => `- ${JSON.stringify(item.path)} · ${item.lineCount} 行 · fingerprint ${item.fingerprint}`),
-      ].join("\n");
-      return success(body, {
-        ...scope,
-        candidates: items,
-        total: candidates.length,
-        nextOffset,
-        scanScope: current.scanScope,
-        excluded: current.excluded,
-        structuralComplete: queue.structuralConfirmed,
-        offset,
-        reviewKind: "structure",
-        scanComplete: refreshed.ok,
-        errors: current.errors,
-        candidateErrors: queue.errors,
-      });
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? DEFAULT_LIST_FILES;
+    if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
+      || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_FILES) {
+      return failure("INVALID_PAGINATION", "list 的 offset 为从 0 开始的安全整数，limit 为 1-50 的整数。");
     }
-
-    return completeStructureReview(input, ctx, current, refreshed);
+    const items = structureListItems(offset, limit, candidates);
+    const scanStatus = refreshed.ok ? "" : "扫描不完整；以下仅为已发现候选。";
+    const summary = !queue.structuralConfirmed
+      ? `结构候选状态无法确认；当前已发现 ${candidates.length} 个候选。`
+      : items.length > 0
+        ? `结构待审 ${offset + 1}-${offset + items.length}/${candidates.length}`
+        : `没有该页已发现的结构候选；总数 ${candidates.length}`;
+    const scope: FileReviewListScope = {
+      scope: "project",
+      ...(typeof input.path === "string" ? { ignoredPath: input.path } : {}),
+    };
+    const scopeNotice = scope.ignoredPath !== undefined
+      ? `path=${JSON.stringify(scope.ignoredPath)} ignored: list returns the current scan inventory (project-relative, constrained by /large scope/exclude), not path-specific results. `
+      : "Current scan inventory (project-relative, constrained by /large scope/exclude). ";
+    const nextOffset = offset + items.length < candidates.length ? offset + items.length : null;
+    const body = [ `${scopeNotice}${scanStatus}${summary}`,
+      `offset=${offset}; limit=${limit}; nextOffset=${nextOffset}; eof=${nextOffset === null}`,
+      `扫描范围：${current.scanScope.scope ?? "."}；排除：${current.excluded.slice(0, 20).map(item => JSON.stringify(item.path)).join(", ") || "无额外排除"}`,
+      ...items.map(item => `- ${JSON.stringify(item.path)} · ${item.lineCount} 行 · fingerprint ${item.fingerprint}`),
+    ].join("\n");
+    return success(body, {
+      ...scope,
+      candidates: items,
+      total: candidates.length,
+      nextOffset,
+      scanScope: current.scanScope,
+      excluded: current.excluded,
+      structuralComplete: queue.structuralConfirmed,
+      offset,
+      reviewKind: "structure",
+      scanComplete: refreshed.ok,
+      errors: current.errors,
+      candidateErrors: queue.errors,
+    });
   }
 
   registerLargeCommand(pi, {

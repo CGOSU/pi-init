@@ -4,7 +4,7 @@ import { reviewPathSelected, type FileReviewScanScope, type FileReviewExclusion 
 import { FILE_REVIEW_ENTRY_TYPE, FILE_REVIEW_POLICY_VERSION, FILE_REVIEW_THRESHOLD, normalizeFileReviewError, inspectProjectFile, recordFileReview, scanProjectFiles, type FileScanError, type FileScanResult, type FileSnapshot, type PersistedFileReviewState, type StateReadResult } from "../src/file-review.ts";
 import { buildReviewCandidateQueue, type ReviewCandidateQueueError } from "../src/review-candidates.ts";
 import { createIncrementalReviewState, markIncrementalReviewNotified, observeIncrementalReviewFiles, refreshIncrementalReviewCandidates, unnotifiedIncrementalReviewCandidates, type IncrementalReviewCandidate, type IncrementalReviewState } from "../src/review-incremental.ts";
-import { hasCompleteCoverage, mergeCoverage, pathKey, type FileCoverage } from "./file-review-coverage.ts";
+import { hasCompleteCoverage, mergeCoverage, type FileCoverage } from "./file-review-coverage.ts";
 import type { LargeReviewSnapshot } from "./large-command.ts";
 
 export function branchEntryIds(ctx: ExtensionContext) {
@@ -117,27 +117,26 @@ export function createFileReviewSession(appendJournal: (entry: ReturnType<typeof
     forcePaths: readonly string[] = [],
     forceAll = false,
     requestedScope?: FileReviewScanScope,
-  ): Promise<{ ok: true; added: FileSnapshot[] } | { ok: false; code: string; message: string; added: FileSnapshot[] }> {
+  ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
     const current = session;
     if (!current || current.generation !== generation) {
-      return { ok: false, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描", added: [] };
+      return { ok: false, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描" };
     }
     const previousFiles = [...current.inventory.values()];
     const branchIds = branchEntryIds(ctx);
     if (!branchIdsContinue(branchIds, current.branchIds)) {
-      return { ok: false, code: "STALE_SESSION", message: "当前 session branch 已变化，扫描结果未应用", added: [] };
+      return { ok: false, code: "STALE_SESSION", message: "当前 session branch 已变化，扫描结果未应用" };
     }
-    const before = new Set(pending(current).map((file) => pathKey(file.path, file.fingerprint)));
     const scanScope = requestedScope ?? current.scanScope;
     const result = await scanProjectFiles(current.projectRoot, { previous: previousFiles, forcePaths, forceAll, ...scanScope });
     if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
       || !branchContinuesFrom(ctx, branchIds) || !branchContinuesFrom(ctx, current.branchIds)) {
-      return { ok: false, code: "STALE_SESSION", message: "扫描期间 Pi session 已变化，结果未应用", added: [] };
+      return { ok: false, code: "STALE_SESSION", message: "扫描期间 Pi session 已变化，结果未应用" };
     }
     if (!result.ok) {
       current.errors = [result.error];
       current.scanErrors = [result.error];
-      return { ok: false, code: result.error.code, message: result.error.message, added: [] };
+      return { ok: false, code: result.error.code, message: result.error.message };
     }
 
     if (requestedScope && JSON.stringify(requestedScope) !== JSON.stringify(current.scanScope)) current.readCoverage.clear();
@@ -154,14 +153,12 @@ export function createFileReviewSession(appendJournal: (entry: ReturnType<typeof
     current.errors = result.errors;
     current.scanErrors = result.errors;
     observeIncrementalReviewFiles(current.incremental, result.files, result.errors.length === 0);
-    const added = pending(current).filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
     return result.errors.length === 0
-      ? { ok: true, added }
+      ? { ok: true }
       : {
         ok: false, code: "PARTIAL_SCAN",
         message: `${result.errors.length} 个路径无法扫描：\n${result.errors.slice(0, 3)
           .map((error) => `${error.path || "."} [${error.code}] ${error.message}`).join("\n")}${result.errors.length > 3 ? `\n另有 ${result.errors.length - 3} 个错误，可通过 /large 查看。` : ""}`,
-        added,
       };
   }
 
@@ -216,26 +213,24 @@ export function createFileReviewSession(appendJournal: (entry: ReturnType<typeof
   async function refreshSpecificFile(ctx: ExtensionContext, pathInput: string) {
     const current = session;
     if (!current || current.generation !== generation) {
-      return { ok: false as const, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描", added: [] as FileSnapshot[] };
+      return { ok: false as const, code: "SESSION_NOT_READY", message: "当前 Pi session 尚未完成项目扫描" };
     }
     const branchIds = branchEntryIds(ctx);
     if (!branchIdsContinue(branchIds, current.branchIds)) {
-      return { ok: false as const, code: "STALE_SESSION", message: "当前 session branch 已变化，检查结果未应用", added: [] as FileSnapshot[] };
+      return { ok: false as const, code: "STALE_SESSION", message: "当前 session branch 已变化，检查结果未应用" };
     }
     const inspected = await inspectProjectFile(current.projectRoot, pathInput);
     if (session !== current || current.generation !== generation || ctx.sessionManager.getSessionId() !== current.sessionId
       || !branchContinuesFrom(ctx, branchIds) || !branchContinuesFrom(ctx, current.branchIds)) {
-      return { ok: false as const, code: "STALE_SESSION", message: "检查期间 Pi session 已变化，结果未应用", added: [] as FileSnapshot[] };
+      return { ok: false as const, code: "STALE_SESSION", message: "检查期间 Pi session 已变化，结果未应用" };
     }
     if (!inspected.ok) {
       current.errors = [...current.errors.filter((error) => error.path !== inspected.error.path), inspected.error];
       current.scanErrors = [...current.scanErrors.filter((error) => error.path !== inspected.error.path), inspected.error];
-      return { ok: false as const, code: inspected.error.code, message: inspected.error.message, added: [] as FileSnapshot[] };
+      return { ok: false as const, code: inspected.error.code, message: inspected.error.message };
     }
-    const before = new Set(pending().map((file) => pathKey(file.path, file.fingerprint)));
     if (reviewPathSelected(inspected.file.path, current.scanScope)) applyFileSnapshot(current, inspected.file);
-    const added = pending().filter((file) => !before.has(pathKey(file.path, file.fingerprint)));
-    return { ok: true as const, added, file: inspected.file };
+    return { ok: true as const, file: inspected.file };
   }
 
   function completeReadEvidence(file: FileSnapshot) {
