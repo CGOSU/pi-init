@@ -8,7 +8,7 @@ import { createAutoModelRuntime } from "../extensions/auto-model-runtime.ts";
 import { createRoleRuntime } from "../extensions/role-runtime.ts";
 import { registerRoleTool } from "../extensions/role-tool.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { parseAutoModel, validateAutoModelCapabilities } from "../src/auto-model.ts";
+import { autoBaselineForRole, hasAutoBoundaryBaseline, parseAutoModel, validateAutoModelCapabilities } from "../src/auto-model.ts";
 import { mergeRoleConfigData, resolveRoleConfig, resolveRoleModel } from "../src/roles.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { createExtensionHarness } from "./support/extension-harness.js";
@@ -666,7 +666,134 @@ test("staging/save/reload retains inactive role mappings and unrelated project c
     await runtime.suggestThinking("reviewer", "high", "Complex review", f.ctx);
     await runtime.automaticRole("architect", f.ctx);
     assert.equal(f.thinking, "high");
+    await runtime.automaticRole("docs-commit", f.ctx);
+    assert.equal(f.thinking, "low");
+    await runtime.automaticRole("developer-test", f.ctx);
+    assert.equal(f.thinking, "medium");
     runtime.stageRoleConfig({ modelStrategy: "roles" });
     assert.equal(resolveRoleModel(await runtime.readSessionRoleConfig(f.ctx), "reviewer").value.model, "reviewer");
+  });
+});
+
+test("Auto role baselines follow configured min/initial/max and auto-assess architect and docs-commit", async () => {
+  const xhighRange = { provider: "test", model: "fixed", initialThinkingLevel: "low", minThinkingLevel: "minimal", maxThinkingLevel: "xhigh" };
+  assert.equal(autoBaselineForRole("architect", xhighRange), "xhigh");
+  assert.equal(autoBaselineForRole("docs-commit", xhighRange), "minimal");
+  assert.equal(autoBaselineForRole("developer-test", xhighRange), "low");
+  assert.equal(hasAutoBoundaryBaseline("architect"), true);
+  assert.equal(hasAutoBoundaryBaseline("docs-commit"), true);
+  assert.equal(hasAutoBoundaryBaseline("developer-test"), false);
+
+  const customRange = { provider: "test", model: "fixed", initialThinkingLevel: "low", minThinkingLevel: "minimal", maxThinkingLevel: "high" };
+  await withTempDirectory(async cwd => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 3, modelStrategy: "auto", autoModel: customRange, roleModels,
+    }));
+    const f = fixture(cwd, false);
+    f.state.activeRole = undefined;
+    const runtime = createRoleRuntime(f.pi, f.state, { activityStatus: { setRole() {} }, acknowledgeRoleRecovery() {} });
+    await f.start();
+    assert.equal(f.thinking, "low");
+
+    await runtime.automaticRole("architect", f.ctx);
+    assert.equal(f.thinking, "high");
+    assert.equal(latestAutoState(f).assessment.to, "high");
+    assert.equal(await businessResult(f), undefined);
+    assert.equal(f.notices.length, 0, "architect entry is auto-assessed without tool reminder");
+
+    await runtime.automaticRole("docs-commit", f.ctx);
+    assert.equal(f.thinking, "minimal");
+    assert.equal(latestAutoState(f).assessment.to, "minimal");
+    assert.equal(await businessResult(f), undefined);
+    assert.equal(f.notices.length, 0, "docs-commit entry is auto-assessed without tool reminder");
+
+    // Reload after docs-commit and confirm developer-test must reset to initialThinkingLevel rather than keeping minimal.
+    await f.runner.emit({ type: "session_start" });
+    f.state.activeRole = undefined;
+    await runtime.automaticRole("developer-test", f.ctx);
+    assert.equal(f.thinking, "low");
+    assert.equal(latestAutoState(f).assessment, undefined);
+
+    // Manual override must still win over role-baseline switching.
+    await f.manual("high");
+    await runtime.automaticRole("docs-commit", f.ctx);
+    assert.equal(f.thinking, "high");
+  });
+});
+
+test("switch_role supports one-step role switch plus thinkingLevel assessment and stays atomic on rejection", async () => {
+  await withTempDirectory(async cwd => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 3, modelStrategy: "auto", autoModel: fixed, roleModels,
+    }));
+    const f = fixture(cwd, false);
+    const runtime = createRoleRuntime(f.pi, f.state, {
+      activityStatus: { setRole() {} },
+      acknowledgeRoleRecovery() { f.state.roleRecoveryPending = false; },
+    });
+    const handoffs = [];
+    registerRoleTool(f.pi, f.state, {
+      roleRuntime: runtime,
+      roleHandoff: {
+        checkSwitchRole: () => ({ allowed: true }),
+        capture: () => ({ activeRole: f.state.activeRole ? { ...f.state.activeRole } : undefined }),
+        finishSwitch: (_ctx, source, result) => {
+          handoffs.push({ from: source.activeRole, to: result });
+          return { terminate: true, handoffId: `handoff-${handoffs.length}` };
+        },
+      },
+      userControl: {},
+      observeRejection() { assert.fail("assessment rejection must not enter role-switch retry guard"); },
+    });
+    const tool = f.tools.get("switch_role");
+    await runtime.automaticRole("docs-commit", f.ctx);
+    assert.equal(f.thinking, "low");
+
+    // Validation rejection on combined switch_role must not mutate role, thinkingLevel, or recovery state.
+    f.state.roleRecoveryPending = true;
+    const branchBefore = f.branch.length;
+    const rejected = await tool.execute("bad-reason", {
+      role: "developer-test", thinkingLevel: "high", reason: " ",
+    }, undefined, undefined, f.ctx);
+    assert.equal(rejected.details.code, "AUTO_REASON_MISSING");
+    assert.equal(f.state.activeRole.role, "docs-commit");
+    assert.equal(f.thinking, "low");
+    assert.equal(f.state.roleRecoveryPending, true);
+    assert.equal(f.branch.length, branchBefore);
+    assert.equal(handoffs.length, 0);
+
+    // Valid one-step switch_role sets role + thinkingLevel + assessment + handoff in one call.
+    const ok = await tool.execute("one-step", {
+      role: "developer-test", thinkingLevel: "high", reason: "Cross-module recovery boundary",
+    }, undefined, undefined, f.ctx);
+    assert.equal(ok.details.role, "developer-test");
+    assert.equal(ok.details.thinkingLevel, "high");
+    assert.equal(ok.details.assessment.to, "high");
+    assert.equal(ok.terminate, true);
+    assert.equal(f.state.activeRole.role, "developer-test");
+    assert.equal(f.thinking, "high");
+    assert.equal(f.state.roleRecoveryPending, false);
+    assert.equal(handoffs.length, 1);
+    assert.equal(await businessResult(f), undefined);
+    assert.equal(f.notices.length, 0, "one-step assessment prevents missing-assessment reminder");
+
+    // Persistence failure on combined switch still completes the role transition and reports partial failure.
+    const append = f.pi.appendEntry;
+    f.pi.appendEntry = (type, data) => {
+      if (data.assessment && data.role === "reviewer") throw new Error("storage full");
+      append(type, data);
+    };
+    const partial = await tool.execute("persist-fail-switch", {
+      role: "reviewer", thinkingLevel: "low", reason: "Simple review",
+    }, undefined, undefined, f.ctx);
+    assert.equal(partial.details.code, "AUTO_ASSESSMENT_PERSIST_FAILED");
+    assert.equal(partial.details.persistFailed, true);
+    assert.equal(partial.details.role, "reviewer");
+    assert.equal(partial.details.thinkingLevel, "low");
+    assert.equal(partial.terminate, true);
+    assert.match(partial.content[0].text, /评估记录保存未获确认/);
+    assert.equal(handoffs.length, 2);
   });
 });

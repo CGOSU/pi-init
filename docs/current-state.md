@@ -109,7 +109,7 @@
 
 ## 当前目标
 
-- 维护随 package 发布的公共职责路由 Skill。模型策略仅有按职责映射（`roles`）与固定模型自适应强度（`auto`）两种，均自动应用；策略切换保留另一套配置。旧 `confirm`/`manual` 限制配置须由用户明确启用迁移并显式保存，不可静默升级。任务边界、安全约束及迁移细节见 [README](../README.md) 与 [设计决策](decisions.md#2026-11-10统一角色模型与固定模型策略的全自动执行)。
+- 维护随 package 发布的公共职责路由 Skill。模型策略仅有按职责映射（`roles`）与固定模型自适应强度（`auto`）两种，均自动应用；策略切换保留另一套配置。Auto 下切入 `architect` 自动设为 `maxThinkingLevel`、`docs-commit` 自动设为 `minThinkingLevel` 并视为已定档，`developer-test` 及自定义角色默认 `initialThinkingLevel` 并支持随 `switch_role` 一步定档或按阶段复杂度在 `[min, max]` 间调整。旧 `confirm`/`manual` 限制配置须由用户明确启用迁移并显式保存，不可静默升级。任务边界、安全约束及迁移细节见 [README](../README.md) 与 [设计决策](decisions.md#2026-11-10统一角色模型与固定模型策略的全自动执行)。
 
 ## 当前已确认事实
 

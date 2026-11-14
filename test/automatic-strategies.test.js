@@ -96,7 +96,11 @@ test("两种策略反复切换保留配置：角色映射强度与固定模型�
     assert.equal((await f.runtime.suggestThinking("reviewer", "low", "Local reversible task", f.ctx)).ok, true);
     await f.runtime.automaticRole("architect", f.ctx);
     assert.equal(f.ctx.model.id, fixedModel.id);
+    assert.equal(f.pi.getThinkingLevel(), "high");
+    await f.runtime.automaticRole("docs-commit", f.ctx);
     assert.equal(f.pi.getThinkingLevel(), "low");
+    await f.runtime.automaticRole("developer-test", f.ctx);
+    assert.equal(f.pi.getThinkingLevel(), "medium");
     f.runtime.stageRoleConfig({ modelStrategy: "roles" });
     const mapped = await f.runtime.automaticRole("reviewer", f.ctx);
     assert.equal(mapped.result.model, mappedModel.id);

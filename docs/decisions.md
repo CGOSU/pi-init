@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-11-15：固定模型 Auto 按职责基线定档并支持 switch_role 一步调档
+
+- 决定：固定模型 `auto` 策略下，切入 `architect` 自动应用配置的 `maxThinkingLevel`、切入 `docs-commit` 自动应用配置的 `minThinkingLevel` 并直接视为已定档（免除二次评估调用）；`developer-test` 及自定义角色默认起始强度 `initialThinkingLevel` 并按任务/阶段复杂度在 `[min, max]` 间调整。同时允许 `switch_role` 在切换或确认职责时直接附带 `thinkingLevel` 与 `reason` 一步完成换角与定档，并在注入提示中补充与配置范围绑定的分档参考。
+- 原因：原有实现下职责变化不调整强度且禁止换角与定档同调，导致切换到文档/架构职责或跨任务时容易长期停留在默认 `medium`，并额外多出一次调档往返。
+- 约束：用户手动强度接管、停止、职责恢复、未知结果保护、模型/凭据失败不回退及同职责评估不触发换角/结束回合的原有边界全部保持不变；未在真实 Pi 宿主或在线模型中验证实际缓存与质量收益，磁盘源码未同步到本机安装副本。
+- 验证：`npm run typecheck` 通过；`node ./scripts/test.js test/auto-model-runtime.test.js test/automatic-strategies.test.js test/role-model-persistence.test.js test/control-center-menu.test.js test/tool-render-errors.test.js test/role-recovery.test.js test/workflow-handoff.test.js test/scaffold.test.js` 101 项全部通过。
+
 ### 2026-11-11：工作流完成默认报告压缩为摘要
 
 - 决定：默认完成摘要仅呈现目标、最终结果与任务进度、开始/结束时间和有效耗时；仅在验证失败/未执行/未记录、阻塞或未知结果时显示简短计数提醒。目标和结果摘要有界截断；完整任务 ID、逐项验证、实现原因、约束及处理细节保留在展开详情与模型只读依据中。
