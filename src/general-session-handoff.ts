@@ -13,12 +13,25 @@ export type HandoffDecision = {
   conclusion: string;
   rationale?: string;
 };
+export type HandoffApproach = {
+  approach: string;
+  outcome: string;
+  sources?: HandoffSource[];
+};
 export type GeneralHandoffContext = {
   goal: string; constraints: string[]; completed: string[]; remaining: string[];
   verification: { summary: string; sources: HandoffSource[] }[];
   unknowns: string[]; nextStep: string; sources: HandoffSource[];
   decisions?: HandoffDecision[];
+  approachesTried?: HandoffApproach[];
 };
+export function generalHandoffSources(context: GeneralHandoffContext): HandoffSource[] {
+  return [
+    ...context.sources,
+    ...context.verification.flatMap(check => check.sources),
+    ...(context.approachesTried ?? []).flatMap(item => item.sources ?? []),
+  ];
+}
 export type GeneralHandoffSnapshot = {
   version: 1; historical: true; context: GeneralHandoffContext;
   source: { sessionId: string; projectRoot: string; sessionFile: string; branchLeafId: string; branchHash: string; toolCallId: string };
@@ -32,7 +45,7 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
   if (!record(input)) return fail("TYPE", "交接正文必须是对象");
   const fields = ["goal", "constraints", "completed", "remaining", "verification", "unknowns", "nextStep", "sources"];
   if (fields.some(key => !(key in input))) return fail("MISSING", "交接正文缺少必填字段（无内容请显式使用空数组）");
-  if (Object.keys(input).some(key => !fields.includes(key) && key !== "decisions")) return fail("FIELD", "交接正文含未知字段，不能提交来源身份或执行授权");
+  if (Object.keys(input).some(key => !fields.includes(key) && key !== "decisions" && key !== "approachesTried")) return fail("FIELD", "交接正文含未知字段，不能提交来源身份或执行授权");
   for (const key of ["goal", "nextStep"]) {
     if (typeof input[key] !== "string") return fail("TYPE", `${key}必须是字符串`);
     if (!nonempty(input[key])) return fail("EMPTY", `${key}不能为空`);
@@ -63,6 +76,21 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
       if ("rationale" in decision && typeof decision.rationale !== "string") return fail("TYPE", "决策rationale必须是字符串；依据不明可省略或标记待确认");
     }
   }
+  if ("approachesTried" in input) {
+    if (!Array.isArray(input.approachesTried)) return fail("TYPE", "approachesTried必须是数组；无已尝试路径可省略或使用空数组");
+    for (const item of input.approachesTried) {
+      if (!record(item)) return fail("TYPE", "已尝试路径必须是对象");
+      if (Object.keys(item).some(key => !["approach", "outcome", "sources"].includes(key))) return fail("FIELD", "已尝试路径含未知字段");
+      for (const key of ["approach", "outcome"] as const) {
+        if (typeof item[key] !== "string") return fail("TYPE", `已尝试路径${key}必须是字符串`);
+        if (!nonempty(item[key])) return fail("EMPTY", `已尝试路径${key}不能为空`);
+      }
+      if ("sources" in item) {
+        const parsed = sources(item.sources);
+        if (!parsed.ok) return parsed;
+      }
+    }
+  }
   const parsedSources = sources(input.sources);
   if (!parsedSources.ok) return parsedSources;
   if (!Array.isArray(input.verification)) return fail("TYPE", "verification必须是数组；未验证使用空数组");
@@ -81,8 +109,12 @@ export function parseGeneralHandoff(input: unknown): HandoffResult<GeneralHandof
     decision.conclusion = decision.conclusion.trim();
     if (decision.rationale !== undefined) decision.rationale = decision.rationale.trim();
   }
+  for (const item of context.approachesTried ?? []) {
+    item.approach = item.approach.trim();
+    item.outcome = item.outcome.trim();
+  }
   for (const check of context.verification) check.summary = check.summary.trim();
-  for (const source of [...context.sources, ...context.verification.flatMap(check => check.sources)]) {
+  for (const source of generalHandoffSources(context)) {
     source.location = source.location.trim();
     source.description = source.description.trim();
   }
@@ -126,7 +158,7 @@ export function readGeneralHandoff(branch: readonly SessionEntry[], identity: { 
   if (![s.sessionId, s.projectRoot, s.sessionFile, s.branchLeafId, s.branchHash, s.toolCallId].every(nonempty)) return fail("IDENTITY", "交接来源身份不完整");
   if (s.sessionId !== identity.sessionId || s.projectRoot !== identity.projectRoot || s.sessionFile !== identity.sessionFile) return fail("IDENTITY", "交接来源session或项目不匹配");
   if (!branch.some(e => e.id === s.branchLeafId) || generalHandoffBranchHash(branch, s.toolCallId as string) !== s.branchHash) return fail("STALE", "交接后现场已变化，请重新准备并核对快照");
-  const allSources = [...parsed.value.sources, ...parsed.value.verification.flatMap(check => check.sources)];
+  const allSources = generalHandoffSources(parsed.value);
   if (allSources.some(source => source.kind === "session-entry" && !branch.some(e => e.id === source.location))) return fail("SOURCE_IDENTITY", "来源条目不属于当前branch");
   if (Buffer.byteLength(JSON.stringify(data), "utf8") > SESSION_HANDOFF_MAX_BYTES) return fail("TOO_LARGE", "交接快照超过32 KiB");
   return { ok: true, value: structuredClone(data) as GeneralHandoffSnapshot };
