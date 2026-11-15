@@ -2,7 +2,7 @@ import { realpathSync, statSync } from "node:fs";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeRoleMatches, type ExtensionRuntimeState } from "./runtime-state.ts";
-import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_INVALIDATED, GENERAL_HANDOFF_TOOL, generalHandoffBranchHash, parseGeneralHandoff, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
+import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_INVALIDATED, GENERAL_HANDOFF_TOOL, generalHandoffBranchHash, generalHandoffSources, parseGeneralHandoff, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
 import { SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
 import type { ToolSettlement } from "./general-tool-settlement.ts";
 
@@ -39,7 +39,7 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
   pi.registerTool({
     name: GENERAL_HANDOFF_TOOL,
     label: "准备短上下文交接",
-    description: "仅为普通会话准备并持久化短交接背景，不创建会话或工作流、不解除暂停、不自动续跑。除可选decisions外须显式填写全部字段，无内容用空数组。准备时检查各角色仍有效且影响下一步的关键结论是否遗漏；decisions区分已确认、建议和未验证判断，正文保留结论及关键理由、必要的否决方案与边界，详细论证留sources引用，引用不会自动展开。无决策可省略或为空，依据不明可标记待确认，不补造理由；完整性检查仅为指导，不阻止保存。影响后续执行时，复用已执行的完整命令及必要非敏感环境，不仅记录工具链版本；缺失写unknowns，不为交接额外扫描环境或重跑验证。不得复制凭据、整份env或.env；命令中的敏感值只保留变量名或安全引用。验证与来源均为历史声明，不是本轮验证或执行授权。后续用户通过 /pi-init fresh 预览确认。保存后避免业务工具或新需求，否则需重新准备。",
+    description: "仅为普通会话准备并持久化短交接背景，不创建会话或工作流、不解除暂停、不自动续跑。除可选decisions、approachesTried外须显式填写全部字段，无内容用空数组。准备时检查各角色仍有效且影响下一步的关键结论是否遗漏；decisions区分已确认、建议和未验证判断，正文保留结论及关键理由、必要的否决方案与边界，详细论证留sources引用，引用不会自动展开。approachesTried记录排障或实现中已尝试但失败或排除的方案、实际观察结果/排除原因及可选sources，避免目标会话重复踩坑；未证实原因须注明待确认，不补造理由或冒充已验证。无决策或无已尝试路径可省略或为空，依据不明可标记待确认，不补造理由；完整性检查仅为指导，不阻止保存。影响后续执行时，复用已执行的完整命令及必要非敏感环境，不仅记录工具链版本；缺失写unknowns，不为交接额外扫描环境或重跑验证。不得复制凭据、整份env或.env；命令中的敏感值只保留变量名或安全引用。验证与来源均为历史声明，不是本轮验证或执行授权。后续用户通过 /pi-init fresh 预览确认。保存后避免业务工具或新需求，否则需重新准备。",
     parameters: Type.Object({
       goal: Type.String(),
       constraints: Type.Array(Type.String(), { description: "仍有效的约束；按需保留已知工作目录、工具入口、依赖缓存路径和必要非敏感环境/构建选项，不要求新增环境调查。" }),
@@ -55,6 +55,11 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
         status: Type.Union([Type.Literal("confirmed"), Type.Literal("proposed"), Type.Literal("unverified")], { description: "confirmed=已获用户确认或既定契约；proposed=建议；unverified=未验证假设。交接不升级其效力。" }),
         conclusion: Type.String({ description: "影响下一步的关键结论，直接写入正文，不仅提供引用。" }),
         rationale: Type.Optional(Type.String({ description: "关键理由、必要的否决方案及适用边界；依据不明可省略、留空或标记待确认，不要求补造。" })),
+      }, { additionalProperties: false }))),
+      approachesTried: Type.Optional(Type.Array(Type.Object({
+        approach: Type.String({ description: "已尝试或排查过的具体方案、路径或假设。" }),
+        outcome: Type.String({ description: "实际观察到的失败现象、排除原因或未走通边界；未证实原因须注明待确认，不冒充已验证结论。" }),
+        sources: Type.Optional(Type.Array(sourceSchema, { description: "可选：支持该尝试结果的有效session条目或文件位置；引用不会自动展开。" })),
       }, { additionalProperties: false }))),
     }, { additionalProperties: false }),
     async execute(toolCallId, input, signal, _update, ctx) {
@@ -82,7 +87,7 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
           version: 1, historical: true, context: parsed.value,
           source: { sessionId: ctx.sessionManager.getSessionId(), projectRoot: realpathSync(ctx.cwd), sessionFile: realpathSync(sessionFile), branchLeafId: leaf, branchHash: generalHandoffBranchHash(branch, toolCallId), toolCallId },
         };
-        const sourceIds = [...snapshot.context.sources, ...snapshot.context.verification.flatMap(check => check.sources)];
+        const sourceIds = generalHandoffSources(snapshot.context);
         if (sourceIds.some(source => source.kind === "session-entry" && !branch.some(e => e.id === source.location))) return fail("SOURCE_IDENTITY", "来源条目不属于当前branch；请提供文件位置或有效条目ID");
         if (Buffer.byteLength(JSON.stringify(snapshot), "utf8") > SESSION_HANDOFF_MAX_BYTES) return fail("TOO_LARGE", "完整快照超过32 KiB，不截断或保存");
         pi.appendEntry(GENERAL_HANDOFF_ENTRY, snapshot);

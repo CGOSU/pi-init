@@ -81,6 +81,73 @@ test("decision context survives persistence without upgrading suggestions or ass
   });
 });
 
+test("approachesTried is optional, validates entries and sources, and trims whitespace", () => {
+  const source = { kind: "file", location: "  src/general-session-handoff.ts  ", description: "  schema边界  " };
+  for (const approachesTried of [[], [
+    { approach: "  直接截断超限快照  ", outcome: "  会导致约束丢失，已改用整包拒绝  " },
+    { approach: "  从obs_recall读取历史  ", outcome: "  跨会话不可用；原因待确认  ", sources: [source] },
+  ]]) {
+    const result = parseGeneralHandoff({ ...body(), approachesTried });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.approachesTried, approachesTried.map(item => ({
+      approach: item.approach.trim(),
+      outcome: item.outcome.trim(),
+      ...(item.sources !== undefined ? { sources: item.sources.map(s => ({ ...s, location: s.location.trim(), description: s.description.trim() })) } : {}),
+    })));
+  }
+  for (const [approachesTried, code] of [
+    [null, "TYPE"],
+    [[null], "TYPE"],
+    [[{ approach: "  ", outcome: "失败" }], "EMPTY"],
+    [[{ approach: "方案A", outcome: "  " }], "EMPTY"],
+    [[{ approach: 1, outcome: "失败" }], "TYPE"],
+    [[{ approach: "方案A", outcome: 1 }], "TYPE"],
+    [[{ approach: "方案A", outcome: "失败", verified: true }], "FIELD"],
+    [[{ approach: "方案A", outcome: "失败", sources: null }], "TYPE"],
+    [[{ approach: "方案A", outcome: "失败", sources: [{ kind: "obs_recall", location: "obs_1", description: "跨会话" }] }], "SOURCE_KIND"],
+    [[{ approach: "方案A", outcome: "失败", sources: [{ kind: "file", location: " ", description: "缺路径" }] }], "SOURCE_MISSING"],
+    [[{ approach: "方案A", outcome: "失败", sources: [{ kind: "file", location: "a.ts", description: " " }] }], "SOURCE_MISSING"],
+    [[{ approach: "方案A", outcome: "中".repeat(SESSION_HANDOFF_MAX_BYTES) }], "TOO_LARGE"],
+  ]) {
+    const result = parseGeneralHandoff({ ...body(), approachesTried });
+    assert.equal(result.ok, false, JSON.stringify(approachesTried));
+    assert.equal(result.code, code);
+  }
+});
+
+test("approachesTried persists and enforces branch source identity on save and read", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const branchSource = { kind: "session-entry", location: h.manager.getBranch()[0].id, description: "初始需求" };
+    const foreign = {
+      ...body(),
+      approachesTried: [{
+        approach: "尝试复用跨分支条目",
+        outcome: "应被来源校验拦截",
+        sources: [{ kind: "session-entry", location: "other-branch", description: "跨分支来源" }],
+      }],
+    };
+    assert.equal((await h.save(foreign)).code, "SOURCE_IDENTITY");
+
+    const approachesTried = [
+      { approach: "方案A：全局拦截", outcome: "破坏既有边界，已排除", sources: [branchSource] },
+      { approach: "方案B：跳过校验", outcome: "存在安全风险，已排除" },
+    ];
+    const saved = await h.save({ ...body(), approachesTried });
+    assert.equal(saved.ok, true);
+    const reopened = SessionManager.open(h.manager.getSessionFile(), cwd);
+    const read = readGeneralHandoff(reopened.getBranch(), saved.value.source);
+    assert.equal(read.ok, true);
+    assert.deepEqual(read.value.context.approachesTried, approachesTried);
+
+    const foreignRead = structuredClone(reopened.getBranch());
+    foreignRead.findLast(e => e.customType === GENERAL_HANDOFF_ENTRY).data.context.approachesTried[0].sources = [
+      { kind: "session-entry", location: "other-branch", description: "跨分支来源" },
+    ];
+    assert.equal(readGeneralHandoff(foreignRead, saved.value.source).code, "SOURCE_IDENTITY");
+  });
+});
+
 test("preparation persists source-bound historical background without migration or workflow", async () => {
   await withTempDirectory(async cwd => {
     const h = fixture(cwd);

@@ -126,6 +126,38 @@ test("decision context reaches preview and the persisted target background witho
   });
 });
 
+test("approachesTried reaches preview and persisted target background alongside decisions without auto-resuming", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    const decisions = [
+      { status: "confirmed", conclusion: "不扩大交接授权", rationale: "历史背景不能恢复执行身份" },
+      { status: "unverified", conclusion: "并发瓶颈原因待确认" },
+    ];
+    const approachesTried = [
+      {
+        approach: "尝试直接修改全局状态跳过校验",
+        outcome: "触发分支与身份失配，已排除",
+        sources: [{ kind: "file", location: "src/general-session-handoff.ts", description: "校验入口" }],
+      },
+      { approach: "尝试增加缓存参数", outcome: "未复现改善，原因待确认" },
+    ];
+    const snapshot = await h.save({ decisions, approachesTried });
+    await h.api.fresh(h.ctx);
+    assert.equal(h.calls, 1);
+    assert.ok(h.confirmations[0].content.includes("approachesTried记录历史已尝试但失败或排除的路径"));
+    assert.ok(h.confirmations[0].content.includes(JSON.stringify(snapshot)));
+    const reopened = SessionManager.open(h.target.manager.getSessionFile(), cwd);
+    const background = reopened.getBranch().find(e => e.type === "message" && e.message.role === "user").message.content;
+    assert.ok(background.includes("approachesTried记录历史已尝试但失败或排除的路径"));
+    assert.ok(background.includes(JSON.stringify(snapshot)));
+    const incoming = reopened.getEntries().find(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY).data;
+    assert.deepEqual(incoming.snapshot.context.decisions, decisions);
+    assert.deepEqual(incoming.snapshot.context.approachesTried, approachesTried);
+    assert.equal(h.target.state.workflowState, undefined);
+    assert.equal(reopened.getEntries().filter(e => e.type === "message").length, 1);
+  });
+});
+
 test("received sessions can prepare another handoff and create a distinct successor, including after reload", async () => {
   for (const reload of [false, true]) await withTempDirectory(async cwd => {
     const a = fixture(cwd);
