@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ToolSettlement } from "./general-tool-settlement.ts";
 import { realpathSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { activeRoleMatches, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { activeRoleMatches, firstPolicyMatch, hasCompactionGate, isActiveWorkflowStatus, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
 import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_TOOL, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../src/general-session-handoff.ts";
 import { isRecord } from "./role-context-protocol.ts";
@@ -34,22 +34,24 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
   let storageUncertain = false;
   function checkReady(ctx: ExtensionContext): HandoffResult<true> {
     const fail = (code: string, message: string): HandoffResult<never> => ({ ok: false, code, message });
-    if (!ctx.isProjectTrusted()) return fail("PROJECT_UNTRUSTED", "当前项目尚未受信任，不能交接。");
-    if (!ctx.isIdle() || state.agentRunActive) return fail("AGENT_BUSY", "Agent仍在运行，请等待本轮结束。");
-    if (ctx.hasPendingMessages()) return fail("MESSAGES_PENDING", "仍有排队消息，请先处理后重新准备快照。");
-    if (ctx.signal?.aborted || state.runtimeDisposed) return fail("CONTEXT_INACTIVE", "当前运行已中止或上下文失效，先核对会话状态。");
-    if (state.userStopRequested) return fail("USER_STOPPED", "用户停止保护仍生效，请先核对停止原因；交接不能解除停止。");
-    if (state.roleRecoveryPersistenceFailed) return fail("ROLE_STORAGE", "职责恢复记录保存失败，请先修复持久化问题。");
-    if (state.roleRecoveryPending) return fail("ROLE_RECOVERY", "当前职责尚未确认，请先用 /pi-init role <职责> 确认，再重新准备交接。");
-    if (state.workflowRestoreError || state.pendingWorkflowRecovery) return fail("WORKFLOW_RECOVERY", "工作流恢复尚未确认，不能通过普通交接绕过。");
-    if (state.roleCompactionInFlight || state.pendingRoleCompaction || state.activeRoleCompaction) return fail("COMPACTION_PENDING", "压缩或其恢复尚未结束，请先核对结果。");
-    if (state.workflowDispatchInFlight || state.internalContinuationPending) return fail("CONTINUATION_PENDING", "派发或内部续接尚未结束，请先等待执行收敛。");
-    if (Object.keys(state.sessionRoleConfigOverrides).length > 0) return fail("UNSAVED_CONFIG", "存在会话临时模型配置；请保存所需配置或撤销覆盖后再准备交接。");
-    if (state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status)) return fail("WORKFLOW_ACTIVE", "未结束工作流必须沿工作流安全边界交接。");
-    if (!state.activeRole || !activeRoleMatches(state, ctx, pi.getThinkingLevel())) return fail("ROLE_MODEL_MISMATCH", "职责与当前模型/推理级别不匹配；请先确认职责，再重新准备交接。");
+    const failure = firstPolicyMatch<readonly [string, string]>([
+      [!ctx.isProjectTrusted(), ["PROJECT_UNTRUSTED", "当前项目尚未受信任，不能交接。"]],
+      [!ctx.isIdle() || state.agentRunActive, ["AGENT_BUSY", "Agent仍在运行，请等待本轮结束。"]],
+      [ctx.hasPendingMessages(), ["MESSAGES_PENDING", "仍有排队消息，请先处理后重新准备快照。"]],
+      [ctx.signal?.aborted || state.runtimeDisposed, ["CONTEXT_INACTIVE", "当前运行已中止或上下文失效，先核对会话状态。"]],
+      [state.userStopRequested, ["USER_STOPPED", "用户停止保护仍生效，请先核对停止原因；交接不能解除停止。"]],
+      [state.roleRecoveryPersistenceFailed, ["ROLE_STORAGE", "职责恢复记录保存失败，请先修复持久化问题。"]],
+      [state.roleRecoveryPending, ["ROLE_RECOVERY", "当前职责尚未确认，请先用 /pi-init role <职责> 确认，再重新准备交接。"]],
+      [state.workflowRestoreError || state.pendingWorkflowRecovery, ["WORKFLOW_RECOVERY", "工作流恢复尚未确认，不能通过普通交接绕过。"]],
+      [hasCompactionGate(state), ["COMPACTION_PENDING", "压缩或其恢复尚未结束，请先核对结果。"]],
+      [state.workflowDispatchInFlight || state.internalContinuationPending, ["CONTINUATION_PENDING", "派发或内部续接尚未结束，请先等待执行收敛。"]],
+      [Object.keys(state.sessionRoleConfigOverrides).length > 0, ["UNSAVED_CONFIG", "存在会话临时模型配置；请保存所需配置或撤销覆盖后再准备交接。"]],
+      [isActiveWorkflowStatus(state.workflowState), ["WORKFLOW_ACTIVE", "未结束工作流必须沿工作流安全边界交接。"]],
+      [!state.activeRole || !activeRoleMatches(state, ctx, pi.getThinkingLevel()), ["ROLE_MODEL_MISMATCH", "职责与当前模型/推理级别不匹配；请先确认职责，再重新准备交接。"]],
+    ]);
+    if (failure) return fail(failure[0], failure[1]);
     const settlement = deps.toolsSettled(ctx);
-    if (!settlement.ok) return fail(settlement.code, settlement.message);
-    return { ok: true, value: true };
+    return settlement.ok ? { ok: true, value: true } : fail(settlement.code, settlement.message);
   }
   const ready = (ctx: ExtensionContext) => checkReady(ctx).ok;
   function blocked(ctx: ExtensionContext) {
@@ -67,10 +69,13 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
   function verify(data: unknown, ctx: ExtensionContext): HandoffResult<GeneralHandoffSnapshot> {
     const fail = (code: string, message: string): HandoffResult<never> => ({ ok: false, code, message });
     if (!isRecord(data)) return fail("TYPE", "目标交接记录必须为对象");
-    if (data.version !== 1 || data.kind !== "incoming" || !isRecord(data.snapshot)
-      || ![data.id, data.sourceLeaf, data.hash, data.targetSessionId].every(v => typeof v === "string" && v.length > 0)) return fail("INVALID", "目标交接包身份不完整");
-    if (Buffer.byteLength(JSON.stringify(data), "utf8") > SESSION_HANDOFF_MAX_BYTES) return fail("TOO_LARGE", "目标完整交接包超限");
-    if (data.targetSessionId !== ctx.sessionManager.getSessionId() || handoffHash(data.snapshot) !== data.hash) return fail("IDENTITY", "目标session或交接内容不匹配");
+    const headerErr = firstPolicyMatch<readonly [string, string]>([
+      [data.version !== 1 || data.kind !== "incoming" || !isRecord(data.snapshot)
+        || ![data.id, data.sourceLeaf, data.hash, data.targetSessionId].every(v => typeof v === "string" && v.length > 0), ["INVALID", "目标交接包身份不完整"]],
+      [Buffer.byteLength(JSON.stringify(data), "utf8") > SESSION_HANDOFF_MAX_BYTES, ["TOO_LARGE", "目标完整交接包超限"]],
+      [data.targetSessionId !== ctx.sessionManager.getSessionId() || handoffHash(data.snapshot) !== data.hash, ["IDENTITY", "目标session或交接内容不匹配"]],
+    ]);
+    if (headerErr) return fail(headerErr[0], headerErr[1]);
     const record = data as unknown as Incoming;
     const source = record.snapshot.source;
     if (!isRecord(source) || ![source.projectRoot, source.sessionFile, source.sessionId].every(v => typeof v === "string" && v.length > 0)
@@ -83,24 +88,27 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       if (!manager.getEntry(record.sourceLeaf)) return fail("BRANCH", "来源branch不存在");
       const checked = readGeneralHandoff(manager.getBranch(record.sourceLeaf), source);
       if (!checked.ok) return checked;
-      if (handoffHash(checked.value) !== record.hash) return fail("STALE", "来源快照已变化");
       const intent = manager.getEntries().findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY
         && isRecord(e.data) && e.data.kind === "outgoing" && e.data.sourceSessionId === source.sessionId);
-      if (intent?.type !== "custom" || !isRecord(intent.data) || intent.data.version !== 1 || intent.data.phase !== "prepared"
-        || intent.data.id !== record.id || intent.data.sourceLeaf !== record.sourceLeaf || intent.data.hash !== record.hash) return fail("SOURCE_LOCK", "来源冻结记录不匹配");
       const branch = ctx.sessionManager.getBranch();
       const entry = incomingEntry(ctx);
       const hasBody = (items: typeof branch) => items.some(e => e.type === "message" && e.message.role === "user" && e.message.content === background(checked.value));
-      if (!entry || !branch.some(e => e.id === entry.id) || !hasBody(branch)) return fail("INCOMPLETE", "目标正文或当前branch不完整；不新建目标");
       const targetFile = ctx.sessionManager.getSessionFile();
       const targetLeaf = ctx.sessionManager.getLeafId();
-      if (!targetFile || !targetLeaf) return fail("PERSISTENCE", "目标尚未持久化");
-      const targetArchive = readHandoffArchive(targetFile, source.projectRoot, record.targetSessionId);
+      const sourceErr = firstPolicyMatch<readonly [string, string]>([
+        [handoffHash(checked.value) !== record.hash, ["STALE", "来源快照已变化"]],
+        [intent?.type !== "custom" || !isRecord(intent.data) || intent.data.version !== 1 || intent.data.phase !== "prepared"
+          || intent.data.id !== record.id || intent.data.sourceLeaf !== record.sourceLeaf || intent.data.hash !== record.hash, ["SOURCE_LOCK", "来源冻结记录不匹配"]],
+        [!entry || !branch.some(e => e.id === entry.id) || !hasBody(branch), ["INCOMPLETE", "目标正文或当前branch不完整；不新建目标"]],
+        [!targetFile || !targetLeaf, ["PERSISTENCE", "目标尚未持久化"]],
+      ]);
+      if (sourceErr) return fail(sourceErr[0], sourceErr[1]);
+      const targetArchive = readHandoffArchive(targetFile!, source.projectRoot, record.targetSessionId);
       if (!targetArchive.ok) return targetArchive;
       const target = targetArchive.value;
-      const savedRecord = target.getEntry(entry.id);
-      if (!target.getEntry(targetLeaf) || savedRecord?.type !== "custom" || handoffHash(savedRecord.data) !== handoffHash(record)
-        || !hasBody(target.getBranch(targetLeaf))) return fail("PERSISTENCE", "目标交接包或正文持久化尚未确认");
+      const savedRecord = target.getEntry(entry!.id);
+      if (!target.getEntry(targetLeaf!) || savedRecord?.type !== "custom" || handoffHash(savedRecord.data) !== handoffHash(record)
+        || !hasBody(target.getBranch(targetLeaf!))) return fail("PERSISTENCE", "目标交接包或正文持久化尚未确认");
       return checked;
     } catch (error) { return fail("PERSISTENCE", "来源或目标文件核对失败：" + String(error)); }
   }

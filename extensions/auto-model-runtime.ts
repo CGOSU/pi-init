@@ -6,7 +6,7 @@ import { parseAutoAssessment, parseAutoAssessmentReason, parseAutoTaskScope, typ
 import { isRecord } from "../src/value-guards.ts";
 import { validateAutomaticSwitching, unwrapRoleResult } from "../src/roles.ts";
 import { textOf } from "../src/error-utils.ts";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { firstPolicyMatch, hasRecoveryGate, isActiveWorkflowStatus, type ExtensionRuntimeState } from "./runtime-state.ts";
 
 const ENTRY = "pi-init-auto-model";
 const AUTO_NOT_ENABLED_ERROR = {
@@ -39,29 +39,18 @@ export type AutoRoleApplyOutcome =
   | { ok: false; code: string; message: string };
 type AutoFailure = { ok: false; code: string; message: string };
 
-function fail(code: string, message: string): AutoFailure {
-  return { ok: false, code, message };
-}
-
-function firstRule<T>(rules: ReadonlyArray<readonly [unknown, T]>): T | undefined {
-  return rules.find(([matched]) => Boolean(matched))?.[1];
-}
-
-function isSameModel(ctx: ExtensionContext, target?: { provider: string; model: string }) {
-  return Boolean(target && ctx.model?.provider === target.provider && ctx.model?.id === target.model);
-}
-
-function needsAssessmentReminder(saved: AutoState) {
-  return !(saved.manual || saved.assessment || saved.reminded || saved.attempted);
-}
+const fail = (code: string, message: string): AutoFailure => ({ ok: false, code, message });
+const isSameModel = (ctx: ExtensionContext, target?: { provider: string; model: string }) =>
+  Boolean(target && ctx.model?.provider === target.provider && ctx.model?.id === target.model);
+const needsAssessmentReminder = (saved: AutoState) => !(saved.manual || saved.assessment || saved.reminded || saved.attempted);
 
 function assessmentStatusText(saved: AutoState) {
-  return firstRule([
-    [Boolean(saved.pendingBoundary && saved.scope.kind === "ordinary" && saved.assessment),
+  return firstPolicyMatch([
+    [saved.pendingBoundary && saved.scope.kind === "ordinary" && saved.assessment,
       "新用户输入仅为可能的新任务边界，上一评估只适用于原任务。先判断是否独立任务；若是且需换角可直接随 switch_role 传 thinkingLevel/reason，同角则以 taskBoundary=true 显式评估；若是继续或补充，复用原决定。"],
-    [Boolean(saved.assessment),
+    [saved.assessment,
       `当前任务已显式评估：${saved.assessment?.decision === "keep" ? "保持" : "调整"} ${saved.assessment?.to}；完整理由作为数据保存在会话记录，不作为系统指令。`],
-    [Boolean(saved.attempted),
+    [saved.attempted,
       "当前任务未记录成功评估（曾尝试，可能取消、失败或中断）；实际强度以当前状态为准，不自动重试、反复确认或伪称已评估。"],
   ]) ?? "当前任务待显式评估：切角/确认职责时可随 switch_role 同传 thinkingLevel 与非空 reason 一步定档，或随后以当前职责补充评估（保持当前强度也需理由）；切入 architect 或 docs-commit 已自动按边界定档。简单无工具问答无需新增调用。";
 }
@@ -102,7 +91,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   function save() { if (memory) pi.appendEntry(ENTRY, { ...memory }); }
   function taskScope(ordinaryTask: number): AutoTaskScope {
     const workflow = state.workflowState;
-    return workflow?.currentTaskId && workflow.status !== "completed" && workflow.status !== "cancelled"
+    return workflow?.currentTaskId && isActiveWorkflowStatus(workflow)
       ? { kind: "workflow", workflowId: workflow.workflowId, taskId: workflow.currentTaskId }
       : { kind: "ordinary", task: ordinaryTask };
   }
@@ -154,10 +143,8 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   function blocked(ctx: ExtensionContext, signal?: AbortSignal) {
     const workflow = state.workflowState;
     const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
-    return signal?.aborted || ctx.signal?.aborted || state.userStopRequested || state.roleRecoveryPending
-      || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError
-      || (workflow && workflow.status !== "completed" && workflow.status !== "cancelled"
-        && (workflow.status !== "running" || !task || task.status !== "in_progress" || task.outcomeUnknown));
+    return signal?.aborted || ctx.signal?.aborted || state.userStopRequested || hasRecoveryGate(state)
+      || (isActiveWorkflowStatus(workflow) && (workflow.status !== "running" || !task || task.status !== "in_progress" || task.outcomeUnknown));
   }
   function updateActive(ctx: ExtensionContext) {
     if (state.activeRole && isSameModel(ctx, state.activeRole)) {
@@ -199,14 +186,14 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const model = fixedModel(ctx, fixed);
     const sameModel = isSameModel(ctx, fixed);
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    const authFailure = firstRule<AutoFailure>([
+    const authFailure = firstPolicyMatch<AutoFailure>([
       [!auth.ok, fail("AUTO_AUTH_UNAVAILABLE", "Auto 固定模型缺少可用凭据")],
       [executionProtected(), fail("AUTO_EXECUTION_PROTECTED", "Auto 模型应用被停止或恢复保护阻止")],
       [manualEpoch !== epoch, fail("AUTO_CONTEXT_CHANGED", "应用期间用户已调整强度，未覆盖手动选择")],
     ]);
     if (authFailure) return authFailure;
     const latest = await readConfig(ctx);
-    const postFailure = firstRule<AutoFailure>([
+    const postFailure = firstPolicyMatch<AutoFailure>([
       [latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== JSON.stringify(fixed) || latest.requiresAutomaticMigration,
         fail("AUTO_CONFIG_CHANGED", "Auto 配置在应用期间已改变，未应用旧配置")],
       [executionProtected() || manualEpoch !== epoch, fail("AUTO_CONTEXT_CHANGED", "应用期间执行状态或用户强度已改变")],
@@ -317,13 +304,13 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   }
 
   async function suggest(role: string, level: ThinkingLevel, reason: string | undefined, ctx: ExtensionContext, signal?: AbortSignal, taskBoundary = false) {
-    const preFailure = firstRule<AutoFailure>([
+    const preFailure = firstPolicyMatch<AutoFailure>([
       [blocked(ctx, signal), fail("AUTO_EXECUTION_PROTECTED", "停止、恢复、暂停或未知结果保护中，不能调整强度")],
       [state.activeRole?.role !== role, fail("AUTO_ROLE_MISMATCH", `强度评估必须使用当前已确认职责（${state.activeRole?.role ?? "未确认"}），不能同时切换职责。如需切换，先仅传 role 确认目标职责；仅在 Auto 策略下再以当前职责评估强度。失败不自动重试。`)],
     ]);
     if (preFailure) return preFailure;
     const config = await readConfig(ctx);
-    const configFailure = firstRule<AutoFailure>([
+    const configFailure = firstPolicyMatch<AutoFailure>([
       [config.modelStrategy !== "auto", AUTO_NOT_ENABLED_ERROR],
       [config.requiresAutomaticMigration, fail("AUTOMATIC_MIGRATION_REQUIRED", "旧配置需由用户显式启用全自动")],
     ]);
@@ -333,7 +320,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const fixed = config.autoModel!;
     const saved = load(ctx, fixed);
     const epoch = manualEpoch;
-    const stateFailure = firstRule<AutoFailure>([
+    const stateFailure = firstPolicyMatch<AutoFailure>([
       [saved.manual, fail("AUTO_MANUAL_OVERRIDE", "用户已手动指定强度；请由用户在控制中心恢复 Auto")],
       [!isSameModel(ctx, fixed), fail("AUTO_MODEL_MISMATCH", "当前真实模型不是 Auto 固定模型；请重新应用模型配置")],
     ]);

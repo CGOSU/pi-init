@@ -2,7 +2,7 @@ import { isRecord, recordOrEmpty as object } from "../src/value-guards.ts";
 import { createHmac, randomBytes } from "node:crypto";
 import { createCacheDiagnosticComparison } from "./cache-diagnostic-comparison.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { firstPolicyMatch, type ExtensionRuntimeState } from "./runtime-state.ts";
 
 type Data = Record<string, unknown>;
 type Count = { state: string; tokens?: number; message?: string };
@@ -29,13 +29,14 @@ export const cacheDiagnosticFields = [
 ] as const;
 
 function count(value: unknown): Count {
-  if (value === undefined) return { state: "missing", message: "Cache token count was not supplied." };
-  if (typeof value !== "number") return { state: "invalid-type", message: "Cache token count must be numeric." };
-  if (!Number.isFinite(value)) return { state: "invalid-format", message: "Cache token count must be finite." };
-  if (value < 0) return { state: "invalid-range", message: "Cache token count must be nonnegative." };
-  if (!Number.isInteger(value)) return { state: "invalid-precision", message: "Cache token count must be integral." };
-  if (!Number.isSafeInteger(value)) return { state: "invalid-overflow", message: "Cache token count exceeds the safe integer range." };
-  return { state: value === 0 ? "zero" : "positive", tokens: value };
+  return firstPolicyMatch<Count>([
+    [value === undefined, { state: "missing", message: "Cache token count was not supplied." }],
+    [typeof value !== "number", { state: "invalid-type", message: "Cache token count must be numeric." }],
+    [!Number.isFinite(value), { state: "invalid-format", message: "Cache token count must be finite." }],
+    [(value as number) < 0, { state: "invalid-range", message: "Cache token count must be nonnegative." }],
+    [!Number.isInteger(value), { state: "invalid-precision", message: "Cache token count must be integral." }],
+    [!Number.isSafeInteger(value), { state: "invalid-overflow", message: "Cache token count exceeds the safe integer range." }],
+  ]) ?? { state: value === 0 ? "zero" : "positive", tokens: value as number };
 }
 function usage(value: unknown, readKey: string, writeKey: string): Usage {
   const fields = object(value);
@@ -195,6 +196,38 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
       read: raw.read.state === "missing" ? request.usage.read : raw.read,
       write: raw.write.state === "missing" ? request.usage.write : raw.write };
   }
+  const openaiApis = new Set(["openai-responses", "openai-codex-responses", "azure-openai-responses"]);
+  const terminalResponseEvents = new Set(["response.completed", "response.done", "response.incomplete", "response.failed"]);
+  function handleOpenAiStream(request: ActiveRequest, raw: Data) {
+    const response = object(raw.response);
+    bindResponse(request, response.id);
+    if (raw.type === "response.created" && request.responseId) request.responseStarted = true;
+    if (!terminalResponseEvents.has(String(raw.type))) return;
+    if (!request.responseStarted) request.data.correlation = "unknown-response-start";
+    const original = object(response.usage);
+    const parsed = usage(original.input_tokens_details, "cached_tokens", "cache_write_tokens");
+    parsed.state = response.usage === undefined ? "missing" : !isRecord(response.usage) ? "invalid" : "observed";
+    observeUsage(request, parsed, String(raw.type), true);
+    if (raw.type === "response.failed") request.data.correlation = "unknown-provider-failure";
+  }
+  function handleAnthropicStream(request: ActiveRequest, raw: Data) {
+    const message = object(raw.message);
+    switch (raw.type) {
+      case "message_start":
+        bindResponse(request, message.id);
+        if (request.responseId) request.responseStarted = true;
+        else request.data.correlation = "unknown-response-start";
+        observeUsage(request, usage(message.usage, "cache_read_input_tokens", "cache_creation_input_tokens"), "message_start");
+        break;
+      case "message_delta":
+        if (!request.responseStarted) request.data.correlation = "unknown-response-start";
+        observeUsage(request, usage(raw.usage, "cache_read_input_tokens", "cache_creation_input_tokens"), "message_delta");
+        break;
+      case "error":
+        request.data.correlation = "unknown-provider-failure";
+        break;
+    }
+  }
   function stream(ctx: ExtensionContext, event: { provider: string; model: string; api: string; data: unknown }) {
     safe(ctx, () => {
       const request = current(ctx);
@@ -203,43 +236,21 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
       if (request.provider !== event.provider || request.model !== event.model) { request.data.correlation = "unknown-model"; return; }
       const raw = object(event.data);
       const api = event.api;
-      if (["openai-responses", "openai-codex-responses", "azure-openai-responses"].includes(api)) {
-        request.data.rawApi = api;
-        const response = object(raw.response);
-        bindResponse(request, response.id);
-        if (raw.type === "response.created" && request.responseId) request.responseStarted = true;
-        if (["response.completed", "response.done", "response.incomplete", "response.failed"].includes(String(raw.type))) {
-          if (!request.responseStarted) request.data.correlation = "unknown-response-start";
-          const original = object(response.usage);
-          const parsed = usage(original.input_tokens_details, "cached_tokens", "cache_write_tokens");
-          parsed.state = response.usage === undefined ? "missing" : response.usage === null || typeof response.usage !== "object" || Array.isArray(response.usage) ? "invalid" : "observed";
-          observeUsage(request, parsed, String(raw.type), true);
-          if (raw.type === "response.failed") request.data.correlation = "unknown-provider-failure";
-        }
-      } else if (api === "anthropic-messages") {
-        request.data.rawApi = api;
-        const message = object(raw.message);
-        if (raw.type === "message_start") {
-          bindResponse(request, message.id);
-          if (request.responseId) request.responseStarted = true;
-          else request.data.correlation = "unknown-response-start";
-          observeUsage(request, usage(message.usage, "cache_read_input_tokens", "cache_creation_input_tokens"), "message_start");
-        }
-        if (raw.type === "message_delta") {
-          if (!request.responseStarted) request.data.correlation = "unknown-response-start";
-          observeUsage(request, usage(raw.usage, "cache_read_input_tokens", "cache_creation_input_tokens"), "message_delta");
-        }
-        if (raw.type === "error") request.data.correlation = "unknown-provider-failure";
-      } else { request.usage.state = "unsupported-api"; }
+      if (openaiApis.has(api)) { request.data.rawApi = api; handleOpenAiStream(request, raw); }
+      else if (api === "anthropic-messages") { request.data.rawApi = api; handleAnthropicStream(request, raw); }
+      else { request.usage.state = "unsupported-api"; }
     });
+  }
+  function bindAssistant(request: ActiveRequest, message: Data) {
+    const id = fingerprint([message.provider, message.model, message.timestamp]);
+    if (request.assistantId && request.assistantId !== id || lastAssistant === id) request.data.correlation = "unknown-assistant-id";
+    request.assistantId = id;
+    return id;
   }
   function assistantStart(ctx: ExtensionContext, message: Data) {
     safe(ctx, () => {
       const request = current(ctx);
-      if (!request || message.role !== "assistant") return;
-      const id = fingerprint([message.provider, message.model, message.timestamp]);
-      if (request.assistantId && request.assistantId !== id || lastAssistant === id) request.data.correlation = "unknown-assistant-id";
-      request.assistantId = id;
+      if (request && message.role === "assistant") bindAssistant(request, message);
     });
   }
   function assistant(ctx: ExtensionContext, message: Data) {
@@ -247,9 +258,7 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
       const request = current(ctx);
       if (!request) return;
       if (!request.provider || !request.model || request.provider !== message.provider || request.model !== message.model) request.data.correlation = "unknown-model";
-      const id = fingerprint([message.provider, message.model, message.timestamp]);
-      if (request.assistantId && request.assistantId !== id || lastAssistant === id) request.data.correlation = "unknown-assistant-id";
-      lastAssistant = id;
+      lastAssistant = bindAssistant(request, message);
       bindResponse(request, message.responseId);
       const outcome = ["stop", "length", "toolUse"].includes(String(message.stopReason)) ? "assistant" : message.stopReason === "error" ? "failed" : message.stopReason === "aborted" ? "aborted" : "unknown-assistant-outcome";
       finish(ctx, outcome, usage(message.usage, "cacheRead", "cacheWrite"));
