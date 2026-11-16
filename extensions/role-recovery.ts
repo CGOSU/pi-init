@@ -2,7 +2,13 @@ import { textOf } from "../src/error-utils.ts";
 import type { ContextEvent, ContextEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { validateWorkflowHandoffIdentity } from "../src/workflow.ts";
 import { roleLabel } from "../src/roles.ts";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import {
+  executingWorkflowTask,
+  hasRecoveryGate,
+  isActiveWorkflowStatus,
+  matchPolicy,
+  type ExtensionRuntimeState,
+} from "./runtime-state.ts";
 import { boundContextWindow, contextByteBudget } from "./role-context-budget.ts";
 import { isWaitingWorkflowBoundary } from "./role-context-waiting.ts";
 import { nextWorkflowAction } from "./workflow-action-policy.ts";
@@ -97,12 +103,9 @@ export function createRoleRecovery(
       const memory = messages.findLast(message => message.role === "custom" && message.customType === TASK_MEMORY_MESSAGE);
       if (!result?.messages && !memory) return result;
       const workflow = state.workflowState;
-      const task = workflow?.tasks.find(task => task.id === workflow.currentTaskId);
-      const liveTask = workflow?.status === "running" && workflow.handoff?.phase === "executing"
-        && task?.status === "in_progress" && !task.outcomeUnknown && state.activeRole?.role === task.role
-        && !state.roleRecoveryPending && !state.roleRecoveryPersistenceFailed && !state.workflowRestoreError
-        && !state.pendingWorkflowRecovery && !state.userStopRequested && !state.runtimeDisposed
-        && validateWorkflowHandoffIdentity(workflow, workflow.handoff, ctx).ok;
+      const active = executingWorkflowTask(state);
+      const liveTask = Boolean(active && !hasRecoveryGate(state) && !state.userStopRequested && !state.runtimeDisposed
+        && validateWorkflowHandoffIdentity(active.workflow, active.handoff, ctx).ok);
       // Live task history belongs to the SDK token-budget/compaction path, not a second byte-sized sliding window.
       const summarizedIds = memory?.role === "custom" ? (memory.details as { summarizedToolCallIds?: unknown } | undefined)?.summarizedToolCallIds : undefined;
       const summarized = new Set(Array.isArray(summarizedIds) ? summarizedIds.filter((id): id is string => typeof id === "string") : []);
@@ -131,7 +134,7 @@ export function createRoleRecovery(
       return candidate.customType !== ROLE_RECOVERY_MESSAGE_TYPE;
     });
     const activeRole = state.activeRole?.role ? roleLabel(state.activeRole.role) : "未知";
-    const activeWorkflow = Boolean(state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status));
+    const activeWorkflow = isActiveWorkflowStatus(state.workflowState);
     const roleRecoveryAction = "需要执行前调用 switch_role(role=...) 并等待成功。";
     const recoveryToolGuidance = state.activeRole?.role === "architect"
       ? `当前角色为 architect；${roleRecoveryAction} 在确认前不得读取文件、搜索、浏览、编辑、写入、执行 shell/test、初始化项目、协作或提交完成结果。无活动工作流且无需工具或新证据的简单问答可以直接回答，但不得把回答视为职责确认。`
@@ -158,34 +161,32 @@ export function createRoleRecovery(
     return finalize({ messages });
   }
 
+  function unknownOutcomeTask(workflow: ExtensionRuntimeState["workflowState"], workflowAction: unknown, input?: Record<string, unknown>) {
+    if (workflowAction !== "retry" && !(workflowAction === "replan" && input?.confirmUnknownOutcome === true)) return undefined;
+    const taskId = input?.taskId;
+    const task = workflowAction === "replan"
+      ? workflow?.tasks.find(item => item.outcomeUnknown)
+      : workflow?.tasks.find(item => taskId === undefined ? item.status === "blocked" : item.id === taskId);
+    return task?.outcomeUnknown ? task : undefined;
+  }
+
   function guardToolCall(event: { toolName: string; input?: Record<string, unknown> }) {
     if (event.toolName === "switch_role") return undefined;
     const readOnly = READ_ONLY_TOOLS.has(event.toolName);
     const workflowAction = event.toolName === "task_workflow" ? event.input?.action : undefined;
-    if (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) {
-      if (workflowAction !== "status" && !(state.activeRole?.role && state.activeRole.role !== "architect" && readOnly)) {
-        return { block: true, reason: "[pi-init-role-recovery] " + ROLE_RECOVERY_REASON };
-      }
-    }
     const workflow = state.workflowState;
-    if (workflowAction === "retry" || (workflowAction === "replan" && event.input?.confirmUnknownOutcome === true)) {
-      const taskId = event.input?.taskId;
-      const task = workflowAction === "replan"
-        ? workflow?.tasks.find(item => item.outcomeUnknown)
-        : workflow?.tasks.find(item => taskId === undefined ? item.status === "blocked" : item.id === taskId);
-      if (task?.outcomeUnknown) return {
-        block: true,
-        reason: "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。" + nextWorkflowAction(state).nextAction,
-      };
-    }
-    const unavailable = state.workflowRestoreError || state.pendingWorkflowRecovery || workflow?.status === "paused" || workflow?.status === "replanning";
-    if (!unavailable || readOnly) return undefined;
-    if (workflowAction && !["complete", "block", "clarify"].includes(String(workflowAction))) return undefined;
-    return {
-      block: true,
-      reason: "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。" + nextWorkflowAction(state).nextAction
-        + "codemode/bash 包装不属于暂停时允许的只读入口。",
-    };
+    const recoveryAllowed = workflowAction === "status" || Boolean(state.activeRole?.role && state.activeRole.role !== "architect" && readOnly);
+    const unavailable = Boolean(state.workflowRestoreError || state.pendingWorkflowRecovery || workflow?.status === "paused" || workflow?.status === "replanning");
+    const executionBlocked = unavailable && !readOnly && (!workflowAction || ["complete", "block", "clarify"].includes(String(workflowAction)));
+    const reason = matchPolicy([
+      [() => (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) && !recoveryAllowed,
+        "[pi-init-role-recovery] " + ROLE_RECOVERY_REASON],
+      [() => Boolean(unknownOutcomeTask(workflow, workflowAction, event.input)),
+        () => "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。" + nextWorkflowAction(state).nextAction],
+      [() => executionBlocked,
+        () => "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。" + nextWorkflowAction(state).nextAction + "codemode/bash 包装不属于暂停时允许的只读入口。"],
+    ]);
+    return reason ? { block: true, reason } : undefined;
   }
 
   pi.on("session_compact", (event, ctx) => afterCompact(event, ctx));

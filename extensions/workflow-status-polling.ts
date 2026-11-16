@@ -2,7 +2,12 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { isExternalRunSource } from "../src/run-timing.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
-import type { ExtensionRuntimeState, WorkflowState } from "./runtime-state.ts";
+import {
+  executingWorkflowTask,
+  isExecutionBlockedState,
+  type ExtensionRuntimeState,
+  type WorkflowState,
+} from "./runtime-state.ts";
 import { workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 
@@ -42,32 +47,31 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
   function hasBranchAnchor(ctx: ExtensionContext, anchor: string | undefined): anchor is string {
     return anchor !== undefined && ctx.sessionManager.getBranch().some(entry => entry.id === anchor);
   }
+  function trackBoundedCall<T>(map: Map<string, T>, toolCallId: string, entry: T, clear: () => void) {
+    map.set(toolCallId, entry);
+    if (map.size > 32) clear();
+  }
+  function popPendingCall<T extends { branchAnchor?: string }>(map: Map<string, T>, toolCallId: string, ctx: ExtensionContext, clear: () => void) {
+    const call = map.get(toolCallId);
+    map.delete(toolCallId);
+    if (call?.branchAnchor !== undefined && !hasBranchAnchor(ctx, call.branchAnchor)) clear();
+    return call;
+  }
   function resolveScope(ctx: ExtensionContext): ObservationScope | undefined {
-    if (!ctx?.isProjectTrusted?.()) return undefined;
-    if (state.runtimeDisposed || state.userStopRequested || state.roleRecoveryPending
-      || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError
-      || state.pendingRoleCompaction || state.roleCompactionInFlight || state.activeRoleCompaction) return undefined;
-    const w = state.workflowState;
-    if (!w) {
-      const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!ctx?.isProjectTrusted?.() || isExecutionBlockedState(state)) return undefined;
+    const sessionId = ctx.sessionManager?.getSessionId?.();
+    if (!state.workflowState) {
       if (typeof sessionId !== "string" || !sessionId.trim()) return undefined;
       const id = fingerprint(["ordinary-session", sessionId, state.activeRole ?? null,
         state.roleContextGeneration, state.roleTransitionGeneration]);
       return id ? { id, canPause: false } : undefined;
     }
-    const h = w.handoff;
-    const task = w.tasks.find(item => item.id === w.currentTaskId);
-    if (!h || !task || w.status !== "running" || h.phase !== "executing"
-      || task.status !== "in_progress" || task.outcomeUnknown || task.delegation
-      || !state.activeRole || task.role !== state.activeRole.role
-      || w.continuation || w.pendingRevision
-      || !w.workflowId || !h.attemptId || !h.handoffId || h.taskId !== task.id
-      || h.workflowId !== w.workflowId || h.planVersion !== w.planVersion
-      || h.recoveryGeneration !== w.recoveryGeneration || h.sessionId !== w.sessionId
-      || w.sessionId !== ctx.sessionManager.getSessionId() || !workflowHandoffMessageOnBranch(ctx, h)) return undefined;
-    const id = fingerprint([w.workflowId, w.planVersion, w.sessionId, w.recoveryGeneration,
-      task.id, h.attemptId, h.handoffId, state.activeRole,
-      state.roleContextGeneration, state.roleTransitionGeneration]);
+    const active = executingWorkflowTask(state, sessionId);
+    if (!active || active.task.delegation || active.workflow.continuation || active.workflow.pendingRevision
+      || !workflowHandoffMessageOnBranch(ctx, active.handoff)) return undefined;
+    const id = fingerprint([active.workflow.workflowId, active.workflow.planVersion, active.workflow.sessionId,
+      active.workflow.recoveryGeneration, active.task.id, active.handoff.attemptId, active.handoff.handoffId,
+      state.activeRole, state.roleContextGeneration, state.roleTransitionGeneration]);
     return id ? { id, canPause: true } : undefined;
   }
   function syncScope(ctx: ExtensionContext) {
@@ -102,8 +106,7 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
         previousRead = undefined; repeats = 0; paused = false;
         for (const call of pendingReads.values()) call.eligible = false;
       }
-      if (input) pendingReads.set(event.toolCallId, { scope: currentScope.id, tool: event.toolName, input, canPause: currentScope.canPause, branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id, eligible: !overlap && !ambiguousActivity && nonReadInFlight.size === 0 });
-      if (pendingReads.size > 32) clearReads();
+      if (input) trackBoundedCall(pendingReads, event.toolCallId, { scope: currentScope.id, tool: event.toolName, input, canPause: currentScope.canPause, branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id, eligible: !overlap && !ambiguousActivity && nonReadInFlight.size === 0 }, clearReads);
     } else if (event.toolName !== "task_workflow" && !event.parentToolCallId) clearReads();
     if (!routingTools.has(event.toolName) && Boolean(event.toolName) && !event.parentToolCallId) {
       if (currentScope && event.toolCallId) {
@@ -118,16 +121,15 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
           : undefined;
         const editPath = typeof rawPath === "string" && rawPath.trim() ? rawPath.trim() : undefined;
         if (input) {
-          pendingFailures.set(event.toolCallId, {
+          trackBoundedCall(pendingFailures, event.toolCallId, {
             scope: currentScope.id,
             tool: event.toolName,
             input,
             ...(editPath ? { editPath } : {}),
             eligible: !overlap,
             branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id,
-          });
+          }, clearFailures);
         }
-        if (pendingFailures.size > 32) clearFailures();
       } else {
         clearFailures();
       }
@@ -139,12 +141,8 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
   pi.on("tool_result", async (event, ctx) => {
     const currentScope = syncScope(ctx);
     nonReadInFlight.delete(event.toolCallId);
-    const call = pendingReads.get(event.toolCallId);
-    pendingReads.delete(event.toolCallId);
-    if (call?.branchAnchor !== undefined && !hasBranchAnchor(ctx, call.branchAnchor)) clearReads();
-    const failureCall = pendingFailures.get(event.toolCallId);
-    pendingFailures.delete(event.toolCallId);
-    if (failureCall?.branchAnchor !== undefined && !hasBranchAnchor(ctx, failureCall.branchAnchor)) clearFailures();
+    const call = popPendingCall(pendingReads, event.toolCallId, ctx, clearReads);
+    const failureCall = popPendingCall(pendingFailures, event.toolCallId, ctx, clearFailures);
     let hintText: string | undefined;
     if (reads.has(event.toolName)) {
       if (event.isError) clearReads();
