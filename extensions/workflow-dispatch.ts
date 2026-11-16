@@ -20,6 +20,7 @@ import {
 } from "../src/workflow.ts";
 import type { RoleRuntime } from "./role-runtime.ts";
 import {
+    matchPolicy,
     textOf,
     type ExtensionRuntimeState,
     type WorkflowActionIdentity,
@@ -132,71 +133,61 @@ export function createWorkflowDispatch(
     }
   }
 
+  function restoreFromEntry(
+    ctx: ExtensionContext,
+    branch: ReturnType<ExtensionContext["sessionManager"]["getBranch"]>,
+    source: ReturnType<typeof latestWorkflowRecoverySource>,
+    sessionId: string,
+  ) {
+    const entry = source.entry;
+    if (!entry) return false;
+    const recordRestoreError = (failure: { code: string; message: string }, prefix: string) => {
+      const restoreError = workflowRestoreErrorForSource(failure, branch, source, sessionId);
+      if (!restoreError) return false;
+      state.workflowRestoreError = restoreError;
+      ctx.ui.notify(`${prefix}（${failure.code}）：${failure.message}`, "error");
+      return false;
+    };
+    const restored = hydrateWorkflowState("data" in entry ? entry.data : undefined);
+    if (!restored.ok) return recordRestoreError(restored, "无法恢复工作流状态");
+    const recovered = recoverWorkflowState(restored.value, sessionId);
+    if (!recovered.ok) return recordRestoreError(recovered, "无法安全恢复工作流");
+    const roleValidation = isWorkflowActive(recovered.value)
+      ? validateWorkflowExecutionRoles(recovered.value.tasks, { unfinishedOnly: true })
+      : { ok: true as const };
+    if (!roleValidation.ok) {
+      // Keep the recovered identity only in memory so an explicit cancellation can be persisted safely.
+      // Do not persist or dispatch an old plan that assigns executable work to architect.
+      state.workflowState = recovered.value;
+      state.workflowRestoreError = { code: roleValidation.code, message: roleValidation.message, ...(source.entryId ? { sourceEntryId: source.entryId } : {}) };
+      ctx.ui.notify(`已保存的工作流包含不可执行角色（${roleValidation.code}）：${roleValidation.message}；原记录未修改，任务不会派发。请先检查状态并显式取消旧工作流，再另建计划。`, "error");
+      return false;
+    }
+    if (!recovered.changed) { state.workflowState = recovered.value; return false; }
+    try {
+      deps.report.persistWorkflowState(recovered.value, ctx);
+      return true;
+    } catch (error) {
+      state.workflowState = undefined;
+      state.pendingWorkflowRecovery = recovered.value;
+      state.workflowRestoreError = {
+        code: typeof error === "object" && error && "code" in error && typeof error.code === "string" ? error.code : "WORKFLOW_RECOVERY_PERSIST_FAILED",
+        message: textOf(error),
+      };
+      ctx.ui.notify(`无法持久化工作流恢复状态：${textOf(error)}`, "error");
+      return false;
+    }
+  }
+
   function restoreWorkflowState(ctx: ExtensionContext, options?: { updateStatus?: boolean }) {
     deps.setCurrentContext(ctx);
-
     state.workflowDispatchInFlight = false;
     state.internalContinuationPending = false;
-
     state.pendingWorkflowRecovery = undefined;
     state.workflowState = undefined;
     state.workflowRestoreError = undefined;
     const branch = ctx.sessionManager.getBranch();
-    const source = latestWorkflowRecoverySource(branch);
-    const { entry, entryId: sourceEntryId } = source;
-    const sessionId = ctx.sessionManager.getSessionId();
-    let statusUpdated = false;
-    if (entry) {
-      const data = "data" in entry ? entry.data : undefined;
-      const restored = hydrateWorkflowState(data);
-      if (!restored.ok) {
-        const restoreError = workflowRestoreErrorForSource(restored, branch, source, sessionId);
-        if (restoreError) {
-          state.workflowRestoreError = restoreError;
-          ctx.ui.notify(`无法恢复工作流状态（${restored.code}）：${restored.message}`, "error");
-        }
-      } else {
-        const recovered = recoverWorkflowState(restored.value, sessionId);
-        if (!recovered.ok) {
-          const restoreError = workflowRestoreErrorForSource(recovered, branch, source, sessionId);
-          if (restoreError) {
-            state.workflowRestoreError = restoreError;
-            ctx.ui.notify(`无法安全恢复工作流（${recovered.code}）：${recovered.message}`, "error");
-          }
-        } else {
-          const roleValidation = isWorkflowActive(recovered.value)
-            ? validateWorkflowExecutionRoles(recovered.value.tasks, { unfinishedOnly: true })
-            : { ok: true as const };
-          if (!roleValidation.ok) {
-            // Keep the recovered identity only in memory so an explicit cancellation can be persisted safely.
-            // Do not persist or dispatch an old plan that assigns executable work to architect.
-            state.workflowState = recovered.value;
-            state.workflowRestoreError = { code: roleValidation.code, message: roleValidation.message, ...(sourceEntryId ? { sourceEntryId } : {}) };
-            ctx.ui.notify(
-              `已保存的工作流包含不可执行角色（${roleValidation.code}）：${roleValidation.message}；原记录未修改，任务不会派发。请先检查状态并显式取消旧工作流，再另建计划。`,
-              "error",
-            );
-          } else if (!recovered.changed) {
-            state.workflowState = recovered.value;
-          } else {
-            try {
-              deps.report.persistWorkflowState(recovered.value, ctx);
-              statusUpdated = true;
-            } catch (error) {
-              state.workflowState = undefined;
-              state.pendingWorkflowRecovery = recovered.value;
-              state.workflowRestoreError = {
-                code: typeof error === "object" && error && "code" in error && typeof error.code === "string"
-                  ? error.code
-                  : "WORKFLOW_RECOVERY_PERSIST_FAILED",
-                message: textOf(error),
-              };
-              ctx.ui.notify(`无法持久化工作流恢复状态：${textOf(error)}`, "error");
-            }
-          }
-        }
-      }
-    }
+    const statusUpdated = restoreFromEntry(ctx, branch, latestWorkflowRecoverySource(branch), ctx.sessionManager.getSessionId());
     if (state.workflowState) deps.guardSessionHandoff?.(ctx);
     if (!statusUpdated && options?.updateStatus !== false) deps.report.updateWorkflowStatus(ctx);
   }
@@ -379,33 +370,19 @@ export function createWorkflowDispatch(
     if (!workflow || workflow.executor !== "local" || workflow.status !== "running") {
       throw new Error("只有运行中的 Local 工作流可以执行安全恢复");
     }
-
     const handoff = workflow.handoff;
-    if (state.roleCompactionInFlight || state.pendingRoleCompaction) {
-      ctx.ui.notify("上下文压缩仍在进行，未重复派发任务；请等待压缩完成，或执行 /reload 后再使用 /pi-init workflow resume。", "warning");
-      return "blocked-by-compaction";
+    const blocked = matchPolicy([
+      [() => state.roleCompactionInFlight || state.pendingRoleCompaction, ["blocked-by-compaction", "上下文压缩仍在进行，未重复派发任务；请等待压缩完成，或执行 /reload 后再使用 /pi-init workflow resume。", "warning"] as const],
+      [() => workflow.continuation?.kind !== "review" && workflow.continuation?.phase === "compacting", ["blocked-by-compaction", "任务边界压缩尚未确认收敛，未切换角色或派发；请 /reload 后核对暂停状态，再显式 resume。", "warning"] as const],
+      [() => state.internalContinuationPending, ["continuation-pending", "自动任务交接消息已排队，未重复派发任务。", "info"] as const],
+      [() => handoff && ["dispatching", "queued"].includes(handoff.phase), ["continuation-pending", "任务交接已进入派发阶段；结果未确认，不会重发，请等待实际执行或核对恢复状态。", "warning"] as const],
+      [() => handoff?.phase === "executing", ["already-started", `任务 ${handoff?.taskId} 已真实启动，未重复派发任务。`, "info"] as const],
+      [() => !resetStaleWorkflowDispatch(), ["dispatch-in-flight", "任务交接调度仍在进行，未重复派发任务。", "info"] as const],
+    ]);
+    if (blocked) {
+      ctx.ui.notify(blocked[1], blocked[2]);
+      return blocked[0];
     }
-    if (workflow.continuation?.kind !== "review" && workflow.continuation?.phase === "compacting") {
-      ctx.ui.notify("任务边界压缩尚未确认收敛，未切换角色或派发；请 /reload 后核对暂停状态，再显式 resume。", "warning");
-      return "blocked-by-compaction";
-    }
-    if (state.internalContinuationPending) {
-      ctx.ui.notify("自动任务交接消息已排队，未重复派发任务。", "info");
-      return "continuation-pending";
-    }
-    if (handoff && ["dispatching", "queued"].includes(handoff.phase)) {
-      ctx.ui.notify("任务交接已进入派发阶段；结果未确认，不会重发，请等待实际执行或核对恢复状态。", "warning");
-      return "continuation-pending";
-    }
-    if (handoff?.phase === "executing") {
-      ctx.ui.notify(`任务 ${handoff.taskId} 已真实启动，未重复派发任务。`, "info");
-      return "already-started";
-    }
-    if (!resetStaleWorkflowDispatch()) {
-      ctx.ui.notify("任务交接调度仍在进行，未重复派发任务。", "info");
-      return "dispatch-in-flight";
-    }
-
     await scheduleWorkflow(ctx);
     return "scheduled";
   }

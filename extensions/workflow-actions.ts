@@ -143,6 +143,21 @@ export function createWorkflowActions(
     });
   }
 
+  function requireActiveWorkflow() {
+    if (!state.workflowState) throw missingWorkflowError();
+    return state.workflowState;
+  }
+
+  function requireExecutingTask(action: "complete" | "block", params: unknown, ctx: ExtensionContext) {
+    const workflow = requireActiveWorkflow();
+    guardQueuedTaskStart(action, ctx);
+    const identity = requireTaskHandoffIdentity(params, ctx);
+    const task = workflow.tasks.find((item) => item.id === identity.taskId);
+    if (!task) throw new Error(`工作流任务不存在：${identity.taskId ?? "（未指定）"}`);
+    requireTaskRole(task, ctx);
+    return { workflow, identity, task };
+  }
+
   const workflowCommand = createWorkflowCommand(state, { ...deps, recoveryActions, commitLifecycleTransition });
 
   async function runTaskWorkflowAction(
@@ -178,23 +193,23 @@ export function createWorkflowActions(
       }
       case "request-replan":
       case "request-goal": {
-        if (!state.workflowState) throw missingWorkflowError();
-        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
+        const workflow = requireActiveWorkflow();
+        requireIdentity(validateWorkflowMutationIdentity(workflow, params, ctx));
         const actor = deps.roleRuntime.activeRoleFor(ctx)?.role;
-        const currentTask = state.workflowState.tasks.find(task => task.id === state.workflowState!.currentTaskId);
-        const executorRequest = params.action === "request-replan" && state.workflowState.status === "running"
-          && state.workflowState.handoff?.phase === "executing" && currentTask?.role === actor;
+        const currentTask = workflow.tasks.find(task => task.id === workflow.currentTaskId);
+        const executorRequest = params.action === "request-replan" && workflow.status === "running"
+          && workflow.handoff?.phase === "executing" && currentTask?.role === actor;
         if (actor !== "architect" && !executorRequest) {
           const step = nextWorkflowAction(state);
-          const code = state.workflowState.currentTaskId ? "WORKFLOW_TASK_BOUNDARY_REQUIRED" : "WORKFLOW_ARCHITECT_REQUIRED";
+          const code = workflow.currentTaskId ? "WORKFLOW_TASK_BOUNDARY_REQUIRED" : "WORKFLOW_ARCHITECT_REQUIRED";
           throw Object.assign(new Error("只有 architect 可以安排目标归属或修正计划；所有执行任务共用同一队列。" + step.nextAction), {
             code, details: { ok: false, code, ...step },
           });
         }
         const grouped = params.action === "request-goal";
         const next = grouped
-          ? requestWorkflowGoal(state.workflowState, { direction: params.summary, parentGoalId: params.parentGoalId })
-          : requestWorkflowReplan(state.workflowState, { direction: params.summary });
+          ? requestWorkflowGoal(workflow, { direction: params.summary, parentGoalId: params.parentGoalId })
+          : requestWorkflowReplan(workflow, { direction: params.summary });
         deps.report.persistWorkflowState(next, ctx);
         return { content: [{ type: "text", text: (grouped ? "已记录插入目标；在安全边界规划同一任务队列，父子关系仅表达归属，不创建子工作流。" : "已记录父计划修正/追加请求；保留有效任务，在安全边界重规划当前队列。") + "\n" + nextWorkflowAction({ ...state, workflowState: next }).nextAction }], details: statusDetails(next), terminate: !next.currentTaskId };
       }
@@ -269,8 +284,8 @@ export function createWorkflowActions(
         };
       }
       case "replan": {
-        if (!state.workflowState) throw missingWorkflowError();
-        if (state.workflowState.currentTaskId) {
+        const workflow = requireActiveWorkflow();
+        if (workflow.currentTaskId) {
           const step = nextWorkflowAction(state);
           throw Object.assign(new Error("当前任务尚未结束，不能应用工作流重规划。" + step.nextAction), {
             code: "WORKFLOW_TASK_BOUNDARY_REQUIRED", details: { ok: false, code: "WORKFLOW_TASK_BOUNDARY_REQUIRED", ...step },
@@ -279,15 +294,15 @@ export function createWorkflowActions(
         if (deps.roleRuntime.activeRoleFor(ctx)?.role !== "architect") {
           throw new Error("只有架构角色可以应用工作流重规划；请先调用 switch_role(role=architect)");
         }
-        if (state.workflowState.status !== "replanning") {
+        if (workflow.status !== "replanning") {
           throw new Error("当前没有等待应用的工作流重规划");
         }
         const config = await deps.roleRuntime.readSessionRoleConfig(ctx);
-        const grouped = state.workflowState.pendingRevision?.kind === "goal";
-        const plan = grouped ? validateWorkflowGoalPlan(state.workflowState, params) : normalizeReplanPlan(params);
+        const grouped = workflow.pendingRevision?.kind === "goal";
+        const plan = grouped ? validateWorkflowGoalPlan(workflow, params) : normalizeReplanPlan(params);
         assertConfiguredTaskRoles(config, plan.tasks, deps.roleRuntime.currentRole("architect", ctx));
-        requireIdentity(validateWorkflowReplanIdentity(state.workflowState, params, ctx));
-        const next = grouped ? createWorkflowGoalState(state.workflowState, params) : applyWorkflowReplan(state.workflowState, {
+        requireIdentity(validateWorkflowReplanIdentity(workflow, params, ctx));
+        const next = grouped ? createWorkflowGoalState(workflow, params) : applyWorkflowReplan(workflow, {
           revisionId: params.revisionId, summary: params.summary, constraints: params.constraints, tasks: params.tasks,
           retainTaskIds: params.retainTaskIds, confirmUnknownOutcome: params.confirmUnknownOutcome === true, reason: params.reason,
         });
@@ -300,16 +315,10 @@ export function createWorkflowActions(
         };
       }
       case "complete": {
-        if (!state.workflowState) throw missingWorkflowError();
-        guardQueuedTaskStart("complete", ctx);
-        const identity = requireTaskHandoffIdentity(params, ctx);
-        const { taskId } = identity;
-        const task = taskId ? state.workflowState.tasks.find((item) => item.id === taskId) : undefined;
-        if (!task) throw new Error(`工作流任务不存在：${taskId ?? "（未指定）"}`);
-        requireTaskRole(task, ctx);
+        const { workflow, identity, task } = requireExecutingTask("complete", params, ctx);
         const verificationEvidenceIds = params.evidenceIds === undefined ? undefined : deps.taskMemory?.verificationSources(ctx, params.evidenceIds);
         if (params.evidenceIds !== undefined && !verificationEvidenceIds) throw Object.assign(new Error("验证来源运行时不可用"), { code: "TASK_MEMORY_UNAVAILABLE" });
-        const transition = transitionWorkflowLifecycle(state.workflowState, {
+        const transition = transitionWorkflowLifecycle(workflow, {
           type: "task-completed", verificationEvidenceIds, identity,
           completionSummary: params.completionSummary,
           implementationRationale: params.implementationRationale,
@@ -342,28 +351,23 @@ export function createWorkflowActions(
         };
       }
       case "block": {
-        if (!state.workflowState) throw missingWorkflowError();
-        guardQueuedTaskStart("block", ctx);
-        const identity = requireTaskHandoffIdentity(params, ctx);
-        const task = state.workflowState.tasks.find((item) => item.id === identity.taskId);
-        if (!task) throw new Error(`工作流任务不存在：${identity.taskId}`);
-        requireTaskRole(task, ctx);
-        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "task-blocked", identity, reason: params.reason, outcomeUnknown: params.outcomeUnknown }, Date.now());
+        const { workflow, identity } = requireExecutingTask("block", params, ctx);
+        const transition = transitionWorkflowLifecycle(workflow, { type: "task-blocked", identity, reason: params.reason, outcomeUnknown: params.outcomeUnknown }, Date.now());
         commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: deps.report.formatWorkflowPauseSummary(transition.state) }], details: statusDetails(transition.state), terminate: true };
       }
       case "resume": {
-        if (!state.workflowState) throw missingWorkflowError();
-        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        if (state.workflowState.status === "replanning") {
+        const workflow = requireActiveWorkflow();
+        requireIdentity(validateWorkflowMutationIdentity(workflow, params, ctx));
+        if (workflow.status === "replanning") {
           await deps.dispatch.scheduleWorkflow(ctx);
           return {
             content: [{ type: "text", text: "工作流仍在等待架构师重规划；已尝试继续架构调度。" }],
-            details: statusDetails(state.workflowState),
+            details: statusDetails(workflow),
             terminate: true,
           };
         }
-        if (state.workflowState.status === "running") {
+        if (workflow.status === "running") {
           const result = await deps.dispatch.resumeLocalWorkflow(ctx);
           const messages = {
             "blocked-by-compaction": "工作流仍在等待上下文压缩，不会并发启动任务。",
@@ -374,19 +378,19 @@ export function createWorkflowActions(
           };
           return {
             content: [{ type: "text", text: messages[result] }],
-            details: statusDetails(state.workflowState),
+            details: statusDetails(workflow),
             terminate: true,
           };
         }
-        const transition = transitionWorkflowLifecycle(state.workflowState, { type: "workflow-resumed", identity: workflowActionIdentity(state.workflowState) }, Date.now());
+        const transition = transitionWorkflowLifecycle(workflow, { type: "workflow-resumed", identity: workflowActionIdentity(workflow) }, Date.now());
         const next = commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: "工作流已恢复，下一任务将自动开始。" }], details: statusDetails(next), terminate: true };
       }
       case "retry": {
-        if (!state.workflowState) throw missingWorkflowError();
-        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        const transition = transitionWorkflowLifecycle(state.workflowState, {
-          type: "task-retried", identity: workflowActionIdentity(state.workflowState), taskId: params.taskId,
+        const workflow = requireActiveWorkflow();
+        requireIdentity(validateWorkflowMutationIdentity(workflow, params, ctx));
+        const transition = transitionWorkflowLifecycle(workflow, {
+          type: "task-retried", identity: workflowActionIdentity(workflow), taskId: params.taskId,
           confirmUnknownOutcome: params.confirmUnknownOutcome === true,
         }, Date.now());
         const next = commitLifecycleTransition(transition, ctx);
@@ -394,10 +398,10 @@ export function createWorkflowActions(
       }
       case "cancel":
       case "cancel-all": {
-        if (!state.workflowState) throw missingWorkflowError();
-        requireIdentity(validateWorkflowMutationIdentity(state.workflowState, params, ctx));
-        const transition = transitionWorkflowLifecycle(state.workflowState, {
-          type: "workflow-cancelled", identity: workflowActionIdentity(state.workflowState),
+        const workflow = requireActiveWorkflow();
+        requireIdentity(validateWorkflowMutationIdentity(workflow, params, ctx));
+        const transition = transitionWorkflowLifecycle(workflow, {
+          type: "workflow-cancelled", identity: workflowActionIdentity(workflow),
         }, Date.now());
         const cancelled = commitLifecycleTransition(transition, ctx);
         return { content: [{ type: "text", text: "工作流已取消。" }], details: statusDetails(cancelled), terminate: true };

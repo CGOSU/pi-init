@@ -104,3 +104,49 @@ export function activeRoleMatches(
     && role.model === ctx.model.id
     && role.thinkingLevel === thinkingLevel;
 }
+
+export function firstPolicyMatch<T>(rules: ReadonlyArray<readonly [unknown, T]>): T | undefined {
+  return rules.find(([matched]) => Boolean(matched))?.[1];
+}
+
+export function matchPolicy<T>(rules: ReadonlyArray<readonly [() => unknown, T | (() => T)]>): T | undefined {
+  for (const [when, result] of rules) {
+    if (when()) return typeof result === "function" ? (result as () => T)() : result;
+  }
+  return undefined;
+}
+
+export function hasRecoveryGate(
+  state: Pick<ExtensionRuntimeState, "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "pendingWorkflowRecovery" | "workflowRestoreError">,
+) {
+  return Boolean(state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError);
+}
+
+export function hasCompactionGate(
+  state: Pick<ExtensionRuntimeState, "pendingRoleCompaction" | "roleCompactionInFlight" | "activeRoleCompaction">,
+) {
+  return Boolean(state.pendingRoleCompaction || state.roleCompactionInFlight || state.activeRoleCompaction);
+}
+
+export function isExecutionBlockedState(
+  state: Pick<ExtensionRuntimeState, "runtimeDisposed" | "userStopRequested" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "pendingWorkflowRecovery" | "workflowRestoreError" | "pendingRoleCompaction" | "roleCompactionInFlight" | "activeRoleCompaction">,
+) {
+  return Boolean(state.runtimeDisposed || state.userStopRequested || hasRecoveryGate(state) || hasCompactionGate(state));
+}
+
+export function isActiveWorkflowStatus(workflow: WorkflowState | undefined): workflow is WorkflowState {
+  return Boolean(workflow && !["completed", "cancelled"].includes(workflow.status));
+}
+
+export function executingWorkflowTask(state: ExtensionRuntimeState, sessionId?: string) {
+  const workflow = state.workflowState;
+  const handoff = workflow?.handoff;
+  const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);
+  if (!workflow || !handoff || !task || workflow.status !== "running" || handoff.phase !== "executing"
+    || task.status !== "in_progress" || task.outcomeUnknown || state.activeRole?.role !== task.role
+    || !workflow.workflowId || !handoff.attemptId || !handoff.handoffId || handoff.taskId !== task.id
+    || handoff.workflowId !== workflow.workflowId || handoff.planVersion !== workflow.planVersion
+    || handoff.recoveryGeneration !== workflow.recoveryGeneration || handoff.sessionId !== workflow.sessionId
+    || (sessionId !== undefined && workflow.sessionId !== sessionId)) return undefined;
+  return { workflow, task, handoff };
+}

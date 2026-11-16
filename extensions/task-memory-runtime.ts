@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-wor
 import { applyParsedTaskCheckpoint, createTaskMemory, recordTaskObservations, parseTaskMemory, parseTaskCheckpoint, taskMemoryScope, taskMemoryError, type TaskMemory, type TaskObservation, type TaskSourceVersion, parseTaskMemoryIdentity } from "../src/task-memory.ts";
 import { workflowHandoffIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { WorkflowHandoffIdentity } from "../src/workflow-types.ts";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { firstPolicyMatch, hasRecoveryGate, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 
 export const TASK_MEMORY_ENTRY = "pi-init-task-memory";
@@ -73,6 +73,13 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
   }
   function scope(ctx: ExtensionContext, current: WorkflowHandoffIdentity) { return JSON.stringify([ctx.cwd, current]); }
   const sourceObservation = readTaskSourceObservation;
+  function verifyObservations(branch: Entry[], items: Array<{ id: string; expected: TaskObservation | undefined }>, current: WorkflowHandoffIdentity, errorMessage: string, cache = new Map<string, TaskObservation | undefined>()) {
+    for (const { id, expected } of items) {
+      if (!cache.has(id)) cache.set(id, sourceObservation(branch, id, current));
+      const actual = cache.get(id);
+      if (!actual || JSON.stringify(actual) !== JSON.stringify(expected)) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", errorMessage);
+    }
+  }
   function load(ctx: ExtensionContext, current: WorkflowHandoffIdentity) {
     const branch = ctx.sessionManager.getBranch();
     let memory = createTaskMemory(current);
@@ -85,10 +92,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       if (!raw || !raw.identity || typeof raw.identity !== "object" || taskMemoryScope(raw.identity as WorkflowHandoffIdentity) !== taskMemoryScope(current)) continue;
       const parsed = parseTaskMemory(raw);
       if (!parsed) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务记忆快照损坏，不能跳过较新记录使用旧成果");
-      for (const observation of parsed.observations) {
-        const actual = sourceObservation(branch, observation.id, current);
-        if (!actual || JSON.stringify(actual) !== JSON.stringify(observation)) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "任务记忆来源不在当前branch或与原结果不一致");
-      }
+      verifyObservations(branch, parsed.observations.map(item => ({ id: item.id, expected: item })), current, "任务记忆来源不在当前branch或与原结果不一致");
       memory = parsed; found = true;
       if (parsed.watermark) {
         const position = branch.findIndex(item => item.id === parsed.watermark);
@@ -139,18 +143,18 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       const { memory, found } = load(ctx, current);
       const applicability = fileApplicability(ctx, memory);
       if (evidenceIds.length > 8) return taskMemoryError("TASK_MEMORY_SOURCE_LIMIT", "一次最多读取8项来源");
+      const branch = ctx.sessionManager.getBranch();
+      const task = state.workflowState?.tasks.find(item => item.id === current.taskId);
       const evidence = evidenceIds.map(id => {
-        const branch = ctx.sessionManager.getBranch();
-        const task = state.workflowState?.tasks.find(task => task.id === current.taskId);
         const dependency = state.workflowState?.tasks.find(source => source.status === "completed" && task?.dependsOn?.includes(source.id) && source.verificationEvidenceIds?.includes(id));
         const own = sourceObservation(branch, id, current);
         const source = own ?? (dependency ? sourceObservation(branch, id, { ...current, taskId: dependency.id }, true) : undefined);
         if (!source) {
           const historical = historicalEvidence?.(ctx, id, task?.dependsOn ?? []);
           if (historical) return historical;
+          return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "只能读取当前任务或已完成直接依赖声明的真实验证来源；旧结果不构成当前执行授权");
         }
-        if (!source) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "只能读取当前任务或已完成直接依赖声明的真实验证来源；旧结果不构成当前执行授权");
-        const entry = ctx.sessionManager.getBranch().find(item => item.id === id);
+        const entry = branch.find(item => item.id === id);
         if (!entry || entry.type !== "message" || entry.message.role !== "toolResult") return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "来源不可读取");
         const text = contentText(entry.message.content);
         return { id, text: bounded(text, 4096), truncated: text.length > 4096, sourceTaskId: own ? current.taskId : dependency!.id, historical: true as const };
@@ -172,13 +176,13 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
       const memory = parseTaskMemory(raw);
       if (!memory) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务的历史记忆快照损坏，无法核对已登记进展");
       if (!memory.checkpoint) continue;
-      for (const id of memory.checkpoint.accomplished.flatMap(item => item.evidenceIds)) {
-        if (!sources.has(id)) sources.set(id, sourceObservation(branch, id, current));
-        const actual = sources.get(id);
-        if (!actual || JSON.stringify(actual) !== JSON.stringify(memory.observations.find(item => item.id === id))) {
-          return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "历史进展来源不在当前branch或与原结果不一致");
-        }
-      }
+      verifyObservations(
+        branch,
+        memory.checkpoint.accomplished.flatMap(item => item.evidenceIds).map(id => ({ id, expected: memory.observations.find(item => item.id === id) })),
+        current,
+        "历史进展来源不在当前branch或与原结果不一致",
+        sources,
+      );
       history.push(memory);
     }
     return history;
@@ -188,20 +192,25 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     const workflow = state.workflowState;
     const task = workflow?.tasks.find(item => item.id === current?.taskId);
     if (!current) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆缺少当前可信身份");
-    const blocked = !workflowHandoffMessageOnBranch(ctx, current) ? "branch-anchor"
-      : !sameIdentity(current, submitted) ? "stale-identity"
-      : workflow?.status !== "running" ? "workflow-not-running"
-      : workflow.handoff?.phase !== "executing" ? "handoff-not-executing"
-      : task?.status !== "in_progress" ? "task-not-executing"
-      : workflow.workflowId !== current.workflowId || workflow.planVersion !== current.planVersion || workflow.recoveryGeneration !== current.recoveryGeneration ? "stale-workflow"
-      : state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError ? "recovery-pending"
-      : state.userStopRequested || state.runtimeDisposed || task.outcomeUnknown ? "execution-stopped"
-      : state.activeRole?.role !== task.role ? "role-mismatch" : undefined;
+    const blocked = firstPolicyMatch([
+      [!workflowHandoffMessageOnBranch(ctx, current), "branch-anchor"],
+      [!sameIdentity(current, submitted), "stale-identity"],
+      [workflow?.status !== "running", "workflow-not-running"],
+      [workflow?.handoff?.phase !== "executing", "handoff-not-executing"],
+      [task?.status !== "in_progress", "task-not-executing"],
+      [workflow?.workflowId !== current.workflowId || workflow?.planVersion !== current.planVersion || workflow?.recoveryGeneration !== current.recoveryGeneration, "stale-workflow"],
+      [hasRecoveryGate(state), "recovery-pending"],
+      [state.userStopRequested || state.runtimeDisposed || task?.outcomeUnknown, "execution-stopped"],
+      [state.activeRole?.role !== task?.role, "role-mismatch"],
+    ]);
     if (blocked) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆只能由当前真实执行者登记，不能沿用旧身份或解除恢复门：" + blocked);
     const { memory, found } = load(ctx, current);
-    if (expectedRevision === undefined) return taskMemoryError("TASK_MEMORY_REVISION_REQUIRED", "checkpoint缺少expectedMemoryRevision；当前可用expectedMemoryRevision=" + memory.revision + "。提交时仍会校验版本，不必为缺失字段重复查询status。");
-    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) return taskMemoryError("TASK_MEMORY_REVISION_INVALID", "expectedMemoryRevision必须是非负整数");
-    if (expectedRevision !== memory.revision) return taskMemoryError("TASK_MEMORY_REVISION_STALE", "任务记忆已更新，checkpoint未保存；按需一次task_workflow(action=\"status\", detail=\"full\")核对最新checkpoint、剩余工作与revision，合并仍有效的进展后再提交，不只替换revision覆盖较新进展。");
+    const revisionError = firstPolicyMatch([
+      [expectedRevision === undefined, ["TASK_MEMORY_REVISION_REQUIRED", "checkpoint缺少expectedMemoryRevision；当前可用expectedMemoryRevision=" + memory.revision + "。提交时仍会校验版本，不必为缺失字段重复查询status。"] as const],
+      [!Number.isSafeInteger(expectedRevision) || (expectedRevision as number) < 0, ["TASK_MEMORY_REVISION_INVALID", "expectedMemoryRevision必须是非负整数"] as const],
+      [expectedRevision !== memory.revision, ["TASK_MEMORY_REVISION_STALE", "任务记忆已更新，checkpoint未保存；按需一次task_workflow(action=\"status\", detail=\"full\")核对最新checkpoint、剩余工作与revision，合并仍有效的进展后再提交，不只替换revision覆盖较新进展。"] as const],
+    ]);
+    if (revisionError) return taskMemoryError(revisionError[0], revisionError[1]);
     const parsed = parseTaskCheckpoint(input);
     if (!parsed) return taskMemoryError("TASK_MEMORY_CHECKPOINT_INVALID", "checkpoint缺少有效步骤、成果来源、剩余项或下一步");
     const ids = [...new Set(parsed.accomplished.flatMap(item => item.evidenceIds))];

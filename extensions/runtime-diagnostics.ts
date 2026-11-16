@@ -9,6 +9,7 @@ import { captureDiagnosticScope, diagnosticDirectory, matchesDiagnosticScope, re
 import { createDiagnosticWriter } from "./diagnostic-writer.ts";
 export { createDiagnosticWriter } from "./diagnostic-writer.ts";
 import { createGlobalDiagnostics, isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
+import { firstPolicyMatch } from "./runtime-state.ts";
 import { normalizeProfile, durationStats, isHealthySample, formatRuntimeSamples, formatProviderObservations, type RuntimeProfile, formatContextProjections, formatToolFailureChains, formatCacheObservations } from "./runtime-diagnostics-report.ts";
 
 const extensionVersion = loadedRuntimeIdentity.extensionVersion;
@@ -33,19 +34,20 @@ function metadata(data: Data): Data {
 }
 function classify(event: string, data: Data) {
   const code = typeof data.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(data.code) ? data.code : "UNKNOWN";
-  if (event === "workflow.action_rejected" || data.businessOk === false) return { category: "business-rejection", code };
-  if ((event === "tool.result" || event === "routing.tool_result" || event === "tool.execution_end") && (data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0)) return { category: "tool-failure", code };
-  if (event === "provider.response" && typeof data.status === "number" && data.status >= 400) return { category: "provider-http", code: "HTTP_" + data.status };
-  if (event === "assistant.result" && data.stopReason === "error") return { category: "assistant-failure", code: typeof data.errorCodeHint === "string" ? data.errorCodeHint : "UNKNOWN" };
-  if (event === "compaction.settled" && data.failed === true) return { category: "compaction-failure", code };
-  if (event === "workflow.suspected_loop") return { category: "suspected-loop", code };
-  if (event === "runtime.slow_round") return { category: "suspected-slow", code };
-  if (event === "context.budget_checked" && ["failed", "error"].includes(String(data.decision))) return { category: "context-budget", code: "BUDGET_DECISION" };
-  if (event === "runtime.failure" || event.startsWith("pi-init.") && isGlobalDiagnosticEvent(event)) return { category: "runtime-failure", code };
-  if (event === "role.handoff_dispatch_unknown") return { category: "outcome-unknown", code: "HANDOFF_DISPATCH_UNKNOWN" };
-  if (event === "workflow.delivery.fallback_failed") return { category: "delivery-failure", code: "FALLBACK_FAILED" };
-  if (event === "compaction.long_wait") return { category: "suspected-stall", code: "COMPACTION_LONG_WAIT" };
-  return undefined;
+  return firstPolicyMatch([
+    [event === "workflow.action_rejected" || data.businessOk === false, { category: "business-rejection", code }],
+    [(event === "tool.result" || event === "routing.tool_result" || event === "tool.execution_end") && (data.isError === true || typeof data.exitCode === "number" && data.exitCode !== 0), { category: "tool-failure", code }],
+    [event === "provider.response" && typeof data.status === "number" && data.status >= 400, { category: "provider-http", code: "HTTP_" + data.status }],
+    [event === "assistant.result" && data.stopReason === "error", { category: "assistant-failure", code: typeof data.errorCodeHint === "string" ? data.errorCodeHint : "UNKNOWN" }],
+    [event === "compaction.settled" && data.failed === true, { category: "compaction-failure", code }],
+    [event === "workflow.suspected_loop", { category: "suspected-loop", code }],
+    [event === "runtime.slow_round", { category: "suspected-slow", code }],
+    [event === "context.budget_checked" && ["failed", "error"].includes(String(data.decision)), { category: "context-budget", code: "BUDGET_DECISION" }],
+    [event === "runtime.failure" || event.startsWith("pi-init.") && isGlobalDiagnosticEvent(event), { category: "runtime-failure", code }],
+    [event === "role.handoff_dispatch_unknown", { category: "outcome-unknown", code: "HANDOFF_DISPATCH_UNKNOWN" }],
+    [event === "workflow.delivery.fallback_failed", { category: "delivery-failure", code: "FALLBACK_FAILED" }],
+    [event === "compaction.long_wait", { category: "suspected-stall", code: "COMPACTION_LONG_WAIT" }],
+  ]);
 }
 
 export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number; global?: Parameters<typeof createGlobalDiagnostics>[0] } = {}) {
@@ -119,43 +121,59 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
         if (issue.remainingEvents === 0) { issue.incomplete = true; issue.evidenceTruncated = true; }
         if (event === "agent.settled" || event === "session.shutdown") issue.remainingEvents = 0;
       }
-      if (event === "agent.before_start") {
-        run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear(); rejectedCalls.clear();
-        profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
-        budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
-      }
-      const currentProfile = normalizeProfile(raw.profile);
-      if (profile && (currentProfile && JSON.stringify(profile) !== JSON.stringify(currentProfile) || !ctx.model || profile.provider !== ctx.model.provider || profile.model !== ctx.model.id)) profileChanged = true;
-      if (event === "assistant.result") stopReason = raw.stopReason;
-      if (event === "tool.call" || event === "routing.tool_call") toolCalls++;
-      if (event === "provider.request") providerRequests++;
-      if (event === "assistant.result" && raw.tokens && typeof raw.tokens === "object") {
-        for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
-          const value = (raw.tokens as Data)[key];
-          if (typeof value === "number" && Number.isFinite(value) && value >= 0) tokens[key] = (tokens[key] ?? 0) + value;
+      const checkProfile = () => {
+        const currentProfile = normalizeProfile(raw.profile);
+        if (profile && (currentProfile && JSON.stringify(profile) !== JSON.stringify(currentProfile) || !ctx.model || profile.provider !== ctx.model.provider || profile.model !== ctx.model.id)) profileChanged = true;
+      };
+      switch (event) {
+        case "agent.before_start":
+          run++; startedAt = nowMs(); toolCalls = 0; providerRequests = 0; tokens = {}; issueOccurrences = 0; overflow = 0; seen.clear(); rejectedCalls.clear();
+          profile = normalizeProfile(raw.profile); profileChanged = false; stopReason = undefined; degraded = raw.degraded === true;
+          budget = { checks: 0, decisions: {} }; providerObservations = emptyProviderObservations(); contextProjection = emptyProjection();
+          break;
+        case "assistant.result":
+          stopReason = raw.stopReason;
+          if (raw.tokens && typeof raw.tokens === "object") {
+            for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"]) {
+              const value = (raw.tokens as Data)[key];
+              if (typeof value === "number" && Number.isFinite(value) && value >= 0) tokens[key] = (tokens[key] ?? 0) + value;
+            }
+          }
+          break;
+        case "tool.call":
+        case "routing.tool_call":
+          toolCalls++;
+          break;
+        case "provider.request":
+          providerRequests++;
+          break;
+        case "context.budget_checked": {
+          budget.checks++; budget.last = row.data;
+          const decision = typeof raw.decision === "string" && /^(?:guard|inflight|unavailable|mode|cooldown|threshold|started|failed|error)$/.test(raw.decision) ? raw.decision : "other";
+          budget.decisions[decision] = (budget.decisions[decision] ?? 0) + 1;
+          break;
+        }
+        case "context.projected":
+          contextProjection.checks++;
+          if (raw.checkpointed === true) contextProjection.checkpointed++;
+          if (raw.overBudget === true) contextProjection.overBudget++;
+          contextProjection.last = row.data;
+          break;
+        case "cache.request":
+          write(ctx, { kind: "cache-request", timestamp: now, ...row.data });
+          break;
+        case "provider.request_summary": {
+          const missingObservations = ["headers", "response", "assistant"].filter(name => raw[name + "Observed"] !== true);
+          providerObservations.requests++;
+          for (const hook of ["headers", "response", "assistant"] as const) if (raw[hook + "Observed"] !== true) providerObservations.missingByHook[hook]++;
+          if (missingObservations.length) providerObservations.missing++;
+          if (raw.outcome !== "assistant" || stopReason === "error" || stopReason === "aborted" || typeof raw.errorCodeHint === "string" || typeof raw.status === "number" && raw.status >= 400) {
+            write(ctx, { kind: "provider-request", timestamp: now, ...row.data, missingObservations });
+          }
+          break;
         }
       }
-      if (event === "context.budget_checked") {
-        budget.checks++; budget.last = row.data;
-        const decision = typeof raw.decision === "string" && /^(?:guard|inflight|unavailable|mode|cooldown|threshold|started|failed|error)$/.test(raw.decision) ? raw.decision : "other";
-        budget.decisions[decision] = (budget.decisions[decision] ?? 0) + 1;
-      }
-      if (event === "context.projected") {
-        contextProjection.checks++;
-        if (raw.checkpointed === true) contextProjection.checkpointed++;
-        if (raw.overBudget === true) contextProjection.overBudget++;
-        contextProjection.last = row.data;
-      }
-      if (event === "cache.request") write(ctx, { kind: "cache-request", timestamp: now, ...row.data });
-      if (event === "provider.request_summary") {
-        const missingObservations = ["headers", "response", "assistant"].filter(name => raw[name + "Observed"] !== true);
-        providerObservations.requests++;
-        for (const hook of ["headers", "response", "assistant"] as const) if (raw[hook + "Observed"] !== true) providerObservations.missingByHook[hook]++;
-        if (missingObservations.length) providerObservations.missing++;
-        if (raw.outcome !== "assistant" || stopReason === "error" || stopReason === "aborted" || typeof raw.errorCodeHint === "string" || typeof raw.status === "number" && raw.status >= 400) {
-          write(ctx, { kind: "provider-request", timestamp: now, ...row.data, missingObservations });
-        }
-      }
+      checkProfile();
       const classified = classify(event, raw);
       // Compare full IDs, not the truncated display metadata; oversized IDs fail open.
       const callId = typeof raw.toolCallId === "string" && raw.toolCallId.length > 0 && raw.toolCallId.length <= 512 ? raw.toolCallId : undefined;
@@ -255,13 +273,12 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
             const info = await lstat(path);
             if (Date.now() - info.mtimeMs > RETENTION_MS) continue;
             if (info.size > maxBytes) { incomplete = true; continue; }
+            const rowTargets: Record<string, Data[]> = { summary: summaries, "provider-request": requests, "cache-request": cacheRequests };
             for (const line of (await readDiagnosticText(path, maxBytes)).split("\n")) {
               if (!line) continue;
               try {
                 const row = JSON.parse(line);
-                if (row && row.kind === "summary") summaries.push(row);
-                if (row && row.kind === "provider-request") requests.push(row);
-                if (row && row.kind === "cache-request") cacheRequests.push(row);
+                if (row && typeof row.kind === "string" && rowTargets[row.kind]) rowTargets[row.kind].push(row);
                 if (row.dropped > 0 || row.overflow > 0 || row.incomplete === true) incomplete = true;
                 if (row.version === 1 && row.kind === "issue" && typeof row.id === "string" && typeof row.runtimeId === "string" && Number.isSafeInteger(row.count) && row.count > 0) latest.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.id]), row);
               } catch { incomplete = true; }
