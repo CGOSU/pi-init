@@ -216,7 +216,6 @@ test("恢复状态详情只展示当前分类允许的建议并保留原记录�
       message: "保存记录损坏",
       sourceEntryId: "source-entry-1",
     },
-    roleCompactionPhase: "idle",
     workflowDispatchInFlight: false,
   };
   const discardable = formatWorkflowStatusText(createWorkflowStatusView(undefined, runtime));
@@ -314,7 +313,7 @@ test("工作流状态工具结果使用结构化状态视图且展开后保留�
     content: [{ type: "text", text: "此处文本标题不参与展示类别判断" }],
     details: attachWorkflowPresentation(workflowState, {
       kind: "workflow-status",
-      view: createWorkflowStatusView(workflowState, { roleCompactionPhase: "idle", workflowDispatchInFlight: false }),
+      view: createWorkflowStatusView(workflowState, { workflowDispatchInFlight: false }),
     }),
   };
   const compact = workflow.renderResult(

@@ -83,7 +83,7 @@ test("verified waiting views retain unknown records and transition results throu
 });
 
 test("waiting snapshot failures preserve large unknown outcomes through the complete recovery callback", () => {
-  for (const failure of ["missing-source", "stale-source", "system", "session", "compaction", "recovery", "recovery-persistence"]) {
+  for (const failure of ["missing-source", "stale-source", "system", "session", "recovery", "recovery-persistence"]) {
     const f = fixture();
     f.ctx.model = { contextWindow: 1000 };
     const unknown = f.messages.find(message => message.customType === "unknown-side-effect");
@@ -92,7 +92,6 @@ test("waiting snapshot failures preserve large unknown outcomes through the comp
     if (failure === "stale-source") f.branch[1].data.plan.summary = "stale plan";
     if (failure === "system") f.messages.unshift({ role: "system", content: "host state", timestamp: 0 });
     if (failure === "session") f.ctx.sessionManager.getSessionId = () => "foreign-session";
-    if (failure === "compaction") f.state.roleCompactionInFlight = true;
     if (failure === "recovery") f.state.roleRecoveryPending = true;
     if (failure === "recovery-persistence") f.state.roleRecoveryPersistenceFailed = true;
     const before = structuredClone(f.messages);

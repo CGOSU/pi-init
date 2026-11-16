@@ -43,18 +43,15 @@ test("交接日志记录事件、身份和状态，观察器不改变任务或�
   });
 });
 
-test("压缩与持久状态跟踪保留操作身份且不写入失败原因正文", async () => {
+test("持久状态跟踪保留派发锁和恢复错误码且不写入失败原因正文", async () => {
   await withMonitor(async ({ ctx, state, monitor, read }) => {
     state.workflowRestoreError = { code: "WORKFLOW_RESTORE_FAILED", message: "private credential" };
-      state.roleCompactionInFlight = true;
-    state.roleCompactionPhase = "compacting";
-    state.roleCompactionOperationId = "operation-1";
-    state.traceHandoff(ctx, "compaction.long_wait", { operationId: "operation-1" });
+    state.workflowDispatchInFlight = true;
+    state.traceHandoff(ctx, "workflow.persisted");
     await monitor.flush();
     const [row] = await read();
-    assert.equal(row.snapshot.compaction.operationId, "operation-1");
-    assert.equal(row.snapshot.locks.compaction, true);
-      assert.equal(row.snapshot.restoreErrorCode, "WORKFLOW_RESTORE_FAILED");
+    assert.equal(row.snapshot.locks.dispatch, true);
+    assert.equal(row.snapshot.restoreErrorCode, "WORKFLOW_RESTORE_FAILED");
     assert.equal(JSON.stringify(row).includes("private"), false);
   });
 });

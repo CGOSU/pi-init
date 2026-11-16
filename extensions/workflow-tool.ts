@@ -70,7 +70,6 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
         return new Text(contentText || "工作流已更新", 0, 0);
       }
       const statusView = createWorkflowStatusView(details, {
-        roleCompactionPhase: "idle",
         workflowDispatchInFlight: false,
       });
       if (details.status === "paused") {
@@ -103,8 +102,10 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
         if (stopped) return { content: [{ type: "text", text: stopped.reason }], details: { ok: false, code: "WORKFLOW_USER_STOPPED" }, terminate: true };
         if (signal?.aborted || runtimeState.workflowRestoreError) return finish(await workflowActions.runTaskWorkflowAction(params, signal, ctx));
         const guard = roleRecovery.guardToolCall({ toolName: "task_workflow", input: params });
-        if (guard?.block && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
-          throw Object.assign(new Error(guard.reason), { code: guard.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED" });
+        if (guard && (params.action === "retry" || params.action === "replan" || runtimeState.roleRecoveryPending || runtimeState.roleRecoveryPersistenceFailed)) {
+          // Preserve the workflow execute boundary's existing recovery error category.
+          const code = guard.code === "ROLE_RECOVERY_REQUIRED" ? "WORKFLOW_EXECUTION_NOT_AUTHORIZED" : guard.code;
+          throw Object.assign(new Error(guard.message), { code });
         }
         let bound: typeof params;
         try { bound = workflowBinding.bind(_toolCallId, params, ctx); }

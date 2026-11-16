@@ -65,9 +65,6 @@ export function pausedContextView(
     if (state.workflowRestoreError || state.roleRecoveryPersistenceFailed) {
       return fail("ROLE_CONTEXT_VIEW_RESTORE_UNCERTAIN", "持久状态或恢复门尚未可靠恢复");
     }
-    if (state.roleCompactionInFlight || state.roleCompactionPhase === "compacting" || state.activeRoleCompaction || state.pendingRoleCompaction) {
-      return fail("ROLE_CONTEXT_VIEW_COMPACTION_UNCERTAIN", "压缩边界尚未确认");
-    }
     const branch = ctx.sessionManager.getBranch();
     const source = latestWorkflowRecoverySource(branch);
     const saved = hydrateWorkflowState(source.entry?.data);

@@ -36,7 +36,7 @@ import {
   renderWorkflowCompletion,
   renderWorkflowTaskCompletion,
 } from "../extensions/workflow-completion-renderer.ts";
-const idleRuntime = { roleCompactionPhase: "idle", workflowDispatchInFlight: false };
+const idleRuntime = { workflowDispatchInFlight: false };
 const theme = { fg: (_color, text) => text, bold: (text) => text };
 
 function createRunningWorkflow() {
@@ -165,7 +165,7 @@ test("启动展示要求当前任务与handoff身份及真实启动时间一致"
   assert.equal(queuedView.kind === "workflow" ? queuedView.activity : "unexpected", "waiting-task");
 });
 
-test("状态视图对暂停、压缩等待、dispatch 和缺失时间保留准确语义", () => {
+test("状态视图对暂停、历史压缩等待、dispatch 和缺失时间保留准确语义", () => {
   const state = createRunningWorkflow();
   const waiting = {
     ...state,
@@ -179,40 +179,13 @@ test("状态视图对暂停、压缩等待、dispatch 和缺失时间保留准�
   assert.equal(dispatching.kind === "workflow" ? dispatching.activity : "unexpected", "dispatching");
 
   const compactingState = { ...waiting, handoff: { ...waiting.handoff, phase: "compacting" } };
-  const compactIdentity = workflowHandoffIdentity(compactingState);
-  const pendingRoleCompaction = {
-    fromRole: "architect",
-    toRole: "developer-test",
-    sessionId: compactingState.sessionId,
-    contextGeneration: 4,
-    roleTransitionGeneration: 5,
-    continuation: { kind: "workflow-task", taskId: "task-a", identity: compactIdentity },
-  };
-  const compactView = createWorkflowStatusView(compactingState, {
-    ...idleRuntime,
-    roleCompactionPhase: "compacting",
-    roleContextGeneration: 4,
-    roleTransitionGeneration: 5,
-    pendingRoleCompaction,
-  }, 170);
-  assert.equal(compactView.kind === "workflow" ? compactView.activity : "unexpected", "compacting");
-  const activeCompaction = createWorkflowStatusView(compactingState, {
-    ...idleRuntime,
-    roleCompactionPhase: "compacting",
-    roleCompactionOperationId: "operation-a",
-    roleContextGeneration: 4,
-    roleTransitionGeneration: 5,
-    activeRoleCompaction: { operationId: "operation-a", transition: pendingRoleCompaction },
-  }, 170);
-  assert.equal(activeCompaction.kind === "workflow" ? activeCompaction.activity : "unexpected", "compacting");
-  const staleCompaction = createWorkflowStatusView(compactingState, {
-    ...idleRuntime,
-    roleCompactionPhase: "compacting",
-    roleContextGeneration: 6,
-    roleTransitionGeneration: 5,
-    pendingRoleCompaction,
-  }, 170);
-  assert.equal(staleCompaction.kind === "workflow" ? staleCompaction.activity : "unexpected", "waiting-task");
+  const compactView = createWorkflowStatusView(compactingState, idleRuntime, 170);
+  assert.equal(compactView.kind === "workflow" ? compactView.activity : "unexpected", "waiting-task");
+  const boundaryView = createWorkflowStatusView({
+    ...waiting,
+    continuation: { kind: "schedule", phase: "compacting", reason: "task-completed" },
+  }, idleRuntime, 170);
+  assert.equal(boundaryView.kind === "workflow" ? boundaryView.activity : "unexpected", "compaction-stalled");
 
   const missingTime = createWorkflowState({
     summary: "无时间状态",

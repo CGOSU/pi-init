@@ -157,6 +157,34 @@ test("调度决策按依赖推进，暂停、终态、压缩和已派发阶段�
   }
 });
 
+test("旧压缩交接只在无执行证据时恢复准备态，有副作用风险时仍要求显式确认", () => {
+  for (const started of [false, true]) {
+    const legacy = preparedTask();
+    legacy.handoff.phase = "compacting";
+    if (started) legacy.tasks[0].executionStartedAt = 102;
+    const identity = workflowHandoffIdentity(legacy);
+    const recovered = recoverWorkflowState(legacy, "test-session");
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.value.recoveryGeneration, legacy.recoveryGeneration + 1);
+    if (!started) {
+      assert.equal(recovered.value.handoff.phase, "prepared");
+      assert.notEqual(recovered.value.handoff.attemptId, identity.attemptId);
+      assert.notEqual(recovered.value.handoff.handoffId, identity.handoffId);
+      assert.deepEqual(selectWorkflowScheduleEffect(recovered.value), { kind: "dispatch-task", taskId: "first" });
+      assert.deepEqual(transitionWorkflowDispatch(recovered.value, { type: "task-started", identity }, 103).effects, []);
+    } else {
+      assert.equal(recovered.value.status, "paused");
+      assert.equal(recovered.value.tasks[0].outcomeUnknown, true);
+      assert.equal(selectWorkflowScheduleEffect(recovered.value), undefined);
+      assert.throws(() => retryWorkflowTask(recovered.value, "first", 103), /显式确认/);
+      const retried = retryWorkflowTask(recovered.value, "first", 104, { confirmUnknownOutcome: true });
+      const next = startWorkflowTask(retried, "first", 105);
+      assert.notEqual(next.handoff.attemptId, identity.attemptId);
+      assert.notEqual(next.handoff.handoffId, identity.handoffId);
+    }
+  }
+});
+
 test("派发后崩溃恢复为结果未知，显式确认重试使用全新尝试身份", () => {
   const initial = preparedTask();
   const identity = workflowHandoffIdentity(initial);

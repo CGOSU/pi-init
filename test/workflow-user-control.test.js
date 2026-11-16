@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parseWorkflowControlInput } from "../src/workflow-input-intent.ts";
 import { createWorkflowUserControl } from "../extensions/workflow-user-control.ts";
 import { createRepeatedRejectionGuard } from "../extensions/workflow-status-polling.ts";
+import { registerWorkflowTool } from "../extensions/workflow-tool.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -85,6 +86,42 @@ test("重复拒绝按真实身份与调用去重，穿插读取不清空，正�
     assert.equal(reject("d").stop, false);
   });
 });
+test("工作流拒绝分类与有界停止使用结构化code而非提示语前缀", async () => {
+  for (const [guardCode, code, prefix] of [
+    ["ROLE_RECOVERY_REQUIRED", "WORKFLOW_EXECUTION_NOT_AUTHORIZED", "[pi-init-workflow-authorization]"],
+    ["WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED", "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED", "[pi-init-role-recovery]"],
+    ["WORKFLOW_EXECUTION_NOT_AUTHORIZED", "WORKFLOW_EXECUTION_NOT_AUTHORIZED", ""],
+  ]) {
+    const f = fixture(".");
+    const diagnostics = [];
+    f.state.traceHandoff = (_ctx, event, data) => { if (event === "workflow.action_rejected") diagnostics.push(data); };
+    f.state.roleRecoveryPending = guardCode === "ROLE_RECOVERY_REQUIRED";
+    const guard = createRepeatedRejectionGuard({ on() { } }, f.state);
+    let tool, message;
+    registerWorkflowTool({ registerTool(value) { tool = value; } }, f.state, {
+      workflowActions: { runTaskWorkflowAction() { assert.fail("拒绝不能执行工作流动作"); } },
+      workflowBinding: { bind() { assert.fail("拒绝不能绑定或推进任务"); } },
+      roleRecovery: { guardToolCall() { return { code: guardCode, message }; } },
+      userControl: f.control,
+      observeRejection: guard.observe,
+    });
+    for (let i = 0; i < 3; i++) {
+      message = `${i === 0 ? "" : prefix}拒绝说明版本${i}`;
+      const operation = tool.execute(`structured-${i}`, { action: "retry" }, undefined, undefined, f.ctx);
+      if (i < 2) await assert.rejects(operation, error => error.code === code && error.message === message);
+      else {
+        const result = await operation;
+        assert.equal(result.terminate, true);
+        assert.equal(result.details.code, code);
+        assert.equal(result.details.rejectionStopped, true);
+      }
+      assert.equal(diagnostics.at(-1).code, code);
+    }
+    assert.equal(f.state.userStopRequested, true);
+    assert.equal(f.retired(), 1);
+  }
+});
+
 test("真实扩展的停止输入不会产生模型消息或settled续跑", async () => {
   await withTempDirectory(async cwd => {
     const h = createExtensionHarness([], { cwd, trusted: true });

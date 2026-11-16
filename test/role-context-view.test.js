@@ -333,13 +333,6 @@ test("unknown boundaries and damaged pairs fail open while host system messages 
   assert.deepEqual(unexpectedSystem.messages.slice(0, systemInput.length), systemInput);
   assert.equal(unexpectedSystem.messages.at(-1).details.code, "ROLE_CONTEXT_VIEW_SYSTEM_MESSAGE_PRESENT");
 
-  const compactState = structuredClone(state);
-  compactState.roleCompactionInFlight = true;
-  const compactMessages = [handoffMessage];
-  const compactResult = callContextHandler(compactState, harness, compactMessages);
-  assert.deepEqual(compactResult.messages[0], handoffMessage);
-  assert.equal(compactResult.messages.at(-1).details.code, "ROLE_CONTEXT_VIEW_COMPACTION_UNCERTAIN");
-
   const mismatchedSessionState = structuredClone(state);
   mismatchedSessionState.workflowState.sessionId = "other-session";
   const mismatchMessages = [{ role: "user", content: "keep the full forked history", timestamp: 1 }, handoffMessage];
@@ -580,9 +573,9 @@ test("recovery bootstrap names the next role step instead of requiring a blocked
   const state = createExtensionRuntimeState(); state.roleRecoveryPending = true;
   const recovery = createRoleRecovery({ on() {} }, state);
   const result = recovery.guardToolCall({ toolName: "read", input: { path: "SKILL.md" } });
-  assert.equal(result.block, true);
-  assert.match(result.reason, /developer-test/);
-  assert.match(result.reason, /docs-commit/);
-  assert.match(result.reason, /不要先读取Skill/);
+  assert.equal(result.code, "ROLE_RECOVERY_REQUIRED");
+  assert.match(result.message, /developer-test/);
+  assert.match(result.message, /docs-commit/);
+  assert.match(result.message, /不要先读取Skill/);
   assert.equal(recovery.guardToolCall({ toolName: "switch_role", input: { role: "developer-test" } }), undefined);
 });

@@ -94,7 +94,7 @@ test("旧嵌套状态不再恢复为扁平队列，原数据保持不变", () =>
   assert.deepEqual(source, before);
 });test("目标分组按验收汇总展示，不把分组结束当作父目标成功", () => {
   const queued = insert(); const next = complete(queued, "inserted");
-  const view = createWorkflowStatusView(next, { roleCompactionPhase: "idle", workflowDispatchInFlight: false }, 120);
+  const view = createWorkflowStatusView(next, { workflowDispatchInFlight: false }, 120);
   const text = formatWorkflowGoalTreeText(view);
   assert.match(text, /共享队列，不挂起父目标/);
   assert.match(text, /新目标 · 已验收 · 1\/1/);

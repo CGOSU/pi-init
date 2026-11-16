@@ -96,7 +96,7 @@ export function createRoleHandoff(pi: ExtensionAPI, state: ExtensionRuntimeState
       state.traceHandoff?.(ctx, "role.handoff_discarded", identity(handoff));
       return false;
     }
-    if (state.agentRunActive || !ctx.isIdle() || state.roleCompactionInFlight || state.pendingRoleCompaction) return true;
+    if (state.agentRunActive || !ctx.isIdle()) return true;
     if (recoveryBlocked()) {
       pending = undefined;
       state.traceHandoff?.(ctx, "role.handoff_blocked_by_recovery", identity(handoff));

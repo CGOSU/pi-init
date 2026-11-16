@@ -148,8 +148,7 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
           fingerprintScheme: "runtime-hmac-sha256-selected-v1", transport: "unavailable", requestForm: "unavailable",
           profileProvider: ctx.model?.provider, profileModel: ctx.model?.id, profileRole: state.activeRole?.role ?? "session", profileThinkingLevel: thinkingLevel,
           contextGeneration: state.roleContextGeneration, roleTransitionGeneration: state.roleTransitionGeneration,
-          compactionPhase: state.roleCompactionPhase, compactionInFlight: state.roleCompactionInFlight,
-          compactionFingerprint: fingerprint(state.roleCompactionOperationId), handoffFingerprint: fingerprint(state.workflowState?.handoff?.handoffId ?? state.pendingRoleCompaction?.budget?.roleHandoffId),
+          handoffFingerprint: fingerprint(state.workflowState?.handoff?.handoffId),
           correlation: blockedUntilBoundary ? "unknown-overlap" : "ordered-hooks" }, streamObserved: false, usage: emptyUsage(), usageEvents: 0 };
       const fields = object(payload);
       const observed = comparison.observe(JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId()]),

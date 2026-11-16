@@ -11,7 +11,7 @@ import { branchContainsExactlyOneAnchor } from "../extensions/role-context-proto
 import { workflowHandoffIdentity } from "../src/workflow.ts";
 
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };
-const idleRuntime = { roleCompactionPhase: "idle", workflowDispatchInFlight: false };
+const idleRuntime = { workflowDispatchInFlight: false };
 
 async function createTaskHarness(directory, options = {}) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });

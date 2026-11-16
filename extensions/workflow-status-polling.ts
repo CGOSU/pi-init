@@ -246,9 +246,8 @@ export function createWorkflowStatusPollingGuard(pi: ExtensionAPI, state: Extens
       roleTransitionGeneration: state.roleTransitionGeneration, roleRecoveryPending: state.roleRecoveryPending,
       roleRecoveryPersistenceFailed: state.roleRecoveryPersistenceFailed, pendingWorkflowRecovery: state.pendingWorkflowRecovery,
       workflowRestoreError: state.workflowRestoreError, userStopRequested: state.userStopRequested,
-      workflowDispatchInFlight: state.workflowDispatchInFlight, internalContinuationPending: state.internalContinuationPending,
-      roleCompactionPhase: state.roleCompactionPhase, pendingRoleCompaction: state.pendingRoleCompaction,
-      activeRoleCompaction: state.activeRoleCompaction });
+      workflowDispatchInFlight: state.workflowDispatchInFlight, internalContinuationPending: state.internalContinuationPending
+    });
     if (!key) { reset(); return { stop: false as const }; }
     const full = request.detail === "full";
     const sources = Array.isArray(request.evidenceIds) && request.evidenceIds.length > 0 && request.evidenceIds.length <= 8

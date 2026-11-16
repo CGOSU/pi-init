@@ -70,6 +70,37 @@ function fixture(cwd, manager = SessionManager.create(cwd, cwd)) {
   return h;
 }
 
+test("incomplete incoming packets fail validation before hashing a missing snapshot", async () => {
+  for (const snapshot of [undefined, null]) await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    h.manager.appendCustomEntry(GENERAL_TRANSFER_ENTRY, {
+      version: 1, kind: "incoming", id: "invalid-import", sourceLeaf: "source-leaf", hash: "hash",
+      targetSessionId: h.manager.getSessionId(), snapshot,
+    });
+    await h.api.fresh(h.ctx);
+    assert.ok(h.notices.at(-1).message.includes("[INVALID]"));
+    assert.equal(h.notices.at(-1).level, "warning");
+    assert.equal(h.calls ?? 0, 0);
+  });
+});
+
+test("readiness failures do not inspect later unavailable host state", async () => {
+  for (const recoveryPending of [false, true]) await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    if (recoveryPending) {
+      h.state.roleRecoveryPending = true;
+      Object.defineProperty(h.ctx, "model", { get() { throw new Error("model unavailable during recovery"); } });
+    } else {
+      h.ctx.isProjectTrusted = () => false;
+      h.ctx.hasPendingMessages = () => { throw new Error("untrusted host queue unavailable"); };
+    }
+    await h.api.fresh(h.ctx);
+    const code = recoveryPending ? "ROLE_RECOVERY" : "PROJECT_UNTRUSTED";
+    assert.ok(h.notices.at(-1).message.includes(`[${code}]`));
+    assert.equal(h.calls ?? 0, 0);
+  });
+});
+
 test("ordinary handoff uses setup then fresh context, persists only background, and does not schedule", async () => {
   await withTempDirectory(async cwd => {
     const h = fixture(cwd);
