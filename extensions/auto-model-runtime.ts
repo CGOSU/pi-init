@@ -9,6 +9,11 @@ import { textOf } from "../src/error-utils.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 
 const ENTRY = "pi-init-auto-model";
+const AUTO_NOT_ENABLED_ERROR = {
+  ok: false as const,
+  code: "AUTO_NOT_ENABLED",
+  message: "当前模型策略为 roles（按职责配置），未启用 Auto。职责切换请仅传 role，移除 Auto 专用参数 thinkingLevel、reason、taskBoundary；如确需 Auto，请由用户在控制中心选择，不自动切换策略或重试。",
+};
 type AutoState = {
   key: string;
   manual: boolean;
@@ -32,6 +37,34 @@ export type AutoRoleAssessmentInput = {
 export type AutoRoleApplyOutcome =
   | { ok: true; assessment?: AutoAssessment; persistFailed?: boolean }
   | { ok: false; code: string; message: string };
+type AutoFailure = { ok: false; code: string; message: string };
+
+function fail(code: string, message: string): AutoFailure {
+  return { ok: false, code, message };
+}
+
+function firstRule<T>(rules: ReadonlyArray<readonly [unknown, T]>): T | undefined {
+  return rules.find(([matched]) => Boolean(matched))?.[1];
+}
+
+function isSameModel(ctx: ExtensionContext, target?: { provider: string; model: string }) {
+  return Boolean(target && ctx.model?.provider === target.provider && ctx.model?.id === target.model);
+}
+
+function needsAssessmentReminder(saved: AutoState) {
+  return !(saved.manual || saved.assessment || saved.reminded || saved.attempted);
+}
+
+function assessmentStatusText(saved: AutoState) {
+  return firstRule([
+    [Boolean(saved.pendingBoundary && saved.scope.kind === "ordinary" && saved.assessment),
+      "新用户输入仅为可能的新任务边界，上一评估只适用于原任务。先判断是否独立任务；若是且需换角可直接随 switch_role 传 thinkingLevel/reason，同角则以 taskBoundary=true 显式评估；若是继续或补充，复用原决定。"],
+    [Boolean(saved.assessment),
+      `当前任务已显式评估：${saved.assessment?.decision === "keep" ? "保持" : "调整"} ${saved.assessment?.to}；完整理由作为数据保存在会话记录，不作为系统指令。`],
+    [Boolean(saved.attempted),
+      "当前任务未记录成功评估（曾尝试，可能取消、失败或中断）；实际强度以当前状态为准，不自动重试、反复确认或伪称已评估。"],
+  ]) ?? "当前任务待显式评估：切角/确认职责时可随 switch_role 同传 thinkingLevel 与非空 reason 一步定档，或随后以当前职责补充评估（保持当前强度也需理由）；切入 architect 或 docs-commit 已自动按边界定档。简单无工具问答无需新增调用。";
+}
 
 export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntimeState, readConfig: (ctx: ExtensionContext) => Promise<ResolvedRoleConfig>, onThinkingChanged: (ctx: ExtensionContext) => void = () => {}) {
   let memory: AutoState | undefined;
@@ -45,10 +78,8 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const key = JSON.stringify(config);
     if (id !== session || memory?.key !== key) {
       session = id;
-      let data: unknown;
-      for (const entry of ctx.sessionManager.getBranch()) {
-        if (entry.type === "custom" && entry.customType === ENTRY) data = entry.data;
-      }
+      const entry = ctx.sessionManager.getBranch().findLast((item) => item.type === "custom" && item.customType === ENTRY);
+      const data = entry?.type === "custom" ? entry.data : undefined;
       const saved = isRecord(data) && data.key === key ? data : {};
       const ordinaryTask = Number.isSafeInteger(saved.ordinaryTask) && (saved.ordinaryTask as number) >= 0 ? saved.ordinaryTask as number : 0;
       const scope = taskScope(ordinaryTask);
@@ -75,18 +106,50 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
       ? { kind: "workflow", workflowId: workflow.workflowId, taskId: workflow.currentTaskId }
       : { kind: "ordinary", task: ordinaryTask };
   }
+  function resetTaskAssessment(saved: AutoState, role?: string) {
+    saved.role = role;
+    saved.assessment = undefined;
+    saved.attempted = false;
+    saved.reminded = false;
+    saved.pendingBoundary = false;
+  }
   function syncScope(saved: AutoState) {
     const scope = taskScope(saved.ordinaryTask);
     if (!parseAutoTaskScope(saved.scope, scope).ok) {
       saved.scope = scope;
-      saved.role = undefined;
-      saved.assessment = undefined;
-      saved.attempted = false;
-      saved.reminded = false;
-      saved.pendingBoundary = false;
+      resetTaskAssessment(saved);
       save();
     }
     return scope;
+  }
+  function advanceOrdinaryBoundary(saved: AutoState, advance: boolean) {
+    syncScope(saved);
+    if (saved.scope.kind === "ordinary" && saved.pendingBoundary && advance) {
+      saved.ordinaryTask += 1;
+      syncScope(saved);
+    }
+  }
+  function applyAssessmentState(saved: AutoState, role: string, from: ThinkingLevel, to: ThinkingLevel, reason: string): AutoAssessment {
+    const assessment: AutoAssessment = { scope: saved.scope, from, to, decision: from === to ? "keep" : "change", reason };
+    saved.initialized = true;
+    saved.pendingBoundary = false;
+    saved.reminded = false;
+    saved.role = role;
+    saved.assessment = assessment;
+    return assessment;
+  }
+  function saveAssessmentTransaction(saved: AutoState, role: string, from: ThinkingLevel, to: ThinkingLevel, reason: string) {
+    const previousAssessment = saved.assessment;
+    const previousRole = saved.role;
+    const assessment = applyAssessmentState(saved, role, from, to, reason);
+    try {
+      save();
+      return { assessment, persisted: true as const };
+    } catch {
+      saved.assessment = previousAssessment;
+      saved.role = previousRole;
+      return { assessment, persisted: false as const };
+    }
   }
   function blocked(ctx: ExtensionContext, signal?: AbortSignal) {
     const workflow = state.workflowState;
@@ -97,7 +160,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
         && (workflow.status !== "running" || !task || task.status !== "in_progress" || task.outcomeUnknown));
   }
   function updateActive(ctx: ExtensionContext) {
-    if (state.activeRole && state.activeRole.provider === ctx.model?.provider && state.activeRole.model === ctx.model?.id) {
+    if (state.activeRole && isSameModel(ctx, state.activeRole)) {
       state.activeRole = { ...state.activeRole, thinkingLevel: pi.getThinkingLevel() };
     }
     onThinkingChanged(ctx);
@@ -115,33 +178,40 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     unwrapRoleResult(validateAutoModelCapabilities(fixed, getSupportedThinkingLevels(model)));
     return model;
   }
+  function requireManualSupportedLevel(model: ReturnType<typeof fixedModel>) {
+    const level = pi.getThinkingLevel();
+    if (!getSupportedThinkingLevels(model).includes(level)) throw new Error("Auto 固定模型不支持用户指定的手动强度，未覆盖手动选择");
+    return level;
+  }
   function targetLevel(ctx: ExtensionContext, config: ResolvedRoleConfig) {
     const fixed = config.autoModel!;
-    fixedModel(ctx, fixed);
+    const model = fixedModel(ctx, fixed);
     const saved = load(ctx, fixed);
-    const initialized = saved.initialized || saved.manual;
-    const sameModel = ctx.model?.provider === fixed.provider && ctx.model?.id === fixed.model;
-    if (saved.manual) {
-      if (!getSupportedThinkingLevels(fixedModel(ctx, fixed)).includes(pi.getThinkingLevel())) throw new Error("Auto 固定模型不支持用户指定的手动强度，未覆盖手动选择");
-      return pi.getThinkingLevel();
-    }
-    return initialized && sameModel ? pi.getThinkingLevel() : autoBaselineForRole(state.activeRole?.role ?? "", fixed);
+    if (saved.manual) return requireManualSupportedLevel(model);
+    return (saved.initialized || saved.manual) && isSameModel(ctx, fixed)
+      ? pi.getThinkingLevel()
+      : autoBaselineForRole(state.activeRole?.role ?? "", fixed);
   }
 
   async function verifyReady(ctx: ExtensionContext, fixed: AutoModelConfig, explicit: boolean, epoch: number, signal?: AbortSignal) {
     const executionProtected = () => (!explicit && blocked(ctx, signal)) || state.userStopRequested || ctx.signal?.aborted || signal?.aborted;
-    if (executionProtected()) return { ok: false as const, code: "AUTO_EXECUTION_PROTECTED", message: "Auto 模型应用被停止或恢复保护阻止" };
+    if (executionProtected()) return fail("AUTO_EXECUTION_PROTECTED", "Auto 模型应用被停止或恢复保护阻止");
     const model = fixedModel(ctx, fixed);
-    const sameModel = ctx.model?.provider === fixed.provider && ctx.model?.id === fixed.model;
+    const sameModel = isSameModel(ctx, fixed);
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) return { ok: false as const, code: "AUTO_AUTH_UNAVAILABLE", message: "Auto 固定模型缺少可用凭据" };
-    if (executionProtected()) return { ok: false as const, code: "AUTO_EXECUTION_PROTECTED", message: "Auto 模型应用被停止或恢复保护阻止" };
-    if (manualEpoch !== epoch) return { ok: false as const, code: "AUTO_CONTEXT_CHANGED", message: "应用期间用户已调整强度，未覆盖手动选择" };
+    const authFailure = firstRule<AutoFailure>([
+      [!auth.ok, fail("AUTO_AUTH_UNAVAILABLE", "Auto 固定模型缺少可用凭据")],
+      [executionProtected(), fail("AUTO_EXECUTION_PROTECTED", "Auto 模型应用被停止或恢复保护阻止")],
+      [manualEpoch !== epoch, fail("AUTO_CONTEXT_CHANGED", "应用期间用户已调整强度，未覆盖手动选择")],
+    ]);
+    if (authFailure) return authFailure;
     const latest = await readConfig(ctx);
-    if (latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== JSON.stringify(fixed) || latest.requiresAutomaticMigration) {
-      return { ok: false as const, code: "AUTO_CONFIG_CHANGED", message: "Auto 配置在应用期间已改变，未应用旧配置" };
-    }
-    if (executionProtected() || manualEpoch !== epoch) return { ok: false as const, code: "AUTO_CONTEXT_CHANGED", message: "应用期间执行状态或用户强度已改变" };
+    const postFailure = firstRule<AutoFailure>([
+      [latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== JSON.stringify(fixed) || latest.requiresAutomaticMigration,
+        fail("AUTO_CONFIG_CHANGED", "Auto 配置在应用期间已改变，未应用旧配置")],
+      [executionProtected() || manualEpoch !== epoch, fail("AUTO_CONTEXT_CHANGED", "应用期间执行状态或用户强度已改变")],
+    ]);
+    if (postFailure) return postFailure;
     return { ok: true as const, model, sameModel, executionProtected };
   }
 
@@ -158,7 +228,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
       finally { selectingModel = undefined; }
     }
     if (manualEpoch !== epoch || ready.executionProtected()) throw new Error("模型应用期间用户已停止或手动调整，未继续调整强度");
-    if (ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) throw new Error("Auto 固定模型未生效，未继续调整强度");
+    if (!isSameModel(ctx, fixed)) throw new Error("Auto 固定模型未生效，未继续调整强度");
     if (pi.getThinkingLevel() !== level) setLevel(level, ctx);
   }
 
@@ -169,8 +239,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const epoch = manualEpoch;
     const ready = await verifyReady(ctx, fixed, explicit, epoch, signal);
     if (!ready.ok) throw new Error(ready.message);
-    const level = targetLevel(ctx, config);
-    await applyModelAndLevel(ctx, fixed, ready, level, epoch);
+    await applyModelAndLevel(ctx, fixed, ready, targetLevel(ctx, config), epoch);
     load(ctx, fixed).initialized = true;
     save();
   }
@@ -182,15 +251,9 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     signal?: AbortSignal,
     assessmentInput?: AutoRoleAssessmentInput,
   ): Promise<AutoRoleApplyOutcome> {
-    if (config.modelStrategy !== "auto") {
-      return {
-        ok: false,
-        code: "AUTO_NOT_ENABLED",
-        message: "当前模型策略为 roles（按职责配置），未启用 Auto。职责切换请仅传 role，移除 Auto 专用参数 thinkingLevel、reason、taskBoundary；如确需 Auto，请由用户在控制中心选择，不自动切换策略或重试。",
-      };
-    }
+    if (config.modelStrategy !== "auto") return AUTO_NOT_ENABLED_ERROR;
     if (config.requiresAutomaticMigration) {
-      if (assessmentInput) return { ok: false, code: "AUTOMATIC_MIGRATION_REQUIRED", message: "旧配置需由用户显式启用全自动" };
+      if (assessmentInput) return fail("AUTOMATIC_MIGRATION_REQUIRED", "旧配置需由用户显式启用全自动");
       unwrapRoleResult(validateAutomaticSwitching(config));
     }
     const fixed = config.autoModel!;
@@ -202,47 +265,26 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (assessmentInput) {
       const parsedReason = parseAutoAssessmentReason(assessmentInput.reason);
       if (!parsedReason.ok) return parsedReason;
-      if (saved.manual) return { ok: false, code: "AUTO_MANUAL_OVERRIDE", message: "用户已手动指定强度；请由用户在控制中心恢复 Auto" };
+      if (saved.manual) return fail("AUTO_MANUAL_OVERRIDE", "用户已手动指定强度；请由用户在控制中心恢复 Auto");
       let model: ReturnType<typeof fixedModel>;
       try { model = fixedModel(ctx, fixed); }
-      catch (error) { return { ok: false, code: "AUTO_MODEL_UNAVAILABLE", message: textOf(error) }; }
+      catch (error) { return fail("AUTO_MODEL_UNAVAILABLE", textOf(error)); }
       const check = validateAutoSuggestion(fixed, getSupportedThinkingLevels(model), assessmentInput.thinkingLevel);
       if (!check.ok) return check;
       if (assessmentInput.taskBoundary && saved.scope.kind === "ordinary" && !saved.pendingBoundary && saved.assessment && prevRole === role) {
-        return { ok: false, code: "AUTO_TASK_BOUNDARY_UNAVAILABLE", message: "没有新的用户输入，不得声明新的普通任务边界" };
+        return fail("AUTO_TASK_BOUNDARY_UNAVAILABLE", "没有新的用户输入，不得声明新的普通任务边界");
       }
       const ready = await verifyReady(ctx, fixed, true, epoch, signal);
       if (!ready.ok) return ready;
       if (saved.manual || memory !== saved || saved.inputRevision !== inputRevision) {
-        return { ok: false, code: "AUTO_CONTEXT_CHANGED", message: "等待期间用户选择、模型或任务已改变，未应用建议" };
+        return fail("AUTO_CONTEXT_CHANGED", "等待期间用户选择、模型或任务已改变，未应用建议");
       }
-      syncScope(saved);
-      if (saved.scope.kind === "ordinary" && saved.pendingBoundary && (assessmentInput.taskBoundary || (prevRole && prevRole !== role))) {
-        saved.ordinaryTask += 1;
-        syncScope(saved);
-      }
+      advanceOrdinaryBoundary(saved, Boolean(assessmentInput.taskBoundary || (prevRole && prevRole !== role)));
       const from = pi.getThinkingLevel();
       await applyModelAndLevel(ctx, fixed, ready, check.value, epoch);
-      saved.initialized = true;
-      saved.pendingBoundary = false;
       saved.attempted = true;
-      saved.reminded = false;
-      saved.role = role;
-      const assessment: AutoAssessment = {
-        scope: saved.scope,
-        from,
-        to: check.value,
-        decision: from === check.value ? "keep" : "change",
-        reason: parsedReason.value,
-      };
-      const previousAssessment = saved.assessment;
-      saved.assessment = assessment;
-      try { save(); }
-      catch {
-        saved.assessment = previousAssessment;
-        return { ok: true, assessment, persistFailed: true };
-      }
-      return { ok: true, assessment, persistFailed: false };
+      const { assessment, persisted } = saveAssessmentTransaction(saved, role, from, check.value, parsedReason.value);
+      return { ok: true, assessment, persistFailed: !persisted };
     }
 
     unwrapRoleResult(validateAutomaticSwitching(config));
@@ -250,49 +292,24 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (!ready.ok) throw new Error(ready.message);
     const scopeMatched = parseAutoTaskScope(saved.scope, taskScope(saved.ordinaryTask)).ok;
     syncScope(saved);
-    let level: ThinkingLevel;
-    if (saved.manual) {
-      if (!getSupportedThinkingLevels(ready.model).includes(pi.getThinkingLevel())) {
-        throw new Error("Auto 固定模型不支持用户指定的手动强度，未覆盖手动选择");
-      }
-      level = pi.getThinkingLevel();
-    } else if (hasAutoBoundaryBaseline(role)) {
-      level = autoBaselineForRole(role, fixed);
-    } else if ((prevRole && prevRole !== role) || (saved.role && saved.role !== role)) {
-      level = fixed.initialThinkingLevel;
-    } else if (scopeMatched && saved.assessment) {
-      level = saved.assessment.to;
-    } else {
-      level = fixed.initialThinkingLevel;
-    }
+    const roleChanged = Boolean((prevRole && prevRole !== role) || (saved.role && saved.role !== role));
+    const baseline = hasAutoBoundaryBaseline(role) ? autoBaselineForRole(role, fixed) : undefined;
+    const level = saved.manual
+      ? requireManualSupportedLevel(ready.model)
+      : baseline ?? (!roleChanged && scopeMatched && saved.assessment ? saved.assessment.to : fixed.initialThinkingLevel);
     const from = pi.getThinkingLevel();
     await applyModelAndLevel(ctx, fixed, ready, level, epoch);
     saved.initialized = true;
     if (!saved.manual) {
-      if (hasAutoBoundaryBaseline(role)) {
-        saved.pendingBoundary = false;
+      if (baseline !== undefined) {
         saved.attempted = false;
-        saved.reminded = false;
-        saved.role = role;
-        saved.assessment = {
-          scope: saved.scope,
-          from,
-          to: level,
-          decision: from === level ? "keep" : "change",
-          reason: role === "architect"
-            ? "Auto 角色基线：architect 默认使用最高强度"
-            : "Auto 角色基线：docs-commit 默认使用最低强度",
-        };
-      } else if ((prevRole && prevRole !== role) || (saved.role && saved.role !== role)) {
-        if (saved.scope.kind === "ordinary" && saved.pendingBoundary) {
-          saved.ordinaryTask += 1;
-          syncScope(saved);
-        }
-        saved.role = role;
-        saved.assessment = undefined;
-        saved.attempted = false;
-        saved.reminded = false;
-        saved.pendingBoundary = false;
+        applyAssessmentState(
+          saved, role, from, level,
+          role === "architect" ? "Auto 角色基线：architect 默认使用最高强度" : "Auto 角色基线：docs-commit 默认使用最低强度",
+        );
+      } else if (roleChanged) {
+        advanceOrdinaryBoundary(saved, true);
+        resetTaskAssessment(saved, role);
       }
     }
     save();
@@ -300,28 +317,33 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   }
 
   async function suggest(role: string, level: ThinkingLevel, reason: string | undefined, ctx: ExtensionContext, signal?: AbortSignal, taskBoundary = false) {
-    const fail = (code: string, message: string) => ({ ok: false as const, code, message });
-    if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "停止、恢复、暂停或未知结果保护中，不能调整强度");
-    if (state.activeRole?.role !== role) return fail("AUTO_ROLE_MISMATCH", `强度评估必须使用当前已确认职责（${state.activeRole?.role ?? "未确认"}），不能同时切换职责。如需切换，先仅传 role 确认目标职责；仅在 Auto 策略下再以当前职责评估强度。失败不自动重试。`);
+    const preFailure = firstRule<AutoFailure>([
+      [blocked(ctx, signal), fail("AUTO_EXECUTION_PROTECTED", "停止、恢复、暂停或未知结果保护中，不能调整强度")],
+      [state.activeRole?.role !== role, fail("AUTO_ROLE_MISMATCH", `强度评估必须使用当前已确认职责（${state.activeRole?.role ?? "未确认"}），不能同时切换职责。如需切换，先仅传 role 确认目标职责；仅在 Auto 策略下再以当前职责评估强度。失败不自动重试。`)],
+    ]);
+    if (preFailure) return preFailure;
     const config = await readConfig(ctx);
-    if (config.modelStrategy !== "auto") return fail("AUTO_NOT_ENABLED", "当前模型策略为 roles（按职责配置），未启用 Auto。职责切换请仅传 role，移除 Auto 专用参数 thinkingLevel、reason、taskBoundary；如确需 Auto，请由用户在控制中心选择，不自动切换策略或重试。");
-    if (config.requiresAutomaticMigration) return fail("AUTOMATIC_MIGRATION_REQUIRED", "旧配置需由用户显式启用全自动");
+    const configFailure = firstRule<AutoFailure>([
+      [config.modelStrategy !== "auto", AUTO_NOT_ENABLED_ERROR],
+      [config.requiresAutomaticMigration, fail("AUTOMATIC_MIGRATION_REQUIRED", "旧配置需由用户显式启用全自动")],
+    ]);
+    if (configFailure) return configFailure;
     const parsedReason = parseAutoAssessmentReason(reason);
     if (!parsedReason.ok) return parsedReason;
     const fixed = config.autoModel!;
     const saved = load(ctx, fixed);
     const epoch = manualEpoch;
-    if (saved.manual) return fail("AUTO_MANUAL_OVERRIDE", "用户已手动指定强度；请由用户在控制中心恢复 Auto");
-    if (ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) return fail("AUTO_MODEL_MISMATCH", "当前真实模型不是 Auto 固定模型；请重新应用模型配置");
+    const stateFailure = firstRule<AutoFailure>([
+      [saved.manual, fail("AUTO_MANUAL_OVERRIDE", "用户已手动指定强度；请由用户在控制中心恢复 Auto")],
+      [!isSameModel(ctx, fixed), fail("AUTO_MODEL_MISMATCH", "当前真实模型不是 Auto 固定模型；请重新应用模型配置")],
+    ]);
+    if (stateFailure) return stateFailure;
     syncScope(saved);
     const model = fixedModel(ctx, fixed);
-    if (taskBoundary && saved.scope.kind === "ordinary") {
-      if (!saved.pendingBoundary && saved.assessment) return fail("AUTO_TASK_BOUNDARY_UNAVAILABLE", "没有新的用户输入，不得声明新的普通任务边界");
-      if (saved.pendingBoundary) {
-        saved.ordinaryTask += 1;
-        syncScope(saved);
-      }
+    if (taskBoundary && saved.scope.kind === "ordinary" && !saved.pendingBoundary && saved.assessment) {
+      return fail("AUTO_TASK_BOUNDARY_UNAVAILABLE", "没有新的用户输入，不得声明新的普通任务边界");
     }
+    if (taskBoundary) advanceOrdinaryBoundary(saved, true);
     const scope = saved.scope;
     const inputRevision = saved.inputRevision;
     const check = validateAutoSuggestion(fixed, getSupportedThinkingLevels(model), level);
@@ -329,26 +351,15 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     const from = pi.getThinkingLevel();
     saved.attempted = true;
     save();
-    if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "执行已停止，未调整强度");
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) return fail("AUTO_AUTH_UNAVAILABLE", "Auto 固定模型缺少可用凭据");
-    const latest = await readConfig(ctx);
-    if (latest.modelStrategy !== "auto" || JSON.stringify(latest.autoModel) !== saved.key || saved.manual || latest.requiresAutomaticMigration) return fail("AUTO_CONFIG_CHANGED", "配置或手动强度在等待期间已变化，未应用建议");
-    if (blocked(ctx, signal)) return fail("AUTO_EXECUTION_PROTECTED", "执行已停止，未调整强度");
-    if (saved.manual || manualEpoch !== epoch || memory !== saved || state.activeRole?.role !== role || pi.getThinkingLevel() !== from
-      || !parseAutoTaskScope(scope, taskScope(saved.ordinaryTask)).ok || saved.inputRevision !== inputRevision
-      || ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) return fail("AUTO_CONTEXT_CHANGED", "等待期间用户选择、模型或任务已改变，未应用建议");
+    const ready = await verifyReady(ctx, fixed, false, epoch, signal);
+    if (!ready.ok) return ready;
+    if (saved.manual || memory !== saved || state.activeRole?.role !== role || pi.getThinkingLevel() !== from
+      || !parseAutoTaskScope(scope, taskScope(saved.ordinaryTask)).ok || saved.inputRevision !== inputRevision || !isSameModel(ctx, fixed)) {
+      return fail("AUTO_CONTEXT_CHANGED", "等待期间用户选择、模型或任务已改变，未应用建议");
+    }
     if (from !== level) setLevel(level, ctx);
-    const assessment: AutoAssessment = { scope, from, to: level, decision: from === level ? "keep" : "change", reason: parsedReason.value };
-    const previousAssessment = saved.assessment;
-    const previousRole = saved.role;
-    saved.assessment = assessment;
-    saved.role = role;
-    saved.pendingBoundary = false;
-    try { save(); }
-    catch {
-      saved.assessment = previousAssessment;
-      saved.role = previousRole;
+    const { assessment, persisted } = saveAssessmentTransaction(saved, role, from, level, parsedReason.value);
+    if (!persisted) {
       return fail("AUTO_ASSESSMENT_PERSIST_FAILED", `评估记录保存未获确认；实际强度为 ${pi.getThinkingLevel()}，不报告成功评估，不自动重试或回放`);
     }
     return {
@@ -364,13 +375,11 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (blocked(ctx)) throw new Error("停止或恢复保护中，恢复 Auto 不会解除任务暂停");
     const fixed = config.autoModel!;
     fixedModel(ctx, fixed);
-    if (ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) throw new Error("请先应用 Auto 固定模型，再恢复自动强度");
+    if (!isSameModel(ctx, fixed)) throw new Error("请先应用 Auto 固定模型，再恢复自动强度");
     const saved = load(ctx, fixed);
     saved.manual = false;
     syncScope(saved);
-    saved.assessment = undefined;
-    saved.attempted = false;
-    saved.reminded = false;
+    resetTaskAssessment(saved);
     save();
   }
 
@@ -387,11 +396,11 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
       if (config.modelStrategy !== "auto") return;
       const fixed = config.autoModel!;
       fixedModel(ctx, fixed);
-      if (ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) throw new Error("请求已阻止：真实模型不是 Auto 固定模型，请重新应用配置");
+      if (!isSameModel(ctx, fixed)) throw new Error("请求已阻止：真实模型不是 Auto 固定模型，请重新应用配置");
     } catch (error) { ctx.ui.notify(textOf(error), "error"); ctx.abort(); }
   });
   pi.on?.("thinking_level_select", async (_event, ctx) => {
-    if (ownThinkingChange || (selectingModel && ctx.model?.provider === selectingModel.provider && ctx.model.id === selectingModel.model)) return;
+    if (ownThinkingChange || (selectingModel && isSameModel(ctx, selectingModel))) return;
     manualEpoch += 1;
     if (memory) memory.manual = true;
     const config = await readConfig(ctx);
@@ -413,13 +422,12 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   });
   pi.on?.("tool_result", async (event, ctx) => {
     if (!memory || event.toolName === "switch_role" || event.toolName === "task_workflow" || !state.activeRole || blocked(ctx)) return;
-    if (parseAutoTaskScope(memory.scope, taskScope(memory.ordinaryTask)).ok
-      && (memory.manual || memory.assessment || memory.reminded || memory.attempted)) return;
+    if (parseAutoTaskScope(memory.scope, taskScope(memory.ordinaryTask)).ok && !needsAssessmentReminder(memory)) return;
     const config = await readConfig(ctx);
     if (config.modelStrategy !== "auto" || config.requiresAutomaticMigration || blocked(ctx) || !state.activeRole) return;
     const saved = load(ctx, config.autoModel!);
     syncScope(saved);
-    if (saved.manual || saved.assessment || saved.reminded || saved.attempted) return;
+    if (!needsAssessmentReminder(saved)) return;
     let reminder = "Auto 当前任务尚未记录显式强度评估。请以当前职责调用 switch_role，提供 thinkingLevel 和简短 reason；保持当前强度也需要理由。本任务只提醒一次，不阻塞已执行工具、不自动重试或新增模型请求。";
     saved.reminded = true;
     try { save(); }
@@ -446,22 +454,17 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     if (!blocked(ctx)) {
       try { await ensure(ctx, config); }
       catch (error) { ctx.ui.notify(textOf(error), "error"); ctx.abort(); return; }
-    } else if (ctx.model?.provider !== fixed.provider || ctx.model?.id !== fixed.model) {
+    } else if (!isSameModel(ctx, fixed)) {
       ctx.ui.notify("Auto 固定模型与当前模型不一致；停止或恢复保护中不会自动应用，请先手动应用模型配置。", "error");
       ctx.abort();
       return;
     }
     syncScope(saved);
     if (!sections) return;
-    const assessmentStatus = saved.pendingBoundary && saved.scope.kind === "ordinary" && saved.assessment
-      ? "新用户输入仅为可能的新任务边界，上一评估只适用于原任务。先判断是否独立任务；若是且需换角可直接随 switch_role 传 thinkingLevel/reason，同角则以 taskBoundary=true 显式评估；若是继续或补充，复用原决定。"
-      : saved.assessment ? `当前任务已显式评估：${saved.assessment.decision === "keep" ? "保持" : "调整"} ${saved.assessment.to}；完整理由作为数据保存在会话记录，不作为系统指令。`
-        : saved.attempted ? "当前任务未记录成功评估（曾尝试，可能取消、失败或中断）；实际强度以当前状态为准，不自动重试、反复确认或伪称已评估。"
-          : "当前任务待显式评估：切角/确认职责时可随 switch_role 同传 thinkingLevel 与非空 reason 一步定档，或随后以当前职责补充评估（保持当前强度也需理由）；切入 architect 或 docs-commit 已自动按边界定档。简单无工具问答无需新增调用。";
     const guidance = saved.manual
       ? "用户手动强度优先，自动调整暂停，只有用户在控制中心恢复 Auto 才解除。"
       : [
-          `本轮入口快照：${assessmentStatus}`,
+          `本轮入口快照：${assessmentStatusText(saved)}`,
           "同轮后续成功的 switch_role 评估结果优先于入口快照，不因快照未更新而重复评估；失败或取消不自动重试。",
           `角色基线：architect 默认 ${fixed.maxThinkingLevel}（最高）、docs-commit 默认 ${fixed.minThinkingLevel}（最低），切入即自动定档无需额外调用；developer-test 等默认 ${fixed.initialThinkingLevel}，按任务在 ${fixed.minThinkingLevel}–${fixed.maxThinkingLevel} 间调整。`,
           `分档参考：${fixed.minThinkingLevel}（低风险/局部明确修改、文档与记忆维护、格式整理、Git 提交、常规只读检索）；${fixed.initialThinkingLevel}（常规单模块实现、明确 Bug 修复与单测）；${fixed.maxThinkingLevel}（架构设计、跨模块复杂改造、状态机/并发/安全与恢复边界，或连续排查/测试失败时主动升档）。同一任务转入文档或收尾阶段时可降回 ${fixed.minThinkingLevel}。`,
