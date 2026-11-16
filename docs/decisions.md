@@ -8,6 +8,15 @@
 
 ## 已确认决策
 
+### 2026-11-16：回合内连续工具错误尾注纠偏与普通会话软提示
+
+- 决定：在 `extensions/workflow-status-polling.ts` 的 `createWorkflowProgressObserver` 中扩展确定性回合内防循环尾注：
+  1. 新增 `WORKFLOW_REPEATED_TOOL_ERROR`：非路由顶层工具（排除 `task_workflow`、`switch_role`、`session_handoff` 与带 `parentToolCallId` 的嵌套子调用）连续 3 次返回相同错误输出指纹，或同一 `path` 的 `edit` 连续 3 次失败（`isError: true` 且非空错误载荷）时，仅在本次 `tool_result.content` 末尾追加一次确定性纠偏文本（引导先用 `read` 核对上下文、换路排查，或将已排除方向记入 `blockReason`/`approachesTried`），并记录去敏 `workflow.suspected_loop` 诊断；任意非路由成功调用、不同目标/错误或作用域变化立即清零，不触发自动暂停。
+  2. 普通会话（`state.workflowState === undefined`）开放只读重复（`WORKFLOW_REPEATED_READ`）与连续失败（`WORKFLOW_REPEATED_TOOL_ERROR`）的 `tool_result` 尾注软提示，按 `(sessionId, activeRole, roleContextGeneration, roleTransitionGeneration)` 与 branch 锚点隔离，不触发 `onRepeatedRead`/`userControl.suspend`；存在非执行中 `workflowState` 时不回退到普通会话计数。
+- 原因：借鉴 Microsoft TokenEconomizer 的回合内 Loop Guard 软注入思路，补足原先仅覆盖“成功只读工具”及“仅限活动执行工作流”的回合内防死磕缺口；同时继续复用 `tool_result` 尾注通道，避免旁路 `sendMessage` steer 干扰状态机与消息配对、避免改写 `system` 破坏 Prompt Cache、避免外部 Judge 模型延迟/凭据风险，也避免从 bash/codemode 文本启发式猜测副作用引发误报。
+- 约束：不修改 `system` 前缀、不调用 Judge 模型、不猜测 shell/codemode 副作用、不对工具错误自动暂停、不因并行/嵌套调用误计；仅根据实际运行的单元与生命周期测试验证，未在真实 Pi 宿主或在线模型进行端到端对比，源码未同步到本机安装副本。
+- 验证：`./node_modules/.bin/tsc --noEmit` 通过；`node ./scripts/test.js test/workflow-read-loop.test.js test/workflow-status-polling.test.js test/workflow-progress.test.js test/workflow-start-lifecycle.test.js test/workflow-user-control.test.js test/runtime-diagnostics.test.js` 85 项通过。
+
 ### 2026-11-15：固定模型 Auto 按职责基线定档并支持 switch_role 一步调档
 
 - 决定：固定模型 `auto` 策略下，切入 `architect` 自动应用配置的 `maxThinkingLevel`、切入 `docs-commit` 自动应用配置的 `minThinkingLevel` 并直接视为已定档（免除二次评估调用）；`developer-test` 及自定义角色默认起始强度 `initialThinkingLevel` 并按任务/阶段复杂度在 `[min, max]` 间调整。同时允许 `switch_role` 在切换或确认职责时直接附带 `thinkingLevel` 与 `reason` 一步完成换角与定档，并在注入提示中补充与配置范围绑定的分档参考。
