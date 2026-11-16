@@ -6,7 +6,7 @@ import { parseAutoAssessment, parseAutoAssessmentReason, parseAutoTaskScope, typ
 import { isRecord } from "../src/value-guards.ts";
 import { validateAutomaticSwitching, unwrapRoleResult } from "../src/roles.ts";
 import { textOf } from "../src/error-utils.ts";
-import { firstPolicyMatch, hasRecoveryGate, isActiveWorkflowStatus, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { firstPolicyMatch, hasRecoveryGate, isActiveWorkflowStatus, onEvents, type ExtensionRuntimeState } from "./runtime-state.ts";
 
 const ENTRY = "pi-init-auto-model";
 const AUTO_NOT_ENABLED_ERROR = {
@@ -371,8 +371,7 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
   }
 
   function resetSession() { session = undefined; memory = undefined; }
-  pi.on?.("session_start", resetSession);
-  pi.on?.("session_tree", resetSession);
+  onEvents(pi, ["session_start", "session_tree"], resetSession);
   pi.on?.("model_select", (event) => {
     if (selectingModel?.provider === event.model.provider && selectingModel.model === event.model.id) selectingModel = undefined;
   });

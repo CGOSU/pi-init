@@ -2,6 +2,7 @@ import { isRecord as record } from "../src/value-guards.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getSessionEntries } from "./session-entries.ts";
+import { matchPolicy, onEvents } from "./runtime-state.ts";
 
 export const CACHE_MISS_NOTICE = "pi-init-cache-miss-reminder";
 export const CACHE_MISS_TOTAL = "pi-init-cache-miss-total";
@@ -10,21 +11,26 @@ type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: st
 type Sample = { prompt: number; read: number; paidRate: number; readRate: number; reportedCache: boolean };
 /** Uses observed usage prices, not account billing. Missing prices must never become zero-price guesses. */
 export function cacheMissSample(message: AssistantMessage, ctx: ExtensionContext): Result<Sample> {
-  const usage = message.usage;
-  if (!record(usage) || !record(usage.cost)) return { ok: false, code: "MISSING", message: "缺少用量或成本明细" };
-  const counts = [usage.input, usage.cacheRead, usage.cacheWrite];
-  if (!counts.every(v => typeof v === "number" && Number.isSafeInteger(v) && v >= 0)) return { ok: false, code: "COUNTS", message: "token计数缺失或无效" };
-  const costs = [usage.cost.input, usage.cost.cacheWrite, usage.cost.cacheRead];
-  if (!costs.every(v => typeof v === "number" && Number.isFinite(v) && v >= 0)) return { ok: false, code: "PRICES", message: "成本明细缺失或无效" };
-  const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
-  if (!Number.isSafeInteger(prompt) || prompt <= 0) return { ok: false, code: "PROMPT", message: "输入规模无效" };
-  const paid = usage.input + usage.cacheWrite;
+  const usage = record(message.usage) ? message.usage : undefined;
+  const cost = usage && record(usage.cost) ? usage.cost : undefined;
+  const prompt = () => usage!.input + usage!.cacheRead + usage!.cacheWrite;
   const model = ctx.model?.provider === message.provider && ctx.model.id === message.model ? ctx.model : undefined;
-  const readRate = usage.cacheRead > 0 ? usage.cost.cacheRead / usage.cacheRead : model?.cost?.cacheRead === undefined ? undefined : model.cost.cacheRead / 1_000_000;
-  if (readRate === undefined || !Number.isFinite(readRate) || readRate < 0) return { ok: false, code: "READ_PRICE", message: "缓存读取价格不可确认" };
-  const paidRate = paid > 0 ? (usage.cost.input + usage.cost.cacheWrite) / paid : 0;
-  if (!Number.isFinite(paidRate)) return { ok: false, code: "PRICES", message: "输入价格溢出" };
-  return { ok: true, value: { prompt, read: usage.cacheRead, paidRate, readRate, reportedCache: usage.cacheRead + usage.cacheWrite > 0 } };
+  const readRate = () => usage!.cacheRead > 0 ? cost!.cacheRead / usage!.cacheRead : model?.cost?.cacheRead === undefined ? undefined : model.cost.cacheRead / 1_000_000;
+  const paidRate = () => {
+    const paid = usage!.input + usage!.cacheWrite;
+    return paid > 0 ? (cost!.input + cost!.cacheWrite) / paid : 0;
+  };
+  return matchPolicy<Result<Sample>>([
+    [() => !usage || !cost, { ok: false, code: "MISSING", message: "缺少用量或成本明细" }],
+    [() => ![usage!.input, usage!.cacheRead, usage!.cacheWrite].every(v => typeof v === "number" && Number.isSafeInteger(v) && v >= 0),
+      { ok: false, code: "COUNTS", message: "token计数缺失或无效" }],
+    [() => ![cost!.input, cost!.cacheWrite, cost!.cacheRead].every(v => typeof v === "number" && Number.isFinite(v) && v >= 0),
+      { ok: false, code: "PRICES", message: "成本明细缺失或无效" }],
+    [() => !Number.isSafeInteger(prompt()) || prompt() <= 0, { ok: false, code: "PROMPT", message: "输入规模无效" }],
+    [() => { const rate = readRate(); return rate === undefined || !Number.isFinite(rate) || rate < 0; },
+      { ok: false, code: "READ_PRICE", message: "缓存读取价格不可确认" }],
+    [() => !Number.isFinite(paidRate()), { ok: false, code: "PRICES", message: "输入价格溢出" }],
+  ]) ?? { ok: true, value: { prompt: prompt(), read: usage!.cacheRead, paidRate: paidRate(), readRate: readRate()!, reportedCache: usage!.cacheRead + usage!.cacheWrite > 0 } };
 }
 
 export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: ExtensionContext, count: number | undefined, totalUsd?: number) => void) {
@@ -53,14 +59,12 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
   }
   function observe(ctx: ExtensionContext, message: AssistantMessage) {
     if (sessionId !== ctx.sessionManager.getSessionId()) restore(ctx);
-    if (!["stop", "toolUse", "length"].includes(message.stopReason)) { previous = undefined; return; }
-    const sample = cacheMissSample(message, ctx);
-    if (!sample.ok) { previous = undefined; return; }
+    const sample = ["stop", "toolUse", "length"].includes(message.stopReason) ? cacheMissSample(message, ctx) : undefined;
+    if (!sample?.ok) { previous = undefined; return; }
     const prior = previous;
     sample.value.reportedCache ||= prior?.reportedCache ?? false;
     previous = sample.value;
-    if (!prior || !ctx.hasUI || !ctx.isProjectTrusted()) return;
-    if (!prior.reportedCache && !sample.value.reportedCache) return;
+    if (!prior || !ctx.hasUI || !ctx.isProjectTrusted() || (!prior.reportedCache && !sample.value.reportedCache)) return;
     const missed = Math.min(prior.prompt, sample.value.prompt) - sample.value.read;
     const extra = missed * Math.max(0, sample.value.paidRate - sample.value.readRate);
     if (missed <= 1024 || !Number.isFinite(extra) || extra <= CACHE_MISS_THRESHOLD_USD || !Number.isFinite(totalUsd + extra)) return;
@@ -81,8 +85,7 @@ export function createCacheMissReminder(pi: ExtensionAPI, setCount: (ctx: Extens
     try { pi.appendEntry(CACHE_MISS_NOTICE, { ...data, phase: "sent" }); }
     catch { /* The persisted notifying marker still prevents duplicate notices; event count is unaffected. */ }
   }
-  pi.on("session_start", (_event, ctx) => restore(ctx));
-  pi.on("session_tree", (_event, ctx) => restore(ctx));
+  onEvents(pi, ["session_start", "session_tree"], (_event, ctx) => restore(ctx));
   pi.on("session_compact", (_event, ctx) => { previous = undefined; publish(ctx); });
   pi.on("session_shutdown", (_event, ctx) => { previous = undefined; setCount(ctx, undefined); });
   return { observe };

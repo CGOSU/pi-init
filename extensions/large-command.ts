@@ -3,7 +3,7 @@ import { parseLargeScanScope, type FileReviewScanScope, type FileReviewExclusion
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FILE_REVIEW_THRESHOLD, type FileSnapshot } from "../src/file-review.ts";
 import type { ReviewCandidate } from "../src/review-candidates.ts";
-import type { ActiveRole } from "./runtime-state.ts";
+import { matchPolicy, onEvents, type ActiveRole } from "./runtime-state.ts";
 
 const MAX_REPORT_FILES = 50;
 
@@ -114,9 +114,7 @@ export function registerLargeCommand(pi: ExtensionAPI, deps: LargeCommandDepende
     activeReview = undefined;
   }
 
-  pi.on("session_start", clearActiveReview);
-  pi.on("session_shutdown", clearActiveReview);
-  pi.on("session_tree", clearActiveReview);
+  onEvents(pi, ["session_start", "session_shutdown", "session_tree"], clearActiveReview);
   pi.on("agent_settled", (_event, ctx) => {
     if (activeReview?.sessionId === ctx.sessionManager.getSessionId()) clearActiveReview();
   });
@@ -128,41 +126,38 @@ export function registerLargeCommand(pi: ExtensionAPI, deps: LargeCommandDepende
       if (!parsed.ok) return ctx.ui.notify(parsed.message, "warning");
       if (handlerInFlight) return ctx.ui.notify("/large 正在扫描或启动审阅；没有重复派发。", "warning");
       const initial = deps.getSnapshot();
-      if (!initial) return ctx.ui.notify("当前 Pi session 尚未完成大文件扫描。", "warning");
-      if (!ctx.isIdle() && JSON.stringify(initial.scanScope ?? {}) !== JSON.stringify(parsed.value)) {
-        return ctx.ui.notify("Agent 正忙；未改变扫描范围，请在当前回合结束后重试。", "warning");
-      }
+      const preflightNotice = matchPolicy<string>([
+        [() => !initial, "当前 Pi session 尚未完成大文件扫描。"],
+        [() => !ctx.isIdle() && JSON.stringify(initial!.scanScope ?? {}) !== JSON.stringify(parsed.value),
+          "Agent 正忙；未改变扫描范围，请在当前回合结束后重试。"],
+      ]);
+      if (preflightNotice || !initial) return ctx.ui.notify(preflightNotice!, "warning");
 
       handlerInFlight = true;
       let dispatchedReview: { sessionId: string; generation: number } | undefined;
       try {
         const result = await deps.scan(ctx, parsed.value);
         const current = deps.getSnapshot();
-        if (!current) return ctx.ui.notify("大文件扫描失败：当前 Pi session 已变化。", "error");
-        if (
-          current.sessionId !== initial.sessionId ||
-          current.generation !== initial.generation ||
-          ctx.sessionManager.getSessionId() !== initial.sessionId
-        ) {
-          return ctx.ui.notify("扫描期间 Pi session 已变化；未启动审阅。", "warning");
+        let blockedReason: string | undefined;
+        const postNotice = matchPolicy<[string, "info" | "warning" | "error"]>([
+          [() => !current, ["大文件扫描失败：当前 Pi session 已变化。", "error"]],
+          [() => current!.sessionId !== initial.sessionId || current!.generation !== initial.generation
+            || ctx.sessionManager.getSessionId() !== initial.sessionId,
+            ["扫描期间 Pi session 已变化；未启动审阅。", "warning"]],
+          [() => !result.ok, () => [scanReport(current!, false, !result.ok ? result.message : undefined), "warning"]],
+          [() => activeReview?.sessionId === current!.sessionId && activeReview.generation === current!.generation,
+            () => [`${scanReport(current!, true)}\n已有 /large 审阅请求正在处理；没有重复派发。`, "info"]],
+          [() => !current!.structuralConfirmed,
+            () => [`${scanReport(current!, true)}\n未启动审阅：结构候选状态无法确认；先解决上列状态错误。`, "warning"]],
+          [() => current!.candidates.length === 0, () => [scanReport(current!, true), "info"]],
+          [() => Boolean(blockedReason = deps.getDispatchBlockReason(ctx)),
+            () => [`${scanReport(current!, true)}\n未启动审阅：${blockedReason}`, "warning"]],
+          [() => !ctx.isIdle(), () => [`${scanReport(current!, true)}\nAgent 正忙；未启动或排队审阅。`, "warning"]],
+        ]);
+        if (postNotice || !current) {
+          const [message, tone] = postNotice ?? ["大文件扫描失败：当前 Pi session 已变化。", "error"];
+          return ctx.ui.notify(message, tone);
         }
-        if (!result.ok) {
-          return ctx.ui.notify(scanReport(current, false, result.message), "warning");
-        }
-
-        if (activeReview?.sessionId === current.sessionId && activeReview.generation === current.generation) {
-          return ctx.ui.notify(`${scanReport(current, true)}\n已有 /large 审阅请求正在处理；没有重复派发。`, "info");
-        }
-        if (!current.structuralConfirmed) {
-          return ctx.ui.notify(`${scanReport(current, true)}\n未启动审阅：结构候选状态无法确认；先解决上列状态错误。`, "warning");
-        }
-        if (current.candidates.length === 0) {
-          return ctx.ui.notify(scanReport(current, true), "info");
-        }
-
-        const blocked = deps.getDispatchBlockReason(ctx);
-        if (blocked) return ctx.ui.notify(`${scanReport(current, true)}\n未启动审阅：${blocked}`, "warning");
-        if (!ctx.isIdle()) return ctx.ui.notify(`${scanReport(current, true)}\nAgent 正忙；未启动或排队审阅。`, "warning");
 
         dispatchedReview = { sessionId: current.sessionId, generation: current.generation };
         activeReview = dispatchedReview;
