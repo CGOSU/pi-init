@@ -23,6 +23,11 @@ const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const ROLE_RECOVERY_REASON = "上下文刚完成压缩，职责尚未重新确认；请先成功调用 switch_role(role=...)。优先按当前任务声明的角色确认；同一实现交付的代码、测试、必要说明及已授权整项 Git 收尾沿用 developer-test，独立文档/版本或显式统一收尾用 docs-commit。恢复门解除前不要先读取Skill或仓库；缺少凭据应停止，不自动更换模型。";
 const SESSION_REARM_REASONS = new Set(["startup", "reload", "resume", "fork"]);
 
+type RecoveryGuardRejection = {
+  code: "ROLE_RECOVERY_REQUIRED" | "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" | "WORKFLOW_EXECUTION_NOT_AUTHORIZED";
+  message: string;
+};
+
 function isPendingEntry(entry: unknown) {
   if (!entry || typeof entry !== "object" || !("data" in entry)) return false;
   const data = (entry as { data?: unknown }).data;
@@ -77,7 +82,6 @@ export function createRoleRecovery(
   }
 
   function afterCompact(event: { reason?: string }, ctx: ExtensionContext) {
-    if (state.roleCompactionInFlight) return;
     requireConfirmation(ctx, event.reason ?? "unknown");
   }
 
@@ -178,15 +182,20 @@ export function createRoleRecovery(
     const recoveryAllowed = workflowAction === "status" || Boolean(state.activeRole?.role && state.activeRole.role !== "architect" && readOnly);
     const unavailable = Boolean(state.workflowRestoreError || state.pendingWorkflowRecovery || workflow?.status === "paused" || workflow?.status === "replanning");
     const executionBlocked = unavailable && !readOnly && (!workflowAction || ["complete", "block", "clarify"].includes(String(workflowAction)));
-    const reason = matchPolicy([
+    return matchPolicy<RecoveryGuardRejection>([
       [() => (state.roleRecoveryPending || state.roleRecoveryPersistenceFailed) && !recoveryAllowed,
-        "[pi-init-role-recovery] " + ROLE_RECOVERY_REASON],
+        { code: "ROLE_RECOVERY_REQUIRED", message: "[pi-init-role-recovery] " + ROLE_RECOVERY_REASON }],
       [() => Boolean(unknownOutcomeTask(workflow, workflowAction, event.input)),
-        () => "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。" + nextWorkflowAction(state).nextAction],
+        () => ({
+          code: "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED",
+          message: "[pi-init-workflow-authorization] 旧执行结果未知；模型布尔值不构成用户授权。" + nextWorkflowAction(state).nextAction
+        })],
       [() => executionBlocked,
-        () => "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。" + nextWorkflowAction(state).nextAction + "codemode/bash 包装不属于暂停时允许的只读入口。"],
+        () => ({
+          code: "WORKFLOW_EXECUTION_NOT_AUTHORIZED",
+          message: "[pi-init-workflow-execution] 工作流暂停、重规划或恢复未完成；职责确认不授权继续执行。" + nextWorkflowAction(state).nextAction + "codemode/bash 包装不属于暂停时允许的只读入口。"
+        })],
     ]);
-    return reason ? { block: true, reason } : undefined;
   }
 
   pi.on("session_compact", (event, ctx) => afterCompact(event, ctx));
@@ -199,14 +208,12 @@ export function createRoleRecovery(
     return { messages: restoreSystemMessagePositions(event.messages, result.messages) };
   });
   pi.on("tool_call", (event, ctx) => {
-    const result = guardToolCall(event);
-    if (result?.block) {
-      const code = result.reason.startsWith("[pi-init-role-recovery]") ? "ROLE_RECOVERY_REQUIRED"
-        : result.reason.startsWith("[pi-init-workflow-authorization]") ? "WORKFLOW_UNKNOWN_OUTCOME_CONFIRMATION_REQUIRED" : "WORKFLOW_EXECUTION_NOT_AUTHORIZED";
-      state.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: event.toolCallId, toolName: event.toolName, action: event.input && "action" in event.input ? event.input.action : undefined, code });
-      onRejected?.(event, ctx, code);
-    }
-    return result;
+    const rejection = guardToolCall(event);
+    if (!rejection) return;
+    const { code, message } = rejection;
+    state.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: event.toolCallId, toolName: event.toolName, action: event.input && "action" in event.input ? event.input.action : undefined, code });
+    onRejected?.(event, ctx, code);
+    return { block: true, reason: message };
   });
 
   return {

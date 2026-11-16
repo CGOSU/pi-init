@@ -35,7 +35,7 @@ export function workflowPanelChoices(state: ExtensionRuntimeState): WorkflowPane
         : Object.keys(state.sessionRoleConfigOverrides).length ? "会话配置尚未持久化，不能直接交接" : undefined
   });
   const unavailable = state.runtimeDisposed ? "当前运行时已退出，请重新打开面板" : state.workflowRestoreError || state.pendingWorkflowRecovery || state.roleRecoveryPersistenceFailed ? "恢复尚未确认；先检查技术详情与恢复提示" : undefined;
-  const inflight = state.roleCompactionInFlight || state.pendingRoleCompaction || state.workflowDispatchInFlight || state.internalContinuationPending || workflow.continuation?.kind !== "review" && workflow.continuation?.phase === "compacting";
+  const inflight = state.workflowDispatchInFlight || state.internalContinuationPending || workflow.continuation?.kind !== "review" && workflow.continuation?.phase === "compacting";
   return choices.map(choice => ({ ...choice, disabledReason: unavailable
     ?? (transferFrozen(workflow) && !(imported && choice.action === "fresh") ? "会话交接期间队列只读，请查看目标会话" : undefined)
     ?? (state.roleRecoveryPending && !(imported && choice.action === "fresh") ? "职责恢复尚未确认" : undefined)

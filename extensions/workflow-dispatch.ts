@@ -93,8 +93,6 @@ export function createWorkflowDispatch(
   async function scheduleWorkflowReplan(ctx: ExtensionContext) {
     if (
       state.workflowDispatchInFlight
-      || state.roleCompactionInFlight
-      || state.pendingRoleCompaction
       || !state.workflowState
       || state.workflowState.status !== "replanning"
       || !state.workflowState.pendingRevision
@@ -372,17 +370,17 @@ export function createWorkflowDispatch(
     }
     const handoff = workflow.handoff;
     const blocked = matchPolicy([
-      [() => state.roleCompactionInFlight || state.pendingRoleCompaction, ["blocked-by-compaction", "上下文压缩仍在进行，未重复派发任务；请等待压缩完成，或执行 /reload 后再使用 /pi-init workflow resume。", "warning"] as const],
       [() => workflow.continuation?.kind !== "review" && workflow.continuation?.phase === "compacting", ["blocked-by-compaction", "任务边界压缩尚未确认收敛，未切换角色或派发；请 /reload 后核对暂停状态，再显式 resume。", "warning"] as const],
       [() => state.internalContinuationPending, ["continuation-pending", "自动任务交接消息已排队，未重复派发任务。", "info"] as const],
       [() => handoff && ["dispatching", "queued"].includes(handoff.phase), ["continuation-pending", "任务交接已进入派发阶段；结果未确认，不会重发，请等待实际执行或核对恢复状态。", "warning"] as const],
       [() => handoff?.phase === "executing", ["already-started", `任务 ${handoff?.taskId} 已真实启动，未重复派发任务。`, "info"] as const],
-      [() => !resetStaleWorkflowDispatch(), ["dispatch-in-flight", "任务交接调度仍在进行，未重复派发任务。", "info"] as const],
+      [() => localScheduleInFlight, ["dispatch-in-flight", "任务交接调度仍在进行，未重复派发任务。", "info"] as const],
     ]);
     if (blocked) {
       ctx.ui.notify(blocked[1], blocked[2]);
       return blocked[0];
     }
+    resetStaleWorkflowDispatch();
     await scheduleWorkflow(ctx);
     return "scheduled";
   }

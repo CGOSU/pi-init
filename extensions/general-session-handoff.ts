@@ -69,7 +69,6 @@ export function registerGeneralSessionHandoff(pi: ExtensionAPI, state: Extension
       const fail = (code: string, message: string) => result({ ok: false, code, message });
       if (signal?.aborted || ctx.signal?.aborted || !ctx.isProjectTrusted() || state.runtimeDisposed || state.userStopRequested
         || state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.workflowRestoreError || state.pendingWorkflowRecovery
-        || state.roleCompactionInFlight || state.pendingRoleCompaction || state.activeRoleCompaction
         || state.workflowDispatchInFlight || state.internalContinuationPending) return fail("SAFETY_GATE", "停止、恢复、信任或运行状态尚不允许准备交接");
       if (!state.activeRole || state.activeRole.role === "architect" || !activeRoleMatches(state, ctx, pi.getThinkingLevel())) return fail("ROLE", "仅当前已确认且模型匹配的执行角色可准备交接");
       if (state.workflowState && !["completed", "cancelled"].includes(state.workflowState.status)) return fail("WORKFLOW_ACTIVE", "未结束工作流必须使用已有工作流交接路径");

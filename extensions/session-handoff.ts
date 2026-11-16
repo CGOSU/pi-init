@@ -9,7 +9,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@e
 import { cloneState } from "../src/workflow.ts";
 import type { WorkflowState } from "../src/workflow-types.ts";
 import { buildSessionHandoff, handoffBoundary, handoffHash, handoffEnvelope, resolveHandoffSnapshot, sessionHandoffSeed, importedWorkflow, workflowContentHash, SESSION_HANDOFF_ENTRY, SESSION_HANDOFF_ACTIVATE, SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_PENDING, SESSION_HANDOFF_IMPORTED, type SessionHandoffPacket, type SessionHandoffSnapshot } from "../src/session-handoff.ts";
-import { firstPolicyMatch, hasCompactionGate, isActiveWorkflowStatus, matchPolicy, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { firstPolicyMatch, isActiveWorkflowStatus, matchPolicy, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { isRecord } from "./role-context-protocol.ts";
 import { readTaskSourceObservation, contentText } from "./task-memory-runtime.ts";
 import { parseTaskMemoryIdentity } from "../src/task-memory.ts";
@@ -77,7 +77,6 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       [ctx.hasPendingMessages(), ["MESSAGES_PENDING", "仍有排队消息，请先处理后再交接。"]],
       [ctx.signal?.aborted, ["CONTEXT_ABORTED", "当前运行已中止，请先核对会话状态。"]],
       [state.agentRunActive, ["AGENT_BUSY", "Agent仍在运行，请等待本轮结束后再交接。"]],
-      [hasCompactionGate(state), ["COMPACTION_PENDING", "上下文压缩或职责切换尚未结束，请先等待结果。"]],
       [state.userStopRequested, ["USER_STOPPED", "用户停止保护仍生效，请先核对停止原因；交接不能解除停止。"]],
       [state.runtimeDisposed, ["CONTEXT_INACTIVE", "当前上下文已失效，请在有效会话中核对交接状态。"]],
       [state.roleRecoveryPersistenceFailed, ["ROLE_RECOVERY_PERSIST_FAILED", "职责恢复记录保存失败，请先处理持久化错误；未确认前不能交接或继续执行。"]],

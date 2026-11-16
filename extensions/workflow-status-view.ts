@@ -31,7 +31,7 @@ export type WorkflowStatusActivity =
   | "cancelled"
   | "waiting-dispatch"
   | "compaction-stalled"
-  | "compacting"
+  | "compacting" // Retained for persisted status presentations, not current runtime activity.
   | "dispatching"
   | "waiting-task"
   | "executing";
@@ -76,11 +76,10 @@ export type WorkflowStatusView =
 
 export type WorkflowStatusRuntime = Pick<
   ExtensionRuntimeState,
-  "workflowRestoreError" | "roleCompactionPhase" | "pendingRoleCompaction" | "workflowDispatchInFlight"
+  "workflowRestoreError" | "workflowDispatchInFlight"
 > & Partial<Pick<
   ExtensionRuntimeState,
-  "roleCompactionOperationId" | "roleContextGeneration" | "roleTransitionGeneration" | "activeRoleCompaction"
-  | "workflowProgressObservation" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed"
+  "workflowProgressObservation" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed"
   | "pendingWorkflowRecovery" | "userStopRequested"
 >>;
 
@@ -124,35 +123,6 @@ function hasExecutionEvidence(task: WorkflowTask, handoff: WorkflowHandoff) {
     && executionStartedAt === handoff.startedAt;
 }
 
-function sameHandoff(left: WorkflowHandoff, right: WorkflowHandoffIdentity) {
-  return left.workflowId === right.workflowId
-    && left.planVersion === right.planVersion
-    && left.taskId === right.taskId
-    && left.attemptId === right.attemptId
-    && left.handoffId === right.handoffId
-    && left.sessionId === right.sessionId
-    && left.recoveryGeneration === right.recoveryGeneration;
-}
-
-function compactionMatchesCurrentHandoff(
-  state: WorkflowState,
-  task: WorkflowTask,
-  handoff: WorkflowHandoff,
-  runtime: WorkflowStatusRuntime,
-) {
-  const active = runtime.activeRoleCompaction;
-  const transition = active?.transition ?? runtime.pendingRoleCompaction;
-  if (!transition
-    || transition.sessionId !== state.sessionId
-    || transition.contextGeneration !== runtime.roleContextGeneration
-    || transition.roleTransitionGeneration !== runtime.roleTransitionGeneration) return false;
-  if (active && active.operationId !== runtime.roleCompactionOperationId) return false;
-  const continuation = transition.continuation;
-  return continuation?.kind === "workflow-task"
-    && continuation.taskId === task.id
-    && sameHandoff(handoff, continuation.identity);
-}
-
 function activityFor(
   state: WorkflowState,
   runtime: WorkflowStatusRuntime,
@@ -162,18 +132,6 @@ function activityFor(
 ): WorkflowStatusActivity {
   if (state.status === "running" || state.status === "replanning") {
     if (recovery) return "execution-blocked";
-    const transition = runtime.activeRoleCompaction?.transition ?? runtime.pendingRoleCompaction;
-    const continuation = transition?.continuation;
-    if (continuation?.kind === "workflow-boundary"
-      && state.continuation?.kind !== "review" && state.continuation?.phase === "compacting"
-      && transition?.contextGeneration === runtime.roleContextGeneration
-      && transition?.roleTransitionGeneration === runtime.roleTransitionGeneration
-      && continuation.identity.workflowId === state.workflowId
-      && continuation.identity.planVersion === state.planVersion
-      && continuation.identity.sessionId === state.sessionId
-      && continuation.identity.recoveryGeneration === state.recoveryGeneration) {
-      return "compacting";
-    }
     if (state.continuation?.kind !== "review" && state.continuation?.phase === "compacting") return "compaction-stalled";
   }
   if (state.status === "replanning") return "awaiting-replan";
@@ -184,11 +142,6 @@ function activityFor(
   if (!state.currentTaskId || !activeTask) return "waiting-dispatch";
   if (!handoff) return "waiting-task";
   if (hasExecutionEvidence(activeTask, handoff)) return "executing";
-  if (handoff.phase === "compacting" && compactionMatchesCurrentHandoff(state, activeTask, handoff, runtime)) {
-    if (runtime.roleCompactionPhase === "compacting" || runtime.pendingRoleCompaction || runtime.activeRoleCompaction) {
-      return "compacting";
-    }
-  }
   if (handoff.phase === "dispatching"
     || (runtime.workflowDispatchInFlight && (handoff.phase === "prepared" || handoff.phase === "waiting-role"))) {
     return "dispatching";
@@ -274,12 +227,6 @@ export function createWorkflowStatusView(
 export function workflowStatusRuntimeFromState(state: ExtensionRuntimeState): WorkflowStatusRuntime {
   return {
     workflowRestoreError: state.workflowRestoreError,
-    roleCompactionPhase: state.roleCompactionPhase,
-    pendingRoleCompaction: state.pendingRoleCompaction,
-    activeRoleCompaction: state.activeRoleCompaction,
-    roleCompactionOperationId: state.roleCompactionOperationId,
-    roleContextGeneration: state.roleContextGeneration,
-    roleTransitionGeneration: state.roleTransitionGeneration,
     workflowDispatchInFlight: state.workflowDispatchInFlight,
     workflowProgressObservation: state.workflowProgressObservation,
     roleRecoveryPending: state.roleRecoveryPending,

@@ -3,12 +3,7 @@ import type { ExtensionAPI, ExtensionContext, ExtensionEvent } from "@earendil-w
 import { isExternalRunSource } from "../src/run-timing.ts";
 import type { ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
 import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
-import type {
-  WorkflowActionIdentity,
-  WorkflowHandoffIdentity,
-  WorkflowReplanIdentity,
-  WorkflowState,
-} from "../src/workflow-types.ts";
+import type { WorkflowState } from "../src/workflow-types.ts";
 export type {
   WorkflowActionIdentity,
   WorkflowContinuation,
@@ -23,26 +18,6 @@ export type ActiveRole = {
   model: string;
   thinkingLevel: ThinkingLevel;
 };
-
-export type RoleCompactionContinuation =
-  | { kind: "workflow-boundary"; identity: WorkflowActionIdentity }
-  | { kind: "workflow-task"; taskId: string; identity: WorkflowHandoffIdentity }
-  | { kind: "workflow-schedule"; identity: WorkflowActionIdentity }
-  | { kind: "workflow-review"; identity: WorkflowActionIdentity }
-  | { kind: "workflow-replan"; identity: WorkflowReplanIdentity };
-
-export type PendingRoleCompaction = {
-  fromRole: string;
-  toRole: string;
-  sessionId: string;
-  contextGeneration: number;
-  roleTransitionGeneration: number;
-  targetRole: ActiveRole;
-  continuation?: RoleCompactionContinuation;
-  budget?: { branchEntryIds: string[]; identity?: WorkflowHandoffIdentity; roleHandoffId?: string; inactiveWorkflowKey?: string; explicitRole: boolean; snapshot: string };
-};
-
-export type RoleCompactionPhase = "idle" | "compacting";
 
 export type ExtensionRuntimeState = {
   traceHandoff?: (ctx: ExtensionContext, event: string, data?: Record<string, unknown>) => void;
@@ -60,12 +35,6 @@ export type ExtensionRuntimeState = {
   roleRecoveryPersistenceFailed: boolean;
   roleContextGeneration: number;
   roleTransitionGeneration: number;
-  pendingRoleCompaction?: PendingRoleCompaction;
-  activeRoleCompaction?: { operationId: string; transition: PendingRoleCompaction };
-  roleCompactionPhase: RoleCompactionPhase;
-  roleCompactionOperationId?: string;
-  roleCompactionStartedAt?: number;
-  roleCompactionInFlight: boolean;
   workflowState?: WorkflowState;
   workflowProgressObservation?: WorkflowProgressObservation;
   workflowDispatchInFlight: boolean;
@@ -86,8 +55,6 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
     roleRecoveryPersistenceFailed: false,
     roleContextGeneration: 0,
     roleTransitionGeneration: 0,
-    roleCompactionPhase: "idle",
-    roleCompactionInFlight: false,
     workflowDispatchInFlight: false,
     internalContinuationPending: false,
     runtimeDisposed: false,
@@ -123,16 +90,10 @@ export function hasRecoveryGate(
   return Boolean(state.roleRecoveryPending || state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError);
 }
 
-export function hasCompactionGate(
-  state: Pick<ExtensionRuntimeState, "pendingRoleCompaction" | "roleCompactionInFlight" | "activeRoleCompaction">,
-) {
-  return Boolean(state.pendingRoleCompaction || state.roleCompactionInFlight || state.activeRoleCompaction);
-}
-
 export function isExecutionBlockedState(
-  state: Pick<ExtensionRuntimeState, "runtimeDisposed" | "userStopRequested" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "pendingWorkflowRecovery" | "workflowRestoreError" | "pendingRoleCompaction" | "roleCompactionInFlight" | "activeRoleCompaction">,
+  state: Pick<ExtensionRuntimeState, "runtimeDisposed" | "userStopRequested" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "pendingWorkflowRecovery" | "workflowRestoreError">,
 ) {
-  return Boolean(state.runtimeDisposed || state.userStopRequested || hasRecoveryGate(state) || hasCompactionGate(state));
+  return Boolean(state.runtimeDisposed || state.userStopRequested || hasRecoveryGate(state));
 }
 
 export function isActiveWorkflowStatus(workflow: WorkflowState | undefined): workflow is WorkflowState {

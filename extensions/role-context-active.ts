@@ -58,9 +58,6 @@ export function activeContextView(state: ExtensionRuntimeState, event: ContextEv
   if (state.workflowRestoreError) {
     return failOpen(event.messages, "ROLE_CONTEXT_VIEW_RESTORE_UNCERTAIN", "持久协作状态恢复失败；完整输入保留且不隔离");
   }
-  if (state.roleCompactionInFlight || state.roleCompactionPhase === "compacting" || state.activeRoleCompaction || state.pendingRoleCompaction) {
-    return failOpen(event.messages, "ROLE_CONTEXT_VIEW_COMPACTION_UNCERTAIN", "当前存在压缩/恢复交接，消息边界映射不确定；完整输入保留且不隔离");
-  }
 
   let sessionId: string;
   let branch: unknown;
