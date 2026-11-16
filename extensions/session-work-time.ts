@@ -8,6 +8,7 @@ import {
 } from "../src/session-work-time.ts";
 import type { RunTimingEntryData } from "./contracts.ts";
 import type { ActivityStatusReporter } from "./activity-status.ts";
+import { onEvents } from "./runtime-state.ts";
 
 const SESSION_WORK_TIME_ENTRY_TYPE = "pi-init-session-work-time";
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
@@ -151,22 +152,23 @@ export function createSessionWorkTimeTracker(
 
 export function registerSessionWorkTime(pi: ExtensionAPI, activityStatus: ActivityStatusReporter) {
   const tracker = createSessionWorkTimeTracker(Date.now, activityStatus);
+  function persistSnapshot(ctx: ExtensionContext) {
+    const snapshot = tracker.snapshot(ctx);
+    if (snapshot) pi.appendEntry(SESSION_WORK_TIME_ENTRY_TYPE, snapshot);
+  }
   pi.registerEntryRenderer<SessionWorkTimeEntryData>(SESSION_WORK_TIME_ENTRY_TYPE, () => ({
     render: () => [],
     invalidate: () => {},
   }));
-  pi.on("session_start", (_event, ctx) => tracker.restore(ctx));
+  onEvents(pi, ["session_start", "session_tree"], (_event, ctx) => tracker.restore(ctx));
   pi.on("session_shutdown", (_event, ctx) => {
-    const snapshot = tracker.snapshot(ctx);
-    if (snapshot) pi.appendEntry(SESSION_WORK_TIME_ENTRY_TYPE, snapshot);
+    persistSnapshot(ctx);
     tracker.shutdown(ctx);
   });
-  pi.on("session_tree", (_event, ctx) => tracker.restore(ctx));
   pi.on("agent_start", (_event, ctx) => tracker.start(ctx));
   pi.on("agent_settled", (_event, ctx) => {
     tracker.complete(ctx);
-    const snapshot = tracker.snapshot(ctx);
-    if (snapshot) pi.appendEntry(SESSION_WORK_TIME_ENTRY_TYPE, snapshot);
+    persistSnapshot(ctx);
     tracker.show(ctx);
   });
 }

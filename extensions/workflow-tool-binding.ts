@@ -4,7 +4,7 @@ import { generalToolSettlement, nestedToolSettlement, type ToolSettlement } from
 import { isWorkflowReadOnlyTool } from "./workflow-user-control.ts";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
-import { activeRoleMatches } from "./runtime-state.ts";
+import { activeRoleMatches, firstPolicyMatch, matchPolicy, onLifecycleReset } from "./runtime-state.ts";
 import { hasCompleteToolPairs, identityMatches, isRecord, type ContextMessage } from "./role-context-protocol.ts";
 
 type RunBinding = {
@@ -24,6 +24,12 @@ const IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGene
 const TASK_ACTIONS = new Set(["complete", "block", "checkpoint"]);
 const REPLAN_ACTIONS = new Set(["replan"]);
 const MUTATION_ACTIONS = new Set(["resume", "retry", "cancel", "cancel-all", "request-replan", "request-goal"]);
+
+function rememberBounded<K, V>(map: Map<K, V>, key: K | undefined, value: V) {
+  if (key === undefined) return;
+  if (map.size >= MAX_CALLS) map.delete(map.keys().next().value!);
+  map.set(key, value);
+}
 
 function codemodeReadOnlyCalls(details: unknown) {
   if (!isRecord(details) || !Array.isArray(details.calls) || !details.calls.length || details.calls.length > MAX_CALLS) return undefined;
@@ -84,8 +90,7 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   }
 
   function remember(id: string, binding: RunBinding) {
-    if (calls.size >= MAX_CALLS) calls.delete(calls.keys().next().value!);
-    calls.set(id, binding);
+    rememberBounded(calls, id, binding);
   }
 
   function stale(binding: RunBinding, ctx: ExtensionContext) {
@@ -104,19 +109,20 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     calls.delete(toolCallId);
     const action = String(params.action);
     if (action === "status") return params;
+    const identityKey = firstPolicyMatch([
+      [TASK_ACTIONS.has(action), "task" as const],
+      [REPLAN_ACTIONS.has(action), "replan" as const],
+      [MUTATION_ACTIONS.has(action), "workflow" as const],
+    ]);
     if (!binding) {
       // Explicit legacy identities still go through the existing domain validators.
-      if (action !== "checkpoint" && IDENTITY_FIELDS.some(field => params[field] !== undefined)) return params;
-      if (!TASK_ACTIONS.has(action) && !REPLAN_ACTIONS.has(action) && !MUTATION_ACTIONS.has(action)) return params;
+      if ((action !== "checkpoint" && IDENTITY_FIELDS.some(field => params[field] !== undefined)) || !identityKey) return params;
       return bindingError("WORKFLOW_RUN_BINDING_MISSING", "缺少本次工具调用的真实派发身份；不能以当前状态补齐旧结果。请等待当前任务回合或查询状态。");
     }
     if (stale(binding, ctx)) {
       return bindingError("WORKFLOW_RUN_BINDING_STALE", "工具所属回合、角色、任务或恢复身份已变化；拒绝将旧结果绑定到最新任务。");
     }
-    if (TASK_ACTIONS.has(action)) return { ...binding.task, ...params };
-    if (REPLAN_ACTIONS.has(action)) return { ...binding.replan, ...params };
-    if (MUTATION_ACTIONS.has(action)) return { ...binding.workflow, ...params };
-    return params;
+    return identityKey ? { ...binding[identityKey], ...params } : params;
   }
 
   pi.on("before_provider_request", (_event, ctx) => {
@@ -129,11 +135,7 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   pi.on("message_start", event => {
     if (!request || event.message.role !== "assistant") return;
     messages.set(event.message, request);
-    const key = messageKey(event.message);
-    if (key) {
-      if (messageKeys.size >= MAX_CALLS) messageKeys.delete(messageKeys.keys().next().value!);
-      messageKeys.set(key, request);
-    }
+    rememberBounded(messageKeys, messageKey(event.message), request);
   });
   pi.on("message_end", event => {
     if (event.message.role !== "assistant") return;
@@ -143,10 +145,7 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     if (key) messageKeys.delete(key);
     if (!binding) return;
     sources.set(event.message, binding);
-    if (key) {
-      if (sourceKeys.size >= MAX_CALLS) sourceKeys.delete(sourceKeys.keys().next().value!);
-      sourceKeys.set(key, binding);
-    }
+    rememberBounded(sourceKeys, key, binding);
     for (const item of event.message.content) {
       if (item.type === "toolCall") remember(item.id, binding);
     }
@@ -217,15 +216,22 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
     return [...executedRoots].every(id => results.has(id));
   }
   function generalToolsSettled(ctx: ExtensionContext, preparingId?: string): ToolSettlement {
-    if ([...activeTools].some(id => id !== preparingId) || uncertainTools) return { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "仍有活动工具或本轮工具结果未确认；请核对真实结果，不要重试未知操作。" };
-    const messages = ctx.sessionManager.getBranch().flatMap(entry => entry.type === "message" ? [entry.message] : []);
-    if ([...readOnlyCodemodeFailures].some(id => !messages.some(message => message.role === "toolResult"
-      && message.toolCallId === id && settledReadOnlyCodemode(message)))) return { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "只读批次失败仍缺少完整持久化回执；请核对真实结果。" };
-    const persisted = generalToolSettlement(messages, preparingId, executedRoots);
-    if (!persisted.ok) return persisted;
-    const results = new Set(messages.flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
-    if ([...executedRoots].some(id => id !== preparingId && !results.has(id))) return { ok: false, code: "TOOL_RESULT_MISSING", message: "本轮已执行工具缺少持久化结果。" };
-    return { ok: true };
+    let messages: ContextMessage[] | undefined;
+    let persisted: ToolSettlement | undefined;
+    const branchMessages = () => messages ??= ctx.sessionManager.getBranch().flatMap(entry => entry.type === "message" ? [entry.message] : []);
+    const settlement = () => persisted ??= generalToolSettlement(branchMessages(), preparingId, executedRoots);
+    return matchPolicy<ToolSettlement>([
+      [() => [...activeTools].some(id => id !== preparingId) || uncertainTools,
+        { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "仍有活动工具或本轮工具结果未确认；请核对真实结果，不要重试未知操作。" }],
+      [() => [...readOnlyCodemodeFailures].some(id => !branchMessages().some(message => message.role === "toolResult"
+        && message.toolCallId === id && settledReadOnlyCodemode(message))),
+        { ok: false, code: "TOOLS_RUNTIME_UNCERTAIN", message: "只读批次失败仍缺少完整持久化回执；请核对真实结果。" }],
+      [() => !settlement().ok, () => settlement()],
+      [() => {
+        const results = new Set(branchMessages().flatMap(message => message.role === "toolResult" ? [message.toolCallId] : []));
+        return [...executedRoots].some(id => id !== preparingId && !results.has(id));
+      }, { ok: false, code: "TOOL_RESULT_MISSING", message: "本轮已执行工具缺少持久化结果。" }],
+    ]) ?? { ok: true };
   }
   function toolsSettled(ctx: ExtensionContext) {
     const workflow = state.workflowState;
@@ -283,9 +289,6 @@ export function createWorkflowToolBinding(pi: ExtensionAPI, state: ExtensionRunt
   });
 
   function reset() { toolEpoch++; nonObservationEpoch++; activeTools.clear(); activeReadOnlyTools.clear(); readOnlyCodemodeFailures.clear(); executedRoots.clear(); uncertainTools = false; safeRequests = new WeakMap(); request = undefined; calls.clear(); messages = new WeakMap(); sources = new WeakMap(); messageKeys.clear(); sourceKeys.clear(); }
-  pi.on("session_start", reset);
-  pi.on("session_tree", reset);
-  pi.on("session_shutdown", reset);
-  pi.on("session_compact", reset);
+  onLifecycleReset(pi, reset, { compact: true });
   return { bind, source, isCurrentSource, providerFailureGuard, toolsSettled, generalToolsSettled };
 }

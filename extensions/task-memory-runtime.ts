@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-wor
 import { applyParsedTaskCheckpoint, createTaskMemory, recordTaskObservations, parseTaskMemory, parseTaskCheckpoint, taskMemoryScope, taskMemoryError, type TaskMemory, type TaskObservation, type TaskSourceVersion, parseTaskMemoryIdentity } from "../src/task-memory.ts";
 import { workflowHandoffIdentity, workflowHandoffMessageOnBranch } from "../src/workflow-handoff.ts";
 import type { WorkflowHandoffIdentity } from "../src/workflow-types.ts";
-import { firstPolicyMatch, hasRecoveryGate, type ExtensionRuntimeState } from "./runtime-state.ts";
+import { firstPolicyMatch, hasRecoveryGate, onEvents, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 
 export const TASK_MEMORY_ENTRY = "pi-init-task-memory";
@@ -48,15 +48,13 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
   const stopped = new Set<string>();
   function suspend(ctx: ExtensionContext) {
     const current = identity(ctx);
-    if (!current) return;
-    const key = scope(ctx, current);
-    if (stopped.has(key)) return;
+    const key = current ? scope(ctx, current) : undefined;
+    if (!current || !key || stopped.has(key)) return;
     stopped.add(key);
     onFailure?.(ctx);
   }
   function identity(ctx: ExtensionContext) {
-    if (!ctx.isProjectTrusted()) return undefined;
-    const workflow = state.workflowState;
+    const workflow = ctx.isProjectTrusted() ? state.workflowState : undefined;
     if (!workflow || workflow.sessionId !== ctx.sessionManager.getSessionId()) return undefined;
     const current = workflowHandoffIdentity(workflow);
     if (current) return current;
@@ -87,9 +85,8 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     let start = 0;
     for (let index = branch.length - 1; index >= 0; index--) {
       const entry = branch[index];
-      if (entry.type !== "custom" || entry.customType !== TASK_MEMORY_ENTRY) continue;
-      const raw = entry.data as Record<string, unknown> | undefined;
-      if (!raw || !raw.identity || typeof raw.identity !== "object" || taskMemoryScope(raw.identity as WorkflowHandoffIdentity) !== taskMemoryScope(current)) continue;
+      const raw = entry.type === "custom" && entry.customType === TASK_MEMORY_ENTRY ? entry.data as Record<string, unknown> | undefined : undefined;
+      if (!raw?.identity || typeof raw.identity !== "object" || taskMemoryScope(raw.identity as WorkflowHandoffIdentity) !== taskMemoryScope(current)) continue;
       const parsed = parseTaskMemory(raw);
       if (!parsed) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务记忆快照损坏，不能跳过较新记录使用旧成果");
       verifyObservations(branch, parsed.observations.map(item => ({ id: item.id, expected: item })), current, "任务记忆来源不在当前branch或与原结果不一致");
@@ -169,9 +166,8 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     const history: TaskMemory[] = [];
     const sources = new Map<string, TaskObservation | undefined>();
     for (const entry of branch) {
-      if (entry.type !== "custom" || entry.customType !== TASK_MEMORY_ENTRY) continue;
-      const raw = entry.data as Record<string, unknown> | undefined;
-      const savedIdentity = parseTaskMemoryIdentity(raw?.identity);
+      const raw = entry.type === "custom" && entry.customType === TASK_MEMORY_ENTRY ? entry.data as Record<string, unknown> | undefined : undefined;
+      const savedIdentity = raw ? parseTaskMemoryIdentity(raw.identity) : undefined;
       if (!savedIdentity || taskMemoryScope(savedIdentity) !== taskMemoryScope(current)) continue;
       const memory = parseTaskMemory(raw);
       if (!memory) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务的历史记忆快照损坏，无法核对已登记进展");
@@ -284,7 +280,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: ExtensionRuntim
     if (message) pi.sendMessage(message, { triggerTurn: false });
   });
   function reset() { failures.clear(); stopped.clear(); lastBoundary = undefined; }
-  pi.on("session_start", reset); pi.on("session_tree", reset); pi.on("session_shutdown", reset);
+  onEvents(pi, ["session_start", "session_tree", "session_shutdown"], reset);
   return { read, checkpoint, verificationSources, suspend };
 }
 export type TaskMemoryRuntime = ReturnType<typeof createTaskMemoryRuntime>;
@@ -308,14 +304,14 @@ export function readTaskSourceObservation(branch: Entry[], id: string, current: 
     }
     if (ownerIndex < 0) return undefined;
     const anchor = branch.slice(0, ownerIndex).findLast(entry => entry.type === "custom_message" && entry.customType === "pi-init-workflow-task");
-    if (!anchor || anchor.type !== "custom_message" || !anchor.details || typeof anchor.details !== "object") return undefined;
-    const details = anchor.details as WorkflowHandoffIdentity;
-    if (taskMemoryScope(details) !== taskMemoryScope(current) && !(dependency
+    const details = anchor?.type === "custom_message" && anchor.details && typeof anchor.details === "object"
+      ? anchor.details as WorkflowHandoffIdentity : undefined;
+    if (!details || (taskMemoryScope(details) !== taskMemoryScope(current) && !(dependency
       && details.sessionId === current.sessionId && details.workflowId === current.workflowId && details.taskId === current.taskId
-      && Number.isSafeInteger(details.planVersion) && details.planVersion >= 0 && details.planVersion <= current.planVersion)) return undefined;
+      && Number.isSafeInteger(details.planVersion) && details.planVersion >= 0 && details.planVersion <= current.planVersion))) return undefined;
     const owner = branch[ownerIndex];
-    if (owner.type !== "message" || owner.message.role !== "assistant") return undefined;
-    const call = owner.message.content.find(part => part.type === "toolCall" && part.id === message.toolCallId);
+    const call = owner?.type === "message" && owner.message.role === "assistant"
+      ? owner.message.content.find(part => part.type === "toolCall" && part.id === message.toolCallId) : undefined;
     if (!call || call.type !== "toolCall" || call.name === "task_workflow" || call.name === "switch_role") return undefined;
     const text = contentText(message.content);
     const data = message.details && typeof message.details === "object" ? message.details as Record<string, unknown> : {};

@@ -1,10 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ActivityStatusOperation, ActivityStatusReporter } from "./activity-status.ts";
+import { onEvents } from "./runtime-state.ts";
 
 const TOOL_START_DELAY_MS = 140;
 const TOOL_UPDATE_DELAY_MS = 50;
 const TOOL_ERROR_DURATION_MS = 3_000;
 const RETIRED_TOOL_ID_LIMIT = 256;
+const STREAM_DELTA_TYPES = new Set(["text_delta", "thinking_delta", "toolcall_delta"]);
 
 type ActiveTool = {
   category: string;
@@ -105,11 +107,9 @@ export function createActivityLifecycle(
     const delay = shownOperationSignature === undefined ? startDelayMs : updateDelayMs;
     pendingOperationTimer = setTimeout(() => {
       pendingOperationTimer = undefined;
-      if (generation !== scheduledGeneration) return;
-      const current = currentOperation();
-      if (!current) return;
-      const currentSignature = JSON.stringify(current);
-      if (currentSignature === shownOperationSignature) return;
+      const current = generation === scheduledGeneration ? currentOperation() : undefined;
+      const currentSignature = current ? JSON.stringify(current) : undefined;
+      if (!current || currentSignature === shownOperationSignature) return;
       shownOperationSignature = currentSignature;
       activityStatus.setOperation(ctx, current);
     }, delay);
@@ -149,10 +149,8 @@ export function createActivityLifecycle(
   });
 
   pi.on("message_update", (event, ctx) => {
-    if (!provider || event.message?.role !== "assistant") return;
-    const type = event.assistantMessageEvent?.type;
-    if (!type || !["text_delta", "thinking_delta", "toolcall_delta"].includes(type)) return;
-    if (provider.phase === "streaming") return;
+    if (!provider || provider.phase === "streaming" || event.message?.role !== "assistant"
+      || !STREAM_DELTA_TYPES.has(String(event.assistantMessageEvent?.type))) return;
     provider = { ...provider, phase: "streaming" };
     publishOperation(ctx);
   });
@@ -187,11 +185,7 @@ export function createActivityLifecycle(
     agentStartedAt = now();
     publishOperation(ctx);
   });
-  pi.on("agent_settled", (_event, ctx) => clearOperations(ctx));
-  pi.on("session_start", (_event, ctx) => clearOperations(ctx));
-  pi.on("session_tree", (_event, ctx) => clearOperations(ctx));
-  pi.on("session_shutdown", (_event, ctx) => clearOperations(ctx));
-  pi.on("model_select", (_event, ctx) => clearOperations(ctx));
+  onEvents(pi, ["agent_settled", "session_start", "session_tree", "session_shutdown", "model_select"], (_event, ctx) => clearOperations(ctx));
 
   return { clear: clearOperations };
 }

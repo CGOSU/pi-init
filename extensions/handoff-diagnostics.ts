@@ -17,8 +17,9 @@ function routingFields(value: unknown): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const key of ["action", "role", "workflowId", "planVersion", "sessionId", "recoveryGeneration", "revisionId", "taskId", "attemptId", "handoffId", "requestId", "questionId", "reportId", "reviewId", "decision", "code"]) {
     const item = source[key];
-    if (typeof item === "string") result[key] = item.slice(0, 256);
-    else if (typeof item === "number" || typeof item === "boolean") result[key] = item;
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+      result[key] = typeof item === "string" ? item.slice(0, 256) : item;
+    }
   }
   for (const key of ["question", "scope", "gaps", "reason", "direction", "clarification", "error"]) {
     if (source[key] !== undefined) result[key + "Hash"] = fingerprint(source[key]);
@@ -91,6 +92,15 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
     lastLoop = loop;
   }
 
+  function currentProfile(ctx: ExtensionContext) {
+    return {
+      provider: ctx.model?.provider,
+      model: ctx.model?.id,
+      role: state.activeRole?.role ?? "session",
+      thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown",
+    };
+  }
+
   function trace(ctx: ExtensionContext, event: string, data: Record<string, unknown> = {}) {
     try {
       if (mode === "off" || !ctx.isProjectTrusted()) return;
@@ -101,8 +111,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
         if (event === "session.start" || event === "session.tree") { lastLoop = undefined; lastRuntimeFailure = undefined; }
         const closing = event === "agent.settled" || event === "session.shutdown";
         if (closing) observeSignals(ctx);
-        const profile = { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" };
-        blackbox.observe(ctx, event, { ...data, profile });
+        blackbox.observe(ctx, event, { ...data, profile: currentProfile(ctx) });
         if (!closing) observeSignals(ctx);
         return;
       }
@@ -117,7 +126,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   if (mode === "off") return { trace, flush, report, resume };
   state.traceHandoff = trace;
   pi.on("input", (event, ctx) => { trace(ctx, "input", { source: event.source, textHash: enabled ? fingerprint(event.text) : undefined }); });
-  pi.on("before_agent_start", (_event, ctx) => { cache.boundary(ctx, "new-run"); pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: { provider: ctx.model?.provider, model: ctx.model?.id, role: state.activeRole?.role ?? "session", thinkingLevel: pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown" } }); });
+  pi.on("before_agent_start", (_event, ctx) => { cache.boundary(ctx, "new-run"); pendingProviderHeaders = undefined; run++; trace(ctx, "agent.before_start", { degraded: Boolean(state.workflowRestoreError || state.roleRecoveryPersistenceFailed || state.workflowProgressObservation?.status === "suspected-loop"), profile: currentProfile(ctx) }); });
   pi.on("agent_start", (_event, ctx) => { trace(ctx, "agent.start"); });
   pi.on("turn_start", (_event, ctx) => { cache.boundary(ctx, "turn-change"); });
   pi.on("agent_end", (_event, ctx) => { trace(ctx, "agent.end"); });
@@ -133,15 +142,22 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
       assistantObserved: outcome === "assistant", outcome, errorCodeHint });
     providerRequest = undefined;
   }
+  function canObserveProvider(ctx: ExtensionContext, boundaryOnUnavailable = false) {
+    if (!writer.failed && ctx.isProjectTrusted()) return true;
+    if (boundaryOnUnavailable) cache.boundary(ctx, "unavailable");
+    pendingProviderHeaders = undefined;
+    providerRequest = undefined;
+    return false;
+  }
   pi.on("before_provider_request", (event, ctx) => {
     try {
-      if (writer.failed || !ctx.isProjectTrusted()) { cache.boundary(ctx, "unavailable"); pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      if (!canObserveProvider(ctx, true)) return;
       providerFields(ctx);
       if (providerRequest) { trace(ctx, "provider.unfinished", { ...providerFields(ctx), reason: "superseded" }); finishProvider(ctx, "superseded"); }
       providerRequest = { requestNumber: ++requestNumber, startedAt: performance.now(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), run,
         headersObserved: pendingProviderHeaders === JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]) };
       pendingProviderHeaders = undefined;
-      cache.request(ctx, event.payload, requestNumber, pi.getThinkingLevel?.() ?? state.activeRole?.thinkingLevel ?? "unknown");
+      cache.request(ctx, event.payload, requestNumber, currentProfile(ctx).thinkingLevel);
       trace(ctx, "provider.request", { requestNumber });
     } catch {}
   });
@@ -149,7 +165,7 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   catch { cache.streamUnavailable(); }
   pi.on("before_provider_headers", (_event, ctx) => {
     try {
-      if (writer.failed || !ctx.isProjectTrusted()) { pendingProviderHeaders = undefined; providerRequest = undefined; return; }
+      if (!canObserveProvider(ctx)) return;
       const fields = providerFields(ctx);
       if (providerRequest) providerRequest.headersObserved = true;
       else pendingProviderHeaders = JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), run]);
