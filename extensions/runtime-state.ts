@@ -1,5 +1,6 @@
 export { textOf } from "../src/error-utils.ts";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionEvent } from "@earendil-works/pi-coding-agent";
+import { isExternalRunSource } from "../src/run-timing.ts";
 import type { ThinkingLevel, WorkflowMode } from "../src/role-types.ts";
 import type { WorkflowProgressObservation } from "../src/workflow-progress.ts";
 import type {
@@ -149,4 +150,52 @@ export function executingWorkflowTask(state: ExtensionRuntimeState, sessionId?: 
     || handoff.recoveryGeneration !== workflow.recoveryGeneration || handoff.sessionId !== workflow.sessionId
     || (sessionId !== undefined && workflow.sessionId !== sessionId)) return undefined;
   return { workflow, task, handoff };
+}
+
+export function onEvents(
+  pi: { on?: ExtensionAPI["on"] },
+  events: readonly ExtensionEvent["type"][],
+  handler: (event: any, ctx: ExtensionContext) => unknown,
+) {
+  for (const event of events) pi.on?.(event as never, handler as never);
+}
+
+export function onLifecycleReset(
+  pi: { on?: ExtensionAPI["on"] },
+  reset: () => void,
+  options: {
+    agentStart?: boolean;
+    modelSelect?: boolean;
+    compact?: boolean;
+    externalInput?: boolean | (() => void);
+    nonExtensionInput?: boolean;
+    branchMove?: "always" | "changed-or-undefined" | "changed-only";
+    onUnchangedBranch?: () => void;
+  } = {},
+) {
+  onEvents(pi, [
+    "session_start",
+    "session_shutdown",
+    ...(options.agentStart ? (["agent_start"] as const) : []),
+    ...(options.modelSelect ? (["model_select"] as const) : []),
+    ...(options.compact ? (["session_compact"] as const) : []),
+  ], () => reset());
+  pi.on?.("session_tree", (event) => {
+    const mode = options.branchMove ?? "always";
+    const changed = mode === "changed-only"
+      ? event?.oldLeafId !== event?.newLeafId
+      : mode === "changed-or-undefined"
+        ? event?.oldLeafId === undefined || event.oldLeafId !== event.newLeafId
+        : true;
+    if (changed) reset();
+    else options.onUnchangedBranch?.();
+  });
+  if (options.externalInput || options.nonExtensionInput) {
+    pi.on?.("input", (event) => {
+      if (options.externalInput ? isExternalRunSource(event?.source) : event?.source !== "extension") {
+        if (typeof options.externalInput === "function") options.externalInput();
+        else reset();
+      }
+    });
+  }
 }

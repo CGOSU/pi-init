@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { isExternalRunSource } from "../src/run-timing.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
 import {
   executingWorkflowTask,
   isExecutionBlockedState,
+  onLifecycleReset,
   type ExtensionRuntimeState,
   type WorkflowState,
 } from "./runtime-state.ts";
@@ -57,6 +57,23 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
     if (call?.branchAnchor !== undefined && !hasBranchAnchor(ctx, call.branchAnchor)) clear();
     return call;
   }
+  function stagePendingCall<T extends { eligible: boolean }>(
+    map: Map<string, T>, toolCallId: string, input: string | undefined,
+    entry: Omit<T, "eligible">, eligibleWhenNoOverlap: boolean, resetStreak: () => void, clear: () => void,
+  ) {
+    // Concurrent observations are ambiguous: never count them toward a pause or hint.
+    const overlap = map.size > 0;
+    if (overlap) {
+      resetStreak();
+      for (const call of map.values()) call.eligible = false;
+    }
+    if (input) trackBoundedCall(map, toolCallId, { ...entry, eligible: !overlap && eligibleWhenNoOverlap } as T, clear);
+  }
+  function isEligibleScopedCall<T extends { eligible: boolean; scope: string; tool: string; branchAnchor?: string }>(
+    call: T | undefined, currentScope: ObservationScope | undefined, toolName: string, ctx: ExtensionContext,
+  ): call is T {
+    return Boolean(call?.eligible && currentScope && call.scope === currentScope.id && call.tool === toolName && hasBranchAnchor(ctx, call.branchAnchor));
+  }
   function resolveScope(ctx: ExtensionContext): ObservationScope | undefined {
     if (!ctx?.isProjectTrusted?.() || isExecutionBlockedState(state)) return undefined;
     const sessionId = ctx.sessionManager?.getSessionId?.();
@@ -100,36 +117,22 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
     }
     if (reads.has(event.toolName) && !event.parentToolCallId && currentScope && event.toolCallId) {
       const input = fingerprint(event.input);
-      // Concurrent observations are ambiguous: never count them toward a pause.
-      const overlap = pendingReads.size > 0;
-      if (overlap) {
-        previousRead = undefined; repeats = 0; paused = false;
-        for (const call of pendingReads.values()) call.eligible = false;
-      }
-      if (input) trackBoundedCall(pendingReads, event.toolCallId, { scope: currentScope.id, tool: event.toolName, input, canPause: currentScope.canPause, branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id, eligible: !overlap && !ambiguousActivity && nonReadInFlight.size === 0 }, clearReads);
+      stagePendingCall(pendingReads, event.toolCallId, input,
+        { scope: currentScope.id, tool: event.toolName, input: input!, canPause: currentScope.canPause, branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id },
+        !ambiguousActivity && nonReadInFlight.size === 0,
+        () => { previousRead = undefined; repeats = 0; paused = false; }, clearReads);
     } else if (event.toolName !== "task_workflow" && !event.parentToolCallId) clearReads();
     if (!routingTools.has(event.toolName) && Boolean(event.toolName) && !event.parentToolCallId) {
       if (currentScope && event.toolCallId) {
         const input = fingerprint(event.input);
-        const overlap = pendingFailures.size > 0;
-        if (overlap) {
-          previousFailure = undefined; failureRepeats = 0; failureHinted = false;
-          for (const call of pendingFailures.values()) call.eligible = false;
-        }
         const rawPath = event.toolName === "edit" && event.input && typeof event.input === "object"
           ? (event.input as Record<string, unknown>).path
           : undefined;
         const editPath = typeof rawPath === "string" && rawPath.trim() ? rawPath.trim() : undefined;
-        if (input) {
-          trackBoundedCall(pendingFailures, event.toolCallId, {
-            scope: currentScope.id,
-            tool: event.toolName,
-            input,
-            ...(editPath ? { editPath } : {}),
-            eligible: !overlap,
-            branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id,
-          }, clearFailures);
-        }
+        stagePendingCall(pendingFailures, event.toolCallId, input,
+          { scope: currentScope.id, tool: event.toolName, input: input!, ...(editPath ? { editPath } : {}), branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id },
+          true,
+          () => { previousFailure = undefined; failureRepeats = 0; failureHinted = false; }, clearFailures);
       } else {
         clearFailures();
       }
@@ -146,7 +149,7 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
     let hintText: string | undefined;
     if (reads.has(event.toolName)) {
       if (event.isError) clearReads();
-      else if (call?.eligible && currentScope && call.scope === currentScope.id && call.tool === event.toolName && hasBranchAnchor(ctx, call.branchAnchor)) {
+      else if (isEligibleScopedCall(call, currentScope, event.toolName, ctx)) {
         const output = fingerprint([event.content, event.details]);
         const key = output && fingerprint([call.tool, call.input, output]);
         if (!key || key !== previousRead) { previousRead = key; repeats = 0; paused = false; }
@@ -156,7 +159,7 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
           const shouldPause = call.canPause && repeats === 6 && !paused;
           if (hint || shouldPause) {
             state.traceHandoff?.(ctx, "workflow.suspected_loop", {
-              code: "WORKFLOW_REPEATED_READ", scopeHash: currentScope.id,
+              code: "WORKFLOW_REPEATED_READ", scopeHash: currentScope!.id,
               inputHash: call.input, outputHash: output, repeats,
             });
           }
@@ -170,8 +173,7 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
     } else if (event.toolName !== "task_workflow" && !event.parentToolCallId) clearReads();
     if (!routingTools.has(event.toolName) && Boolean(event.toolName) && !event.parentToolCallId) {
       if (!event.isError) clearFailures();
-      else if (failureCall?.eligible && currentScope && failureCall.scope === currentScope.id
-        && failureCall.tool === event.toolName && hasBranchAnchor(ctx, failureCall.branchAnchor)
+      else if (isEligibleScopedCall(failureCall, currentScope, event.toolName, ctx)
         && ((Array.isArray(event.content) && event.content.length > 0) || event.details !== undefined)) {
         const output = fingerprint([event.content, event.details]);
         const targetHash = (failureCall.editPath && fingerprint(failureCall.editPath)) || failureCall.input;
@@ -189,7 +191,7 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
             state.traceHandoff?.(ctx, "workflow.suspected_loop", {
               code: "WORKFLOW_REPEATED_TOOL_ERROR",
               toolName: failureCall.tool,
-              scopeHash: currentScope.id,
+              scopeHash: currentScope!.id,
               inputHash: targetHash,
               outputHash: output,
               repeats: failureRepeats,
@@ -216,14 +218,10 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: Extensio
     }
   });
   pi.on("agent_settled", () => observe(undefined, "automatic-turn"));
-  pi.on("session_start", () => reset(undefined));
-  pi.on("session_tree", event => {
-    if (event.oldLeafId !== event.newLeafId) reset(undefined);
-    else observe();
-  });
-  pi.on("session_shutdown", () => reset(undefined));
-  pi.on("input", event => {
-    if (isExternalRunSource(event.source)) reset();
+  onLifecycleReset(pi, () => reset(undefined), {
+    externalInput: () => reset(),
+    branchMove: "changed-only",
+    onUnchangedBranch: () => observe(),
   });
   return { observe, reset };
 }
@@ -272,12 +270,7 @@ export function createWorkflowStatusPollingGuard(pi: ExtensionAPI, state: Extens
     stopped = true;
     return { stop: true as const, firstStop, code: "WORKFLOW_STATUS_NO_PROGRESS" as const };
   }
-  pi.on("agent_start", reset);
-  pi.on("session_start", reset);
-  pi.on("session_tree", reset);
-  pi.on("session_shutdown", reset);
-  pi.on("model_select", reset);
-  pi.on("input", event => { if (isExternalRunSource(event.source)) reset(); });
+  onLifecycleReset(pi, reset, { agentStart: true, modelSelect: true, externalInput: true });
   return { observe };
 }
 export function createRepeatedRejectionGuard(pi: ExtensionAPI, state: ExtensionRuntimeState) {
@@ -297,9 +290,6 @@ export function createRepeatedRejectionGuard(pi: ExtensionAPI, state: ExtensionR
     if (counts.size > 32) counts.delete(counts.keys().next().value!);
     return { stop: entry.count >= 3, firstStop: entry.count === 3, code: "WORKFLOW_REJECTION_NO_PROGRESS" as const };
   }
-  pi.on("input", event => { if (isExternalRunSource(event.source)) reset(); });
-  pi.on("session_start", reset);
-  pi.on("session_tree", reset);
-  pi.on("session_shutdown", reset);
+  onLifecycleReset(pi, reset, { externalInput: true });
   return { observe, reset };
 }

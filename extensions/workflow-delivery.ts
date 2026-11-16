@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
+import { onLifecycleReset, type ExtensionRuntimeState } from "./runtime-state.ts";
 import { hasCompleteToolPairs, messageRecord, toolCallIds, type ContextMessage } from "./role-context-protocol.ts";
 
 import { createWorkflowCompletionView } from "./workflow-completion-view.ts";
@@ -34,17 +34,15 @@ export function createWorkflowDelivery(pi: ExtensionAPI, state: ExtensionRuntime
   }
   function prepare(toolCallId: string): void {
     const ctx = state.currentContext;
-    if (!ctx || !toolCallId.trim()) return;
-    const key = scope(ctx);
-    if (!key) return;
-    if (receipt?.scope === key) return;
+    const key = ctx && toolCallId.trim() ? scope(ctx) : undefined;
+    if (!key || receipt?.scope === key) return;
     const workflow = state.workflowState!;
     const view = createWorkflowCompletionView(workflow);
     receipt = {
       scope: key, toolCallId, report: formatWorkflowCompletionSummaryText(view), basis: formatWorkflowCompletionText(view),
       timingLines: formatWorkflowCompletionTimingLines(view), timingDelivered: false,
       delivered: false, blocked: false, fallbackAttempted: false };
-    trace(ctx, "prepared");
+    trace(ctx!, "prepared");
   }
 
   pi.on("context_with_system", (event, ctx) => {
@@ -75,8 +73,8 @@ export function createWorkflowDelivery(pi: ExtensionAPI, state: ExtensionRuntime
   pi.on("message_end", (event, ctx) => {
     const active = current(ctx);
     const message = messageRecord(event.message);
-    if (!active || active.delivered || active.fallbackAttempted || active.blocked || message?.role !== "assistant" || message.stopReason !== "stop") return;
-    if (!Array.isArray(message.content) || toolCallIds(message)?.length !== 0) return;
+    if (!active || active.delivered || active.fallbackAttempted || active.blocked || message?.role !== "assistant"
+      || message.stopReason !== "stop" || !Array.isArray(message.content) || toolCallIds(message)?.length !== 0) return;
     const text = message.content.flatMap(item => {
       const part = messageRecord(item);
       return part?.type === "text" && typeof part.text === "string" ? [part.text] : [];
@@ -114,10 +112,6 @@ export function createWorkflowDelivery(pi: ExtensionAPI, state: ExtensionRuntime
       try { ctx.ui.notify(report + "\n最终报告消息派发未确认；未自动重发，也未重新执行任务。", "warning"); } catch { }
     }
   });
-  pi.on("input", event => { if (event.source !== "extension") clear(); });
-  pi.on("agent_start", clear);
-  pi.on("session_start", clear);
-  pi.on("session_tree", event => { if (event.oldLeafId !== undefined && event.oldLeafId === event.newLeafId) return; clear(); });
-  pi.on("session_shutdown", clear);
+  onLifecycleReset(pi, clear, { agentStart: true, nonExtensionInput: true, branchMove: "changed-or-undefined" });
   return { prepare };
 }
