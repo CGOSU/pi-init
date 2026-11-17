@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-11-18：从公共协作规则中移除 context-mode 分工约定
+
+- 决定：停用 `context-mode` 后，从公共[协作细则](../skills/pi-init-role-routing/references/collaboration-details.md#执行与验证)和 [README](../README.md) 中移除 `context-mode` / `ctx_*` 使用指引，工具分工收敛为 `pi-graph`（结构/符号/关系定位）、`rg`（精确文本与未索引内容）、原生 `read`/`edit`/`bash`（定向原文、精确修改与短命令）以及 `codemode`（多命令联查、一次性探针与长输出过滤），保留原权限、原文证据与不强制串行约束。
+- 原因：`pi-init` 与 `pi-graph` 对 `context-mode` 无运行时依赖，核心场景已由 `pi-graph`、`codemode`、原生工具与 `pi-init` 任务/交接记忆覆盖；保留 `context-mode` 规则反而会与 `codemode` 及代码检索定位产生职责重叠。
+- 约束与替代：仅调整规则与文档，不修改运行时守卫或诊断测试夹具，不自动安装/同步本机 Pi 副本。本决定部分替代[2026-11-07：按问题划分代码检索与上下文工具职责](#2026-11-07按问题划分代码检索与上下文工具职责)中有关 `context-mode` 的条款。
+
 ### 2026-11-17：按子系统组织扩展并收敛领域、宿主和状态职责
 
 - 决定：`extensions/index.ts` 保持 package 稳定入口，扩展实现按 `file-review/`、`diagnostics/`、`session/`、`role/`、`workflow/` 分目录；每批仅迁移一个子系统并调整实际导入、动态加载和资源路径，不在迁移中夹带行为重构，不新增目录级通用 barrel。初始化工具/菜单装配、共享运行时状态、跨系统 handoff 快照及计时报告视图等保留在根目录；它们不是待机械清空的剩余文件。
