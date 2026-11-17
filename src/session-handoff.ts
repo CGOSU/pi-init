@@ -1,8 +1,12 @@
+import { TASK_MEMORY_ENTRY } from "./task-memory-protocol.ts";
 import { jsonHash } from "./json-hash.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { cloneState, getNextWorkflowTask, hydrateWorkflowState } from "./workflow.ts";
+import { cloneState } from "./workflow-state.ts";
+import { getNextWorkflowTask } from "./workflow-queries.ts";
+import { hydrateWorkflowState } from "./workflow-hydration.ts";
 import type { WorkflowState } from "./workflow-types.ts";
-import { parseTaskMemory, type TaskCheckpoint } from "./task-memory.ts";
+import { parseTaskMemory, taskMemoryError, type TaskCheckpoint } from "./task-memory.ts";
+import { isRecord } from "./value-guards.ts";
 
 export const SESSION_HANDOFF_ENTRY = "pi-init-session-handoff";
 export const SESSION_HANDOFF_ACTIVATE = "pi-init-session-handoff-activate";
@@ -40,10 +44,14 @@ export function buildSessionHandoff(state: WorkflowState, branch: readonly Sessi
     workflow.continuation = { kind: "schedule", phase: "pending", reason: "resume" };
   }
   const recentCheckpoints: HistoricalCheckpoint[] = [...branch].reverse().flatMap(entry => {
-    if (entry.type !== "custom" || entry.customType !== "pi-init-task-memory") return [];
-    const memory = parseTaskMemory(entry.data);
-    if (!memory?.checkpoint || memory.identity.sessionId !== state.sessionId
-      || memory.identity.workflowId !== state.workflowId || memory.identity.planVersion !== state.planVersion) return [];
+    if (entry.type !== "custom" || entry.customType !== TASK_MEMORY_ENTRY) return [];
+    const identity = isRecord(entry.data) && isRecord(entry.data.identity) ? entry.data.identity : undefined;
+    if (!identity || identity.sessionId !== state.sessionId
+      || identity.workflowId !== state.workflowId || identity.planVersion !== state.planVersion) return [];
+    const parsed = parseTaskMemory(entry.data);
+    if (!parsed.ok) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "会话交接不能跳过损坏的任务记忆；" + parsed.code + "：" + parsed.message);
+    const memory = parsed.value;
+    if (!memory.checkpoint) return [];
     return [{ taskId: memory.identity.taskId, checkpoint: memory.checkpoint, historical: true as const, sourceSessionId: memory.identity.sessionId, sourceFile }];
   }).filter((item, index, all) => all.findIndex(other => other.taskId === item.taskId) === index);
   const inherited = [...branch].reverse().find(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY && (entry.data as { kind?: string })?.kind === "incoming");

@@ -14,13 +14,15 @@ import {
   WORKFLOW_TASK_STATUSES,
   WORKFLOW_AUDIT_TASK_STATUSES,
   TASK_ID_PATTERN,
+  WORKFLOW_REVISION_STATUSES,
+} from "./workflow-protocol.ts";
+import {
   assertAcyclic,
   normalizeDelegation,
   normalizeExecutor,
   normalizePendingRevision,
   normalizePlanSnapshot,
   normalizeTaskIds,
-  WORKFLOW_REVISION_STATUSES,
   normalizeTextList,
   normalizeTimestamp,
   normalizeRevisionId,
@@ -29,7 +31,10 @@ import {
   normalizeWorkflowContinuation,
   normalizeWorkflowHandoff,
   requireTimestamp,
-  requireText, normalizeWorkflowPriority, assertSupportedWorkflowFeatures } from "./workflow-model.ts";
+  requireText,
+  normalizeWorkflowPriority,
+  assertSupportedWorkflowFeatures,
+} from "./workflow-validation.ts";
 import type {
   HydratedWorkflowState,
   WorkflowHydrationResult,

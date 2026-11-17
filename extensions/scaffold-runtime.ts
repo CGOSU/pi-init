@@ -8,7 +8,7 @@ import {
 import { DEFAULT_ROLE_NAMES } from "../src/roles.ts";
 import { createScaffold } from "../src/scaffold.ts";
 import type { ScaffoldOptions, ScaffoldOperationResult, ScaffoldResult, TemplateLanguage } from "../src/scaffold-types.ts";
-import type { RoleModelConfig } from "./contracts.ts";
+import type { RoleModelConfig } from "../src/role-types.ts";
 import { input, isMenuBack, MENU_BACK, selectRoleModel, showMenu } from "./ui.ts";
 
 function normalizeTargetDir(value: string): string {
