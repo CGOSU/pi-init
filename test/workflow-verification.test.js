@@ -2,12 +2,12 @@ import "../scripts/test-bootstrap.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { taskWorkflowParameters } from "../extensions/contracts.ts";
+import { taskWorkflowParameters } from "../extensions/workflow/workflow-tool-parameters.ts";
 import { parseWorkflowVerification, restoreWorkflowVerification, formatWorkflowVerification, hasCurrentWorkflowVerification } from "../src/workflow-verification.ts";
 import { createWorkflowState, startWorkflowTask, completeWorkflowTask, hydrateWorkflowState, requestWorkflowReplan } from "../src/workflow.ts";
-import { createWorkflowTaskCompletionView, createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
-import { formatWorkflowTaskCompletionSummaryText, formatWorkflowCompletionSummaryText, formatWorkflowCompletionText } from "../extensions/workflow-completion-renderer.ts";
-import { workflowPresentationFromDetails } from "../extensions/workflow-presentation.ts";
+import { createWorkflowTaskCompletionView, createWorkflowCompletionView } from "../extensions/workflow/workflow-completion-view.ts";
+import { formatWorkflowTaskCompletionSummaryText, formatWorkflowCompletionSummaryText, formatWorkflowCompletionText } from "../extensions/workflow/workflow-completion-renderer.ts";
+import { workflowPresentationFromDetails } from "../extensions/workflow/workflow-presentation.ts";
 
 function running() {
   return startWorkflowTask(createWorkflowState({ sessionId: "current-session", summary: "verification", tasks: [{ id: "check", task: "deliver", files: ["src/"], acceptanceCriteria: ["applicable checks"] }, { id: "next", task: "next delivery", files: ["src/"], acceptanceCriteria: ["next checks"] }] }, 10), "check", 20);

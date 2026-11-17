@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { textOf, type ExtensionRuntimeState } from "./runtime-state.ts";
-import type { createRoleRuntime } from "./role-runtime.ts";
-import type { createWorkflowActions } from "./workflow-actions.ts";
-import type { createWorkflowUserControl } from "./workflow-user-control.ts";
-import type { createSessionHandoff } from "./session-handoff.ts";
-import type { createDiagnosticControls } from "./diagnostic-controls.ts";
-import type { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
+import type { createRoleRuntime } from "./role/role-runtime.ts";
+import type { createWorkflowActions } from "./workflow/workflow-actions.ts";
+import type { createWorkflowUserControl } from "./workflow/workflow-user-control.ts";
+import type { createSessionHandoff } from "./session/session-handoff-runtime.ts";
+import type { createDiagnosticControls } from "./diagnostics/diagnostic-controls.ts";
+import type { createHandoffDiagnostics } from "./diagnostics/handoff-diagnostics.ts";
 
 type ControlCenter = ReturnType<typeof import("./control-center.ts").createControlCenter>;
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");

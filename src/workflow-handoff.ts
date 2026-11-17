@@ -1,28 +1,19 @@
 import { hasOwn, isRecord } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { cloneState, WORKFLOW_STATE_VERSION } from "./workflow-model.ts";
+import { cloneState } from "./workflow-state.ts";
+import { WORKFLOW_TASK_MESSAGE_TYPE, WORKFLOW_REPLAN_MESSAGE_TYPE } from "./workflow-protocol.ts";
 import type {
-  HydratedWorkflowState,
   WorkflowActionIdentity,
   WorkflowHandoffIdentity,
   WorkflowIdentityValidationResult,
-  WorkflowRecoveryResult,
+  WorkflowIdentityContext,
+  WorkflowMessageAnchor,
   WorkflowReplanIdentity,
   WorkflowState,
   WorkflowValidationFailure,
 } from "./workflow-types.ts";
 
-const TASK_MESSAGE_TYPE = "pi-init-workflow-task";
-const REPLAN_MESSAGE_TYPE = "pi-init-workflow-replan";
 const BASE_IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration"] as const;
-
-function hasWorkflowIdentity(state: HydratedWorkflowState): state is WorkflowState {
-  return typeof state.workflowId === "string"
-    && typeof state.sessionId === "string"
-    && typeof state.planVersion === "number" && Number.isSafeInteger(state.planVersion) && state.planVersion >= 0
-    && typeof state.recoveryGeneration === "number" && Number.isSafeInteger(state.recoveryGeneration) && state.recoveryGeneration >= 0;
-}
 
 function failure(
   code: string,
@@ -68,7 +59,7 @@ function differingIdentityFields(actual: unknown, expected: unknown, fields: rea
   return fields.filter((field) => actualValues?.[field] !== expectedValues?.[field]);
 }
 
-function sameIdentity(actual: unknown, expected: unknown, fields: readonly string[]): boolean {
+function identityFieldsMatch(actual: unknown, expected: unknown, fields: readonly string[]): boolean {
   if (!isRecord(actual) || !isRecord(expected)) return false;
   return fields.every((field) => actual[field] === expected[field]);
 }
@@ -91,7 +82,7 @@ const notExecuting = workflowHandoffNotExecutingFailure;
 function validateBaseIdentity(
   state: WorkflowState | undefined,
   input: unknown,
-  ctx: ExtensionContext,
+  context: WorkflowIdentityContext,
 ): WorkflowIdentityValidationResult<WorkflowActionIdentity> {
   if (!isRecord(input)) {
     return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份", {
@@ -131,7 +122,7 @@ function validateBaseIdentity(
       );
     }
   }
-  const sessionId = ctx?.sessionManager?.getSessionId?.();
+  const sessionId = context.sessionId;
   if (typeof sessionId !== "string" || !sessionId) {
     return failure("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法从 Pi 公共 SessionManager 读取当前 sessionId", {
       mismatchedFields: ["sessionId"],
@@ -162,24 +153,25 @@ function validateBaseIdentity(
   return { ok: true, value: workflowActionIdentity(state) };
 }
 
-function activeBranchContains(
-  ctx: ExtensionContext,
+function containsWorkflowAnchor(
+  anchors: readonly WorkflowMessageAnchor[],
   customType: string,
   expected: unknown,
   fields: readonly string[],
 ): boolean {
-  const branch = ctx?.sessionManager?.getBranch?.();
-  if (!Array.isArray(branch)) return false;
-  return branch.some((entry: unknown) => isRecord(entry)
-    && entry.type === "custom_message"
-    && entry.customType === customType
-    && sameIdentity(entry.details, expected, fields));
+  return anchors.some((anchor) => anchor.messageType === customType
+    && identityFieldsMatch(anchor.identity, expected, fields));
 }
 
-export function workflowHandoffMessageOnBranch(ctx: ExtensionContext, identity: WorkflowHandoffIdentity): boolean {
-  return activeBranchContains(
-    ctx,
-    TASK_MESSAGE_TYPE,
+// Startup and tool-settlement evidence require the full task/attempt/handoff identity.
+// Result validation below intentionally keeps its separate base-identity branch scope.
+export function workflowHandoffAnchorMatches(
+  anchors: readonly WorkflowMessageAnchor[],
+  identity: WorkflowHandoffIdentity,
+): boolean {
+  return containsWorkflowAnchor(
+    anchors,
+    WORKFLOW_TASK_MESSAGE_TYPE,
     identity,
     [...BASE_IDENTITY_FIELDS, "taskId", "attemptId", "handoffId"],
   );
@@ -228,17 +220,17 @@ export function workflowReplanIdentity(state: WorkflowState | undefined): Workfl
 export function validateWorkflowMutationIdentity(
   state: WorkflowState | undefined,
   input: unknown,
-  ctx: ExtensionContext,
+  context: WorkflowIdentityContext,
 ): WorkflowIdentityValidationResult<WorkflowActionIdentity> {
-  return validateBaseIdentity(state, input, ctx);
+  return validateBaseIdentity(state, input, context);
 }
 
 export function validateWorkflowHandoffIdentity(
   state: WorkflowState | undefined,
   input: unknown,
-  ctx: ExtensionContext,
+  context: WorkflowIdentityContext,
 ): WorkflowIdentityValidationResult<WorkflowHandoffIdentity> {
-  const base = validateBaseIdentity(state, input, ctx);
+  const base = validateBaseIdentity(state, input, context);
   if (!base.ok) return base;
   if (!isRecord(input)) {
     return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份");
@@ -272,7 +264,7 @@ export function validateWorkflowHandoffIdentity(
     }
   }
   const expected = workflowHandoffIdentity(state) ?? handoff;
-  const differs = !sameIdentity(input, expected, fields);
+  const differs = !identityFieldsMatch(input, expected, fields);
   if (differs) {
     const mismatchedFields = differingIdentityFields(input, expected, fields);
     return identityFailure(
@@ -282,7 +274,7 @@ export function validateWorkflowHandoffIdentity(
       "拒绝旧 attempt 的结果。查询当前状态一次；若 attempt/handoff/branch 已变化，不得把旧结果换成最新身份提交。结果未知时先核对副作用并显式授权 retry。",
     );
   }
-  const branchMatched = activeBranchContains(ctx, TASK_MESSAGE_TYPE, expected, BASE_IDENTITY_FIELDS);
+  const branchMatched = containsWorkflowAnchor(context.anchors, WORKFLOW_TASK_MESSAGE_TYPE, expected, BASE_IDENTITY_FIELDS);
   if (handoff.phase !== "executing" && handoff.phase !== "queued") return notExecuting(handoff.phase, { branchMatched });
   if (!branchMatched) {
     return identityFailure(
@@ -298,9 +290,9 @@ export function validateWorkflowHandoffIdentity(
 export function validateWorkflowReplanIdentity(
   state: WorkflowState | undefined,
   input: unknown,
-  ctx: ExtensionContext,
+  context: WorkflowIdentityContext,
 ): WorkflowIdentityValidationResult<WorkflowReplanIdentity> {
-  const base = validateBaseIdentity(state, input, ctx);
+  const base = validateBaseIdentity(state, input, context);
   if (!base.ok) return base;
   if (!isRecord(input)) {
     return failure("WORKFLOW_ACTION_IDENTITY_MISSING", "工作流操作缺少执行身份");
@@ -333,7 +325,7 @@ export function validateWorkflowReplanIdentity(
       );
     }
   }
-  const differs = !sameIdentity(input, expected, fields);
+  const differs = !identityFieldsMatch(input, expected, fields);
   if (differs) {
     const mismatchedFields = differingIdentityFields(input, expected, fields);
     return identityFailure(
@@ -343,7 +335,7 @@ export function validateWorkflowReplanIdentity(
       "拒绝旧 revision 的重规划结果。读取当前状态并由 architect 处理当前 revision；不得将旧计划改贴新 handoff 身份。",
     );
   }
-  if (!activeBranchContains(ctx, REPLAN_MESSAGE_TYPE, expected, BASE_IDENTITY_FIELDS)) {
+  if (!containsWorkflowAnchor(context.anchors, WORKFLOW_REPLAN_MESSAGE_TYPE, expected, BASE_IDENTITY_FIELDS)) {
     return identityFailure(
       "WORKFLOW_REPLAN_BRANCH_MISMATCH",
       "当前 session branch 不包含匹配的重规划消息",
@@ -352,127 +344,6 @@ export function validateWorkflowReplanIdentity(
     );
   }
   return { ok: true, value: expected };
-}
-
-export function recoverWorkflowState(
-  state: HydratedWorkflowState,
-  currentSessionId: unknown,
-): WorkflowRecoveryResult {
-  if (typeof currentSessionId !== "string" || !currentSessionId) {
-    return failure("WORKFLOW_SESSION_ID_UNAVAILABLE", "无法从 Pi 公共 SessionManager 读取当前 sessionId");
-  }
-  const legacy = Number.isInteger(state?.legacySourceVersion);
-  if (!legacy && state.sessionId !== currentSessionId) {
-    return failure("WORKFLOW_SESSION_MISMATCH", "已保存的工作流属于其他 Pi session；不会恢复或重放");
-  }
-
-  if (!legacy && !hasWorkflowIdentity(state)) {
-    return failure("WORKFLOW_STATE_INVALID", "已保存的工作流缺少有效身份，无法安全恢复");
-  }
-  if (!legacy && hasWorkflowIdentity(state)
-    && (state.status === "completed" || state.status === "cancelled") && !state.handoff) {
-    return { ok: true, value: state, changed: false };
-  }
-
-  const workflowId = legacy ? randomUUID() : state.workflowId;
-  const sessionId = legacy ? currentSessionId : state.sessionId;
-  const planVersion = legacy
-    ? (state.revisions ?? []).filter((revision) => revision.status === "applied").length
-    : state.planVersion;
-  if (typeof workflowId !== "string" || typeof sessionId !== "string"
-    || typeof planVersion !== "number" || !Number.isSafeInteger(planVersion) || planVersion < 0) {
-    return failure("WORKFLOW_STATE_INVALID", "已保存的工作流缺少有效身份，无法安全恢复");
-  }
-  const migrated: WorkflowState = {
-    ...state,
-    workflowId,
-    sessionId,
-    planVersion,
-    recoveryGeneration: (state.recoveryGeneration ?? 0) + 1,
-    version: WORKFLOW_STATE_VERSION,
-  };
-  delete migrated.legacySourceVersion;
-  if (!migrated.handoff && migrated.continuation?.kind !== "review"
-    && migrated.continuation?.phase === "compacting" && migrated.status !== "paused") {
-    migrated.status = "paused";
-    migrated.pauseReason = "boundary-compaction-interrupted";
-    migrated.taskPauseReason = "任务边界压缩在恢复前未确认完成；结果已保留，核对后执行 /pi-init workflow resume。";
-  }
-  const currentTask = migrated.currentTaskId
-    ? migrated.tasks.find((task) => task.id === migrated.currentTaskId)
-    : undefined;
-  const legacyInProgressTasks = legacy
-    ? migrated.tasks.filter((task) => task.status === "in_progress")
-    : [];
-
-  if (legacy && legacyInProgressTasks.length > 0) {
-    for (const task of legacyInProgressTasks) {
-      task.status = "blocked";
-      task.outcomeUnknown = true;
-      task.blockReason = "旧工作流缺少 attempt/handoff 身份，无法确认任务是否产生副作用；核对后显式 retry";
-    }
-    migrated.status = "paused";
-    migrated.pauseReason = "legacy-execution-outcome-unknown";
-    migrated.taskPauseReason = `任务 ${legacyInProgressTasks.map((task) => task.id).join(", ")} 的旧执行结果未知`;
-    migrated.currentTaskId = undefined;
-    delete migrated.handoff;
-    delete migrated.continuation;
-  } else if (migrated.handoff) {
-    const previousHandoff = migrated.handoff;
-    const hasExecutionEvidence = currentTask?.outcomeUnknown === true
-      || currentTask?.executionStartedAt !== undefined
-      || currentTask?.startedAt !== undefined
-      || previousHandoff.startedAt !== undefined;
-    if (!hasExecutionEvidence
-      && (previousHandoff.phase === "prepared" || previousHandoff.phase === "waiting-role" || previousHandoff.phase === "compacting")) {
-      migrated.handoff = {
-        ...previousHandoff,
-        attemptId: randomUUID(),
-        handoffId: randomUUID(),
-        recoveryGeneration: migrated.recoveryGeneration,
-        phase: "prepared",
-        createdAt: Date.now(),
-      };
-    } else {
-      if (!currentTask) return failure("WORKFLOW_HANDOFF_STATE_MISMATCH", "已保存 handoff 找不到当前任务");
-      currentTask.status = "blocked";
-      currentTask.outcomeUnknown = true;
-      currentTask.blockReason = "任务交接已进入派发/执行阶段但没有业务验收结果；核对可能的副作用后显式 retry";
-      migrated.status = "paused";
-      migrated.pauseReason = "handoff-outcome-unknown";
-      migrated.taskPauseReason = `任务 ${currentTask.id} 的执行结果未知`;
-      migrated.currentTaskId = undefined;
-      delete migrated.handoff;
-      delete migrated.continuation;
-      migrated.nudgeCount = 0;
-    }
-  } else if (migrated.continuation?.kind === "replan") {
-    migrated.continuation = {
-      ...migrated.continuation,
-      phase: "pending",
-      handoffId: randomUUID(),
-    };
-  }
-
-  if (migrated.status === "running" && !migrated.currentTaskId && !migrated.continuation) {
-    migrated.continuation = { kind: "schedule", phase: "pending" };
-  }
-  if (migrated.status === "paused" && migrated.pauseReason === "architecture-review") {
-    migrated.continuation = { kind: "review" };
-  }
-  if (migrated.status === "replanning" && migrated.pendingRevision && !migrated.continuation) {
-    migrated.continuation = {
-      kind: "replan",
-      revisionId: migrated.pendingRevision.revisionId,
-      phase: "pending",
-      handoffId: randomUUID(),
-    };
-  }
-
-  // Time since the last saved snapshot is unobserved after reload, not confirmed execution.
-  const recovered = cloneState({ ...migrated, status: "paused" });
-  recovered.status = migrated.status;
-  return { ok: true, value: recovered, changed: true };
 }
 
 export function ensureWorkflowReplanHandoff(state: WorkflowState | undefined): WorkflowState | undefined {

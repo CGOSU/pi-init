@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { generalToolSettlement } from "../extensions/general-tool-settlement.ts";
+import { generalToolSettlement } from "../extensions/session/general-tool-settlement.ts";
 import { sdkAssistantTurn } from "./support/sdk-assistant-turn.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 

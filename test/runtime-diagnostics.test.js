@@ -4,10 +4,10 @@ import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile, stat, utimes, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
+import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
-import { createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
+import { createRuntimeDiagnostics } from "../extensions/diagnostics/runtime-diagnostics.ts";
 import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 

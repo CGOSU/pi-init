@@ -60,7 +60,7 @@
 
 ## 安全原文分页
 
-- `file_review(action="read", path, offset, limit)` 提供无原生 read 时的安全原文读取：从 1 开始，默认 100/最多 200 行，每页原文最多 16 KiB，只登记完整返回行。分页职责独立在 `extensions/file-review-read.ts`，复用路径校验、稳定快照/指纹与覆盖区间；原生 read 可混用，list 返回当前扫描范围内的项目相对路径库存，complete 保留当前版本全文校验。失败、取消、内容变化或会话/分支变化不产生错误覆盖。
+- `file_review(action="read", path, offset, limit)` 提供无原生 read 时的安全原文读取：从 1 开始，默认 100/最多 200 行，每页原文最多 16 KiB，只登记完整返回行。分页职责独立在 `extensions/file-review/file-review-read.ts`，复用路径校验、稳定快照/指纹与覆盖区间；原生 read 可混用，list 返回当前扫描范围内的项目相对路径库存，complete 保留当前版本全文校验。失败、取消、内容变化或会话/分支变化不产生错误覆盖。
 
 ## 功能收敛
 

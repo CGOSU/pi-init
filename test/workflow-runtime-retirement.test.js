@@ -2,7 +2,7 @@ import { latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createWorkflowDispatch } from "../extensions/workflow-dispatch.ts";
+import { createWorkflowDispatch } from "../extensions/workflow/workflow-dispatch.ts";
 import { cancelWorkflow, createWorkflowState, hydrateWorkflowState } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -176,7 +176,11 @@ test("迟到的重规划异常不告警旧工作流或清除新工作流调度",
       automaticRole: () => selection,
     },
     messages: { sendWorkflowReplanMessage() {} },
-    report: { persistWorkflowState(next) { state.workflowState = next; }, updateWorkflowStatus() {} },
+    store: {
+      persistWorkflowState(next) { state.workflowState = next; },
+      restoreSnapshot(next) { state.workflowState = next; },
+    },
+    report: { updateWorkflowStatus() {} },
     setCurrentContext() {},
   });
   const ctx = { ui: { notify(message, level) { notifications.push({ message, level }); } } };

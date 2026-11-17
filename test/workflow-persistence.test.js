@@ -6,7 +6,8 @@ import { startWorkflowTask } from "../src/workflow.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createWorkflowReport } from "../extensions/workflow-report.ts";
+import { createWorkflowReport } from "../extensions/workflow/workflow-report.ts";
+import { createWorkflowStore } from "../extensions/workflow/workflow-store.ts";
 import { WORKFLOW_RECOVERY_DISPOSITION_TYPE } from "../src/workflow-recovery-disposition.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
@@ -54,14 +55,82 @@ test("appendEntry 失败时 persistWorkflowState 保留内存状态和恢复错�
   state.workflowState = current;
   state.workflowRestoreError = restoreError;
   const persistenceError = new Error("session entry 写入失败");
-  const report = createWorkflowReport(state, {
+  const store = createWorkflowStore(state, {
     pi: { appendEntry() { throw persistenceError; } },
-    roleRuntime: {},
   });
 
-  assert.throws(() => report.persistWorkflowState(next, {}), persistenceError);
+  assert.throws(() => store.persistWorkflowState(next, {}), persistenceError);
   assert.equal(state.workflowState, current);
   assert.equal(state.workflowRestoreError, restoreError);
+});
+
+for (const failingStage of ["observer", "trace", "status"]) {
+  test(`提交后的 ${failingStage} 失败不会将已保存工作流误报为写入失败`, () => {
+    const state = createExtensionRuntimeState();
+    state.workflowState = createWorkflowState({ summary: "辅助失败", tasks: tasks() }, 100);
+    const next = { ...state.workflowState, status: "cancelled", updatedAt: 200 };
+    const saved = [];
+    const notifications = [];
+    const fail = () => { throw new Error(`${failingStage} failed`); };
+    if (failingStage === "trace") state.traceHandoff = fail;
+    const report = createWorkflowReport(state, {
+      roleRuntime: { refreshRoleStatus: failingStage === "status" ? fail : () => {} },
+    });
+    const store = createWorkflowStore(state, {
+      pi: { appendEntry(type, data) { saved.push({ type, data }); } },
+      onWorkflowPersisted: failingStage === "observer" ? fail : undefined,
+      traceWorkflowPersisted: ctx => state.traceHandoff?.(ctx, "workflow.persisted"),
+      updateWorkflowStatus: report.updateWorkflowStatus,
+    });
+    const ctx = { ui: { notify(message) { notifications.push(message); } } };
+
+    assert.doesNotThrow(() => store.persistWorkflowState(next, ctx));
+    assert.equal(state.workflowState, next);
+    assert.equal(saved[0].data, next);
+    assert.equal(notifications.some(message => message.includes("已保存")), true);
+    report.dispose();
+  });
+}
+
+test("辅助告警本身失败仍保留已保存状态和当前恢复语义", () => {
+  const state = createExtensionRuntimeState();
+  state.workflowState = createWorkflowState({ summary: "告警失败", tasks: tasks() }, 100);
+  state.workflowRestoreError = { code: "OLD_FAILURE", message: "stale recovery error" };
+  const next = { ...state.workflowState, status: "cancelled", updatedAt: 200 };
+  const saved = [];
+  const fail = () => { throw new Error("auxiliary unavailable"); };
+  const store = createWorkflowStore(state, {
+    pi: { appendEntry(_type, data) { saved.push(data); } },
+    onWorkflowPersisted: fail,
+    traceWorkflowPersisted: fail,
+    updateWorkflowStatus: fail,
+  });
+  assert.equal(store.persistWorkflowState(next, { ui: { notify: fail } }), next);
+  assert.equal(saved[0], next);
+  assert.equal(state.workflowState, next);
+  assert.equal(state.workflowRestoreError, undefined);
+});
+
+test("状态展示故障不撤回任务完成，也不重派已完成任务", async () => {
+  await withTempDirectory(async (directory) => {
+    await writeWorkflowConfig(directory);
+    const initial = createWorkflowState({ summary: "提交后展示故障", tasks: tasks(), executor: "local" }, 100);
+    const harness = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: initial }], {
+      cwd: directory, trusted: true, model: developerModel, availableModels: [developerModel],
+    });
+    await emitExtensionEvent(harness, "session_start");
+    const originalSetStatus = harness.context.ui.setStatus;
+    harness.context.ui.setStatus = () => { throw new Error("status sink unavailable"); };
+    const workflow = harness.tools.find(tool => tool.name === "task_workflow");
+    const result = await workflow.execute("complete-with-status-failure", completeParams(harness), undefined, undefined, harness.context);
+    assert.equal(result.details.tasks[0].status, "completed");
+    assert.equal(latestWorkflowEntry(harness).data.tasks[0].status, "completed");
+    harness.context.ui.setStatus = originalSetStatus;
+    await emitExtensionEvent(harness, "agent_settled");
+    const taskMessages = harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task");
+    assert.deepEqual(taskMessages.map(({ message }) => message.details.taskId), ["first", "second"]);
+    assert.equal(latestWorkflowEntry(harness).data.tasks[0].status, "completed");
+  });
 });
 
 test("初始任务状态写入失败不派发任务且后续可安全重新调度", async () => {

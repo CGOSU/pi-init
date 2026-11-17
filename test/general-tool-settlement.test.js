@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generalToolSettlement, nestedToolSettlement } from "../extensions/general-tool-settlement.ts";
+import { generalToolSettlement, nestedToolSettlement } from "../extensions/session/general-tool-settlement.ts";
 import { sdkReceipt } from "./support/nested-receipt.js";
 
 const pair = nestedCalls => [

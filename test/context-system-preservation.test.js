@@ -3,8 +3,9 @@ import test from "node:test";
 import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { getCurrentSystemMessage, getCurrentTools } from "@earendil-works/pi-ai";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createRoleRecovery, ROLE_RECOVERY_MESSAGE_TYPE } from "../extensions/role-recovery.ts";
-import { createWorkflowDelivery } from "../extensions/workflow-delivery.ts";
+import { ROLE_RECOVERY_MESSAGE_TYPE } from "../extensions/role/role-recovery.ts";
+import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
+import { createWorkflowDelivery } from "../extensions/workflow/workflow-delivery.ts";
 
 function fixture() {
   const handlers = new Map();
@@ -55,7 +56,7 @@ function assertSystemHistory(before, after) {
 test("SDK recovery annotation preserves the existing system-history prefix", async () => {
   const f = fixture();
   f.state.roleRecoveryPending = true;
-  createRoleRecovery(f.pi, f.state);
+  createRoleContextPipeline(f.pi, f.state);
   const messages = transcript();
   messages.push({ role: "system", content: "", sections: { latest: "keep before the recovery notice" }, timestamp: 6 });
   const before = structuredClone(messages);
@@ -70,8 +71,10 @@ test("SDK recovery annotation preserves the existing system-history prefix", asy
 test("SDK ordered conversation projection preserves system-delta boundaries around surviving messages", async () => {
   const f = fixture();
   const summary = { role: "custom", customType: "test-summary", content: "Prior observations", timestamp: 0 };
-  createRoleRecovery(f.pi, f.state, event => ({ messages: [summary, ...event.messages.filter(message =>
-    !(message.role === "assistant" && message.content[0].text === "obsolete discussion"))] }));
+  createRoleContextPipeline(f.pi, f.state, {
+    contextView: event => ({ messages: [summary, ...event.messages.filter(message =>
+      !(message.role === "assistant" && message.content[0].text === "obsolete discussion"))] }),
+  });
   const messages = transcript();
   const before = structuredClone(messages);
   const output = await f.runner.emitContext(messages);
@@ -83,7 +86,7 @@ test("SDK ordered conversation projection preserves system-delta boundaries arou
 
 test("SDK ordinary no-op context retains every system and conversation message", async () => {
   const f = fixture();
-  createRoleRecovery(f.pi, f.state);
+  createRoleContextPipeline(f.pi, f.state);
   const messages = transcript();
   const before = structuredClone(messages);
   const output = await f.runner.emitContext(messages);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createRoleRuntime } from "../extensions/role-runtime.ts";
+import { createRoleRuntime } from "../extensions/role/role-runtime.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { withTempDirectory } from "./support/temp-directory.js";

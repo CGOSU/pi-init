@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowMessages } from "../extensions/workflow-messages.ts";
+import { createWorkflowMessages } from "../extensions/workflow/workflow-messages.ts";
 import { createWorkflowState, ensureWorkflowReplanHandoff, requestWorkflowReplan, cancelWorkflow, recoverWorkflowState, retryWorkflowTask, startWorkflowTask, workflowHandoffIdentity, workflowReplanIdentity } from "../src/workflow.ts";
 import { selectWorkflowScheduleEffect, transitionWorkflowDispatch } from "../src/workflow-orchestrator.ts";
 

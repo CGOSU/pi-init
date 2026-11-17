@@ -43,6 +43,12 @@ export type ExtensionRuntimeState = {
   runtimeDisposed: boolean;
 };
 
+// Live views are shallow: workflow snapshots are replaced via pure domain
+// transitions. Each owner declares the runtime fields it may replace.
+export type RuntimeStateView = Readonly<ExtensionRuntimeState>;
+export type RuntimeStateAccess<Writable extends keyof ExtensionRuntimeState> =
+  Omit<RuntimeStateView, Writable> & Pick<ExtensionRuntimeState, Writable>;
+
 export function createExtensionRuntimeState(): ExtensionRuntimeState {
   return {
     agentRunActive: false,
@@ -62,7 +68,7 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
 }
 
 export function activeRoleMatches(
-  state: ExtensionRuntimeState,
+  state: Pick<RuntimeStateView, "activeRole">,
   ctx: ExtensionContext,
   thinkingLevel: string,
 ) {
@@ -96,11 +102,11 @@ export function isExecutionBlockedState(
   return Boolean(state.runtimeDisposed || state.userStopRequested || hasRecoveryGate(state));
 }
 
-export function isActiveWorkflowStatus(workflow: WorkflowState | undefined): workflow is WorkflowState {
+export function isWorkflowUnfinished(workflow: WorkflowState | undefined): workflow is WorkflowState {
   return Boolean(workflow && !["completed", "cancelled"].includes(workflow.status));
 }
 
-export function executingWorkflowTask(state: ExtensionRuntimeState, sessionId?: string) {
+export function executingWorkflowTask(state: Pick<RuntimeStateView, "workflowState" | "activeRole">, sessionId?: string) {
   const workflow = state.workflowState;
   const handoff = workflow?.handoff;
   const task = workflow?.tasks.find((item) => item.id === workflow.currentTaskId);

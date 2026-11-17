@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowDelivery } from "../extensions/workflow-delivery.ts";
+import { createWorkflowDelivery } from "../extensions/workflow/workflow-delivery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
-import { formatWorkflowCompletionSummaryText, formatWorkflowCompletionText, formatWorkflowCompletionTimingLines } from "../extensions/workflow-completion-renderer.ts";
-import { hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
+import { createWorkflowCompletionView } from "../extensions/workflow/workflow-completion-view.ts";
+import { formatWorkflowCompletionSummaryText, formatWorkflowCompletionText, formatWorkflowCompletionTimingLines } from "../extensions/workflow/workflow-completion-renderer.ts";
+import { hasCompleteToolPairs } from "../extensions/role/role-context-protocol.ts";
 
 function fixture(overrides = {}) {
   const hooks = new Map();

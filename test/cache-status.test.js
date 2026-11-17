@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { parseCacheUsage } from "../extensions/cache-status.ts";
+import { parseCacheUsage } from "../extensions/diagnostics/cache-status.ts";
 
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 

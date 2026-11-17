@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { createReadTool } from '@earendil-works/pi-coding-agent';
 import os from 'node:os';
 import path from 'node:path';
-import { readReviewPage, verifyNativeRead, FILE_REVIEW_READ_MAX_BYTES } from '../extensions/file-review-read.ts';
+import { readReviewPage, verifyNativeRead, FILE_REVIEW_READ_MAX_BYTES } from '../extensions/file-review/file-review-read.ts';
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 async function fixture(run) {

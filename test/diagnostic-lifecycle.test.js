@@ -4,11 +4,11 @@ import test from "node:test";
 import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { createDiagnosticWriter } from "../extensions/diagnostic-writer.ts";
-import { createDiagnosticControls } from "../extensions/diagnostic-controls.ts";
-import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
-import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
-import { createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
+import { createDiagnosticWriter } from "../extensions/diagnostics/diagnostic-writer.ts";
+import { createDiagnosticControls } from "../extensions/diagnostics/diagnostic-controls.ts";
+import { createGlobalDiagnostics } from "../extensions/diagnostics/global-diagnostics.ts";
+import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
+import { createRuntimeDiagnostics } from "../extensions/diagnostics/runtime-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { fastForwardTimeouts } from "./support/fast-forward-timeouts.js";
@@ -253,14 +253,14 @@ for (const scope of ["project", "handoff", "global"]) {
     test(`independent processes append ${scope} JSON atomically${rotate ? " with bounded rotation" : " without loss"}`, { timeout: 15000 }, async () => withTempDirectory(async cwd => {
       const count = rotate ? 45 : 12, maxBytes = rotate ? scope === "project" ? 2048 : 8192 : 1024 * 1024;
       const sources = {
-        project: `import {createDiagnosticWriter} from ${JSON.stringify(new URL("../extensions/runtime-diagnostics.ts", import.meta.url).href)};
+        project: `import {createDiagnosticWriter} from ${JSON.stringify(new URL("../extensions/diagnostics/runtime-diagnostics.ts", import.meta.url).href)};
           const d=createDiagnosticWriter({file:'diagnostics/runtime.jsonl',maxBytes:${maxBytes},maxPending:128,warning:'stopped'});
           for(let i=0;i<${count};i++) d.write(ctx,()=>({producer:process.pid,index:i,text:'中文✓é'})); await d.flush(); if(d.failed) throw Error('writer stopped');`,
-        handoff: `import {createHandoffDiagnostics} from ${JSON.stringify(new URL("../extensions/handoff-diagnostics.ts", import.meta.url).href)};
+        handoff: `import {createHandoffDiagnostics} from ${JSON.stringify(new URL("../extensions/diagnostics/handoff-diagnostics.ts", import.meta.url).href)};
           import {createExtensionRuntimeState} from ${JSON.stringify(new URL("../extensions/runtime-state.ts", import.meta.url).href)};
           const d=createHandoffDiagnostics({on(){}},createExtensionRuntimeState(),{mode:'verbose',maxBytes:${maxBytes}});
           for(let i=0;i<${count};i++) d.trace(ctx,'fixture',{producer:process.pid,index:i,text:'中文✓é'}); await d.flush();`,
-        global: `import {createGlobalDiagnostics} from ${JSON.stringify(new URL("../extensions/global-diagnostics.ts", import.meta.url).href)};
+        global: `import {createGlobalDiagnostics} from ${JSON.stringify(new URL("../extensions/diagnostics/global-diagnostics.ts", import.meta.url).href)};
           const d=createGlobalDiagnostics({maxBytes:${maxBytes}});
           for(let i=0;i<${count};i++) d.observe(ctx,'pi-init.command_failed'); await d.flush(); if(d.status().written!==${count}||d.status().dropped) throw Error('writer lost records');`,
       };
@@ -301,7 +301,7 @@ for (const operation of ["clear", "export", "resume"]) {
     const monitor = createHandoffDiagnostics({ on() { } }, createExtensionRuntimeState(), { mode: "verbose" });
     monitor.trace(ctx, "before"); await monitor.flush();
     const control = createDiagnosticControls({ ...monitor, agentDir: () => join(cwd, "agent") });
-    const source = `import * as fs from 'node:fs/promises'; import {withDiagnosticLock} from ${JSON.stringify(new URL("../extensions/diagnostic-storage.ts", import.meta.url).href)};
+    const source = `import * as fs from 'node:fs/promises'; import {withDiagnosticLock} from ${JSON.stringify(new URL("../extensions/diagnostics/diagnostic-storage.ts", import.meta.url).href)};
       const release=new Promise(resolve=>process.stdin.once('data',resolve));
       await withDiagnosticLock(${JSON.stringify(directory)},async()=>{
         const handle=await fs.open(${JSON.stringify(file)},'a');

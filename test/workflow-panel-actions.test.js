@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { workflowPanelChoices, runWorkflowPanelRequest } from "../extensions/workflow-panel-actions.ts";
-import { createWorkflowReport } from "../extensions/workflow-report.ts";
+import { workflowPanelChoices, runWorkflowPanelRequest } from "../extensions/workflow/workflow-panel-actions.ts";
+import { createWorkflowReport } from "../extensions/workflow/workflow-report.ts";
+import { createWorkflowStore } from "../extensions/workflow/workflow-store.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 import { createExtensionHarness } from "./support/extension-harness.js";
-import { createWorkflowActions } from "../extensions/workflow-actions.ts";
-import { showWorkflowPanel } from "../extensions/workflow-panel.ts";
+import { createWorkflowActions } from "../extensions/workflow/workflow-actions.ts";
+import { showWorkflowPanel } from "../extensions/workflow/workflow-panel.ts";
 
 function fixture() {
   const state = createExtensionRuntimeState();
@@ -125,8 +126,12 @@ test("面板取消入口经过确认后复用业务命令，默认返回不写�
       call.component.handleInput("\u001b[B"); call.component.handleInput("\r");
     } });
     const roleRuntime = { refreshRoleStatus() {} };
-    const report = createWorkflowReport(state, { pi: { appendEntry: (_type, next) => writes.push(next) }, roleRuntime });
-    const actions = createWorkflowActions(state, { report, roleRuntime, dispatch: {}, coordination: { isLinkedToWorkflow: () => false } });
+    const report = createWorkflowReport(state, { roleRuntime });
+    const store = createWorkflowStore(state, {
+      pi: { appendEntry: (_type, next) => writes.push(next) },
+      updateWorkflowStatus: report.updateWorkflowStatus,
+    });
+    const actions = createWorkflowActions(state, { report, store, roleRuntime, dispatch: {}, coordination: { isLinkedToWorkflow: () => false } });
     await actions.workflowCommand("status", undefined, h.context);
     assert.equal(writes.length, accept ? 1 : 0);
     assert.equal(state.workflowState.status, accept ? "cancelled" : "running");

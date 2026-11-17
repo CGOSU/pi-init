@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ROLE_RECOVERY_ENTRY_TYPE } from "../extensions/role-recovery.ts";
+import { ROLE_RECOVERY_ENTRY_TYPE } from "../extensions/role/role-recovery.ts";
 import { DEFAULT_ROLE_CONFIG } from "../src/roles.ts";
 import { createExtensionHarness, emitExtensionEvent, callToolCall } from "./support/extension-harness.js";
 import { createWorkflowState } from "./support/workflow-fixtures.js";

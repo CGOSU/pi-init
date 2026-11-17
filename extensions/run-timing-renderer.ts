@@ -1,7 +1,7 @@
 import { Text } from "@earendil-works/pi-tui";
-import type { ReportTheme } from "./contracts.ts";
+import type { ReportTheme } from "./report-theme.ts";
 import type { RunTimingView, RunTimingValue } from "./run-timing-view.ts";
-import { formatWorkflowDuration, formatWorkflowTimestamp } from "./workflow-view-format.ts";
+import { formatWorkflowDuration, formatWorkflowTimestamp } from "./workflow/workflow-view-format.ts";
 
 const INVALID_DURATION = "不可用（无效或不完整的时间戳）";
 

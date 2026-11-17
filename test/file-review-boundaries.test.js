@@ -4,8 +4,8 @@ import test from "node:test";
 import fs, { mkdir, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { createFileReviewSession } from "../extensions/file-review-session.ts";
-import { createFileReviewObserver } from "../extensions/file-review-observer.ts";
+import { createFileReviewSession } from "../extensions/file-review/file-review-session.ts";
+import { createFileReviewObserver } from "../extensions/file-review/file-review-observer.ts";
 import { FILE_REVIEW_ENTRY_TYPE } from "../src/file-review.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 

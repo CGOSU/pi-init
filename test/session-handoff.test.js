@@ -6,7 +6,9 @@ import { createWorkflowState, workflowMessageIdentity } from "./support/workflow
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { handoffBoundary, resolveHandoffSnapshot, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
+import { buildSessionHandoff, handoffBoundary, resolveHandoffSnapshot, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
+import { createTaskMemory } from "../src/task-memory.ts";
+import { TASK_MEMORY_ENTRY } from "../src/task-memory-protocol.ts";
 import { readFile } from "node:fs/promises";
 
 async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = false } = {}) {
@@ -73,6 +75,26 @@ async function completedNestedReadFailure(h, { complete = true, name = "read" } 
   h.manager.appendMessage(result);
   h.branch.splice(0, h.branch.length, ...h.manager.getBranch());
 }
+
+test("handoff preserves valid historical checkpoints but refuses damaged current-scope snapshots", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    const workflow = latest(h);
+    const memory = createTaskMemory(workflowMessageIdentity(h));
+    memory.checkpoint = { step: "finished first task", accomplished: [], remaining: ["second"], blockers: [], nextStep: "second" };
+    h.manager.appendCustomEntry(TASK_MEMORY_ENTRY, memory);
+    h.manager.appendCustomEntry(TASK_MEMORY_ENTRY, { ...memory, identity: { ...memory.identity, workflowId: "unrelated" }, version: 2 });
+    const packet = buildSessionHandoff(workflow, h.manager.getBranch());
+    assert.deepEqual(packet.context.checkpoints.map(item => item.checkpoint), [memory.checkpoint]);
+    const before = structuredClone(workflow);
+    h.manager.appendCustomEntry(TASK_MEMORY_ENTRY, { ...memory, revision: -1 });
+    assert.throws(() => buildSessionHandoff(workflow, h.manager.getBranch()),
+      error => error.code === "TASK_MEMORY_SNAPSHOT_INVALID" && error.message.includes("memory.revision"));
+    assert.deepEqual(latest(h), before);
+    assert.equal(h.sentMessages.filter(entry => entry.message.customType === "pi-init-workflow-task").length, 1);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
 
 test("high host usage only reminds and does not pause or replace a session at the completed-task boundary", async () => {
   await withTempDirectory(async cwd => {

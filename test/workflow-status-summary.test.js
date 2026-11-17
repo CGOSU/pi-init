@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowActions } from "../extensions/workflow-actions.ts";
+import { createWorkflowActions } from "../extensions/workflow/workflow-actions.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
-import { formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
-import { createCurrentWorkflowStatusView } from "../extensions/workflow-status-view.ts";
+import { formatWorkflowStatusText } from "../extensions/workflow/workflow-status-renderer.ts";
+import { createCurrentWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
 
 test("status defaults to actionable summary while full history remains explicit and UI details survive", async () => {
   const state = createExtensionRuntimeState();

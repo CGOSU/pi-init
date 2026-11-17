@@ -9,10 +9,10 @@ import {
   setWorkflowHandoffPhase,
   startWorkflowTask,
 } from "../src/workflow.ts";
-import { createWorkflowReport } from "../extensions/workflow-report.ts";
-import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
-import { formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
-import { attachWorkflowPresentation } from "../extensions/workflow-presentation.ts";
+import { createWorkflowReport } from "../extensions/workflow/workflow-report.ts";
+import { createWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
+import { formatWorkflowStatusText } from "../extensions/workflow/workflow-status-renderer.ts";
+import { attachWorkflowPresentation } from "../extensions/workflow/workflow-presentation.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { workflowMessageIdentity, latestWorkflow } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";

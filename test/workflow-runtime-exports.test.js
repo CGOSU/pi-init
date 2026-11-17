@@ -48,7 +48,7 @@ test("Pi's Jiti loader rejects stale workflow identity and forbidden execution r
   const { startWorkflowTask } = await jiti.import(path.resolve(testDirectory, "../src/workflow.ts"));
   const { createExtensionHarness, emitExtensionEvent } = await jiti.import(path.join(testDirectory, "support/extension-harness.js"));
   const { withTempDirectory } = await jiti.import(path.join(testDirectory, "support/temp-directory.js"));
-  const { createWorkflowDispatch } = await jiti.import(path.resolve(testDirectory, "../extensions/workflow-dispatch.ts"));
+  const { createWorkflowDispatch } = await jiti.import(path.resolve(testDirectory, "../extensions/workflow/workflow-dispatch.ts"));
 
   await withTempDirectory(async (cwd) => {
     const pausedWorkflow = createWorkflowState({
@@ -75,8 +75,11 @@ test("Pi's Jiti loader rejects stale workflow identity and forbidden execution r
       messages: {
         sendWorkflowTaskMessage: (_ctx, taskId, _note, identity) => sentMessages.push({ taskId, identity }),
       },
-      report: {
+      store: {
         persistWorkflowState: (next) => { state.workflowState = next; },
+        restoreSnapshot: (next) => { state.workflowState = next; },
+      },
+      report: {
         updateWorkflowStatus: () => {},
         formatWorkflowPauseSummary: () => "暂停",
       },

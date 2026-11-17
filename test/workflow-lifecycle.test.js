@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowActions } from "../extensions/workflow-actions.ts";
+import { createWorkflowActions } from "../extensions/workflow/workflow-actions.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState, workflowActionIdentity, recoverWorkflowState, startWorkflowTask, workflowHandoffIdentity, ensureWorkflowReplanHandoff, workflowReplanIdentity } from "../src/workflow.ts";
 import { transitionWorkflowDispatch, transitionWorkflowLifecycle } from "../src/workflow-orchestrator.ts";
@@ -27,13 +27,15 @@ function actionHarness(initial, options = {}) {
       activeRoleFor: () => ({ role: options.role ?? "developer-test" }),
 
     },
-    report: {
+    store: {
       persistWorkflowState: (next) => {
         order.push("persist");
         if (options.fail) throw new Error("session write failed");
         state.workflowState = next;
         return next;
       },
+    },
+    report: {
       formatWorkflowState: () => "状态",
       formatWorkflowPauseSummary: () => "暂停",
     },

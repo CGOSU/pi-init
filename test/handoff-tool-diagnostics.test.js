@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { summarizeToolResult } from "../extensions/handoff-tool-diagnostics.ts";
+import { summarizeToolResult } from "../extensions/diagnostics/handoff-tool-diagnostics.ts";
 
 test("tool summaries retain the SDK structured exit code alongside result details", () => {
   const summary = summarizeToolResult({

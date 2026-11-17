@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowStatusPollingGuard } from "../extensions/workflow-status-polling.ts";
+import { createWorkflowStatusPollingGuard } from "../extensions/workflow/workflow-status-polling.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState, startWorkflowTask, setWorkflowHandoffPhase, markWorkflowTaskStarted } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { taskWorkflowParameters } from "../extensions/contracts.ts";
+import { taskWorkflowParameters } from "../extensions/workflow/workflow-tool-parameters.ts";
 import { validateWorkflowMutationIdentity } from "../src/workflow-handoff.ts";
-import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
+import { createWorkflowToolBinding } from "../extensions/workflow/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { sdkReceipt } from "./support/nested-receipt.js";
 
@@ -30,11 +30,11 @@ test("host coercion does not authorize missing or stale workflow identities", ()
   const tool = { name: "task_workflow", parameters: taskWorkflowParameters };
   const validate = args => validateToolArguments(tool, { name: tool.name, arguments: args });
   const normalized = validate({ ...f.identity, action: "complete", planVersion: "0", recoveryGeneration: "1" });
-  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, normalized, f.ctx).ok, true);
+  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, normalized, { sessionId: f.identity.sessionId, anchors: [] }).ok, true);
   const stale = validate({ ...normalized, recoveryGeneration: "0" });
-  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, stale, f.ctx).code, "WORKFLOW_ACTION_IDENTITY_STALE");
+  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, stale, { sessionId: f.identity.sessionId, anchors: [] }).code, "WORKFLOW_ACTION_IDENTITY_STALE");
   const wrongSession = validate({ ...normalized, sessionId: "another-session" });
-  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, wrongSession, f.ctx).code, "WORKFLOW_SESSION_MISMATCH");
+  assert.equal(validateWorkflowMutationIdentity(f.state.workflowState, wrongSession, { sessionId: f.identity.sessionId, anchors: [] }).code, "WORKFLOW_SESSION_MISMATCH");
   const missing = validate({ action: "complete", planVersion: null });
   assert.throws(() => f.binding.bind("unissued", missing, f.ctx), error => error.code === "WORKFLOW_RUN_BINDING_MISSING");
   f.issue("stale-call");

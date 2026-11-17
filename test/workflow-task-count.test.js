@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Check } from "typebox/value";
-import { taskWorkflowParameters } from "../extensions/contracts.ts";
+import { taskWorkflowParameters } from "../extensions/workflow/workflow-tool-parameters.ts";
 import { applyWorkflowReplan, completeWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask, validateWorkflowPlan } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { createWorkflowState, markWorkflowTaskStarted, latestWorkflowEntry } from "./support/workflow-fixtures.js";

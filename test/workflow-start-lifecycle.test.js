@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
-import { validateWorkflowTaskStartMessage } from "../extensions/workflow-start-evidence.ts";
+import { createWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
+import { validateWorkflowTaskStartMessage } from "../extensions/workflow/workflow-start-evidence.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { createWorkflowState, latestWorkflow } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { branchContainsExactlyOneAnchor } from "../extensions/role-context-protocol.ts";
+import { branchContainsExactlyOneAnchor } from "../extensions/role/role-context-protocol.ts";
 import { workflowHandoffIdentity } from "../src/workflow.ts";
 
 const developerModel = { provider: "openai-codex", id: "gpt-5.6-luna" };

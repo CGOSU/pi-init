@@ -2,12 +2,12 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   roleLabel,
 } from "../src/roles.ts";
-import type { ResolvedRoleConfig, RoleModelConfig } from "./contracts.ts";
+import type { ResolvedRoleConfig, RoleModelConfig } from "../src/role-types.ts";
 import type { ExtensionRuntimeState } from "./runtime-state.ts";
 import {
   workflowModeLabel,
   type RoleRuntime,
-} from "./role-runtime.ts";
+} from "./role/role-runtime.ts";
 import {
   formatRoleModel,
   isMenuBack,
@@ -16,8 +16,8 @@ import {
   shortModelName,
   showMenu,
 } from "./ui.ts";
-import type { WorkflowCommandResult } from "./workflow-panel-actions.ts";
-import { configureAutoModel, configureModelStrategy, stageAutoModel } from "./model-strategy-menu.ts";
+import type { WorkflowCommandResult } from "./workflow/workflow-panel-actions.ts";
+import { configureAutoModel, configureModelStrategy, stageAutoModel } from "./role/model-strategy-menu.ts";
 
 export type ControlCenterDependencies = {
   state: ExtensionRuntimeState;

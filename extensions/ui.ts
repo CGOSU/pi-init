@@ -12,8 +12,8 @@ import {
   filterRoleModels,
   roleLabel,
 } from "../src/roles.ts";
-import type { ThinkingLevel } from "../src/role-types.ts";
-import type { MenuItem, MenuOptions, MenuSaveResult, RoleModelConfig } from "./contracts.ts";
+import type { RoleModelConfig, ThinkingLevel } from "../src/role-types.ts";
+import type { MenuItem, MenuOptions, MenuSaveResult } from "./menu-types.ts";
 
 type RolePickerModel = Model<Api>;
 

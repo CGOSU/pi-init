@@ -5,8 +5,8 @@ import {
   hydrateWorkflowState, markWorkflowTaskStarted, recoverWorkflowState, resumeWorkflow, retryWorkflowTask,
   setWorkflowHandoffPhase, startWorkflowTask,
 } from "../src/workflow.ts";
-import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
-import { createWorkflowCompletionView } from "../extensions/workflow-completion-view.ts";
+import { createWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
+import { createWorkflowCompletionView } from "../extensions/workflow/workflow-completion-view.ts";
 
 function plan(now) {
   return createWorkflowState({

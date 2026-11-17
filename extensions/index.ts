@@ -3,44 +3,44 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { findMatchingRole } from "../src/roles.ts";
-import { clearRoleConfigNotice, showRoleConfigNotice } from "./role-config-notice.ts";
-import { evaluateFileReviewDispatch } from "./file-review-dispatch-policy.ts";
-import { isWorkflowActive, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
-import { createWorkflowRevisionInput } from "./workflow-revision-input.ts";
+import { clearRoleConfigNotice, showRoleConfigNotice } from "./role/role-config-notice.ts";
+import { evaluateFileReviewDispatch } from "./file-review/file-review-dispatch-policy.ts";
+import { isWorkflowRunning, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
+import { createWorkflowRevisionInput } from "./workflow/workflow-revision-input.ts";
 import { registerExtensionCommand } from "./extension-command.ts";
 import { registerProjectTool } from "./project-tool.ts";
-import { registerWorkflowTool } from "./workflow-tool.ts";
-import { registerRoleTool } from "./role-tool.ts";
-import { createRoleRuntime } from "./role-runtime.ts";
+import { registerWorkflowTool } from "./workflow/workflow-tool.ts";
+import { registerRoleTool } from "./role/role-tool.ts";
+import { createRoleRuntime } from "./role/role-runtime.ts";
 import { registerActivityStatusSources } from "./activity-status-registration.ts";
-import { createArchitectBoundary } from "./architect-boundary.ts";
+import { createArchitectBoundary } from "./role/architect-boundary.ts";
 import { createExtensionRuntimeState, textOf } from "./runtime-state.ts";
-import { createWorkflowActions } from "./workflow-actions.ts";
-import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow-dispatch.ts";
-import { createWorkflowMessages } from "./workflow-messages.ts";
-import { createWorkflowReport } from "./workflow-report.ts";
+import { createWorkflowActions } from "./workflow/workflow-actions.ts";
+import { createWorkflowDispatch, type WorkflowDispatch } from "./workflow/workflow-dispatch.ts";
+import { createWorkflowMessages } from "./workflow/workflow-messages.ts";
+import { createWorkflowReport } from "./workflow/workflow-report.ts";
+import { createWorkflowStore, type WorkflowStore } from "./workflow/workflow-store.ts";
 import { createRunTimingView } from "./run-timing-view.ts";
 import { renderRunTimingReport } from "./run-timing-renderer.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
-import { createFileReviewRuntime } from "./file-review-runtime.ts";
-import { createRoleRecovery } from "./role-recovery.ts";
-import { createRoleContextView } from "./role-context-view.ts";
-import { registerContextCapacity } from "./role-context-capacity.ts";
-import { createRunTimingDiagnostics } from "./run-timing-diagnostics.ts";
-import { createRuntimeRoutingContext } from "./runtime-routing-context.ts";
-import {
-  type RunTimingEntryData,
-} from "./contracts.ts";
-import { createDiagnosticControls } from "./diagnostic-controls.ts";
-import { createHandoffDiagnostics } from "./handoff-diagnostics.ts";
-import { createRoleHandoff } from "./role-handoff.ts";
-import { createWorkflowToolBinding } from "./workflow-tool-binding.ts";
-import { createWorkflowStatusPollingGuard, createWorkflowProgressObserver, createRepeatedRejectionGuard } from "./workflow-status-polling.ts";
-import { createWorkflowDelivery } from "./workflow-delivery.ts";
-import { createWorkflowUserControl } from "./workflow-user-control.ts";
-import { createTaskMemoryRuntime } from "./task-memory-runtime.ts";
+import { createFileReviewRuntime } from "./file-review/file-review-runtime.ts";
+import { createRoleRecovery } from "./role/role-recovery.ts";
+import { createRoleContextView } from "./role/role-context-view.ts";
+import { createRoleContextPipeline } from "./role/role-context-pipeline.ts";
+import { registerContextCapacity } from "./role/role-context-capacity.ts";
+import { createRunTimingDiagnostics } from "./diagnostics/run-timing-diagnostics.ts";
+import { createRuntimeRoutingContext } from "./role/runtime-routing-context.ts";
+import type { RunTimingEntryData } from "./run-timing-view.ts";
+import { createDiagnosticControls } from "./diagnostics/diagnostic-controls.ts";
+import { createHandoffDiagnostics } from "./diagnostics/handoff-diagnostics.ts";
+import { createRoleHandoff } from "./role/role-handoff.ts";
+import { createWorkflowToolBinding } from "./workflow/workflow-tool-binding.ts";
+import { createWorkflowStatusPollingGuard, createWorkflowProgressObserver, createRepeatedRejectionGuard } from "./workflow/workflow-status-polling.ts";
+import { createWorkflowDelivery } from "./workflow/workflow-delivery.ts";
+import { createWorkflowUserControl } from "./workflow/workflow-user-control.ts";
+import { createTaskMemoryRuntime } from "./workflow/task-memory-runtime.ts";
 import { registerAbnormalToolGuard } from "./abnormal-tool-guard.ts";
-import { createSessionHandoff, outgoingTransfer } from "./session-handoff.ts";
+import { createSessionHandoff, outgoingTransfer } from "./session/session-handoff-runtime.ts";
 
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
@@ -64,7 +64,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     ctx => {
       const next = runtimeState.workflowState ? resetWorkflowNudges(runtimeState.workflowState) : undefined;
       if (!next || next === runtimeState.workflowState) return;
-      try { workflowReport.persistWorkflowState(next, ctx); }
+      try { workflowStore.persistWorkflowState(next, ctx); }
       catch (error) {
         userControl.suspend(ctx, "task-memory-progress-unavailable");
         throw error;
@@ -74,24 +74,26 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
   registerContextCapacity(pi, runtimeState);
-  const roleRecovery = createRoleRecovery(pi, runtimeState, roleContextView.context, (event, ctx, code) => {
+  const roleRecovery = createRoleRecovery(pi, runtimeState, (event, ctx, code) => {
     if (runtimeState.userStopRequested) { ctx.abort(); return; }
     const rejection = rejectionGuard.observe({ ...event, action: event.input?.action, role: event.input?.role, code }, ctx);
     if (rejection.stop) userControl.suspend(ctx, "repeated-guard-rejection");
-  }, taskMemory);
+  });
+  createRoleContextPipeline(pi, runtimeState, { contextView: roleContextView.context, taskMemory });
   const runTimingDiagnostics = createRunTimingDiagnostics(
     pi,
-    () => Boolean(runtimeState.workflowState && isWorkflowActive(runtimeState.workflowState)),
+    () => Boolean(runtimeState.workflowState && isWorkflowRunning(runtimeState.workflowState)),
   );
   pi.registerTool(createEditGuardTool());
   let workflowDispatch: WorkflowDispatch;
   let workflowReport: ReturnType<typeof createWorkflowReport>;
+  let workflowStore: WorkflowStore;
   const workflowMessages = createWorkflowMessages(runtimeState, {
     pi,
     setInternalContinuationPending: (value) => {
       runtimeState.internalContinuationPending = value;
     },
-    persistWorkflowState: (next, ctx) => workflowReport.persistWorkflowState(next, ctx),
+    persistWorkflowState: (next, ctx) => workflowStore.persistWorkflowState(next, ctx),
   });
   const roleRuntime = createRoleRuntime(pi, runtimeState, {
               activityStatus, getWorkflowState: () => runtimeState.workflowState,
@@ -104,7 +106,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const current = runtimeState.workflowState;
       if (!current || current.status !== "running" || !current.currentTaskId || !["executing", "queued", "dispatching"].includes(current.handoff?.phase ?? "")) return;
       const next = markWorkflowTaskOutcomeUnknown(current, { taskId: current.currentTaskId, reason: "活动回合中断或失败；已发生的副作用需核对，不自动重放。" });
-      try { workflowReport.persistWorkflowState(next, ctx); }
+      try { workflowStore.persistWorkflowState(next, ctx); }
       catch (error) { runtimeState.pendingWorkflowRecovery ??= next; throw error; }
     },
   });
@@ -131,15 +133,19 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   registerAbnormalToolGuard(pi, ctx => userControl.suspend(ctx, "abnormal-tool-arguments"));
   workflowReport = createWorkflowReport(runtimeState, {
-    pi, roleRuntime, activityStatus,
-    onWorkflowPersisted: (workflow) => {
-      workflowProgressObserver.observe(workflow);
-    },
+    roleRuntime, activityStatus,
+  });
+  workflowStore = createWorkflowStore(runtimeState, {
+    pi,
+    onWorkflowPersisted: workflow => workflowProgressObserver.observe(workflow),
+    traceWorkflowPersisted: ctx => runtimeState.traceHandoff?.(ctx, "workflow.persisted"),
+    updateWorkflowStatus: workflowReport.updateWorkflowStatus,
   });
   workflowDispatch = createWorkflowDispatch(runtimeState, {
     roleRuntime,
     messages: workflowMessages,
     report: workflowReport,
+    store: workflowStore,
     toolsSettled: workflowBinding.generalToolsSettled,
     offerSessionHandoff: ctx => sessionHandoff.beforeDispatch(ctx),
     guardSessionHandoff: ctx => { if (outgoingTransfer(ctx, runtimeState.workflowState)) sessionHandoff.beforeDispatch(ctx); },
@@ -148,7 +154,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     },
   });
   const sessionHandoff = createSessionHandoff(pi, runtimeState, {
-    persist: workflowReport.persistWorkflowState, restore: workflowDispatch.restoreWorkflowState,
+    persist: workflowStore.persistWorkflowState, restore: workflowDispatch.restoreWorkflowState,
     schedule: workflowDispatch.scheduleWorkflow, toolsSettled: workflowBinding.toolsSettled,
     generalToolsSettled: workflowBinding.generalToolsSettled,
   });
@@ -156,6 +162,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime,
     dispatch: workflowDispatch,
     report: workflowReport,
+    store: workflowStore,
     taskMemory,
     freshSession: sessionHandoff.fresh, resumeExecution: userControl.resume,
   });
@@ -183,7 +190,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     roleRuntime.refreshRoleStatus(ctx);
   });
   const captureWorkflowRevisionInput = createWorkflowRevisionInput(runtimeState, {
-    persistWorkflowState: workflowReport.persistWorkflowState,
+    persistWorkflowState: workflowStore.persistWorkflowState,
     scheduleWorkflow: workflowDispatch.scheduleWorkflow,
   });
 

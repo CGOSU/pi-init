@@ -4,7 +4,7 @@ import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
+import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkflowProgressTracker } from "../src/workflow-progress.ts";
-import { createWorkflowProgressObserver } from "../extensions/workflow-status-polling.ts";
+import { createWorkflowProgressObserver } from "../extensions/workflow/workflow-status-polling.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 

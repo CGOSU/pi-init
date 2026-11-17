@@ -1,14 +1,15 @@
+import { TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE } from "../src/task-memory-protocol.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTaskMemoryRuntime, TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE, taskMemoryText } from "../extensions/task-memory-runtime.ts";
-import { createRoleRecovery } from "../extensions/role-recovery.ts";
-import { createRoleContextView } from "../extensions/role-context-view.ts";
-import { createWorkflowToolBinding } from "../extensions/workflow-tool-binding.ts";
+import { createTaskMemoryRuntime, readTaskSourceObservation, taskMemoryText } from "../extensions/workflow/task-memory-runtime.ts";
+import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
+import { createRoleContextView } from "../extensions/role/role-context-view.ts";
+import { createWorkflowToolBinding } from "../extensions/workflow/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createWorkflowActions } from "../extensions/workflow-actions.ts";
+import { createWorkflowActions } from "../extensions/workflow/workflow-actions.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { createWorkflowState } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -98,6 +99,70 @@ test("snapshot corruption and branch changes cannot revive unsupported evidence"
   f.setBranch([{ type: "custom", id: "other", customType: "unrelated", data: {} }]);
   assert.equal(f.runtime.read(f.ctx).memory.observations.length, 0);
   assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint("fake"), 0), error => error.code === "TASK_MEMORY_IDENTITY_INVALID");
+});
+test("malformed checkpoint errors remain specific and never persist progress", async () => {
+  const f = fixture(); await f.commit();
+  const id = f.runtime.read(f.ctx).memory.observations[0].id;
+  const before = structuredClone(f.branch);
+  assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, { ...checkpoint(id), blockers: "none" }, 0),
+    error => error.code === "TASK_MEMORY_INPUT_TYPE" && error.message.includes("checkpoint.blockers"));
+  assert.deepEqual(f.branch, before);
+  assert.equal(f.progress, 0);
+});
+test("corrupt newest snapshots never fall back to older available memory", async () => {
+  for (const corrupt of [memory => { memory.version = 2; }, memory => { memory.identity.attemptId = ""; }, memory => { memory.observations[0].id = "missing"; }]) {
+    const f = fixture(); await f.commit();
+    const previous = structuredClone(f.branch.at(-1).data);
+    f.pi.appendEntry(TASK_MEMORY_ENTRY, previous);
+    corrupt(f.branch.at(-1).data);
+    const before = structuredClone(f.branch);
+    const view = f.runtime.read(f.ctx);
+    assert.equal(view.status, "unavailable");
+    assert.equal(view.memory, undefined);
+    assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(previous.observations[0].id), 0));
+    assert.deepEqual(f.branch, before);
+  }
+});
+test("damaged historical identities cannot be skipped when checking prior progress", async () => {
+  const f = fixture(); await f.commit();
+  const valid = structuredClone(f.branch.at(-1).data);
+  f.branch.at(-1).data.identity.attemptId = "";
+  f.pi.appendEntry(TASK_MEMORY_ENTRY, valid);
+  assert.equal(f.runtime.read(f.ctx).status, "available");
+  const before = structuredClone(f.branch);
+  assert.throws(() => f.runtime.checkpoint(f.ctx, f.identity, checkpoint(valid.observations[0].id), 0),
+    error => error.code === "TASK_MEMORY_SNAPSHOT_INVALID" && error.message.includes("memory.identity.attemptId"));
+  assert.deepEqual(f.branch, before);
+  assert.equal(f.progress, 0);
+});
+test("paused identity recovery refuses a damaged latest snapshot without clearing safety guards", async () => {
+  const f = fixture(); await f.commit();
+  f.pi.appendEntry(TASK_MEMORY_ENTRY, f.branch.at(-1).data);
+  f.branch.at(-1).data.identity.handoffId = "";
+  f.state.workflowState.status = "paused";
+  f.state.workflowState.pauseReason = "task-blocked";
+  f.state.workflowState.tasks[0].status = "blocked";
+  f.state.workflowState.tasks[0].outcomeUnknown = true;
+  delete f.state.workflowState.currentTaskId;
+  delete f.state.workflowState.handoff;
+  f.state.roleRecoveryPending = true;
+  f.state.userStopRequested = true;
+  const before = structuredClone(f.state.workflowState);
+  assert.equal(f.runtime.read(f.ctx).status, "unavailable");
+  await f.emit("before_agent_start");
+  await f.emit("before_agent_start");
+  assert.equal(f.stops, 1);
+  assert.deepEqual(f.state.workflowState, before);
+  assert.equal(f.state.roleRecoveryPending, true);
+  assert.equal(f.state.userStopRequested, true);
+});
+test("source lookup rejects malformed anchor identities rather than accepting a partial scope match", async () => {
+  const f = fixture(); const event = await f.commit();
+  const id = event.toolResultEntryIds[0];
+  assert.equal(readTaskSourceObservation(f.branch, id, f.identity)?.id, id);
+  f.branch[0].details = { ...f.identity, handoffId: undefined };
+  assert.equal(readTaskSourceObservation(f.branch, id, f.identity), undefined);
+  assert.equal(f.runtime.read(f.ctx, [id]).status, "unavailable");
 });
 test("write failure never acknowledges progress or changes the original tool result", async () => {
   const f = fixture(); f.setFail(true); const event = await f.commit();
@@ -282,18 +347,18 @@ test("registered extension records SDK results and binds checkpoint without inje
 
 test("ordinary observations and checkpoints leave the model history prefix unchanged", async () => {
   const f = fixture();
-  const recovery = createRoleRecovery(f.pi, f.state, undefined, undefined, f.runtime);
+  const pipeline = createRoleContextPipeline(f.pi, f.state, { taskMemory: f.runtime });
   await f.emit("before_agent_start"); // The initial handoff has no observations to restore.
   await f.commit();
   const messages = [{ role: "user", content: "work", timestamp: 0 },
     ...f.branch.filter(entry => entry.type === "message").map(entry => entry.message)];
   const prefix = structuredClone(messages);
-  assert.equal(recovery.context({ type: "context", messages }, f.ctx), undefined);
+  assert.equal(pipeline.context({ type: "context", messages }, f.ctx), undefined);
   const id = f.runtime.read(f.ctx).memory.observations[0].id;
   f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
   await f.commit("new observation");
   assert.equal(await f.emit("before_agent_start"), undefined);
-  assert.equal(recovery.context({ type: "context", messages }, f.ctx), undefined);
+  assert.equal(pipeline.context({ type: "context", messages }, f.ctx), undefined);
   assert.deepEqual(messages, prefix);
   assert.equal(f.branch.some(entry => entry.customType === TASK_MEMORY_MESSAGE), false);
   assert.match(f.runtime.read(f.ctx, [id]).evidence[0].text, /91 passed/);

@@ -3,9 +3,9 @@ import test from "node:test";
 import { readFile, writeFile, symlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseWorkflowControlInput } from "../src/workflow-input-intent.ts";
-import { createWorkflowUserControl } from "../extensions/workflow-user-control.ts";
-import { createRepeatedRejectionGuard } from "../extensions/workflow-status-polling.ts";
-import { registerWorkflowTool } from "../extensions/workflow-tool.ts";
+import { createWorkflowUserControl } from "../extensions/workflow/workflow-user-control.ts";
+import { createRepeatedRejectionGuard } from "../extensions/workflow/workflow-status-polling.ts";
+import { registerWorkflowTool } from "../extensions/workflow/workflow-tool.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -46,7 +46,12 @@ test("停止和保存快照不需要切角、不修改工作流、不重放任�
     f.state.userStopRequested = false;
     restored.restore(f.ctx);
     assert.equal(f.state.userStopRequested, true);
-    assert.equal(f.control.guardToolCall({ toolName: "bash", input: {} })?.block, true);
+    for (const toolName of ["read", "grep", "find", "ls"]) {
+      assert.equal(f.control.guardToolCall({ toolName, input: {} }), undefined);
+    }
+    for (const toolName of ["bash", "ffgrep", "fffind", "graph_locate", "obs_recall", "codemode", "file_review"]) {
+      assert.equal(f.control.guardToolCall({ toolName, input: {} })?.block, true);
+    }
     assert.equal(f.control.guardToolCall({ toolName: "task_workflow", input: { action: "status" } }), undefined);
   });
 });

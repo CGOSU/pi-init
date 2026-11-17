@@ -4,8 +4,8 @@ import { createExtensionHarness, emitExtensionEvent } from "./support/extension-
 import { createWorkflowState, requestWorkflowReplan } from "../src/workflow.ts";
 import { buildHandoffSnapshot } from "../extensions/handoff-snapshot.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createRoleHandoff } from "../extensions/role-handoff.ts";
-import { nextWorkflowAction } from "../extensions/workflow-action-policy.ts";
+import { createRoleHandoff } from "../extensions/role/role-handoff.ts";
+import { nextWorkflowAction } from "../extensions/workflow/workflow-action-policy.ts";
 
 function switchRole(harness, role, signal) {
   return harness.tools.find((tool) => tool.name === "switch_role").execute("switch-" + role, { role }, signal, undefined, harness.context);

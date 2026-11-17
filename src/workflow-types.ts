@@ -168,6 +168,13 @@ export type WorkflowRecoveryResult =
   | WorkflowValidationFailure;
 export type WorkflowRoleValidationResult = { ok: true } | WorkflowValidationFailure;
 
+// Host adapters project session records into these data-only identity inputs.
+export type WorkflowMessageAnchor = { messageType: string; identity: unknown };
+export type WorkflowIdentityContext = {
+  sessionId: unknown;
+  anchors: readonly WorkflowMessageAnchor[];
+};
+
 export type WorkflowIdentityValidationResult<T extends WorkflowActionIdentity> = WorkflowResult<T>;
 export type WorkflowHydrationResult = WorkflowResult<HydratedWorkflowState>;
 

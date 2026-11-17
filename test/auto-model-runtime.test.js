@@ -4,15 +4,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentSession, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { createAutoModelRuntime } from "../extensions/auto-model-runtime.ts";
-import { createRoleRuntime } from "../extensions/role-runtime.ts";
-import { registerRoleTool } from "../extensions/role-tool.ts";
+import { createAutoModelRuntime } from "../extensions/role/auto-model-runtime.ts";
+import { createRoleRuntime } from "../extensions/role/role-runtime.ts";
+import { registerRoleTool } from "../extensions/role/role-tool.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { autoBaselineForRole, hasAutoBoundaryBaseline, parseAutoModel, validateAutoModelCapabilities } from "../src/auto-model.ts";
 import { mergeRoleConfigData, resolveRoleConfig, resolveRoleModel } from "../src/roles.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
 import { createExtensionHarness } from "./support/extension-harness.js";
-import { configureAutoModel, configureModelStrategy } from "../extensions/model-strategy-menu.ts";
+import { configureAutoModel, configureModelStrategy } from "../extensions/role/model-strategy-menu.ts";
 
 const fixed = { provider: "test", model: "fixed", initialThinkingLevel: "medium", minThinkingLevel: "low", maxThinkingLevel: "high" };
 const roleModels = {

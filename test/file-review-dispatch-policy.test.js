@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateFileReviewDispatch } from "../extensions/file-review-dispatch-policy.ts";
+import { evaluateFileReviewDispatch } from "../extensions/file-review/file-review-dispatch-policy.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 test("审阅派发保持恢复、活动工作流、派发和忙碌检查的优先级", () => {

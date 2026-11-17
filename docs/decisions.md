@@ -8,6 +8,16 @@
 
 ## 已确认决策
 
+### 2026-11-17：按子系统组织扩展并收敛领域、宿主和状态职责
+
+- 决定：`extensions/index.ts` 保持 package 稳定入口，扩展实现按 `file-review/`、`diagnostics/`、`session/`、`role/`、`workflow/` 分目录；每批仅迁移一个子系统并调整实际导入、动态加载和资源路径，不在迁移中夹带行为重构，不新增目录级通用 barrel。初始化工具/菜单装配、共享运行时状态、跨系统 handoff 快照及计时报告视图等保留在根目录；它们不是待机械清空的剩余文件。
+- 领域边界：`src/workflow.ts` 仅显式导出已使用的公共接口，领域内部直接依赖所属模块，不绕回 facade。原 `workflow-model.ts` 拆成 `workflow-protocol.ts`（协议与约束）、`workflow-validation.ts`（输入和任务图校验）、`workflow-state.ts`（状态构造/克隆）及 `workflow-queries.ts`（只读查询）。`src/workflow-handoff.ts` 接受普通的 session/branch 快照，不依赖 Pi SDK；宿主读取、恢复和 queued-start 适配归 `extensions/workflow/workflow-session-adapter.ts`。
+- 定义所有权：删除混合职责的 `extensions/contracts.ts`；菜单类型和共享主题单独维护，角色配置类型直接引用领域定义，初始化/角色/工作流工具 Schema 各归其实际所有者。任务记忆协议标识、引用/文本上限由 `src/task-memory-protocol.ts` 统一供 Schema、解析和运行时使用；工作流消息标识集中在其领域协议中，不增加万能 constants/utils/contracts。
+- 解析边界：任务记忆 identity/checkpoint/memory 解析集中在 `src/task-memory-parsing.ts`，返回含明确 code、message、field 的结构化 Result；值类型归 `task-memory-types.ts`，领域操作和直接调用方消费真实解析结果，不以空值掩盖损坏输入，也不改变合法记忆的数据形状与引用上限。
+- 状态与上下文：`extensions/workflow/workflow-store.ts` 负责先成功 append 再发布内存快照、恢复快照及恢复处置记录；`workflow-report.ts` 只负责展示。读方和各写方使用 `RuntimeStateView` / 限定可写字段的 `RuntimeStateAccess` 描述依赖，不引入通用状态管理框架，也不把浅只读类型宣称为运行时安全沙箱。角色恢复模块负责恢复状态及工具授权；`role-context-pipeline.ts` 负责投影、恢复说明、记忆、预算与 system 位置复原，诊断失败不得撤销已完成的请求投影。
+- 明确保留：running 与 unfinished 状态查询含义不同；工具只读分类不等于授权白名单；严格/定向身份比较、完整哈希/短指纹/HMAC、普通会话与工作流交接的安全校验不因表面相似而合并。`src/` 与 `extensions/` 同名不自动视为重复实现，只有宿主职责不清的会话模块采用 `*-runtime.ts` 名称。
+- 原因与约束：让职责、依赖方向和修改入口可预测，避免平铺目录、转导出及跨层状态写入掩盖耦合；保持用户路径、持久化格式、消息协议和停止/恢复/未知副作用保护，不恢复退役功能。本文旧日期条目及历史审计中的源码路径按当时布局保留，当前布局以本条和实际目录为准。
+
 ### 2026-11-16：回合内连续工具错误尾注纠偏与普通会话软提示
 
 - 决定：在 `extensions/workflow-status-polling.ts` 的 `createWorkflowProgressObserver` 中扩展确定性回合内防循环尾注：

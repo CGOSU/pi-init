@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
+import { createWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
 import {
   formatWorkflowControlCenterLabel,
   formatWorkflowStatusDetailsText,
@@ -10,9 +10,9 @@ import {
   renderWorkflowStatusResult,
   workflowStatusBar,
   workflowStatusTaskItems,
-} from "../extensions/workflow-status-renderer.ts";
-import { createWorkflowPauseView } from "../extensions/workflow-pause-view.ts";
-import { createWorkflowCompletionView, createWorkflowTaskCompletionView } from "../extensions/workflow-completion-view.ts";
+} from "../extensions/workflow/workflow-status-renderer.ts";
+import { createWorkflowPauseView } from "../extensions/workflow/workflow-pause-view.ts";
+import { createWorkflowCompletionView, createWorkflowTaskCompletionView } from "../extensions/workflow/workflow-completion-view.ts";
 import {
   blockWorkflowTask,
   cancelWorkflow,
@@ -35,7 +35,7 @@ import {
   formatWorkflowTaskCompletionText,
   renderWorkflowCompletion,
   renderWorkflowTaskCompletion,
-} from "../extensions/workflow-completion-renderer.ts";
+} from "../extensions/workflow/workflow-completion-renderer.ts";
 const idleRuntime = { workflowDispatchInFlight: false };
 const theme = { fg: (_color, text) => text, bold: (text) => text };
 

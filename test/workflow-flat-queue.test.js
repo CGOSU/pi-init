@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkflowState, getNextWorkflowTask, hydrateWorkflowState, startWorkflowTask, completeWorkflowTask, blockWorkflowTask, setWorkflowHandoffPhase, markWorkflowTaskStarted, cloneState, requestWorkflowReplan, markWorkflowTaskOutcomeUnknown, applyWorkflowReplan } from "../src/workflow.ts";
 import { requestWorkflowGoal, createWorkflowGoalState, workflowGoalProgress } from "../src/workflow-goals.ts";
-import { createWorkflowStatusView } from "../extensions/workflow-status-view.ts";
-import { formatWorkflowGoalTreeText, formatWorkflowStatusText } from "../extensions/workflow-status-renderer.ts";
+import { createWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
+import { formatWorkflowGoalTreeText, formatWorkflowStatusText } from "../extensions/workflow/workflow-status-renderer.ts";
 
 function task(id, priority = 0, dependsOn = []) { return { id, task: id, files: ["src"], acceptanceCriteria: ["已验证"], priority, dependsOn }; }
 function root() { return createWorkflowState({ summary: "原始目标", sessionId: "flat-session", tasks: [task("original")] }, 100); }

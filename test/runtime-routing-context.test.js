@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRuntimeRoutingContext } from "../extensions/runtime-routing-context.ts";
+import { createRuntimeRoutingContext } from "../extensions/role/runtime-routing-context.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 import { createExtensionHarness } from "./support/extension-harness.js";

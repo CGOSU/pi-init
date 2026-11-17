@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionHarness } from "./support/extension-harness.js";
-import { createWorkflowErrorView } from "../extensions/workflow-error-view.ts";
-import { renderWorkflowOperationFailure } from "../extensions/workflow-result-renderer.ts";
+import { createWorkflowErrorView } from "../extensions/workflow/workflow-error-view.ts";
+import { renderWorkflowOperationFailure } from "../extensions/workflow/workflow-result-renderer.ts";
 
 test("工作流错误视图使用 Result 区分原文、损坏诊断、字段类型错误和缺失详情", () => {
   const ordinary = createWorkflowErrorView("  普通错误文本  ");

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nextWorkflowAction } from '../extensions/workflow-action-policy.ts';
+import { nextWorkflowAction } from '../extensions/workflow/workflow-action-policy.ts';
 import { createExtensionRuntimeState } from '../extensions/runtime-state.ts';
-import { createRoleHandoff } from '../extensions/role-handoff.ts';
+import { createRoleHandoff } from '../extensions/role/role-handoff.ts';
 import { createWorkflowState } from "./support/workflow-fixtures.js";
 import { startWorkflowTask, requestWorkflowReplan, completeWorkflowTask, markWorkflowTaskOutcomeUnknown } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { createRuntimeRoutingContext } from '../extensions/runtime-routing-context.ts';
+import { createRuntimeRoutingContext } from '../extensions/role/runtime-routing-context.ts';
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { blockWorkflowTask } from "../src/workflow.ts";
@@ -88,7 +88,7 @@ test('runtime section uses same boundary guidance rather than architect ping-pon
 });
 
 test('request and application reject premature replan with stable executor guidance', async () => {
-  const { createWorkflowActions } = await import('../extensions/workflow-actions.ts');
+  const { createWorkflowActions } = await import('../extensions/workflow/workflow-actions.ts');
   const { workflowActionIdentity } = await import('../src/workflow.ts');
   const harness = createExtensionHarness([], { trusted: true });
   const workflow = requestWorkflowReplan(running(), { direction: 'new direction' });
@@ -148,7 +148,7 @@ test('switch_role refuses premature role handoff before model, recovery or dispa
 });
 
 test('complete and block require the assigned role before changing lifecycle state', async () => {
-  const { createWorkflowActions } = await import('../extensions/workflow-actions.ts');
+  const { createWorkflowActions } = await import('../extensions/workflow/workflow-actions.ts');
   const { workflowHandoffIdentity } = await import('../src/workflow-handoff.ts');
   const harness = createExtensionHarness([], { trusted: true });
   const workflow = running();
@@ -158,7 +158,8 @@ test('complete and block require the assigned role before changing lifecycle sta
   let persisted = 0;
   let markedStarted = 0;
   const actions = createWorkflowActions(state, {
-    report: { persistWorkflowState() { persisted++; } },
+    store: { persistWorkflowState() { persisted++; } },
+    report: {},
     coordination: {},
     dispatch: { markCurrentTaskStarted() { markedStarted++; } },
     roleRuntime: {
@@ -203,7 +204,7 @@ test('blocked task reaches requested replan without becoming completed or replay
 });
 
 test('complete and block on a queued task persist once without writing an intermediate executing entry', async () => {
-  const { createWorkflowActions } = await import('../extensions/workflow-actions.ts');
+  const { createWorkflowActions } = await import('../extensions/workflow/workflow-actions.ts');
   const { workflowHandoffIdentity, setWorkflowHandoffPhase } = await import('../src/workflow.ts');
   for (const action of ['complete', 'block']) {
     const harness = createExtensionHarness([], { trusted: true });
@@ -215,8 +216,10 @@ test('complete and block on a queued task persist once without writing an interm
     const persisted = [];
     let markedStarted = 0;
     const actions = createWorkflowActions(state, {
-      report: {
+      store: {
         persistWorkflowState(next) { persisted.push(next.status); state.workflowState = next; return next; },
+      },
+      report: {
         formatWorkflowPauseSummary() { return 'paused'; },
       },
       coordination: {},

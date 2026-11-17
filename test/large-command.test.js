@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerLargeCommand } from "../extensions/large-command.ts";
+import { registerLargeCommand } from "../extensions/file-review/large-command.ts";
 
 function candidate(path = "src/large.ts", fingerprint = "a".repeat(64)) {
   return { path, lineCount: 501, fingerprint };

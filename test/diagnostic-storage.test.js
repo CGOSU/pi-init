@@ -4,9 +4,9 @@ import test from "node:test";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDiagnosticWriter, createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
-import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
-import { readDiagnosticText } from "../extensions/diagnostic-storage.ts";
+import { createDiagnosticWriter, createRuntimeDiagnostics } from "../extensions/diagnostics/runtime-diagnostics.ts";
+import { createGlobalDiagnostics } from "../extensions/diagnostics/global-diagnostics.ts";
+import { readDiagnosticText } from "../extensions/diagnostics/diagnostic-storage.ts";
 
 async function fixture(fn) {
   const root = await fs.mkdtemp(join(tmpdir(), "pi-diagnostic-storage-"));

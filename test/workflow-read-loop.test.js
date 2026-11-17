@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createWorkflowProgressObserver } from '../extensions/workflow-status-polling.ts';
+import { createWorkflowProgressObserver } from '../extensions/workflow/workflow-status-polling.ts';
 import { createExtensionRuntimeState } from '../extensions/runtime-state.ts';
 
 function fixture() {

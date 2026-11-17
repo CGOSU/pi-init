@@ -1,7 +1,16 @@
 import { hasCurrentWorkflowVerification } from "./workflow-verification.ts";
 import { isRecord } from "./value-guards.ts";
 import { randomUUID } from "node:crypto";
-import { assertAcyclic, cloneState, cloneTask, normalizeIdentityToken, normalizeTask, normalizeTaskIds, normalizeTextList, requireText, requireTimestamp } from "./workflow-model.ts";
+import {
+  assertAcyclic,
+  normalizeIdentityToken,
+  normalizeTask,
+  normalizeTaskIds,
+  normalizeTextList,
+  requireText,
+  requireTimestamp,
+} from "./workflow-validation.ts";
+import { cloneState, cloneTask } from "./workflow-state.ts";
 import { requestWorkflowReplan } from "./workflow-replan.ts";
 import type { WorkflowGoal, WorkflowPlan, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 

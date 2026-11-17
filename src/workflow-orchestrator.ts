@@ -1,6 +1,16 @@
-import { cloneState, getWorkflowTask } from "./workflow-model.ts";
+import { cloneState } from "./workflow-state.ts";
+import { getWorkflowTask, getNextWorkflowTask } from "./workflow-queries.ts";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "./workflow-handoff.ts";
-import { getNextWorkflowTask, markWorkflowTaskStarted, setWorkflowHandoffPhase, blockWorkflowTask, cancelWorkflow, completeWorkflowTask, resumeWorkflow, retryWorkflowTask, markWorkflowTaskOutcomeUnknown } from "./workflow-transitions.ts";
+import {
+  markWorkflowTaskStarted,
+  setWorkflowHandoffPhase,
+  blockWorkflowTask,
+  cancelWorkflow,
+  completeWorkflowTask,
+  resumeWorkflow,
+  retryWorkflowTask,
+  markWorkflowTaskOutcomeUnknown,
+} from "./workflow-transitions.ts";
 import type { WorkflowHandoffIdentity, WorkflowReplanIdentity, WorkflowState, WorkflowActionIdentity } from "./workflow-types.ts";
 export type WorkflowDispatchEvent =
   | { type: "task-dispatch-requested"; identity: WorkflowHandoffIdentity }

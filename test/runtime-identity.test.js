@@ -4,7 +4,7 @@ import test from "node:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureRuntimeIdentity, loadedRuntimeIdentity } from "../extensions/runtime-identity.ts";
+import { captureRuntimeIdentity, loadedRuntimeIdentity } from "../extensions/diagnostics/runtime-identity.ts";
 
 test("运行身份保留加载快照，源码改变只影响新捕获，不包含路径或源码", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-identity-private-"));
@@ -23,9 +23,17 @@ test("运行身份保留加载快照，源码改变只影响新捕获，不包�
     await writeFile(join(root, "src", "private.js"), "export const privateValue = 2;");
     const changedJavaScript = captureRuntimeIdentity(root);
     assert.notEqual(changedJavaScript.sourceFingerprint, withJavaScript.sourceFingerprint);
+    await mkdir(join(root, "extensions", "file-review"));
+    const nestedExtension = join(root, "extensions", "file-review", "private.ts");
+    await writeFile(nestedExtension, "export const privateValue = 1;");
+    const withNestedExtension = captureRuntimeIdentity(root);
+    assert.notEqual(withNestedExtension.sourceFingerprint, changedJavaScript.sourceFingerprint);
+    await writeFile(nestedExtension, "export const privateValue = 2;");
+    const changedNestedExtension = captureRuntimeIdentity(root);
+    assert.notEqual(changedNestedExtension.sourceFingerprint, withNestedExtension.sourceFingerprint);
     await mkdir(join(root, "skills"));
     await writeFile(join(root, "skills", "SKILL.md"), "A loaded role rule.");
-    assert.notEqual(captureRuntimeIdentity(root).sourceFingerprint, changedJavaScript.sourceFingerprint);
+    assert.notEqual(captureRuntimeIdentity(root).sourceFingerprint, changedNestedExtension.sourceFingerprint);
     assert.equal(before.sourceCommit, undefined);
     assert.equal(before.extensionVersion, "2.0.11");
     assert.equal(before.pid, process.pid);

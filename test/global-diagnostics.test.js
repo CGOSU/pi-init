@@ -5,8 +5,8 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
-import { createRuntimeDiagnostics } from "../extensions/runtime-diagnostics.ts";
+import { createGlobalDiagnostics } from "../extensions/diagnostics/global-diagnostics.ts";
+import { createRuntimeDiagnostics } from "../extensions/diagnostics/runtime-diagnostics.ts";
 import { fastForwardTimeouts } from "./support/fast-forward-timeouts.js";
 
 async function fixture(fn) {
@@ -52,7 +52,7 @@ test("全局白名单仅存自身故障元数据，跨项目隔离并与项目�
 }));
 
 test("多进程共享全局目录的并发写入保持完整且不丢记录", async () => fixture(async ({ agentDir, rows }) => {
-  const moduleUrl = new URL("../extensions/global-diagnostics.ts", import.meta.url).href;
+  const moduleUrl = new URL("../extensions/diagnostics/global-diagnostics.ts", import.meta.url).href;
   const source = `import {createGlobalDiagnostics} from ${JSON.stringify(moduleUrl)};
     const d=createGlobalDiagnostics(); const ctx={cwd:process.cwd(),isProjectTrusted:()=>true,sessionManager:{getSessionId:()=>"s"},ui:{notify:()=>{}}};
     for(let i=0;i<12;i++) d.observe(ctx,"pi-init.command_failed"); await d.flush(); if(d.status().dropped) process.exitCode=1;`;

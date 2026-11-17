@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzeRuntimeSamples, durationStats, normalizeProfile, formatProviderObservations, formatContextProjections, formatToolFailureChains } from "../extensions/runtime-diagnostics-report.ts";
+import { analyzeRuntimeSamples, durationStats, normalizeProfile, formatProviderObservations, formatContextProjections, formatToolFailureChains } from "../extensions/diagnostics/runtime-diagnostics-report.ts";
 const profile = { provider: "test", model: "model", role: "session", thinkingLevel: "high" };
 function samples(version, ms, options = {}) {
   return Array.from({ length: 8 }, (_, index) => ({ version: 1, kind: "summary", extensionVersion: version, runtimeId: "runtime", captureId: version, sessionId: "session", run: index + 1, timestamp: version === "old" ? "2026-01-01T00:00:00Z" : "2026-01-02T00:00:00Z", profile, durationMs: ms, tokens: { totalTokens: ms }, outcome: "normal-stop", issueOccurrences: 0, dropped: 0, overflow: 0, aborted: false, incomplete: false, ...options }));

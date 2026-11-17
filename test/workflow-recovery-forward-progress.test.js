@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createWorkflowState, requestWorkflowReplan } from "../src/workflow.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createRoleRecovery } from "../extensions/role-recovery.ts";
-import { createRoleHandoff } from "../extensions/role-handoff.ts";
-import { nextWorkflowAction } from "../extensions/workflow-action-policy.ts";
-import { workflowStatusToolSummary } from "../extensions/workflow-status-tool-text.ts";
+import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
+import { createRoleHandoff } from "../extensions/role/role-handoff.ts";
+import { nextWorkflowAction } from "../extensions/workflow/workflow-action-policy.ts";
+import { workflowStatusToolSummary } from "../extensions/workflow/workflow-status-tool-text.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 
 function waitingWorkflow() {
@@ -18,7 +18,7 @@ function waitingWorkflow() {
 
 test("queued recovery provides the same concrete role before and after status without another status prerequisite", () => {
   const state = { ...createExtensionRuntimeState(), workflowState: waitingWorkflow(), roleRecoveryPending: true };
-  const recovery = createRoleRecovery({ on() {}, appendEntry() { assert.fail("context must not persist"); } }, state);
+  const pipeline = createRoleContextPipeline({ on() {}, appendEntry() { assert.fail("context must not persist"); } }, state);
   const step = nextWorkflowAction(state);
   assert.equal(step.requiredRole, "developer-test");
   assert.equal(step.taskId, "next-task");
@@ -26,7 +26,7 @@ test("queued recovery provides the same concrete role before and after status wi
   assert.match(status, /next-task/);
   assert.match(status, /switch_role\(role="developer-test"\)/);
   for (const messages of [[], [{ role: "user", content: status, timestamp: 0 }]]) {
-    const result = recovery.context({ messages }, { model: { contextWindow: 500000 } });
+    const result = pipeline.context({ messages }, { model: { contextWindow: 500000 } });
     const prompt = result.messages.find(message => message.customType === "pi-init-role-recovery").content;
     assert.match(prompt, /switch_role\(role="developer-test"\)/);
     assert.doesNotMatch(prompt, /先调用 task_workflow|尚未获取时只读一次/);
@@ -107,9 +107,9 @@ test("replanning preserves oversized protected history under SDK budgeting witho
       { role: "custom", customType: "unknown-side-effect", content: "Do not infer success", timestamp: 2 },
     ];
     const before = structuredClone(state.workflowState);
-    const recovery = createRoleRecovery({ on() {}, appendEntry() { assert.fail("must not persist"); } }, state,
-      event => ({ messages: event.messages }), undefined, { suspend() { assert.fail("byte size must not stop replanning"); } });
-    const result = recovery.context({ messages }, { model: { contextWindow: 500000 } });
+    const pipeline = createRoleContextPipeline({ on() {}, appendEntry() { assert.fail("must not persist"); } }, state,
+      { contextView: event => ({ messages: event.messages }), taskMemory: { suspend() { assert.fail("byte size must not stop replanning"); } } });
+    const result = pipeline.context({ messages }, { model: { contextWindow: 500000 } });
     for (const message of messages) assert.ok(result.messages.includes(message));
     assert.equal(observations.at(-1).data.budgetBytes, null);
     assert.equal(observations.at(-1).data.overBudget, false);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCacheMissReminder, cacheMissSample, CACHE_MISS_NOTICE, CACHE_MISS_TOTAL } from "../extensions/cache-miss-reminder.ts";
+import { createCacheMissReminder, cacheMissSample, CACHE_MISS_NOTICE, CACHE_MISS_TOTAL } from "../extensions/diagnostics/cache-miss-reminder.ts";
 
 function message(input, read, inputCost = input * 10 / 1_000_000) {
   return { role: "assistant", provider: "test", model: "model", timestamp: 1, stopReason: "toolUse", content: [], usage: { input, cacheRead: read, cacheWrite: 0, output: 1, cost: { input: inputCost, cacheRead: read / 1_000_000, cacheWrite: 0, output: 0 } } };

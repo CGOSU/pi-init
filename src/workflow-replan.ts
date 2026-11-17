@@ -3,14 +3,14 @@ import { randomUUID } from "node:crypto";
 import {
   assertAcyclic,
   assertWorkflowExecutionRoles,
-  clonePlan,
-  cloneState,
-  cloneTask,
   normalizeRevisionId,
   normalizeTask,
   normalizeTaskIds,
   normalizeTextList,
-  requireText, assertWorkflowGoalReferences } from "./workflow-model.ts";
+  requireText,
+  assertWorkflowGoalReferences,
+} from "./workflow-validation.ts";
+import { clonePlan, cloneState, cloneTask } from "./workflow-state.ts";
 import type { WorkflowPlanSummary, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 type WorkflowReplanRequest = {
   revisionId?: unknown;

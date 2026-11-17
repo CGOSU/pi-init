@@ -1,6 +1,12 @@
 import { isObject as isRecord } from "../src/value-guards.ts";
 import { getRunTimingDuration, isExternalRunSource } from "../src/run-timing.ts";
 
+export type RunTimingEntryData = {
+  source?: unknown;
+  startedAt?: unknown;
+  completedAt?: unknown;
+};
+
 export type RunTimingValue =
   | { kind: "available"; milliseconds: number }
   | { kind: "unavailable"; reason: "missing-or-invalid" };

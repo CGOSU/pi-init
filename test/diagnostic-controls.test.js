@@ -5,10 +5,10 @@ import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
-import { createDiagnosticControls } from "../extensions/diagnostic-controls.ts";
-import { createDiagnosticWriter } from "../extensions/runtime-diagnostics.ts";
-import { createGlobalDiagnostics } from "../extensions/global-diagnostics.ts";
-import { withDiagnosticLock } from "../extensions/diagnostic-storage.ts";
+import { createDiagnosticControls } from "../extensions/diagnostics/diagnostic-controls.ts";
+import { createDiagnosticWriter } from "../extensions/diagnostics/runtime-diagnostics.ts";
+import { createGlobalDiagnostics } from "../extensions/diagnostics/global-diagnostics.ts";
+import { withDiagnosticLock } from "../extensions/diagnostics/diagnostic-storage.ts";
 import { createExtensionHarness } from "./support/extension-harness.js";
 import { fastForwardTimeouts } from "./support/fast-forward-timeouts.js";
 
@@ -118,7 +118,7 @@ test("独立进程写入与清理共用锁，不破坏新日志", () => fixture(
   const directory = directories.project;
   await fs.writeFile(file(directory), "{}\n");
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
-    import {withDiagnosticLock} from ${JSON.stringify(new URL("../extensions/diagnostic-storage.ts", import.meta.url).href)};
+    import {withDiagnosticLock} from ${JSON.stringify(new URL("../extensions/diagnostics/diagnostic-storage.ts", import.meta.url).href)};
     import {writeFile} from 'node:fs/promises';
     await withDiagnosticLock(${JSON.stringify(directory)}, async () => {
       process.stdout.write('locked\\n');

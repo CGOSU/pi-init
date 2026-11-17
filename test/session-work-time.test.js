@@ -6,7 +6,7 @@ import {
   getSessionWorkTime,
   startSessionWorkTime,
 } from "../src/session-work-time.ts";
-import { createSessionWorkTimeTracker } from "../extensions/session-work-time.ts";
+import { createSessionWorkTimeTracker } from "../extensions/session/session-work-time-runtime.ts";
 import { createActivityStatus } from "../extensions/activity-status.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 

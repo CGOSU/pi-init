@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createWorkflowDispatch } from "../extensions/workflow-dispatch.ts";
+import { createWorkflowDispatch } from "../extensions/workflow/workflow-dispatch.ts";
 import { createWorkflowState, setWorkflowHandoffPhase, startWorkflowTask } from "../src/workflow.ts";
 
 function fixture(automaticRole = async role => ({ result: { role } })) {
@@ -22,8 +22,11 @@ function fixture(automaticRole = async role => ({ result: { role } })) {
         state.workflowState = setWorkflowHandoffPhase(state.workflowState, "queued");
       },
     },
-    report: {
+    store: {
       persistWorkflowState(next) { state.workflowState = next; },
+      restoreSnapshot(next) { state.workflowState = next; },
+    },
+    report: {
       updateWorkflowStatus() { },
       formatWorkflowPauseSummary: () => "暂停",
     },

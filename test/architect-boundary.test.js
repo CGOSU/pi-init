@@ -6,7 +6,7 @@ import { withTempDirectory } from "./support/temp-directory.js";
 import {
   ARCHITECT_ALLOWED_ACTIONS_TEXT,
   ARCHITECT_ALLOWED_TASK_WORKFLOW_ACTIONS,
-} from "../extensions/architect-boundary.ts";
+} from "../extensions/role/architect-boundary.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };

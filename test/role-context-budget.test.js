@@ -1,10 +1,11 @@
+import { TASK_MEMORY_MESSAGE } from "../src/task-memory-protocol.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundContextWindow } from "../extensions/role-context-budget.ts";
-import { createRoleRecovery } from "../extensions/role-recovery.ts";
+import { boundContextWindow } from "../extensions/role/role-context-budget.ts";
+import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createTaskMemory, recordTaskObservations, checkpointTaskMemory } from "../src/task-memory.ts";
-import { TASK_MEMORY_MESSAGE, taskMemoryText } from "../extensions/task-memory-runtime.ts";
+import { taskMemoryText } from "../extensions/workflow/task-memory-runtime.ts";
 
 function pair(index, text = "x".repeat(2000), isError = false) {
   return [{ role: "assistant", content: [{ type: "toolCall", id: "call-" + index, name: "bash", arguments: { command: "verify-" + index } }], timestamp: index },
@@ -57,9 +58,9 @@ test("public recovery context applies budget and records degradation metadata, n
     { role: "custom", customType: "pi-init-role-context-view-diagnostic", content: "完整模型消息已保留", timestamp: 0 },
     ...Array.from({ length: 120 }, (_, i) => pair(i)).flat(),
   ];
-  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }));
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: event => ({ messages: event.messages }) });
   const original = { roleRecoveryPending: state.roleRecoveryPending };
-  const result = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } });
+  const result = pipeline.context({ type: "context", messages }, { model: { contextWindow: 16000 } });
   assert.ok(Buffer.byteLength(JSON.stringify(result.messages)) <= 24000);
   assert.equal(trace[0].event, "context.projected");
   assert.equal(trace[0].data.checkpointed, true);
@@ -69,14 +70,27 @@ test("public recovery context applies budget and records degradation metadata, n
   assert.equal(state.roleRecoveryPending, original.roleRecoveryPending);
 });
 
+test("context diagnostics cannot discard a successful projection or expose excluded history", () => {
+  const state = createExtensionRuntimeState();
+  state.traceHandoff = () => { throw new Error("diagnostic unavailable"); };
+  const user = { role: "user", content: "Keep the current constraints", timestamp: 0 };
+  const source = [user, ...pair(0, "Excluded historical tool output")];
+  const projected = [user];
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: () => ({ messages: projected }) });
+  const result = pipeline.context({ type: "context", messages: source }, { model: { contextWindow: 16000 } });
+  assert.deepEqual(result.messages, projected);
+  assert.deepEqual(source, [user, ...pair(0, "Excluded historical tool output")]);
+  assert.equal(state.roleRecoveryPending, false);
+});
+
 test("recovery byte metrics remain exact for unchanged multilingual contexts", () => {
   for (const repetitions of [1, 10000]) {
     const state = createExtensionRuntimeState();
     const trace = [];
     state.traceHandoff = (_ctx, event, data) => trace.push({ event, data });
     const messages = [{ role: "user", content: "约束 🚀".repeat(repetitions), timestamp: 0 }];
-    const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }));
-    const result = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } });
+    const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: event => ({ messages: event.messages }) });
+    const result = pipeline.context({ type: "context", messages }, { model: { contextWindow: 16000 } });
     assert.equal(result.messages, messages);
     assert.equal(trace[0].data.checkpointed, false);
     assert.equal(trace[0].data.outputBytes, Buffer.byteLength(JSON.stringify(messages)));
@@ -104,8 +118,8 @@ test("public live-task context keeps successful results when protected evidence 
   state.traceHandoff = (_ctx, event, data) => observations.push({ event, data });
   const verified = pair(1, "Tests 91 passed; exit 0");
   const messages = [{ role: "user", content: "finish patch", timestamp: 0 }, ...pair(0, "old error".repeat(30000), true), ...verified, ...pair(2, "latest read")];
-  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }));
-  const result = recovery.context({ type: "context", messages }, { model: { contextWindow: 500000 } });
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: event => ({ messages: event.messages }) });
+  const result = pipeline.context({ type: "context", messages }, { model: { contextWindow: 500000 } });
   assert.equal(result.messages, messages);
   for (const message of verified) assert.ok(result.messages.includes(message));
   assert.equal(observations[0].data.overBudget, true);
@@ -131,11 +145,11 @@ function boundaryMessage() {
 test("one hundred projections retain the immutable recovery summary while archiving covered failure bodies", () => {
   const state = createExtensionRuntimeState();
   const memory = { read() { assert.fail("context must not refresh task memory"); }, suspend() { assert.fail("bounded memory should not pause"); } };
-  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: event => ({ messages: event.messages }), taskMemory: memory });
   const summary = boundaryMessage();
   let messages = [{ role: "user", content: "finish the patch", timestamp: 0 }, summary, ...pair(0, "old failure".repeat(6000), true), ...pair(1, "Tests 91 passed"), ...pair(2, "latest read")];
   for (let i = 0; i < 100; i++) {
-    messages = recovery.context({ type: "context", messages }, { model: { contextWindow: 16000 } }).messages;
+    messages = pipeline.context({ type: "context", messages }, { model: { contextWindow: 16000 } }).messages;
     assert.deepEqual(messages.filter(message => message.customType === TASK_MEMORY_MESSAGE), [summary]);
     assert.ok(messages.includes(summary), "the persisted boundary message is not regenerated");
     assert.match(JSON.stringify(messages), /Tests 91 passed/);
@@ -148,10 +162,10 @@ test("one hundred projections retain the immutable recovery summary while archiv
 test("oversized persisted recovery memory pauses without dropping instructions or rereading history", () => {
   const state = createExtensionRuntimeState(); let pauses = 0;
   const memory = { read() { assert.fail("context must not refresh task memory"); }, suspend() { pauses++; } };
-  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: event => ({ messages: event.messages }), taskMemory: memory });
   const user = { role: "user", content: "user constraints".repeat(4000), timestamp: 0 };
   const summary = boundaryMessage();
-  const result = recovery.context({ type: "context", messages: [user, summary, ...pair(2)] }, { model: { contextWindow: 16000 } });
+  const result = pipeline.context({ type: "context", messages: [user, summary, ...pair(2)] }, { model: { contextWindow: 16000 } });
   assert.equal(pauses, 1);
   assert.ok(result.messages.includes(user));
   assert.ok(result.messages.includes(summary));
@@ -170,12 +184,12 @@ test("live executing task uses SDK token budget instead of repeatedly discarding
   state.traceHandoff = (_ctx, event, data) => observations.push({ event, data });
   let branch = [anchor];
   const ctx = { model: { contextWindow: 500000, maxTokens: 32000 }, getContextUsage: () => ({ tokens: 47386, contextWindow: 500000, percent: 9.4772 }), sessionManager: { getSessionId: () => identity.sessionId, getBranch: () => branch } };
-  const recovery = createRoleRecovery({ on() {} }, state, event => ({ messages: event.messages }), undefined, memory);
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: event => ({ messages: event.messages }), taskMemory: memory });
   const source = [{ role: "user", content: "finish patch" }, ...Array.from({ length: 30 }, (_, i) => pair(i, "document content".repeat(1000))).flat()];
   source[1].content.unshift({ type: "thinking", thinking: "", thinkingSignature: "opaque".repeat(40000) });
   let messages = source;
   for (let i = 0; i < 100; i++) {
-    messages = recovery.context({ type: "context", messages }, ctx).messages;
+    messages = pipeline.context({ type: "context", messages }, ctx).messages;
     for (const message of source) assert.ok(messages.includes(message), "successful work must survive without a voluntary checkpoint");
     assert.equal(messages.some(message => message.customType === "pi-init-context-checkpoint"), false);
   }
@@ -183,8 +197,8 @@ test("live executing task uses SDK token budget instead of repeatedly discarding
   assert.equal(observations.at(-1).data.budgetBytes, null);
   assert.equal(observations.at(-1).data.omittedMessages, 0);
   ctx.getContextUsage = () => ({ tokens: 450000, contextWindow: 500000, percent: 90 });
-  assert.equal(recovery.context({ type: "context", messages: source }, ctx).messages.includes(source[2]), true);
+  assert.equal(pipeline.context({ type: "context", messages: source }, ctx).messages.includes(source[2]), true);
   branch = [];
-  recovery.context({ type: "context", messages: source }, ctx);
+  pipeline.context({ type: "context", messages: source }, ctx);
   assert.notEqual(observations.at(-1).data.reason, "sdk-token-budget");
 });

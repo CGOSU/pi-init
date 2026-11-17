@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { initProjectParameters } from "./contracts.ts";
+import { initProjectParameters } from "./project-tool-parameters.ts";
 
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
 type ScaffoldOutcome = Awaited<ReturnType<ScaffoldRuntime["runScaffold"]>>;

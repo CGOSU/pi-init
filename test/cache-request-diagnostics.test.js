@@ -4,7 +4,7 @@ import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHandoffDiagnostics } from "../extensions/handoff-diagnostics.ts";
+import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 // Confirmed requirement: observations never change requests or infer real misses from SDK defaults.

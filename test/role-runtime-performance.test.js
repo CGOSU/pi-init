@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { createRoleRuntime } from "../extensions/role-runtime.ts";
+import { createRoleRuntime } from "../extensions/role/role-runtime.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 function fixture(cwd) {

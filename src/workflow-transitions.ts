@@ -1,14 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { parseWorkflowVerification } from "./workflow-verification.ts";
-import {
-  WORKFLOW_MAX_NUDGES,
-  cloneState,
-  getWorkflowExecutionBounds,
-  getWorkflowTask,
-  normalizeTextList,
-  requireText,
-} from "./workflow-model.ts";
-import type { WorkflowHandoffPhase, WorkflowState, WorkflowTask } from "./workflow-types.ts";
+import { WORKFLOW_MAX_NUDGES } from "./workflow-protocol.ts";
+import { cloneState } from "./workflow-state.ts";
+import { getWorkflowExecutionBounds, getWorkflowTask, getNextWorkflowTask } from "./workflow-queries.ts";
+import { normalizeTextList, requireText } from "./workflow-validation.ts";
+import type { WorkflowHandoffPhase, WorkflowState } from "./workflow-types.ts";
 
 type CompleteTaskInput = {
   taskId: string;
@@ -18,18 +14,6 @@ type CompleteTaskInput = {
   verificationEvidenceIds?: string[];
 };
 type TaskReasonInput = { taskId: string; reason: unknown };
-
-function dependenciesCompleted(state: WorkflowState, task: WorkflowTask): boolean {
-  return task.dependsOn.every((dependency) => getWorkflowTask(state, dependency)?.status === "completed");
-}
-
-export function getNextWorkflowTask(state: WorkflowState | null | undefined): WorkflowTask | undefined {
-  if (!state || state.status !== "running" || state.currentTaskId) return undefined;
-  return state.tasks.reduce<WorkflowTask | undefined>((next, task) => {
-    if (task.status !== "pending" || !dependenciesCompleted(state, task)) return next;
-    return !next || (task.priority ?? 0) > (next.priority ?? 0) ? task : next;
-  }, undefined);
-}
 
 export function startWorkflowTask(state: WorkflowState, taskId?: string, now = Date.now()): WorkflowState {
   if (!state || state.status !== "running") throw new Error("工作流当前不可启动任务");
@@ -103,13 +87,6 @@ export function markWorkflowTaskStarted(state: WorkflowState, taskId: string, no
     result.startedAt = getWorkflowExecutionBounds(state).startedAt ?? now;
   }
   return result;
-}
-
-export function getWorkflowTaskDuration(task: WorkflowTask | null | undefined): number | undefined {
-  if (!task || typeof task.startedAt !== "number" || typeof task.completedAt !== "number"
-    || !Number.isFinite(task.startedAt) || !Number.isFinite(task.completedAt)) return undefined;
-  if (task.completedAt < task.startedAt) return undefined;
-  return task.completedAt - task.startedAt;
 }
 
 export function completeWorkflowTask(
@@ -333,20 +310,4 @@ export function recordWorkflowNudge(
     result.taskPauseReason = `任务 ${state.currentTaskId} 已达到 ${WORKFLOW_MAX_NUDGES} 次续跑检查上限，仍缺新的阶段进展或任务结果`;
   }
   return result;
-}
-
-export function workflowProgress(state: WorkflowState | null | undefined): {
-  completed: number;
-  total: number;
-  blocked: number;
-  currentTaskId: string | undefined;
-} {
-  const total = state?.tasks?.length ?? 0;
-  const completed = state?.tasks?.filter((task) => task.status === "completed").length ?? 0;
-  const blocked = state?.tasks?.filter((task) => task.status === "blocked").length ?? 0;
-  return { completed, total, blocked, currentTaskId: state?.currentTaskId };
-}
-
-export function isWorkflowActive(state: WorkflowState | null | undefined): boolean {
-  return state?.status === "running";
 }

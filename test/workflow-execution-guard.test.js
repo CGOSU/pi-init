@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRoleRecovery } from "../extensions/role-recovery.ts";
+import { createRoleRecovery } from "../extensions/role/role-recovery.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
 function fixture() {
@@ -68,7 +68,7 @@ test("结构化拒绝保留恢复、未知结果、暂停执行的优先级并�
   const diagnostics = [], rejected = [];
   state.traceHandoff = (_ctx, _event, data) => diagnostics.push(data);
   const recovery = createRoleRecovery({ on(name, handler) { handlers.set(name, handler); } }, state,
-    undefined, (_event, _ctx, code) => rejected.push(code));
+    (_event, _ctx, code) => rejected.push(code));
   const event = { toolName: "task_workflow", toolCallId: "denied", input: { action: "retry", confirmUnknownOutcome: true } };
   state.roleRecoveryPending = true;
   for (const [code, input] of [

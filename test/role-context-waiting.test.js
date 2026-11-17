@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRoleContextView, ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE } from "../extensions/role-context-view.ts";
+import { createRoleContextView, ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE } from "../extensions/role/role-context-view.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState, requestWorkflowReplan, ensureWorkflowReplanHandoff, workflowReplanIdentity, applyWorkflowReplan } from "../src/workflow.ts";
-import { hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
-import { createRoleRecovery } from "../extensions/role-recovery.ts";
-import { isWaitingWorkflowBoundary } from "../extensions/role-context-waiting.ts";
+import { hasCompleteToolPairs } from "../extensions/role/role-context-protocol.ts";
+import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
+import { isWaitingWorkflowBoundary } from "../extensions/role/role-context-waiting.ts";
 
 function fixture() {
   let workflow = createWorkflowState({ sessionId: "waiting-session", summary: "Original plan", constraints: ["Never change production"], tasks: [{ id: "old", task: "Old task", files: ["src"], acceptanceCriteria: ["checked"] }] }, 1);
@@ -73,8 +73,8 @@ test("verified waiting views retain unknown records and transition results throu
   const view = createRoleContextView(f.state);
   assert.equal(isWaitingWorkflowBoundary(f.state), true);
   assert.equal(isWaitingWorkflowBoundary({ workflowState: undefined, customType: "pi-init-workflow-waiting-context" }), false, "a custom marker cannot bypass budget checks");
-  const recovery = createRoleRecovery({ on() {}, appendEntry() { assert.fail("context must remain read-only"); } }, f.state, view.context);
-  const result = recovery.context({ messages: f.messages }, f.ctx);
+  const pipeline = createRoleContextPipeline({ on() {}, appendEntry() { assert.fail("context must remain read-only"); } }, f.state, { contextView: view.context });
+  const result = pipeline.context({ messages: f.messages }, f.ctx);
   assert.ok(result.messages.includes(f.messages.find(message => message.customType === "unknown-side-effect")));
   assert.ok(result.messages.includes(f.messages.find(message => message.toolCallId === "replan-result")));
   assert.equal(f.state.workflowState.continuation.phase, "pending");
@@ -95,8 +95,8 @@ test("waiting snapshot failures preserve large unknown outcomes through the comp
     if (failure === "recovery") f.state.roleRecoveryPending = true;
     if (failure === "recovery-persistence") f.state.roleRecoveryPersistenceFailed = true;
     const before = structuredClone(f.messages);
-    const recovery = createRoleRecovery({ on() {}, appendEntry() { assert.fail("failure must remain read-only"); } }, f.state, createRoleContextView(f.state).context);
-    const result = recovery.context({ messages: f.messages }, f.ctx);
+    const pipeline = createRoleContextPipeline({ on() {}, appendEntry() { assert.fail("failure must remain read-only"); } }, f.state, { contextView: createRoleContextView(f.state).context });
+    const result = pipeline.context({ messages: f.messages }, f.ctx);
     const messages = result?.messages ?? f.messages;
     assert.ok(messages.includes(unknown), failure);
     assert.deepEqual(messages.filter(message => ![ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE, "pi-init-role-recovery"].includes(message.customType)), before, failure);

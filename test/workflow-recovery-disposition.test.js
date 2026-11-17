@@ -7,7 +7,7 @@ import {
   parseWorkflowRecoveryDisposition,
   workflowRecoveryDispositionMatches,
 } from "../src/workflow-recovery-disposition.ts";
-import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "../extensions/workflow-recovery.ts";
+import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "../extensions/workflow/workflow-recovery-source.ts";
 
 test("恢复错误分类区分可隔离、可恢复、必须阻塞及未知错误", () => {
   const discardable = classifyWorkflowRecoveryError("WORKFLOW_STATE_INVALID");

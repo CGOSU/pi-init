@@ -1,17 +1,17 @@
-import { getNextWorkflowTask, isWorkflowActive, workflowActionIdentity } from "../src/workflow.ts";
-import type { ExtensionRuntimeState } from "./runtime-state.ts";
-import { nextWorkflowAction } from "./workflow-action-policy.ts";
+import { getNextWorkflowTask, isWorkflowRunning, workflowActionIdentity } from "../src/workflow.ts";
+import type { RuntimeStateView } from "./runtime-state.ts";
+import { nextWorkflowAction } from "./workflow/workflow-action-policy.ts";
 
-export function buildHandoffSnapshot(state: ExtensionRuntimeState, role: string) {
+export function buildHandoffSnapshot(state: RuntimeStateView, role: string) {
   const workflow = state.workflowState;
-  const active = workflow && isWorkflowActive(workflow) ? workflow : undefined;
+  const active = workflow && isWorkflowRunning(workflow) ? workflow : undefined;
   const task = active?.tasks.find(item => item.id === active.currentTaskId) ?? (active ? getNextWorkflowTask(active) : undefined);
   return { role, workflow: active ? { ...workflowActionIdentity(active), status: active.status, taskId: task?.id, taskStatus: task?.status,
     verificationRefs: active.tasks.filter(item => item.verification?.length).slice(-4).map(item => item.id) } : undefined,
     nextAction: nextWorkflowAction(state).nextAction };
 }
 
-export function handoffSnapshotPrompt(state: ExtensionRuntimeState, role: string) {
+export function handoffSnapshotPrompt(state: RuntimeStateView, role: string) {
   return [
     "系统生成的轻量交接快照（引用按需读取，不代表任务完成或证据已接受）：",
     JSON.stringify(buildHandoffSnapshot(state, role)),

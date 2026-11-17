@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createRoleContextView, ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE } from "../extensions/role-context-view.ts";
-import { createRoleRecovery } from "../extensions/role-recovery.ts";
+import { createRoleContextView, ROLE_CONTEXT_VIEW_DIAGNOSTIC_TYPE } from "../extensions/role/role-context-view.ts";
+import { createRoleRecovery } from "../extensions/role/role-recovery.ts";
+import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
-import { createWorkflowMessages } from "../extensions/workflow-messages.ts";
+import { createWorkflowMessages } from "../extensions/workflow/workflow-messages.ts";
 import {
   completeWorkflowTask,
   createWorkflowState,
@@ -15,7 +16,7 @@ import {
 } from "../src/workflow.ts";
 import { createExtensionHarness } from "./support/extension-harness.js";
 import { blockWorkflowTask } from "../src/workflow.ts";
-import { groupToolMessages, hasCompleteToolPairs } from "../extensions/role-context-protocol.ts";
+import { groupToolMessages, hasCompleteToolPairs } from "../extensions/role/role-context-protocol.ts";
 
 test("active projection retains earlier constraints and stopped work without clearing live task history", () => {
   const { state, harness, handoffMessage } = makeWorkflowContextFixture();
@@ -61,8 +62,8 @@ test("paused recovery keeps the trusted task window and user goal without revivi
   const observations = [];
   state.traceHandoff = (_ctx, event, data) => { if (event === "context.view.observed") observations.push(data); };
   state.roleRecoveryPending = true;
-  const roleRecovery = createRoleRecovery({ on() {}, appendEntry() {} }, state, createRoleContextView(state).context);
-  const result = roleRecovery.context({ type: "context", messages }, harness.context);
+  const pipeline = createRoleContextPipeline({ on() {} }, state, { contextView: createRoleContextView(state).context });
+  const result = pipeline.context({ type: "context", messages }, harness.context);
   assert.ok(result, "paused workflows still require a bounded recovery view while role recovery is pending");
   assert.equal(observations[0].inputMessages, messages.length);
   assert.ok(observations[0].outputMessages > 0 && observations[0].outputMessages < messages.length);
@@ -232,7 +233,7 @@ function callContextHandler(state, harness, messages) {
   const handlers = new Map();
   const pi = { on(name, handler) { handlers.set(name, handler); } };
   const roleContextView = createRoleContextView(state);
-  createRoleRecovery(pi, state, roleContextView.context);
+  createRoleContextPipeline(pi, state, { contextView: roleContextView.context });
   return handlers.get("context_with_system")({ type: "context_with_system", messages }, harness.context);
 }
 
@@ -284,7 +285,7 @@ test("public context callback isolates the current role window while retaining n
   const originalBranch = structuredClone(harness.branch);
   const handlers = new Map();
   const pi = { on(name, handler) { handlers.set(name, handler); } };
-  createRoleRecovery(pi, state, createRoleContextView(state).context);
+  createRoleContextPipeline(pi, state, { contextView: createRoleContextView(state).context });
   const result = handlers.get("context_with_system")({ type: "context_with_system", messages }, harness.context);
 
   assert.ok(result);

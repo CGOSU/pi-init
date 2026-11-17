@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateContextCapacity, registerContextCapacity } from "../extensions/role-context-capacity.ts";
-import { createSessionHandoff } from "../extensions/session-handoff.ts";
+import { evaluateContextCapacity, registerContextCapacity } from "../extensions/role/role-context-capacity.ts";
+import { createSessionHandoff } from "../extensions/session/session-handoff-runtime.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 
 const model = (contextWindow, api = "openai-responses") => ({ provider: "test", id: String(contextWindow), contextWindow, api });

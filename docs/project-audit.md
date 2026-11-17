@@ -6,8 +6,8 @@
 
 | 问题 | 修复与主要位置 |
 | --- | --- |
-| 诊断写入跟随已有目录/日志链接，维护页读取也可能越过预期文件边界 | 复用逐段目录检查、普通文件/no-follow 打开；维护页和导出共用有界读取。涉及 [diagnostic-storage.ts](../extensions/diagnostic-storage.ts)、[runtime-diagnostics.ts](../extensions/runtime-diagnostics.ts)、[global-diagnostics.ts](../extensions/global-diagnostics.ts)、[diagnostic-controls.ts](../extensions/diagnostic-controls.ts)。安全回归覆盖目录、文件、备份链接与字节上限。 |
-| 原生 read 的空结果或旧正文也能计为读完当前文件 | 校验真实返回正文与当前指纹、范围一致后才计覆盖；拒绝无法核实的单空行证明。见 [file-review-runtime.ts](../extensions/file-review-runtime.ts)、[file-review-read.ts](../extensions/file-review-read.ts)。保留分段、缺口、版本失效和实际 SDK LF/CRLF 回归。 |
+| 诊断写入跟随已有目录/日志链接，维护页读取也可能越过预期文件边界 | 复用逐段目录检查、普通文件/no-follow 打开；维护页和导出共用有界读取。涉及 [diagnostic-storage.ts](../extensions/diagnostics/diagnostic-storage.ts)、[runtime-diagnostics.ts](../extensions/diagnostics/runtime-diagnostics.ts)、[global-diagnostics.ts](../extensions/diagnostics/global-diagnostics.ts)、[diagnostic-controls.ts](../extensions/diagnostics/diagnostic-controls.ts)。安全回归覆盖目录、文件、备份链接与字节上限。 |
+| 原生 read 的空结果或旧正文也能计为读完当前文件 | 校验真实返回正文与当前指纹、范围一致后才计覆盖；拒绝无法核实的单空行证明。见 [file-review-runtime.ts](../extensions/file-review/file-review-runtime.ts)、[file-review-read.ts](../extensions/file-review/file-review-read.ts)。保留分段、缺口、版本失效和实际 SDK LF/CRLF 回归。 |
 | 用量增量刷新先提交事件/游标，后算派生汇总；中断后可能永久遗留旧时长 | 把整个增量刷新置于同一事务，失败保留旧状态，后续可一致恢复。见 [refresh.js](../scripts/pi-usage/refresh.js)。 |
 | session 中的 null/原始值导致扫描崩溃，丢失后续有效记录 | 结构化解析拒绝非法行形状，保留原有容错导入语义。见 [core.js](../scripts/pi-usage/core.js)。 |
 | DuckDB connect 或连接清理失败时不释放实例 | 两种失败路径均尝试关闭实例。见 [database.js](../scripts/pi-usage/database.js) 与 [pi-usage-recovery.test.js](../test/pi-usage-recovery.test.js)。 |
@@ -37,9 +37,9 @@
 ## 实施接缝与实测依据
 
 - 初始化：[`src/scaffold.ts`](../src/scaffold.ts) 在写入前逐段检查模板输出目录，拒绝项目内符号链接/非目录；保留已有文件和链接。目标根目录仍按既有选址契约处理，不是操作系统沙箱。回归见 [`scaffold-boundary.test.js`](../test/scaffold-boundary.test.js)。
-- 诊断：[`diagnostic-writer.ts`](../extensions/diagnostic-writer.ts) 收敛有界队列、失败停录与显式恢复；[`diagnostic-storage.ts`](../extensions/diagnostic-storage.ts) 为项目/全局/handoff 的追加、轮转、恢复和维护提供目录级跨进程 `runtime.lock`。状态检查不会证明跨进程健康；锁不会自动窃取。停录后使用 `/blackbox resume <scope>` 仅恢复后续采集。细节见[运行诊断](runtime-diagnostics.md)、[交接日志](handoff-diagnostics.md)。
+- 诊断：[`diagnostic-writer.ts`](../extensions/diagnostics/diagnostic-writer.ts) 收敛有界队列、失败停录与显式恢复；[`diagnostic-storage.ts`](../extensions/diagnostics/diagnostic-storage.ts) 为项目/全局/handoff 的追加、轮转、恢复和维护提供目录级跨进程 `runtime.lock`。状态检查不会证明跨进程健康；锁不会自动窃取。停录后使用 `/blackbox resume <scope>` 仅恢复后续采集。细节见[运行诊断](runtime-diagnostics.md)、[交接日志](handoff-diagnostics.md)。
 - 验证：[`src/workflow-verification.ts`](../src/workflow-verification.ts) 集中解析、旧记录恢复、状态分类和显示；contracts/actions/transitions/hydration 与 completion/status 调用方同步迁移。新输入的 `check`、`status`、`details` 必须显式提供；`not-run` 表示尚未执行，不代表操作结果未知。完成判定仍按任务已确认验收，不添加“所有记录都须 passed”的门槛。历史字符串原样保留并标记未分类；带 `sourceSessionId` 的历史结构按来源显示，不计作当前验证；均不据文字推断通过/失败。
-- 拆分：[`workflow-command.ts`](../extensions/workflow-command.ts)、[`workflow-action-types.ts`](../extensions/workflow-action-types.ts)、[`file-review-session.ts`](../extensions/file-review-session.ts) 和 [`file-review-observer.ts`](../extensions/file-review-observer.ts) 承担拆出的命令适配、类型、会话状态及事件观察；原工具编排入口保留。恢复守卫、分支归属和原生读取证据边界保持。
+- 拆分：[`workflow-command.ts`](../extensions/workflow/workflow-command.ts)、[`workflow-action-types.ts`](../extensions/workflow/workflow-action-types.ts)、[`file-review-session.ts`](../extensions/file-review/file-review-session.ts) 和 [`file-review-observer.ts`](../extensions/file-review/file-review-observer.ts) 承担拆出的命令适配、类型、会话状态及事件观察；原工具编排入口保留。恢复守卫、分支归属和原生读取证据边界保持。
 - 支持范围：本机当前 Pi SDK 三包均为 1.5.0，peer 下限为 `^1.5.0`；Node 引擎下限维持 `>=22.19.0`，本次宿主 Node v26.13.0 / Darwin arm64。不测试或承诺旧 SDK/Node，不要求 GitHub Actions/CI、真实 Windows/PowerShell、真实 Pi reload/TUI 或真实业务数据迁移；这些均非本轮待办。
 
 ### 指纹隔离基准（不是端到端服务基准）
