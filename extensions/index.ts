@@ -130,6 +130,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     getThinkingLevel: () => pi.getThinkingLevel(),
   });
   pi.on("before_agent_start", runtimeRoutingContext.beforeAgentStart);
+  pi.on("context_with_system", runtimeRoutingContext.contextWithSystem);
   createArchitectBoundary(pi, (ctx) => roleRuntime.activeRoleFor(ctx)?.role);
   registerAbnormalToolGuard(pi, ctx => userControl.suspend(ctx, "abnormal-tool-arguments"));
   workflowReport = createWorkflowReport(runtimeState, {

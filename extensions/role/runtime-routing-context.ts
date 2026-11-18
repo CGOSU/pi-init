@@ -1,4 +1,4 @@
-import type { BeforeAgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { BeforeAgentStartEvent, ContextWithSystemEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getWorkflowTask } from "../../src/workflow.ts";
 import { roleLabel, isValidRoleId } from "../../src/roles.ts";
 import type { ActiveRole, RuntimeStateView } from "../runtime-state.ts";
@@ -92,5 +92,21 @@ export function createRuntimeRoutingContext(
     sections[SECTION_KEY] = buildRuntimeSection(state, ctx, deps);
   }
 
-  return { beforeAgentStart };
+  function contextWithSystem(event: ContextWithSystemEvent, ctx: ExtensionContext) {
+    // A same-role confirmation can finish without starting a fresh run. Refresh
+    // only our current section in the request, not the persisted host transcript.
+    const { messages } = event;
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      if (message.role !== "system" || !message.sections || !(SECTION_KEY in message.sections)) continue;
+      if (message.sections[SECTION_KEY] === null) return;
+      const section = buildRuntimeSection(state, ctx, deps);
+      if (message.sections[SECTION_KEY] === section) return;
+      const updated = messages.slice();
+      updated[index] = { ...message, sections: { ...message.sections, [SECTION_KEY]: section } };
+      return { messages: updated };
+    }
+  }
+
+  return { beforeAgentStart, contextWithSystem };
 }
