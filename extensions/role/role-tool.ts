@@ -3,7 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { isThinkingLevel, normalizeRoleId, roleLabel } from "../../src/roles.ts";
 import { switchRoleParameters } from "./role-tool-parameters.ts";
 import { shortModelName } from "../ui.ts";
-import type { ExtensionRuntimeState } from "../runtime-state.ts";
+import { onLifecycleReset, type ExtensionRuntimeState } from "../runtime-state.ts";
 import type { createRoleRuntime } from "./role-runtime.ts";
 import type { createRoleHandoff } from "./role-handoff.ts";
 import type { createWorkflowUserControl } from "../workflow/workflow-user-control.ts";
@@ -19,6 +19,15 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
   observeRejection: ReturnType<typeof createRepeatedRejectionGuard>["observe"];
 }) {
   const { roleRuntime, roleHandoff, userControl, observeRejection } = dependencies;
+  let reusedScope: string | undefined;
+  let reusedCount = 0;
+  const reusedCalls = new Set<string>();
+  function resetReused() {
+    reusedScope = undefined;
+    reusedCount = 0;
+    reusedCalls.clear();
+  }
+  onLifecycleReset(pi, resetReused, { agentStart: true, modelSelect: true, compact: true, externalInput: true });
   pi.registerTool({
     name: "switch_role",
     label: "Switch Role",
@@ -108,6 +117,50 @@ export function registerRoleTool(pi: ExtensionAPI, runtimeState: ExtensionRuntim
         const prefix = reused ? "当前职责已确认，无需切换" : unchanged ? "已重新确认当前职责"
           : "已切换到";
         const nextAction = nextWorkflowAction(runtimeState);
+        if (!reused || extraText) {
+          resetReused();
+        } else {
+          const scope = JSON.stringify([
+            ctx.sessionManager?.getSessionId?.(),
+            runtimeState.roleContextGeneration,
+            runtimeState.roleTransitionGeneration,
+            result.role,
+            result.provider,
+            result.model,
+            result.thinkingLevel,
+            nextAction.action,
+            nextAction.code,
+            nextAction.taskId,
+          ]);
+          if (reusedScope !== scope) {
+            reusedScope = scope;
+            reusedCount = 0;
+            reusedCalls.clear();
+          }
+          if (!_toolCallId || !reusedCalls.has(_toolCallId)) {
+            reusedCount += 1;
+            if (_toolCallId && reusedCalls.size < 32) reusedCalls.add(_toolCallId);
+          }
+          if (reusedCount >= 2) {
+            const code = "ROLE_ALREADY_CONFIRMED";
+            runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: "switch_role", code, requiredRole: result.role });
+            const rejection = observeRejection({ toolName: "switch_role", toolCallId: _toolCallId, role: params.role, code }, ctx);
+            if (rejection.stop) {
+              userControl.suspend(ctx, "repeated-rejection");
+              runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: _toolCallId, code: rejection.code });
+            }
+            const stop = rejection.stop || reusedCount >= 3;
+            const message = stop
+              ? "同一职责的重复确认已连续被拒绝；当前回合结束，请勿继续调用 switch_role。"
+              : "当前职责已确认且未变化，请勿重复调用 switch_role；请直接使用当前职责所需工具继续未完成工作，或直接回复用户。";
+            const failure = fail(code, message);
+            return {
+              ...failure,
+              details: { ...failure.details, requestedRole: selection.requestedRole, reused: true, rejectionStopped: stop },
+              ...(stop ? { terminate: true } : {}),
+            };
+          }
+        }
         const continuation = nextAction.action === "recover"
           ? "。职责确认不解除工作流暂停或恢复限制，仍不能执行任务。\n" + nextAction.nextAction + (transition.terminate ? "当前回合结束。" : "")
           : `${reused ? "。沿当前职责继续未完成工作，不必再次确认。" : ""}${transition.terminate ? unchanged ? "。当前回合结束；由现有工作流调度器派发待办任务。" : "。当前回合结束；随后以新职责继续未完成工作。" : ""}`;
