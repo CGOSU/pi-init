@@ -64,18 +64,19 @@ test("同一 run 确认职责后，下一次模型请求不再提示恢复", asy
   const harness = createExtensionHarness(recoveryBranch());
   await emitExtensionEvent(harness, "session_start", { reason: "new" });
   const { systemPromptOptions: { sections } } = await beforeAgentStart(harness);
+  const wrapRuntime = (text) => `<pi_init_runtime>\n${text}\n</pi_init_runtime>`;
   const update = {
     role: "system", content: "", timestamp: 2,
     sections: { pi_init_runtime: sections.pi_init_runtime, other_extension: "keep me" },
     toolsRemoved: [{ name: "unused" }],
   };
   const messages = [
-    { role: "system", content: "host", timestamp: 0, sections: { pi_init_runtime: "older runtime" } },
+    { role: "system", content: "host", timestamp: 0, sections: { pi_init_runtime: wrapRuntime("older runtime\n职责恢复：pending\n工作流下一步：recover"), host_section: "keep host" } },
     { role: "user", content: "继续任务", timestamp: 1 },
     update,
   ];
-  const request = async () => {
-    let projected = messages;
+  const request = async (input = messages) => {
+    let projected = input;
     for (const handler of harness.handlers.get("context_with_system") ?? []) {
       projected = (await handler({ type: "context_with_system", messages: projected }, harness.context))?.messages ?? projected;
     }
@@ -88,13 +89,19 @@ test("同一 run 确认职责后，下一次模型请求不再提示恢复", asy
   assert.equal(harness.entries.at(-1).data.status, "acknowledged");
 
   const next = await request();
+  const leadingRuntime = next[0].sections.pi_init_runtime;
   const runtime = getCurrentSystemMessage(next).sections.pi_init_runtime;
+  assert.ok(leadingRuntime.startsWith("<pi_init_runtime>\n") && leadingRuntime.endsWith("\n</pi_init_runtime>"));
+  assert.match(leadingRuntime, /职责恢复：已确认/);
+  assert.doesNotMatch(leadingRuntime, /工作流下一步：recover/);
+  assert.equal(next[0].sections.host_section, "keep host");
   assert.match(runtime, /职责恢复：已确认/);
   assert.doesNotMatch(runtime, /工作流下一步：recover/);
-  assert.equal(next[0], messages[0]);
   assert.equal(next[1], messages[1]);
   assert.deepEqual(next[2], { ...update, sections: { ...update.sections, pi_init_runtime: runtime } });
+  assert.match(messages[0].sections.pi_init_runtime, /工作流下一步：recover/);
   assert.match(messages[2].sections.pi_init_runtime, /工作流下一步：recover/);
+  assert.equal(await request(next), next);
 });
 
 test("before_agent_start 在活动 Local 工作流恢复时保留职责恢复门", async () => {

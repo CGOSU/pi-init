@@ -57,6 +57,70 @@ test("同职责确认及闲置切角不额外终止或派发回合", async () =>
   await emitExtensionEvent(harness, "session_shutdown");
 });
 
+test("同回合重复确认同一已激活职责超过一次会被拒绝并最终终止回合，新回合或换角后重置", async () => {
+  const harness = createExtensionHarness();
+  const tool = harness.tools.find((item) => item.name === "switch_role");
+  await tool.execute("initial-role", { role: "developer-test" }, undefined, undefined, harness.context);
+  await startRun(harness);
+
+  const callSame = (id, role = "developer-test") =>
+    tool.execute(id, { role }, undefined, undefined, harness.context);
+
+  const first = await callSame("repeat-1");
+  assert.notEqual(first.terminate, true);
+  assert.equal(first.details.reused, true);
+  assert.match(first.content[0].text, /当前职责已确认，无需切换/);
+
+  const replayed = await callSame("repeat-1");
+  assert.notEqual(replayed.terminate, true);
+  assert.equal(replayed.details.reused, true);
+
+  const second = await callSame("repeat-2");
+  assert.equal(second.details.ok, false);
+  assert.equal(second.details.code, "ROLE_ALREADY_CONFIRMED");
+  assert.equal(second.details.reused, true);
+  assert.equal(second.details.rejectionStopped, false);
+  assert.notEqual(second.terminate, true);
+
+  const third = await callSame("repeat-3");
+  assert.equal(third.details.ok, false);
+  assert.equal(third.details.code, "ROLE_ALREADY_CONFIRMED");
+  assert.equal(third.details.reused, true);
+  assert.equal(third.details.rejectionStopped, true);
+  assert.equal(third.terminate, true);
+  assert.equal(handoffs(harness).length, 0);
+
+  await emitExtensionEvent(harness, "agent_end");
+  await emitExtensionEvent(harness, "agent_settled");
+  await startRun(harness);
+  const nextRunFirst = await callSame("next-run-1");
+  assert.equal(nextRunFirst.details.reused, true);
+  assert.notEqual(nextRunFirst.terminate, true);
+
+  const nextRunSecond = await callSame("next-run-2");
+  assert.equal(nextRunSecond.details.code, "ROLE_ALREADY_CONFIRMED");
+  assert.notEqual(nextRunSecond.terminate, true);
+
+  const switched = await callSame("switch-docs", "docs-commit");
+  assert.equal(switched.details.role, "docs-commit");
+  assert.equal(switched.details.reused, false);
+  assert.equal(switched.terminate, true);
+
+  await emitExtensionEvent(harness, "agent_end");
+  await emitExtensionEvent(harness, "agent_settled");
+  assert.equal(handoffs(harness).length, 1);
+
+  const docsRun = await startRun(harness, handoffs(harness)[0].message);
+  assert.match(docsRun.systemPromptOptions.sections.pi_init_runtime, /当前职责：文档收尾/);
+  const afterSwitch = await callSame("docs-repeat-1", "docs-commit");
+  assert.equal(afterSwitch.details.reused, true);
+  assert.notEqual(afterSwitch.terminate, true);
+
+  await emitExtensionEvent(harness, "agent_end");
+  await emitExtensionEvent(harness, "agent_settled");
+  await emitExtensionEvent(harness, "session_shutdown");
+});
+
 test("关闭会话撤销待交接，迟到 settled 不重放", async () => {
   const harness = createExtensionHarness();
   await switchRole(harness, "architect");

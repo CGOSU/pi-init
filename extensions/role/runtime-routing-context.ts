@@ -8,6 +8,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const SECTION_KEY = "pi_init_runtime";
+const SECTION_OPEN = `<${SECTION_KEY}>\n`;
+const SECTION_CLOSE = `\n</${SECTION_KEY}>`;
+
+function formatRuntimeSection(existing: string, section: string) {
+  return existing.startsWith(SECTION_OPEN) && existing.endsWith(SECTION_CLOSE)
+    ? `${SECTION_OPEN}${section}${SECTION_CLOSE}`
+    : section;
+}
 
 type RuntimeRoutingDependencies = {
   getActiveRole: (ctx: ExtensionContext) => ActiveRole | undefined;
@@ -94,18 +102,31 @@ export function createRuntimeRoutingContext(
 
   function contextWithSystem(event: ContextWithSystemEvent, ctx: ExtensionContext) {
     // A same-role confirmation can finish without starting a fresh run. Refresh
-    // only our current section in the request, not the persisted host transcript.
+    // all active runtime sections in the request (including the leading system
+    // message used as top-level instructions), not the persisted host transcript.
     const { messages } = event;
+    let hasActiveSection = false;
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index];
       if (message.role !== "system" || !message.sections || !(SECTION_KEY in message.sections)) continue;
       if (message.sections[SECTION_KEY] === null) return;
-      const section = buildRuntimeSection(state, ctx, deps);
-      if (message.sections[SECTION_KEY] === section) return;
-      const updated = messages.slice();
-      updated[index] = { ...message, sections: { ...message.sections, [SECTION_KEY]: section } };
-      return { messages: updated };
+      hasActiveSection = true;
+      break;
     }
+    if (!hasActiveSection) return;
+    const section = buildRuntimeSection(state, ctx, deps);
+    let updated: typeof messages | undefined;
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
+      if (message.role !== "system" || !message.sections) continue;
+      const existing = message.sections[SECTION_KEY];
+      if (typeof existing !== "string") continue;
+      const formatted = formatRuntimeSection(existing, section);
+      if (existing === formatted) continue;
+      updated ??= messages.slice();
+      updated[index] = { ...message, sections: { ...message.sections, [SECTION_KEY]: formatted } };
+    }
+    if (updated) return { messages: updated };
   }
 
   return { beforeAgentStart, contextWithSystem };
