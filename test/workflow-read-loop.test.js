@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createWorkflowProgressObserver } from '../extensions/workflow/workflow-status-polling.ts';
 import { createExtensionRuntimeState } from '../extensions/runtime-state.ts';
+import { createWorkflowState } from '../src/workflow.ts';
 
 function fixture() {
   const state = createExtensionRuntimeState();
@@ -54,6 +55,23 @@ test('new contents, ranges, and actual non-read activity reset observations', as
     }
     assert.equal(f.pauses(), 0, mode);
     assert.equal(f.diagnostics.length, 0, mode);
+  }
+});
+
+test('review reads distinguish new pages, files and contents, and reset on external input', async () => {
+  for (const change of ['page', 'file', 'content', 'input']) {
+    const f = fixture();
+    f.state.workflowState = createWorkflowState({
+      sessionId: 's', summary: 'Review plan', reviewRequired: true,
+      tasks: [{ id: 't', task: 'Check bindings', role: 'developer-test', files: ['src'], acceptanceCriteria: ['Bound'] }],
+    });
+    f.ctx.cwd = process.cwd();
+    for (let i = 0; i < 6; i++) await f.read({ path: 'package.json' }, 'same');
+    if (change === 'input') await f.emit('input', { source: 'interactive', text: 'new question' });
+    const input = { path: change === 'file' ? 'other/package.json' : 'package.json', offset: change === 'page' ? 2 : 1 };
+    await f.read(input, change === 'content' ? 'updated' : 'same');
+    assert.equal(f.pauses(), 0, change);
+    assert.equal(f.diagnostics.length, 1, change);
   }
 });
 

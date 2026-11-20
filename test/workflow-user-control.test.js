@@ -9,7 +9,8 @@ import { registerWorkflowTool } from "../extensions/workflow/workflow-tool.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
+import { createReadTool } from "@earendil-works/pi-coding-agent";
+import { createExtensionHarness, emitExtensionEvent, emitToolResult } from "./support/extension-harness.js";
 function fixture(cwd) {
   const state = createExtensionRuntimeState();
   state.workflowState = createWorkflowState({ sessionId: "s", workflowId: "w", summary: "整体运行时收敛", tasks: [{ id: "one", task: "收敛生命周期", role: "developer-test", files: ["src"], acceptanceCriteria: ["安全停止"] }, { id: "two", task: "补齐预算", role: "developer-test", files: ["src"], acceptanceCriteria: ["预算可达"] }] }, 1);
@@ -202,19 +203,23 @@ test("恢复门在tool_call前置拒绝时也有界停止，不能依赖execute�
   });
 });
 
+async function reviewHarness(cwd) {
+  await mkdir(join(cwd, ".pi"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
+    schemaVersion: 2, workflowMode: "on",
+    roleModels: {
+      architect: { provider: "test-provider", model: "session-default", thinkingLevel: "max" },
+      "developer-test": { provider: "test-provider", model: "session-default", thinkingLevel: "high" },
+    },
+  }));
+  const review = createWorkflowState({ sessionId: "test-session", summary: "文章规划", reviewRequired: true,
+    tasks: [{ id: "first", role: "developer-test", task: "验证文章链路", files: ["src"], acceptanceCriteria: ["可以读取已发布文章"] }] });
+  return createExtensionHarness([{ id: "review-plan", type: "custom", customType: "pi-init-workflow", data: review }], { cwd, trusted: true, deferSendMessagePersistence: true });
+}
+
 test("架构审阅无当前任务时，交替撞同一门禁只结束本轮，仍可由用户批准原计划", async () => {
   await withTempDirectory(async cwd => {
-    await mkdir(join(cwd, ".pi"), { recursive: true });
-    await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
-      schemaVersion: 2, workflowMode: "on",
-      roleModels: {
-        architect: { provider: "test-provider", model: "session-default", thinkingLevel: "max" },
-        "developer-test": { provider: "test-provider", model: "session-default", thinkingLevel: "high" },
-      },
-    }));
-    const review = createWorkflowState({ sessionId: "test-session", summary: "文章规划", reviewRequired: true,
-      tasks: [{ id: "first", role: "developer-test", task: "验证文章链路", files: ["src"], acceptanceCriteria: ["可以读取已发布文章"] }] });
-    const h = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: review }], { cwd, trusted: true, deferSendMessagePersistence: true });
+    const h = await reviewHarness(cwd);
     const latest = () => h.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
     const call = (toolName, toolCallId, input) => emitExtensionEvent(h, "tool_call", { toolName, toolCallId, input });
     try {
@@ -247,6 +252,52 @@ test("架构审阅无当前任务时，交替撞同一门禁只结束本轮，�
       await emitExtensionEvent(h, "agent_settled");
       assert.deepEqual(latest(), before);
       assert.equal(h.sentMessages.length, 0);
+
+      await h.commands.get("pi-init").handler("workflow resume", h.context);
+      assert.equal(latest().status, "running");
+      assert.equal(latest().currentTaskId, "first");
+      assert.equal(h.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
+    } finally { await emitExtensionEvent(h, "session_shutdown"); }
+  });
+});
+
+test("待审计划重复读取同一原生结果只结束本轮，仍待用户审批", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await reviewHarness(cwd);
+    const path = join(cwd, "package.json");
+    const latest = () => h.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+    const tool = createReadTool(cwd);
+    async function read(i, input) {
+      const toolCallId = `review-read-${i}`;
+      h.branch.push({ id: `assistant-${i}`, type: "message", message: {
+        role: "assistant", content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: input }],
+      } });
+      assert.equal(await emitExtensionEvent(h, "tool_call", { toolName: "read", toolCallId, input }), undefined);
+      const result = await tool.execute(toolCallId, input, undefined);
+      return emitToolResult(h, { ...result, toolName: "read", toolCallId, input, isError: false });
+    }
+    try {
+      await writeFile(path, '{\n  "name": "review-fixture"\n}\n');
+      await emitExtensionEvent(h, "session_start");
+      await emitExtensionEvent(h, "agent_start");
+      const before = structuredClone(latest());
+      assert.equal(before.currentTaskId, undefined);
+      for (let i = 0; i <= 6; i++) {
+        const result = await read(i, { path: i % 2 ? path : "package.json", ...(i % 2 ? { offset: 1 } : {}), limit: 100 + i });
+        assert.equal(result?.content.some(block => block.type === "text" && block.text.includes("WORKFLOW_REPEATED_READ")) ?? false, i === 3);
+        assert.equal(h.aborts.length, i === 6 ? 1 : 0);
+      }
+      await emitExtensionEvent(h, "agent_settled");
+      assert.deepEqual(latest(), before);
+      assert.equal(h.entries.some(entry => entry.type === "pi-init-user-control"), false);
+      assert.equal(h.sentMessages.length, 0);
+
+      await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" });
+      await emitExtensionEvent(h, "agent_start");
+      await read("new-turn", { path: "package.json" });
+      assert.equal(h.aborts.length, 1);
+      await emitExtensionEvent(h, "agent_settled");
+      assert.deepEqual(latest(), before);
 
       await h.commands.get("pi-init").handler("workflow resume", h.context);
       assert.equal(latest().status, "running");
