@@ -70,7 +70,21 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         throw error;
       }
     });
-  const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, { onRepeatedRead: ctx => userControl.suspend(ctx, "repeated-read") });
+  function endArchitectureReviewTurn(ctx: ExtensionContext, notice?: string) {
+    // The plan is already paused; end the round without adding a user stop.
+    roleHandoff.reset();
+    ctx.abort();
+    if (notice) ctx.ui.notify(notice, "warning");
+  }
+  const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, {
+    onRepeatedRead: (ctx, stop) => {
+      if (stop === "review") {
+        endArchitectureReviewTurn(ctx, "待审期间重复读取未获得新信息，本轮已停止，计划仍等待用户审阅。");
+      } else {
+        userControl.suspend(ctx, "repeated-read");
+      }
+    },
+  });
   const activityStatus = registerActivityStatusSources(pi);
   const roleContextView = createRoleContextView(runtimeState);
   registerContextCapacity(pi, runtimeState);
@@ -82,12 +96,11 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       userControl.suspend(ctx, "repeated-guard-rejection");
       return;
     }
-    // The plan is already paused; stop this turn without persisting a separate user stop.
-    roleHandoff.reset();
-    ctx.abort();
+    endArchitectureReviewTurn(ctx, rejection.firstStop
+      ? "待审计划的执行门禁已被反复触发，本轮已停止；计划仍等待用户审阅，未启动任务。"
+      : undefined);
     if (rejection.firstStop) {
       runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: event.toolCallId, code: rejection.code });
-      ctx.ui.notify("待审计划的执行门禁已被反复触发，本轮已停止；计划仍等待用户审阅，未启动任务。", "warning");
     }
   });
   createRoleContextPipeline(pi, runtimeState, { contextView: roleContextView.context, taskMemory });

@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { isCoreReadOnlyTool } from "../../src/tool-classification.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fingerprint } from "../diagnostics/handoff-tool-diagnostics.ts";
@@ -14,17 +15,19 @@ import { workflowHandoffMessageOnBranch } from "./workflow-session-adapter.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import { isAwaitingArchitectureReview } from "./workflow-action-policy.ts";
 
-type ObservationScope = { id: string; canPause: boolean };
-type PendingReadCall = { scope: string; tool: string; input: string; canPause: boolean; eligible: boolean; branchAnchor?: string };
+type RepeatedReadStop = "task" | "review";
+type ObservationScope = { id: string; stop?: RepeatedReadStop };
+type PendingReadCall = { scope: string; tool: string; input: string; eligible: boolean; branchAnchor?: string };
 type PendingFailureCall = { scope: string; tool: string; input: string; editPath?: string; eligible: boolean; branchAnchor?: string };
 
 const WORKFLOW_REPEATED_READ_HINT = "WORKFLOW_REPEATED_READ：相同范围的只读观察连续重复，未发现新信息。请依据已有事实推进或说明阻塞；持续重复将请求暂停。";
+const REVIEW_REPEATED_READ_HINT = "WORKFLOW_REPEATED_READ：待审期间多次读取未获得新信息。请复用已有结果回答或等待用户审阅；继续重复将结束本轮，计划保持待审。";
 const SESSION_REPEATED_READ_HINT = "WORKFLOW_REPEATED_READ：相同范围的只读观察连续重复，未发现新信息。请依据已有事实直接推进、收敛结论，或在准备 session_handoff 时将已排除方向记入 approachesTried。";
 const REPEATED_EDIT_ERROR_HINT = "WORKFLOW_REPEATED_TOOL_ERROR：同一目标的 edit 连续失败。请停止盲目微调替换文本，先用 read 重新核对目标文件的当前完整片段与唯一上下文；若当前修改方案不可行，请改换实现路径，或在阻塞/交接时将已试错路径记入 blockReason 或 approachesTried。";
 const REPEATED_TOOL_ERROR_HINT = "WORKFLOW_REPEATED_TOOL_ERROR：相同工具调用连续返回相同错误。请停止原样重试，先核对前置假设、参数或环境状态并改换排查/实现路径；若确认外部阻塞或方案不可行，请如实报告阻塞或在准备交接时记入 blockReason 或 approachesTried。";
 
 export function createWorkflowProgressObserver(pi: ExtensionAPI, state: RuntimeStateAccess<"workflowProgressObservation">,
-  options: { onRepeatedRead?: (ctx: ExtensionContext) => void | Promise<void> } = {}) {
+  options: { onRepeatedRead?: (ctx: ExtensionContext, stop: RepeatedReadStop) => void | Promise<void> } = {}) {
   const tracker = createWorkflowProgressTracker();
   const pendingStatusCalls = new Set<string>();
   const routingTools = new Set(["task_workflow", "switch_role", "session_handoff"]);
@@ -79,11 +82,17 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: RuntimeS
   function resolveScope(ctx: ExtensionContext): ObservationScope | undefined {
     if (!ctx?.isProjectTrusted?.() || isExecutionBlockedState(state)) return undefined;
     const sessionId = ctx.sessionManager?.getSessionId?.();
-    if (!state.workflowState) {
-      if (typeof sessionId !== "string" || !sessionId.trim()) return undefined;
+    if (typeof sessionId !== "string" || !sessionId.trim()) return undefined;
+    const workflow = state.workflowState;
+    if (!workflow) {
       const id = fingerprint(["ordinary-session", sessionId, state.activeRole ?? null,
         state.roleContextGeneration, state.roleTransitionGeneration]);
-      return id ? { id, canPause: false } : undefined;
+      return id ? { id } : undefined;
+    }
+    if (workflow.sessionId === sessionId && isAwaitingArchitectureReview(workflow)) {
+      const id = fingerprint(["architecture-review", sessionId, workflow.workflowId, workflow.planVersion,
+        workflow.recoveryGeneration, state.activeRole, state.roleContextGeneration, state.roleTransitionGeneration]);
+      return id ? { id, stop: "review" } : undefined;
     }
     const active = executingWorkflowTask(state, sessionId);
     if (!active || active.task.delegation || active.workflow.continuation || active.workflow.pendingRevision
@@ -91,7 +100,7 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: RuntimeS
     const id = fingerprint([active.workflow.workflowId, active.workflow.planVersion, active.workflow.sessionId,
       active.workflow.recoveryGeneration, active.task.id, active.handoff.attemptId, active.handoff.handoffId,
       state.activeRole, state.roleContextGeneration, state.roleTransitionGeneration]);
-    return id ? { id, canPause: true } : undefined;
+    return id ? { id, stop: "task" } : undefined;
   }
   function syncScope(ctx: ExtensionContext) {
     const next = resolveScope(ctx);
@@ -118,14 +127,18 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: RuntimeS
       else ambiguousActivity = true;
     }
     if (isCoreReadOnlyTool(event.toolName) && !event.parentToolCallId && currentScope && event.toolCallId) {
-      const input = fingerprint(event.input);
+      const { path, offset } = (event.input ?? {}) as Record<string, unknown>;
+      // For native read in review, the starting line and visible result identify the slice; the requested limit does not.
+      const input = currentScope.stop === "review" && event.toolName === "read" && typeof path === "string"
+        ? fingerprint([resolve(ctx.cwd, path), typeof offset === "number" ? Math.max(1, offset) : 1])
+        : fingerprint(event.input);
       stagePendingCall(pendingReads, event.toolCallId, input,
-        { scope: currentScope.id, tool: event.toolName, input: input!, canPause: currentScope.canPause, branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id },
+        { scope: currentScope.id, tool: event.toolName, input: input!, branchAnchor: ctx.sessionManager.getBranch().at(-1)?.id },
         !ambiguousActivity && nonReadInFlight.size === 0,
         () => { previousRead = undefined; repeats = 0; paused = false; }, clearReads);
     } else if (event.toolName !== "task_workflow" && !event.parentToolCallId) clearReads();
     if (!routingTools.has(event.toolName) && Boolean(event.toolName) && !event.parentToolCallId) {
-      if (currentScope && event.toolCallId) {
+      if (currentScope && currentScope.stop !== "review" && event.toolCallId) {
         const input = fingerprint(event.input);
         const rawPath = event.toolName === "edit" && event.input && typeof event.input === "object"
           ? (event.input as Record<string, unknown>).path
@@ -151,24 +164,28 @@ export function createWorkflowProgressObserver(pi: ExtensionAPI, state: RuntimeS
     let hintText: string | undefined;
     if (isCoreReadOnlyTool(event.toolName)) {
       if (event.isError) clearReads();
-      else if (isEligibleScopedCall(call, currentScope, event.toolName, ctx)) {
-        const output = fingerprint([event.content, event.details]);
+      else if (currentScope && isEligibleScopedCall(call, currentScope, event.toolName, ctx)) {
+        const output = fingerprint(currentScope.stop === "review" && event.toolName === "read"
+          ? event.content : [event.content, event.details]);
         const key = output && fingerprint([call.tool, call.input, output]);
         if (!key || key !== previousRead) { previousRead = key; repeats = 0; paused = false; }
         else {
           repeats++;
           const hint = repeats === 3;
-          const shouldPause = call.canPause && repeats === 6 && !paused;
-          if (hint || shouldPause) {
+          const stop = repeats === 6 && !paused ? currentScope.stop : undefined;
+          if (hint || stop) {
             state.traceHandoff?.(ctx, "workflow.suspected_loop", {
-              code: "WORKFLOW_REPEATED_READ", scopeHash: currentScope!.id,
+              code: "WORKFLOW_REPEATED_READ", scopeHash: currentScope.id,
               inputHash: call.input, outputHash: output, repeats,
             });
           }
-          if (hint) hintText = call.canPause ? WORKFLOW_REPEATED_READ_HINT : SESSION_REPEATED_READ_HINT;
-          if (shouldPause) {
+          if (hint) {
+            hintText = currentScope.stop === "review" ? REVIEW_REPEATED_READ_HINT
+              : currentScope.stop === "task" ? WORKFLOW_REPEATED_READ_HINT : SESSION_REPEATED_READ_HINT;
+          }
+          if (stop) {
             paused = true;
-            await options.onRepeatedRead?.(ctx);
+            await options.onRepeatedRead?.(ctx, stop);
           }
         }
       }
