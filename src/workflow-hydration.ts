@@ -85,6 +85,10 @@ function normalizeRevisionRecord(revision: unknown, index: number): WorkflowRevi
   if (result.kind !== "goal" && result.childGoal !== undefined) {
     throw new Error(`非嵌套工作流 revision ${revision.revisionId} 不能包含 childGoal`);
   }
+  if (revision.reviewRequired !== undefined) {
+    if (revision.reviewRequired !== true || revision.kind === "goal") throw new Error("已保存的 revision 审阅要求无效");
+    result.reviewRequired = true;
+  }
   if (revision.requestedFromTaskId !== undefined) {
     result.requestedFromTaskId = requireText(
       revision.requestedFromTaskId,
@@ -288,6 +292,9 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflow
     const matchingRevision = requestedRevisions[0];
     if (matchingRevision?.kind !== pendingRevision.kind || matchingRevision?.childGoal !== pendingRevision.childGoal || matchingRevision?.goalParentId !== pendingRevision.goalParentId) {
       throw new Error("已保存的工作流 pendingRevision 嵌套类型与 revision 审计记录不一致");
+    }
+    if (matchingRevision.reviewRequired !== pendingRevision.reviewRequired) {
+      throw new Error("已保存的重规划审阅要求与 revision 审计记录不一致");
     }
   }
   if (!pendingRevision && requestedRevisions.length > 0) {

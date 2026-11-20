@@ -1,4 +1,4 @@
-import { latestWorkflow } from "./support/workflow-fixtures.js";
+import { latestWorkflow, workflowMessageIdentity } from "./support/workflow-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -12,7 +12,7 @@ const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const docs = { provider: "openai-codex", id: "gpt-5.6-docs" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
-async function makeHarness(directory) {
+async function makeHarness(directory, options = {}) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify({
     schemaVersion: 2,
@@ -30,6 +30,7 @@ async function makeHarness(directory) {
     model: architect,
     availableModels: [architect, docs, developer],
     sessionId: "workflow-input-resume-session",
+    ...options,
   });
   await emitExtensionEvent(harness, "session_start");
   return harness;
@@ -91,6 +92,72 @@ test("普通继续输入不创建 pendingRevision，中断后沿原计划继续�
     assert.equal(resumed.pendingRevision, undefined);
     assert.equal(resumed.currentTaskId, "first-task");
     assert.equal(harness.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
+  });
+});
+
+test("待审计划按用户方向修订，恢复后仍须审批修订版才派发", async () => {
+  await withTempDirectory(async (directory) => {
+    const h = await makeHarness(directory);
+    const execute = (id, args) => h.tools.find(tool => tool.name === "task_workflow").execute(id, args, undefined, undefined, h.context);
+    const task = (id, objective) => ({ id, task: objective, files: ["src"], acceptanceCriteria: [objective], role: "developer-test" });
+    const toolDispatches = () => h.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task");
+    try {
+      await execute("plan", { action: "plan", summary: "原计划", reviewRequired: true, tasks: [task("original", "检查项目元信息")] });
+      const direction = "重规划：不要再读 package.json，只验证本地 D1 查询";
+      await emitExtensionEvent(h, "input", { source: "interactive", text: direction });
+      assert.equal(latestWorkflow(h).status, "replanning");
+      assert.match(h.sentMessages.at(-1).message.content, /只验证本地 D1 查询/);
+      assert.equal(toolDispatches().length, 0);
+
+      await emitExtensionEvent(h, "session_start");
+      const identity = workflowMessageIdentity(h, "pi-init-workflow-replan");
+      await execute("apply", { action: "replan", ...identity, summary: "修订计划", tasks: [task("d1", "验证本地 D1 查询")] });
+      await emitExtensionEvent(h, "agent_settled");
+      assert.equal(latestWorkflow(h).pauseReason, "architecture-review");
+      assert.equal(latestWorkflow(h).currentTaskId, undefined);
+      assert.deepEqual(latestWorkflow(h).tasks.map(t => t.id), ["d1"]);
+      assert.equal(toolDispatches().length, 0);
+      await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" });
+      await emitExtensionEvent(h, "agent_settled");
+      assert.equal(toolDispatches().length, 0);
+
+      await h.commands.get("pi-init").handler("workflow resume", h.context);
+      assert.equal(latestWorkflow(h).currentTaskId, "d1");
+      assert.equal(toolDispatches().length, 1);
+    } finally { await emitExtensionEvent(h, "session_shutdown"); }
+  });
+});
+
+test("同任务纠偏只传递一个用户输入，改目标仍走任务边界重规划", async () => {
+  await withTempDirectory(async (directory) => {
+    const h = await makeHarness(directory, { deferSendMessagePersistence: true });
+    const workflow = h.tools.find(tool => tool.name === "task_workflow");
+    const steer = text => emitExtensionEvent(h, "input", { source: "interactive", text });
+    try {
+      await workflow.execute("plan-for-steering", { action: "plan", summary: "验证查询", tasks: [
+        { id: "check", task: "验证本地查询", files: ["src"], acceptanceCriteria: ["能查已发布数据"], role: "developer-test" },
+      ] }, undefined, undefined, h.context);
+      await emitExtensionEvent(h, "agent_settled");
+      const dispatch = h.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message;
+      await emitExtensionEvent(h, "agent_start");
+      await emitExtensionEvent(h, "message_start", { message: { ...dispatch, role: "custom", timestamp: Date.now() } });
+      h.persistSentMessage(dispatch);
+      const before = structuredClone(latestWorkflow(h));
+      assert.equal(before.handoff.phase, "executing");
+      const sent = h.sentMessages.length;
+      const result = await steer("任务纠偏：绑定已确认；不要再查配置；下一步只验证已发布数据查询。");
+      assert.equal(result.action, "transform");
+      assert.match(result.text, /绑定已确认；不要再查配置；下一步只验证已发布数据查询/);
+      assert.deepEqual(latestWorkflow(h), before);
+      assert.equal(h.sentMessages.length, sent);
+      assert.equal(h.sentUserMessages.length, 0);
+
+      await steer("重规划：改为验证未发布文章的访问权限");
+      assert.equal(latestWorkflow(h).currentTaskId, "check");
+      assert.match(latestWorkflow(h).pendingRevision.direction, /未发布文章的访问权限/);
+      assert.equal((await steer("任务纠偏：直接测试新目标")).action, "handled");
+      assert.equal(h.sentMessages.length, sent);
+    } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
 });
 

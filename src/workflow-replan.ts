@@ -62,7 +62,9 @@ export function requestWorkflowReplan(
   { revisionId, direction, kind = "replan", childGoal, goalParentId }: WorkflowReplanRequest = {},
   now = Date.now(),
 ): WorkflowState {
-  const pausedBoundary = state?.status === "paused" && !state.currentTaskId && !state.handoff && ["task-blocked", "task-not-completed", "handoff-outcome-unknown", "legacy-execution-outcome-unknown", "dependency-blocked"].includes(state.pauseReason ?? "");
+  const pausedWithoutTask = state?.status === "paused" && !state.currentTaskId && !state.handoff;
+  const reviewRequired = pausedWithoutTask && state.pauseReason === "architecture-review" && kind === "replan";
+  const pausedBoundary = reviewRequired || pausedWithoutTask && ["task-blocked", "task-not-completed", "handoff-outcome-unknown", "legacy-execution-outcome-unknown", "dependency-blocked"].includes(state.pauseReason ?? "");
   const convertGoal = state?.pendingRevision?.kind === "goal" && kind === "replan" && (state.status === "replanning" || state.status === "running" || pausedBoundary);
   if (!state || (state.status !== "running" && !pausedBoundary && !convertGoal)) {
     throw new Error("只有运行中或在安全边界暂停的工作流才能请求重规划");
@@ -93,6 +95,7 @@ export function requestWorkflowReplan(
     direction: normalizedDirection,
     requestedAt: now,
     ...(state.currentTaskId ? { requestedFromTaskId: state.currentTaskId } : {}),
+    ...(reviewRequired ? { reviewRequired: true as const } : {}),
     ...(kind === "goal"
       ? { kind, childGoal: requireText(childGoal ?? normalizedDirection, "插入目标"), ...(goalParentId ? { goalParentId } : {}) }
       : {}),
@@ -256,6 +259,10 @@ export function applyWorkflowReplan(
     result.status = "completed";
     result.completedAt = now;
     delete result.continuation;
+  } else if (pendingRevision.reviewRequired) {
+    result.status = "paused";
+    result.pauseReason = "architecture-review";
+    result.continuation = { kind: "review" };
   } else {
     result.status = "running";
     delete result.completedAt;

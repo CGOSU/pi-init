@@ -2,7 +2,27 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { appendWorkflowReplanDirection, requestWorkflowReplan, requestWorkflowGoal } from "../../src/workflow.ts";
 import { isExternalRunSource } from "../../src/run-timing.ts";
 import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput, isExplicitWorkflowChildInput } from "../../src/workflow-input-intent.ts";
-import { textOf, type ExtensionRuntimeState, type WorkflowState } from "../runtime-state.ts";
+import { executingWorkflowTask, isExecutionBlockedState, textOf, type ExtensionRuntimeState, type RuntimeStateView, type WorkflowState } from "../runtime-state.ts";
+import { workflowHandoffMessageOnBranch } from "./workflow-session-adapter.ts";
+
+export function workflowTaskCorrectionInput(
+  state: RuntimeStateView, event: { text?: unknown; source?: unknown }, ctx: ExtensionContext,
+) {
+  if (!isExternalRunSource(event.source) || typeof event.text !== "string") return undefined;
+  const correction = /^任务纠偏\s*[：:]\s*(\S[\s\S]*)$/u.exec(event.text.trim());
+  if (!correction) return undefined;
+
+  const active = executingWorkflowTask(state, ctx.sessionManager.getSessionId());
+  if (!ctx.isProjectTrusted() || isExecutionBlockedState(state) || !active || active.workflow.pendingRevision
+    || !workflowHandoffMessageOnBranch(ctx, active.handoff)) {
+    ctx.ui.notify("没有可安全接收纠偏的执行中任务；不会恢复或重试旧任务。需改变计划时，按当前暂停提示处理或发送「重规划：<新方向>」。", "warning");
+    return { action: "handled" as const };
+  }
+  return {
+    action: "transform" as const,
+    text: `任务纠偏（当前任务 ${active.task.id}）：${correction[1]}\n沿用已确认事实和成果，不重复已排除的动作，优先做用户指定的下一项验证。此纠偏不改变目标、验收或权限；需要变更时说明冲突，等待用户明确要求重规划，不按新契约执行。`,
+  };
+}
 
 export function createWorkflowRevisionInput(runtimeState: ExtensionRuntimeState, dependencies: {
   persistWorkflowState: (next: WorkflowState, ctx: ExtensionContext) => void;
