@@ -77,7 +77,18 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   const roleRecovery = createRoleRecovery(pi, runtimeState, (event, ctx, code) => {
     if (runtimeState.userStopRequested) { ctx.abort(); return; }
     const rejection = rejectionGuard.observe({ ...event, action: event.input?.action, role: event.input?.role, code }, ctx);
-    if (rejection.stop) userControl.suspend(ctx, "repeated-guard-rejection");
+    if (!rejection.stop) return;
+    if (!rejection.reviewOnly) {
+      userControl.suspend(ctx, "repeated-guard-rejection");
+      return;
+    }
+    // The plan is already paused; stop this turn without persisting a separate user stop.
+    roleHandoff.reset();
+    ctx.abort();
+    if (rejection.firstStop) {
+      runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: event.toolCallId, code: rejection.code });
+      ctx.ui.notify("待审计划的执行门禁已被反复触发，本轮已停止；计划仍等待用户审阅，未启动任务。", "warning");
+    }
   });
   createRoleContextPipeline(pi, runtimeState, { contextView: roleContextView.context, taskMemory });
   const runTimingDiagnostics = createRunTimingDiagnostics(

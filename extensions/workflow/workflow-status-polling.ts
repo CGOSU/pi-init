@@ -12,6 +12,7 @@ import {
 } from "../runtime-state.ts";
 import { workflowHandoffMessageOnBranch } from "./workflow-session-adapter.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import { isAwaitingArchitectureReview } from "./workflow-action-policy.ts";
 
 type ObservationScope = { id: string; canPause: boolean };
 type PendingReadCall = { scope: string; tool: string; input: string; canPause: boolean; eligible: boolean; branchAnchor?: string };
@@ -280,15 +281,26 @@ export function createRepeatedRejectionGuard(pi: ExtensionAPI, state: RuntimeSta
   function observe(event: { toolName: string; toolCallId: string; action?: unknown; role?: unknown; code: string }, ctx: ExtensionContext) {
     const workflow = state.workflowState;
     const task = workflow?.tasks.find(item => item.id === workflow.currentTaskId);
-    const identity = fingerprint({ sessionId: ctx.sessionManager.getSessionId(), workflowId: workflow?.workflowId, taskId: task?.id, status: workflow?.status, taskStatus: task?.status, outcomeUnknown: task?.outcomeUnknown, handoff: workflow?.handoff, recoveryGeneration: workflow?.recoveryGeneration, role: state.activeRole, contextGeneration: state.roleContextGeneration });
+    const sessionId = ctx.sessionManager.getSessionId();
+    const awaitingReview = workflow?.sessionId === sessionId && isAwaitingArchitectureReview(workflow)
+      && !state.workflowRestoreError && !state.pendingWorkflowRecovery
+      && !state.roleRecoveryPending && !state.roleRecoveryPersistenceFailed;
+    const reviewOnly = awaitingReview && event.code === "WORKFLOW_EXECUTION_NOT_AUTHORIZED";
+    const identity = fingerprint({
+      sessionId, workflowId: workflow?.workflowId, planVersion: workflow?.planVersion,
+      status: workflow?.status, pauseReason: workflow?.pauseReason, awaitingReview,
+      taskId: task?.id, taskStatus: task?.status, outcomeUnknown: task?.outcomeUnknown, handoff: workflow?.handoff,
+      recoveryGeneration: workflow?.recoveryGeneration, role: state.activeRole, contextGeneration: state.roleContextGeneration,
+    });
     if (scope !== identity) { reset(); scope = identity; }
-    if (!workflow || !task || !["running", "replanning", "paused"].includes(workflow.status)) return { stop: false as const };
-    const key = fingerprint([event.toolName, event.action, event.role, event.code])!;
+    if (!workflow || (!task && !reviewOnly) || !["running", "replanning", "paused"].includes(workflow.status)) return { stop: false as const };
+    // During review, changing tools cannot get past the same execution gate.
+    const key = reviewOnly ? event.code : fingerprint([event.toolName, event.action, event.role, event.code])!;
     const entry = counts.get(key) ?? { count: 0, calls: new Set<string>() };
     if (!entry.calls.has(event.toolCallId)) { entry.count++; if (entry.calls.size < 32) entry.calls.add(event.toolCallId); }
     counts.set(key, entry);
     if (counts.size > 32) counts.delete(counts.keys().next().value!);
-    return { stop: entry.count >= 3, firstStop: entry.count === 3, code: "WORKFLOW_REJECTION_NO_PROGRESS" as const };
+    return { stop: entry.count >= 3, firstStop: entry.count === 3, reviewOnly, code: "WORKFLOW_REJECTION_NO_PROGRESS" as const };
   }
   onLifecycleReset(pi, reset, { externalInput: true });
   return { observe, reset };

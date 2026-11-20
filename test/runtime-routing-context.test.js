@@ -43,7 +43,11 @@ test("paused routing never grants execution just because role recovery was confi
   assert.match(section, /paused/);
   assert.match(section, /architecture-review/);
   assert.match(section, /不是.*执行授权/);
-  assert.match(section, /task_workflow\(action="status"\)/);
+  assert.match(section, /工作流下一步：wait/);
+  assert.match(section, /\/pi-init workflow resume/);
+  assert.doesNotMatch(section, /switch_role|developer-test/);
+  state.roleRecoveryPending = true;
+  assert.doesNotMatch(routingSection(state), /switch_role|developer-test/);
 });
 
 test("package policy follows the active role without replacing project instructions or retaining old roles", () => {

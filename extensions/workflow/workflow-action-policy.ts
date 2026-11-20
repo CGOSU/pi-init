@@ -12,6 +12,10 @@ export type WorkflowNextAction = {
   taskId?: string;
 };
 
+export function isAwaitingArchitectureReview(workflow: PolicyState["workflowState"]): boolean {
+  return workflow?.status === "paused" && workflow.pauseReason === "architecture-review" && !workflow.currentTaskId;
+}
+
 /** Routing advice only: never grants identity, execution or side-effect authority. */
 export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   const workflow = state.workflowState;
@@ -38,6 +42,12 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
     nextAction: recoveryStatus + "工作流恢复状态尚未持久化；结束当前轮询，按既有恢复流程处理持久化问题，未确认前不得派发或重放任务。" };
   if (state.roleRecoveryPending && !activeWorkflow) {
     return { action: "recover", recovery: "role", code: "ROLE_RECOVERY_PENDING", message: "职责恢复尚未确认。", nextAction: `无活动工作流且无需工具或新证据的简单问答可以直接回答；不要调用 task_workflow(status)，回答不会解除恢复门。需要执行时${roleAction}` };
+  }
+  if (isAwaitingArchitectureReview(workflow) && !unknownTasks.length) {
+    return { action: "recover", recovery: "wait",
+      nextAction: '架构规划等待用户审阅；普通问题直接回答，不轮询 task_workflow(action="status")。'
+        + (state.roleRecoveryPending ? "确需工具时先按恢复门确认当前职责，不切到待执行任务的角色。" : "")
+        + "确需只读核对时使用原生 read/grep/find/ls，不重试被拒的搜索工具。用户批准后通过 /pi-init workflow resume 开始执行。" };
   }
   if (!state.roleRecoveryPending && workflow?.status === "paused"
     && ["session-handoff-review", "session-transfer-pending", "session-handoff-imported"].includes(workflow.pauseReason ?? "")) {

@@ -202,6 +202,60 @@ test("恢复门在tool_call前置拒绝时也有界停止，不能依赖execute�
   });
 });
 
+test("架构审阅无当前任务时，交替撞同一门禁只结束本轮，仍可由用户批准原计划", async () => {
+  await withTempDirectory(async cwd => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 2, workflowMode: "on",
+      roleModels: {
+        architect: { provider: "test-provider", model: "session-default", thinkingLevel: "max" },
+        "developer-test": { provider: "test-provider", model: "session-default", thinkingLevel: "high" },
+      },
+    }));
+    const review = createWorkflowState({ sessionId: "test-session", summary: "文章规划", reviewRequired: true,
+      tasks: [{ id: "first", role: "developer-test", task: "验证文章链路", files: ["src"], acceptanceCriteria: ["可以读取已发布文章"] }] });
+    const h = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: review }], { cwd, trusted: true, deferSendMessagePersistence: true });
+    const latest = () => h.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+    const call = (toolName, toolCallId, input) => emitExtensionEvent(h, "tool_call", { toolName, toolCallId, input });
+    try {
+      await emitExtensionEvent(h, "session_start");
+      await emitExtensionEvent(h, "agent_start");
+      const before = structuredClone(latest());
+      assert.equal(before.currentTaskId, undefined);
+      const denied = [
+        ["fffind", { pattern: "astro.config" }],
+        ["graph_locate", { query: "article publication" }],
+        ["fffind", { pattern: "package.json" }],
+      ];
+      for (const [i, [toolName, input]] of denied.entries()) {
+        assert.equal((await call(toolName, `denied-${i}`, input)).block, true);
+        assert.equal(h.aborts.length, i === 2 ? 1 : 0);
+        if (i === 0) {
+          assert.equal(await call("read", "read-before-stop", { path: "package.json" }), undefined);
+          assert.equal((await call(toolName, `denied-${i}`, input)).block, true);
+        }
+      }
+      await emitExtensionEvent(h, "agent_settled");
+      assert.deepEqual(latest(), before);
+      assert.equal(h.branch.some(entry => entry.customType === "pi-init-user-control"), false);
+      assert.equal(h.sentMessages.length, 0);
+
+      await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" });
+      await emitExtensionEvent(h, "agent_start");
+      assert.equal((await call("fffind", "new-turn", { pattern: "astro.config" })).block, true);
+      assert.equal(h.aborts.length, 1);
+      await emitExtensionEvent(h, "agent_settled");
+      assert.deepEqual(latest(), before);
+      assert.equal(h.sentMessages.length, 0);
+
+      await h.commands.get("pi-init").handler("workflow resume", h.context);
+      assert.equal(latest().status, "running");
+      assert.equal(latest().currentTaskId, "first");
+      assert.equal(h.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task").length, 1);
+    } finally { await emitExtensionEvent(h, "session_shutdown"); }
+  });
+});
+
 test("完整工具组不触发主动压缩，原生压缩后保留任务并重新确认职责", async () => {
   await withTempDirectory(async cwd => {
     const h = await runningHarness(cwd);
