@@ -58,7 +58,7 @@ function buildRuntimeSection(
     `当前职责：${role}`,
     workflowSummary(state),
     recoveryGuidance(state, step),
-    `工作流下一步：${step.action}。${step.nextAction}`,
+    `工作流下一步：${step.recovery === "wait" ? "wait" : step.action}。${step.nextAction}`,
   ].join("\n");
 }
 

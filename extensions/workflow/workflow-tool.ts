@@ -120,7 +120,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, runtimeState: ExtensionRu
         runtimeState.traceHandoff?.(ctx, "workflow.action_rejected", { toolCallId: _toolCallId, action: params.action, code, errorHash: fingerprint(value?.message) });
         const rejection = observeRejection({ toolName: "task_workflow", toolCallId: _toolCallId, action: params.action, code }, ctx);
         if (rejection.stop) {
-          userControl.suspend(ctx, "repeated-rejection");
+          if (!rejection.reviewOnly) userControl.suspend(ctx, "repeated-rejection");
           runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: _toolCallId, code: rejection.code });
           return { content: [{ type: "text", text: "同一身份的工作流动作已连续被拒绝，自动续跑已停止；未恢复、完成或重试任务。原错误码：" + code }], details: { ok: false, code, rejectionStopped: true }, terminate: true };
         }
