@@ -47,7 +47,7 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
     return { action: "recover", recovery: "wait",
       nextAction: '架构规划等待用户审阅；普通问题直接回答，不轮询 task_workflow(action="status")。'
         + (state.roleRecoveryPending ? "确需工具时先按恢复门确认当前职责，不切到待执行任务的角色。" : "")
-        + "确需只读核对时使用原生 read/grep/find/ls，不重试被拒的搜索工具。用户批准后通过 /pi-init workflow resume 开始执行。" };
+        + "确需只读核对时使用原生 read/grep/find/ls，不重试被拒的搜索工具。用户可用 /pi-init workflow resume 批准执行当前计划，或发送「重规划：<新方向>」修订计划；修订后仍待审。" };
   }
   if (!state.roleRecoveryPending && workflow?.status === "paused"
     && ["session-handoff-review", "session-transfer-pending", "session-handoff-imported"].includes(workflow.pauseReason ?? "")) {

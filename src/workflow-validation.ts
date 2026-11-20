@@ -307,6 +307,10 @@ export function normalizePendingRevision(revision: unknown): WorkflowPendingRevi
     direction: requireText(source.direction, "已保存的工作流 pendingRevision 的 direction"),
     requestedAt: requireTimestamp(source.requestedAt, "已保存的工作流 pendingRevision 的 requestedAt"),
   };
+  if (source.reviewRequired !== undefined) {
+    if (source.reviewRequired !== true || source.kind === "goal") throw new Error("已保存的重规划审阅要求无效");
+    result.reviewRequired = true;
+  }
   if (source.requestedFromTaskId !== undefined) {
     result.requestedFromTaskId = requireText(
       source.requestedFromTaskId,

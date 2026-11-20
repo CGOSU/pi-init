@@ -6,7 +6,7 @@ import { findMatchingRole } from "../src/roles.ts";
 import { clearRoleConfigNotice, showRoleConfigNotice } from "./role/role-config-notice.ts";
 import { evaluateFileReviewDispatch } from "./file-review/file-review-dispatch-policy.ts";
 import { isWorkflowRunning, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
-import { createWorkflowRevisionInput } from "./workflow/workflow-revision-input.ts";
+import { createWorkflowRevisionInput, workflowTaskCorrectionInput } from "./workflow/workflow-revision-input.ts";
 import { registerExtensionCommand } from "./extension-command.ts";
 import { registerProjectTool } from "./project-tool.ts";
 import { registerWorkflowTool } from "./workflow/workflow-tool.ts";
@@ -70,16 +70,16 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         throw error;
       }
     });
-  function endArchitectureReviewTurn(ctx: ExtensionContext, notice?: string) {
+  function endArchitectureReviewTurn(ctx: ExtensionContext, reason?: string) {
     // The plan is already paused; end the round without adding a user stop.
     roleHandoff.reset();
     ctx.abort();
-    if (notice) ctx.ui.notify(notice, "warning");
+    if (reason) ctx.ui.notify(`${reason}本轮已停止，计划仍待审。批准当前计划：/pi-init workflow resume；要改方向：发送「重规划：<新方向>」，修订后仍待审。`, "warning");
   }
   const workflowProgressObserver = createWorkflowProgressObserver(pi, runtimeState, {
     onRepeatedRead: (ctx, stop) => {
       if (stop === "review") {
-        endArchitectureReviewTurn(ctx, "待审期间重复读取未获得新信息，本轮已停止，计划仍等待用户审阅。");
+        endArchitectureReviewTurn(ctx, "待审期间重复读取未获得新信息。");
       } else {
         userControl.suspend(ctx, "repeated-read");
       }
@@ -97,7 +97,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       return;
     }
     endArchitectureReviewTurn(ctx, rejection.firstStop
-      ? "待审计划的执行门禁已被反复触发，本轮已停止；计划仍等待用户审阅，未启动任务。"
+      ? "待审计划的执行门禁已被反复触发。"
       : undefined);
     if (rejection.firstStop) {
       runtimeState.traceHandoff?.(ctx, "workflow.rejection_stopped", { toolCallId: event.toolCallId, code: rejection.code });
@@ -224,8 +224,10 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     const handled = (await userControl.input(event, ctx))
       ?? ((await captureWorkflowRevisionInput(event, ctx)) ? { action: "handled" as const } : undefined);
     if (handled) return handled;
+    const correction = workflowTaskCorrectionInput(runtimeState, event, ctx);
+    if (correction?.action === "handled") return correction;
     runTimingDiagnostics.captureInput(event.source);
-    return { action: "continue" };
+    return correction ?? { action: "continue" };
   });
 
   pi.on("before_agent_start", (_event, ctx) => {

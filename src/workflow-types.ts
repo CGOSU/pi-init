@@ -71,6 +71,7 @@ export type WorkflowPendingRevision = {
   direction: string;
   requestedAt: number;
   requestedFromTaskId?: string;
+  reviewRequired?: true;
   kind?: "replan" | "goal";
   goalParentId?: string;
   childGoal?: string;

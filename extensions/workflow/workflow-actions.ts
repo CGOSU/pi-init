@@ -308,8 +308,11 @@ export function createWorkflowActions(
         });
         deps.store.persistWorkflowState(next, ctx);
         state.workflowDispatchInFlight = false;
+        const nextStep = next.pauseReason === "architecture-review"
+          ? nextWorkflowAction({ ...state, workflowState: next }).nextAction
+          : "新计划将自动开始。";
         return {
-          content: [{ type: "text", text: `${grouped ? "目标已加入共享队列；原目标、已完成成果与待执行任务保留，无父子运行栈。" : "已应用工作流重规划。"}\n${deps.report.formatWorkflowState(next)}\n\n新计划将自动开始。` }],
+          content: [{ type: "text", text: `${grouped ? "目标已加入共享队列；原目标、已完成成果与待执行任务保留，无父子运行栈。" : "已应用工作流重规划。"}\n${deps.report.formatWorkflowState(next)}\n\n${nextStep}` }],
           details: statusDetails(next),
           terminate: true,
         };

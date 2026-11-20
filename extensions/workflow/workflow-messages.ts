@@ -171,6 +171,7 @@ export function createWorkflowMessages(
       "本轮身份由运行时绑定，不将旧结果换成新身份。",
       "当前计划：" + JSON.stringify(workflow.plan),
       "待处理方向：" + request.direction,
+      ...(request.reviewRequired ? ["只按用户方向提交修订计划。提交后仍待用户审阅，不执行任务；已有信息够用时不要重复调查。"] : []),
       "已有任务与真实成果：" + JSON.stringify(workflow.tasks.filter(task => task.status !== "completed" && task.status !== "superseded" || dependencies.has(task.id)).map(task => ({ id: task.id, task: task.task, status: task.status, dependsOn: task.dependsOn, completionSummary: task.completionSummary, verification: task.verification, outcomeUnknown: task.outcomeUnknown, blockReason: task.blockReason }))),
       request.kind === "goal" ? "目标插入仍使用同一队列，显式retainTaskIds保留所有仍有效的pending任务；目标分组不是子工作流。" : "只修改未完成的后续计划；用retainTaskIds保留仍有效的pending任务，已完成成果自动保留。",
       '调用task_workflow(action="replan", summary=..., constraints=[...], tasks=[...], retainTaskIds=[...])；未知结果必须先核对副作用，由用户明确确认，不自动重试。',
