@@ -22,23 +22,21 @@ pi --no-extensions -e ./extensions/index.ts
 
 已安装为 Pi package 时，设置变量后使用原有 Pi 启动命令即可。扩展加载时读取开关；取消变量恢复自动黑匣子；设为 0 则完全关闭采集，再重新加载扩展。
 
-日志写入当前项目的 .pi/logs/handoff.jsonl，每行一个 JSON。约 2 MiB 轮转，保留一个 handoff.jsonl.1 备份；与自动黑匣子复用 runtime-diagnostics.ts 中的有界写队列、轮转和失败停用处理，不合并文件或采集内容。正在发生的问题可用 PowerShell 实时查看：
-
-```powershell
-Get-Content .pi/logs/handoff.jsonl -Tail 30 -Wait
-```
+日志写入 Pi Agent 目录的 `diagnostics/pi-init/handoff/<projectKey>/<sessionKey>.jsonl`，每行一个 JSON。单文件最多 2 MiB，保留一份 `.1` 备份。它与自动黑匣子共享[会话留存上限](runtime-diagnostics.md#保存内容与位置)，采集内容仍分开。`/blackbox status session` 显示当前会话的详细日志路径，历史会话可从 `/blackbox menu` 选择。
 
 ## 离线统计
 
 在 pi-init 仓库运行（已安装 package 时使用其 scripts/handoff-report.js 的实际路径）：
 
 ```sh
+# 使用 /blackbox status session 显示的实际路径替换下面的示例
+node scripts/handoff-report.js /path/to/agent/diagnostics/pi-init/handoff/PROJECT_KEY/SESSION_KEY.jsonl
+# 可附加 .jsonl.1 的完整路径；顺序不限，重复事件按 runtime/session/sequence 去重
+# 旧日志仍可作为显式输入
 node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl
-# 同时分析轮转文件；顺序不限，重复事件按 runtime/session/sequence 去重
-node scripts/handoff-report.js /path/to/project/.pi/logs/handoff.jsonl.1 /path/to/project/.pi/logs/handoff.jsonl
 ```
 
-不传路径时读取当前目录 `.pi/logs/handoff.jsonl`，输出 JSON 到 stdout，不修改日志，不进入模型上下文。输出包含工具调用/执行/错误数、SDK 耗时合计、回合耗时、同角色切换候选、同版本读取重叠候选和角色派发延迟。
+必须显式传入至少一个日志路径。脚本输出 JSON 到 stdout，不修改日志，不进入模型上下文。输出包含工具调用/执行/错误数、SDK 耗时合计、回合耗时、同角色切换候选、同版本读取重叠候选和角色派发延迟。
 
 回合从 before_start 到 settled，排除下一次用户输入前的空闲；未闭合为 null，多次 agent.start 明确警告，不把 run 误当唯一执行实例。缺失片段不推断失败；无效/截断行、重复和日志丢弃均披露。只分析成功且未标记截断的 read 结果中有明确版本与行范围的记录；重叠是请求范围统计，不证明实际返回行数或操作可省略，版本按 stat 观察隔离。SDK 耗时可能重叠或嵌套，不可相减推算模型推理耗时。同角色切换仅列候选，不自动跳过模型配置或恢复操作。
 

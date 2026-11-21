@@ -1,11 +1,10 @@
-import { lstat } from "node:fs/promises";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { diagnosticLocation, findDiagnosticFiles, recentDiagnosticFiles, withDiagnosticLocation } from "./diagnostic-layout.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { formatRuntimeIdentity, loadedRuntimeIdentity } from "./runtime-identity.ts";
 import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
-import { captureDiagnosticScope, diagnosticDirectory, matchesDiagnosticScope, readDiagnosticText, withDiagnosticLock, type DiagnosticScope, type DiagnosticResumeResult } from "./diagnostic-storage.ts";
+import { captureDiagnosticScope, diagnosticErrorCode, matchesDiagnosticScope, readDiagnosticText, type DiagnosticScope, type DiagnosticResumeResult } from "./diagnostic-storage.ts";
 import { createDiagnosticWriter } from "./diagnostic-writer.ts";
 export { createDiagnosticWriter } from "./diagnostic-writer.ts";
 import { createGlobalDiagnostics, isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
@@ -50,8 +49,9 @@ function classify(event: string, data: Data) {
   ]);
 }
 
-export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number; global?: Parameters<typeof createGlobalDiagnostics>[0] } = {}) {
-  const global = createGlobalDiagnostics(options.global);
+export function createRuntimeDiagnostics(snapshot: () => unknown, options: { maxBytes?: number; now?: () => number; agentDir?: () => string; global?: Parameters<typeof createGlobalDiagnostics>[0] } = {}) {
+  const agentDir = options.agentDir ?? options.global?.agentDir ?? getAgentDir;
+  const global = createGlobalDiagnostics({ ...options.global, agentDir });
   const maxBytes = Math.max(128 * 1024, Math.min(options.maxBytes ?? 2 * 1024 * 1024, 2 * 1024 * 1024));
   const runtimeId = randomUUID();
   const nowMs = options.now ?? (() => performance.now());
@@ -83,7 +83,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   const seen = new Set<string>();
   // Only explicit workflow rejection observations establish result correlation.
   const rejectedCalls = new Map<string, string>();
-  const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes, maxPending: MAX_PENDING, retentionMs: RETENTION_MS, rejectOversize: true, directoryMode: 0o700, warning: "运行黑匣子写入失败；已停用记录，不影响任务执行。" });
+  const writer = createDiagnosticWriter({ scope: "project", agentDir, maxBytes, maxPending: MAX_PENDING, retentionMs: RETENTION_MS, warning: "运行黑匣子写入失败；已停用记录，不影响任务执行。" });
   function write(ctx: ExtensionContext, record: Data) {
     writer.write(ctx, dropped => ({ version: 1, extensionVersion, runtimeIdentity: loadedRuntimeIdentity, runtimeId, captureId, sessionId: ctx.sessionManager.getSessionId(), run, dropped, ...record }));
   }
@@ -253,40 +253,46 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       // Observation must never affect task execution.
     }
   }
-  async function report(ctx: ExtensionContext) {
+  async function report(ctx: ExtensionContext, sessionKey?: string) {
     if (!ctx.isProjectTrusted()) return "运行黑匣子：未信任项目，不读取诊断。";
     const initial = captureDiagnosticScope(ctx);
+    const current = () => matchesDiagnosticScope(ctx, initial);
     await Promise.all([writer.flush(), global.flush()]);
-    if (!matchesDiagnosticScope(ctx, initial)) return "运行黑匣子：项目、会话或分支已变化，未读取诊断。";
+    if (!current()) return "运行黑匣子：项目、会话或分支已变化，未读取诊断。";
     const latest = new Map<string, Data>();
     const summaries: Data[] = [];
     const requests: Data[] = [];
     const cacheRequests: Data[] = [];
+    const rowTargets = new Map([["summary", summaries], ["provider-request", requests], ["cache-request", cacheRequests]]);
     let incomplete = false;
+    let readError: string | undefined;
+    let rows = 0;
+    const location = diagnosticLocation(agentDir(), "project", initial.cwd, sessionKey);
     try {
-      const directory = await diagnosticDirectory(ctx.cwd, [".pi", "diagnostics"]);
-      await withDiagnosticLock(directory, async () => {
-        if (!matchesDiagnosticScope(ctx, initial) || await diagnosticDirectory(initial.cwd, [".pi", "diagnostics"]) !== directory) throw new Error("diagnostic scope changed");
-        for (const suffix of [".1", ""]) {
+      await withDiagnosticLocation(location, { current }, async root => {
+        const retained = (await findDiagnosticFiles(location, root)).filter(file => Date.now() - file.mtimeMs <= RETENTION_MS);
+        const recent = recentDiagnosticFiles(retained, maxBytes);
+        incomplete = recent.limited;
+        for (const { path } of recent.files) {
           try {
-            const path = join(directory, "runtime.jsonl" + suffix);
-            const info = await lstat(path);
-            if (Date.now() - info.mtimeMs > RETENTION_MS) continue;
-            if (info.size > maxBytes) { incomplete = true; continue; }
-            const rowTargets: Record<string, Data[]> = { summary: summaries, "provider-request": requests, "cache-request": cacheRequests };
             for (const line of (await readDiagnosticText(path, maxBytes)).split("\n")) {
               if (!line) continue;
               try {
                 const row = JSON.parse(line);
-                if (row && typeof row.kind === "string" && rowTargets[row.kind]) rowTargets[row.kind].push(row);
+                if (!row || typeof row.kind !== "string") { incomplete = true; continue; }
+                rows++;
+                rowTargets.get(row.kind)?.push(row);
                 if (row.dropped > 0 || row.overflow > 0 || row.incomplete === true) incomplete = true;
                 if (row.version === 1 && row.kind === "issue" && typeof row.id === "string" && typeof row.runtimeId === "string" && Number.isSafeInteger(row.count) && row.count > 0) latest.set(JSON.stringify([row.runtimeId, row.captureId, row.sessionId, row.id]), row);
               } catch { incomplete = true; }
             }
-          } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") incomplete = true; }
+          } catch (error) { readError = diagnosticErrorCode(error); incomplete = true; }
         }
       });
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") incomplete = true; }
+    } catch (error) {
+      if (diagnosticErrorCode(error) !== "ENOENT") { readError = diagnosticErrorCode(error); incomplete = true; }
+    }
+    if (!current()) return "运行黑匣子：项目、会话或分支已变化，未读取诊断。";
     const grouped = new Map<string, { label: string; count: number }>();
     for (const row of latest.values()) {
       const label = [row.category, row.code, row.toolName].filter(value => typeof value === "string").join(" / ").replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 200);
@@ -294,7 +300,16 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
       item.count += Number(row.count); grouped.set(String(row.id), item);
     }
     const lines = [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 20).map(item => item.label + "：" + item.count + " 次观察");
-    return ["运行黑匣子（本地保留文件；7 天按文件更新时间清理；观察次数不等于失败请求数）", formatRuntimeIdentity(), global.report(), ...lines, formatToolFailureChains([...latest.values()]), formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests), lines.length ? "现场：.pi/diagnostics/runtime.jsonl（含 .1 备份）" : "暂无已记录问题，不代表运行无故障。", incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : ""].filter(Boolean).join("\n");
+    return [
+      "运行黑匣子（" + (sessionKey ? "选定会话" : "当前项目") + "；最近 7 天留存样本，观察次数不等于失败请求数）",
+      "现场：" + location.path + (sessionKey ? "（及 .1 备份）" : "（独立会话文件及 .1 备份）"),
+      formatRuntimeIdentity(), global.report(), ...lines, formatToolFailureChains([...latest.values()]),
+      formatRuntimeSamples(summaries), formatContextProjections(summaries), formatProviderObservations([...requests, ...summaries]), formatCacheObservations(cacheRequests),
+      readError ? "诊断读取失败（" + readError + "）。" : undefined,
+      writer.failed ? "项目黑匣子已停录（" + writer.failureCode + "）；排除原因后使用 /blackbox resume project。" : undefined,
+      !incomplete && !lines.length ? (rows ? "暂无已记录问题，不代表运行无故障。" : "暂无留存诊断记录，不代表运行无故障。") : undefined,
+      incomplete || writer.failed || writer.dropped ? "记录不完整：存在读取/写入失败、截断或丢弃（evidenceTruncated 仅表示有界现场省略，不表示请求失败）。" : undefined,
+    ].filter(Boolean).join("\n");
   }
   async function resume(ctx: ExtensionContext, target: DiagnosticScope): Promise<DiagnosticResumeResult> {
     if (target === "global") return global.resume(ctx);

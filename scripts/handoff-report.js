@@ -200,7 +200,7 @@ export function analyzeHandoffLog(input) {
 
 async function main() {
   const paths = process.argv.slice(2);
-  if (!paths.length) paths.push(".pi/logs/handoff.jsonl");
+  if (!paths.length) throw new Error("用法：node scripts/handoff-report.js <日志文件> [日志文件 ...]；不自动读取项目内旧日志。");
   const records = [];
   const warnings = [];
   for (const path of paths) {

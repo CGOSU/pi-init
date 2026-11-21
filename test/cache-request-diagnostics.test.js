@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { diagnosticPath } from "./support/diagnostic-paths.js";
 import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 
@@ -20,13 +21,15 @@ async function withDiagnostics(fn, options = {}) {
     if (options.unsupportedHook && name === "provider_stream_event") throw new Error("unsupported event");
     handlers.set(name, handler);
   } };
-  const monitor = createHandoffDiagnostics(pi, state, { mode: "automatic", ...options });
+  const agent = join(cwd, "agent");
+  const file = scope => diagnosticPath(scope, ctx, agent);
+  const monitor = createHandoffDiagnostics(pi, state, { mode: "automatic", agentDir: () => agent, ...options });
   const emit = async (name, event = {}) => handlers.get(name)?.(event, ctx);
-  const read = async (path) => {
-    try { return (await readFile(join(cwd, ".pi", path), "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse); }
+  const read = async (scope) => {
+    try { return (await readFile(file(scope), "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse); }
     catch (error) { if (error.code === "ENOENT") return []; throw error; }
   };
-  const rows = async () => { await monitor.flush(); return read("diagnostics/runtime.jsonl"); };
+  const rows = async () => { await monitor.flush(); return read("project"); };
   const cacheRows = async () => (await rows()).filter(row => row.kind === "cache-request");
   let timestamp = 0;
   const start = async (payload = { instructions: "private-system", input: [{ role: "user", content: "private-context" }], tools: [{ name: "private-tool", parameters: {} }] }) => emit("before_provider_request", { payload });
@@ -41,7 +44,7 @@ async function withDiagnostics(fn, options = {}) {
     await raw("response.created", { id });
     await raw(type, { id, usage });
   };
-  try { await emit("before_agent_start"); await fn({ cwd, ctx, state, monitor, emit, start, raw, end, response, rows, cacheRows, read, notices }); }
+  try { await emit("before_agent_start"); await fn({ cwd, agent, file, ctx, state, monitor, emit, start, raw, end, response, rows, cacheRows, read, notices }); }
   finally { await monitor.flush(); await rm(cwd, { recursive: true, force: true }); }
 }
 
@@ -339,7 +342,7 @@ test("selected prompt fingerprints are runtime-keyed, stage-specific and sensiti
     assert.equal(rows[0].transport, "unavailable"); assert.equal(rows[0].requestForm, "unavailable");
     assert.deepEqual(payload.instructions, before.instructions);
     assert.deepEqual(payload.tools, before.tools);
-    const logs = JSON.stringify([rows, await read("logs/handoff.jsonl")]);
+    const logs = JSON.stringify([rows, await read("handoff")]);
     assert.equal(logs.includes("private-"), false);
     assert.equal(logs.includes(ctx.cwd), false);
   }, { mode: "verbose" });
@@ -383,16 +386,17 @@ test("automatic and verbose reports include raw unknown/zero/positive and do not
 });
 
 test("request records share runtime rotation, bounded queues, off/trust guards and write-failure isolation", async () => {
-  await withDiagnostics(async ({ cwd, start, end, monitor, cacheRows, emit }) => {
+  await withDiagnostics(async ({ file, start, end, monitor, cacheRows, emit }) => {
     for (let i = 0; i < 150; i++) { await start(); await end(); }
     await monitor.flush();
     await start(); await end();
     const rows = await cacheRows();
     assert.ok(rows.some(row => row.dropped > 0));
     for (let i = 0; i < 130; i++) { await start(); await end(); await monitor.flush(); }
-    const files = await readdir(join(cwd, ".pi/diagnostics"));
-    assert.deepEqual(files.sort(), ["runtime.jsonl", "runtime.jsonl.1"]);
-    for (const file of files) assert.ok((await stat(join(cwd, ".pi/diagnostics", file))).size <= 128 * 1024);
+    const path = file("project");
+    const files = await readdir(dirname(path));
+    assert.deepEqual(files.sort(), [basename(path), basename(path) + ".1"]);
+    for (const name of files) assert.ok((await stat(join(dirname(path), name))).size <= 128 * 1024);
     await emit("session_shutdown");
   }, { maxBytes: 128 * 1024 });
   for (const mode of ["off", "automatic"]) await withDiagnostics(async ({ cwd, ctx, start, end, monitor }) => {
@@ -400,8 +404,8 @@ test("request records share runtime rotation, bounded queues, off/trust guards a
     await start(); await end(); await monitor.flush();
     assert.deepEqual(await readdir(cwd), []);
   }, { mode });
-  await withDiagnostics(async ({ cwd, start, end, monitor, notices }) => {
-    await writeFile(join(cwd, ".pi"), "blocked");
+  await withDiagnostics(async ({ agent, start, end, monitor, notices }) => {
+    await writeFile(agent, "blocked");
     await start(); await end(); await monitor.flush();
     await start(); await end(); await monitor.flush();
     assert.equal(notices.length, 1);

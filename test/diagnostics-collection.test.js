@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile, rm, symlink, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rename, writeFile, rm, symlink, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -51,6 +51,18 @@ test("collection refuses oversized inputs and symlink files; record limit is exp
   }
 });
 
+test("a managed segment replaced between discovery and capture is disclosed without reading the replacement", async t => {
+  const directory = await fixture(t);
+  const path = join(directory, "runtime.jsonl");
+  await writeFile(path, '{}\n');
+  const { dev, ino } = await stat(path);
+  await rename(path, path + ".1");
+  await writeFile(path, '{"replacement":true}\n');
+  const result = await readSources([{ kind: "runtime", path, managed: { dev, ino } }]);
+  assert.deepEqual(result.records.runtime, []);
+  assert.equal(result.unavailable[0].code, "UNSAFE_OR_CHANGED_SOURCE");
+});
+
 test("local bundle deduplicates snapshots, correlates session evidence and never copies raw bodies", async t => {
   const directory = await fixture(t);
   const runtime = join(directory, "runtime.jsonl");
@@ -93,12 +105,14 @@ test("local bundle deduplicates snapshots, correlates session evidence and never
   }
 });
 
-test("CLI requires explicit runtime and output; repeatable source flags never imply directory scanning", () => {
+test("CLI requires an explicit input mode; time and session selectors cannot change explicit files", () => {
   assert.throws(() => parseArguments([]), /必须指定/);
   assert.throws(() => parseArguments(["--session", "session", "--output", "out"]), /必须指定/);
   assert.throws(() => parseArguments(["--runtime", "a", "--output", "b", "--output", "c"]), /只能指定/);
   assert.throws(() => parseArguments(["--upload", "yes"]), /参数无效/);
   assert.equal(parseArguments(["--runtime", "a", "--runtime", "b", "--output", "out"]).inputs.length, 2);
+  assert.throws(() => parseArguments(["--runtime", "a", "--session-id", "s", "--output", "out"]), /仅用于/);
+  assert.throws(() => parseArguments(["--project", "a", "--since", "999999999999999d", "--output", "out"]), /--since/);
   assert.equal(parseArguments(["--help"]).help, true);
 });
 

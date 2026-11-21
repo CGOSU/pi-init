@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { diagnosticPath, diagnosticRoot } from "./support/diagnostic-paths.js";
 import { createDiagnosticWriter, createRuntimeDiagnostics } from "../extensions/diagnostics/runtime-diagnostics.ts";
 import { createGlobalDiagnostics } from "../extensions/diagnostics/global-diagnostics.ts";
 import { readDiagnosticText } from "../extensions/diagnostics/diagnostic-storage.ts";
@@ -23,16 +24,17 @@ async function fixture(fn) {
   finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 
-for (const file of ["diagnostics/runtime.jsonl", "logs/handoff.jsonl"]) {
-  for (const linked of [".pi", ".pi/" + file.split("/")[0], ".pi/" + file, ".pi/" + file + ".1"]) {
-    test(`project diagnostics refuse symlinked storage: ${linked}`, async () => fixture(async ({ root, outside, ctx, notices }) => {
-      const target = join(root, linked);
-      await fs.mkdir(join(target, ".."), { recursive: true });
-      const directory = !linked.includes(".jsonl");
+for (const scope of ["project", "handoff"]) {
+  for (const linked of ["root", "group", "project", "file", "backup"]) {
+    test(`${scope} diagnostics refuse symlinked storage: ${linked}`, async () => fixture(async ({ root, outside, ctx, notices }) => {
+      const agent = join(root, "agent"), file = diagnosticPath(scope, ctx, agent);
+      const target = { root: diagnosticRoot(agent), group: dirname(dirname(file)), project: dirname(file), file, backup: file + ".1" }[linked];
+      await fs.mkdir(dirname(target), { recursive: true });
+      const directory = !["file", "backup"].includes(linked);
       const destination = directory ? outside : join(outside, "private.jsonl");
       if (!directory) await fs.writeFile(destination, "private-content\n");
       await fs.symlink(destination, target, directory ? "junction" : "file");
-      const writer = createDiagnosticWriter({ file, maxBytes: 4096, maxPending: 4, warning: "storage rejected" });
+      const writer = createDiagnosticWriter({ scope, agentDir: () => agent, maxBytes: 4096, maxPending: 4, warning: "storage rejected" });
       writer.write(ctx, () => ({ kind: "summary" }));
       await writer.flush();
       assert.equal(writer.failed, true);
@@ -68,12 +70,12 @@ test("bounded diagnostic reads accept the exact limit and reject larger files", 
 }));
 
 test("runtime reports refuse symlinked files without reading external data", async () => fixture(async ({ root, outside, ctx }) => {
-  const directory = join(root, ".pi", "diagnostics");
-  await fs.mkdir(directory, { recursive: true });
+  const agent = join(root, "agent"), file = diagnosticPath("project", ctx, agent);
+  await fs.mkdir(dirname(file), { recursive: true });
   const external = join(outside, "runtime.jsonl");
   await fs.writeFile(external, JSON.stringify({ version: 1, kind: "issue", runtimeId: "external", id: "external", category: "PRIVATE_CATEGORY", code: "PRIVATE_CODE", count: 1 }) + "\n");
-  await fs.symlink(external, join(directory, "runtime.jsonl"), "file");
-  const diagnostics = createRuntimeDiagnostics(() => ({}));
+  await fs.symlink(external, file, "file");
+  const diagnostics = createRuntimeDiagnostics(() => ({}), { agentDir: () => agent });
   const report = await diagnostics.report(ctx);
   assert.equal(report.includes("PRIVATE_CATEGORY"), false);
   assert.equal(report.includes("PRIVATE_CODE"), false);

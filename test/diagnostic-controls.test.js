@@ -2,7 +2,8 @@ import test from "node:test";
 import "../scripts/test-bootstrap.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { diagnosticPath, diagnosticRoot } from "./support/diagnostic-paths.js";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { createDiagnosticControls } from "../extensions/diagnostics/diagnostic-controls.ts";
@@ -15,23 +16,23 @@ import { fastForwardTimeouts } from "./support/fast-forward-timeouts.js";
 async function fixture(run) {
   const root = await fs.mkdtemp(join(tmpdir(), "pi-controls-"));
   const project = join(root, "project"), agent = join(root, "agent");
-  const directories = { project: join(project, ".pi", "diagnostics"), global: join(agent, "diagnostics", "pi-init") };
-  for (const path of Object.values(directories)) await fs.mkdir(path, { recursive: true });
+  await fs.mkdir(join(project, ".pi"), { recursive: true });
   const notices = [];
-  const ctx = { cwd: project, hasUI: true, isProjectTrusted: () => true, sessionManager: { getSessionId: () => "session" }, ui: { notify: (...args) => notices.push(args), confirm: async () => true } };
+  const ctx = { cwd: project, hasUI: true, isProjectTrusted: () => true, sessionManager: { getSessionId: () => "test-session" }, ui: { notify: (...args) => notices.push(args), confirm: async () => true } };
+  const files = { project: diagnosticPath("project", ctx, agent), global: diagnosticPath("global", ctx, agent) };
+  for (const path of Object.values(files)) await fs.mkdir(dirname(path), { recursive: true });
   let flushed = 0;
   const controls = createDiagnosticControls({ agentDir: () => agent, report: async () => "报告", flush: async () => { flushed++; } });
-  try { await run({ root, project, agent, directories, ctx, controls, notices, flushed: () => flushed }); }
+  try { await run({ root, project, agent, files, ctx, controls, notices, flushed: () => flushed }); }
   finally { await fs.rm(root, { recursive: true, force: true }); }
 }
-const file = directory => join(directory, "runtime.jsonl");
 const exists = path => fs.access(path).then(() => true, () => false);
 
-test("导出显式范围、256条上限、严格白名单与跨层关联，不覆盖目标", () => fixture(async ({ root, directories, ctx, controls }) => {
+test("导出显式范围、256条上限、严格白名单与跨层关联，不覆盖目标", () => fixture(async ({ root, files, ctx, controls }) => {
   const secret = "private-token-prompt-path";
   const records = Array.from({ length: 300 }, (_, count) => ({ count, kind: "issue", category: "runtime-failure", snapshot: secret, message: secret, code: secret, diagnosticEventId: "id", environment: secret, events: [{ data: secret }] }));
-  await fs.writeFile(file(directories.project), records.map(JSON.stringify).join("\n") + "\n");
-  await fs.writeFile(file(directories.global), JSON.stringify({ event: "runtime.failure", diagnosticEventId: "id", message: secret }) + "\n");
+  await fs.writeFile(files.project, records.map(JSON.stringify).join("\n") + "\n");
+  await fs.writeFile(files.global, JSON.stringify({ event: "runtime.failure", diagnosticEventId: "id", message: secret }) + "\n");
   const target = join(root, "project-export.json");
   const result = await controls.exportFile(ctx, "project", target);
   assert.equal(result.ok, true); assert.equal(result.value.count, 256);
@@ -47,15 +48,15 @@ test("导出显式范围、256条上限、严格白名单与跨层关联，不�
   assert.equal(await exists(join(root, "invalid")), false);
 }));
 
-test("清理取消和无交互/未信任不产生写入或删除；清理仅限选定范围的两个日志", () => fixture(async ({ project, directories, ctx, controls, flushed }) => {
-  for (const directory of Object.values(directories)) {
-    await fs.writeFile(file(directory), "{}\n"); await fs.writeFile(file(directory) + ".1", "{}\n");
-    await fs.writeFile(join(directory, "unrelated"), "keep");
+test("清理取消和无交互/未信任不产生写入或删除；清理仅限选定范围的两个日志", () => fixture(async ({ project, files, ctx, controls, flushed }) => {
+  for (const file of Object.values(files)) {
+    await fs.writeFile(file, "{}\n"); await fs.writeFile(file + ".1", "{}\n");
+    await fs.writeFile(join(dirname(file), "unrelated"), "keep");
   }
   const state = join(project, ".pi", "workflow.json"); await fs.writeFile(state, "keep");
   ctx.ui.confirm = async () => false;
   assert.equal(await controls.clear(ctx, "project"), undefined); assert.equal(flushed(), 0);
-  assert.equal(await exists(file(directories.project)), true);
+  assert.equal(await exists(files.project), true);
   ctx.hasUI = false;
   assert.equal((await controls.clear(ctx, "project")).code, "CONFIRMATION_REQUIRED");
   ctx.hasUI = true; ctx.ui.confirm = async () => true;
@@ -63,86 +64,89 @@ test("清理取消和无交互/未信任不产生写入或删除；清理仅限�
   assert.equal((await controls.clear(ctx, "global")).ok, false);
   ctx.isProjectTrusted = () => true;
   assert.deepEqual(await controls.clear(ctx, "project"), { ok: true, value: { count: 2 } });
-  assert.equal(await exists(file(directories.global)), true);
+  assert.equal(await exists(files.global), true);
   assert.equal(await fs.readFile(state, "utf8"), "keep");
-  assert.equal(await exists(join(directories.project, "unrelated")), true);
+  assert.equal(await exists(join(dirname(files.project), "unrelated")), true);
 }));
 
-test("拒绝目录/文件链接、损坏数据、超限文件，失败不生成成功导出", () => fixture(async ({ root, directories, ctx, controls }) => {
-  const external = join(root, "external"); await fs.mkdir(external); await fs.writeFile(file(external), "keep");
-  await fs.rm(directories.project, { recursive: true }); await fs.symlink(external, directories.project, "dir");
+test("拒绝目录/文件链接、损坏数据、超限文件，失败不生成成功导出", () => fixture(async ({ root, files, ctx, controls }) => {
+  const external = join(root, "external"); await fs.mkdir(external); await fs.writeFile(join(external, "runtime.jsonl"), "keep");
+  await fs.rm(dirname(files.project), { recursive: true }); await fs.symlink(external, dirname(files.project), "dir");
   assert.equal((await controls.clear(ctx, "project")).code, "UNSAFE_DIAGNOSTIC_PATH");
-  await fs.unlink(directories.project); await fs.mkdir(directories.project);
-  await fs.symlink(file(external), file(directories.project));
+  await fs.unlink(dirname(files.project)); await fs.mkdir(dirname(files.project));
+  await fs.symlink(join(external, "runtime.jsonl"), files.project);
   assert.equal((await controls.clear(ctx, "project")).code, "UNSAFE_DIAGNOSTIC_PATH");
-  assert.equal(await fs.readFile(file(external), "utf8"), "keep");
-  await fs.unlink(file(directories.project));
+  assert.equal(await fs.readFile(join(external, "runtime.jsonl"), "utf8"), "keep");
+  await fs.unlink(files.project);
   const target = join(root, "export");
-  await fs.writeFile(file(directories.project), "invalid json\n");
+  await fs.writeFile(files.project, "invalid json\n");
   assert.equal((await controls.exportFile(ctx, "project", target)).ok, false);
   assert.equal(await exists(target), false);
-  await fs.writeFile(file(directories.project), "x".repeat(2 * 1024 * 1024 + 1));
+  await fs.writeFile(files.project, "x".repeat(2 * 1024 * 1024 + 1));
   assert.equal((await controls.exportFile(ctx, "project", target)).code, "DIAGNOSTIC_TOO_LARGE");
-  await fs.writeFile(file(directories.project), "{}\n");
+  await fs.writeFile(files.project, "{}\n");
   assert.equal((await controls.exportFile(ctx, "project", join(root, "missing", "export"))).code, "ENOENT");
 }));
 
 test("活动锁阻止清理，取消不等待锁；释放后项目与全局writer继续有效记录", { timeout: 5000 }, async t => {
-  const delays = await fastForwardTimeouts(t, () => fixture(async ({ directories, agent, ctx, controls }) => {
+  const delays = await fastForwardTimeouts(t, () => fixture(async ({ files, agent, ctx, controls }) => {
     for (const scope of ["project", "global"]) {
-      const directory = directories[scope]; await fs.writeFile(file(directory), "{}\n");
+      const directory = diagnosticRoot(agent); await fs.writeFile(files[scope], "{}\n");
+      const lockName = scope === "global" ? "runtime.lock" : "sidecar.lock";
       let release, ready;
       const acquired = new Promise(resolve => { ready = resolve; });
-      const lock = withDiagnosticLock(directory, async () => { ready(); await new Promise(resolve => { release = resolve; }); });
+      const lock = withDiagnosticLock(directory, async () => { ready(); await new Promise(resolve => { release = resolve; }); }, fs, lockName);
       await acquired;
       try {
         ctx.ui.confirm = async () => false;
         assert.equal(await controls.clear(ctx, scope), undefined);
         ctx.ui.confirm = async () => true;
         assert.equal((await controls.clear(ctx, scope)).code, "DIAGNOSTIC_LOCK_BUSY");
-        assert.equal(await exists(file(directory)), true);
-        assert.ok((await fs.stat(join(directory, "runtime.lock"))).isDirectory());
+        assert.equal(await exists(files[scope]), true);
+        assert.ok((await fs.stat(join(directory, lockName))).isDirectory());
       } finally { release(); await lock; }
       assert.equal((await controls.clear(ctx, scope)).ok, true);
     }
-    const writer = createDiagnosticWriter({ file: "diagnostics/runtime.jsonl", maxBytes: 4096, maxPending: 5, warning: "failure" });
+    const writer = createDiagnosticWriter({ scope: "project", agentDir: () => agent, maxBytes: 4096, maxPending: 5, warning: "failure" });
     writer.write(ctx, () => ({ count: 1 })); await writer.flush();
     const global = createGlobalDiagnostics({ agentDir: () => agent }); global.observe(ctx, "runtime.failure"); await global.flush();
-    assert.equal(JSON.parse(await fs.readFile(file(directories.project), "utf8")).count, 1);
-    assert.equal(JSON.parse(await fs.readFile(file(directories.global), "utf8")).event, "runtime.failure");
+    assert.equal(JSON.parse(await fs.readFile(files.project, "utf8")).count, 1);
+    assert.equal(JSON.parse(await fs.readFile(files.global, "utf8")).event, "runtime.failure");
   }));
   assert.deepEqual(delays, Array(200).fill(20), "both real locks must exhaust the production retry waits");
 });
 
-test("独立进程写入与清理共用锁，不破坏新日志", () => fixture(async ({ directories, ctx, controls }) => {
-  const directory = directories.project;
-  await fs.writeFile(file(directory), "{}\n");
+test("独立进程写入与清理共用锁，不破坏新日志", () => fixture(async ({ files, agent, ctx, controls }) => {
+  const directory = diagnosticRoot(agent);
+  await fs.writeFile(files.project, "{}\n");
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import {withDiagnosticLock} from ${JSON.stringify(new URL("../extensions/diagnostics/diagnostic-storage.ts", import.meta.url).href)};
     import {writeFile} from 'node:fs/promises';
     await withDiagnosticLock(${JSON.stringify(directory)}, async () => {
       process.stdout.write('locked\\n');
       await new Promise(r => setTimeout(r, 300));
-      await writeFile(${JSON.stringify(file(directory))}, '{"count":1}\\n');
-    });
+      await writeFile(${JSON.stringify(files.project)}, '{"count":1}\\n');
+    }, undefined, 'sidecar.lock');
   `], { stdio: ["ignore", "pipe", "pipe"] });
   const exit = new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", code => code === 0 ? resolve() : reject(new Error("child exit " + code))); });
   await new Promise((resolve, reject) => { child.stdout.once("data", resolve); child.once("error", reject); });
   assert.equal((await controls.clear(ctx, "project")).ok, true);
   await exit;
-  assert.equal(await exists(file(directory)), false);
-  assert.equal(await exists(join(directory, "runtime.lock")), false);
+  assert.equal(await exists(files.project), false);
+  assert.equal(await exists(join(directory, "sidecar.lock")), false);
 }));
 
-test("真实控制中心导航到同一诊断入口，按选择范围导出且不调用模型", () => fixture(async ({ root, project, directories }) => {
-  await fs.writeFile(file(directories.project), '{"kind":"summary","count":7}\n');
+test("真实控制中心导航到同一诊断入口，按选择范围导出且不调用模型", () => fixture(async ({ root, project, ctx }) => {
+  const file = diagnosticPath("project", ctx);
+  await fs.mkdir(dirname(file), { recursive: true });
+  await fs.writeFile(file, '{"kind":"summary","count":7}\n');
   const destination = join(root, "selected.json");
   let step = 0;
   const harness = createExtensionHarness([], { cwd: project, trusted: true, mode: "tui",
     custom: async ({ component }) => {
       step++;
       if (step > 3) { component.handleInput("\u001b"); return; }
-      const moves = step === 1 ? 3 : step === 2 ? 1 : 0;
+      const moves = step === 1 ? 3 : step === 2 ? 2 : 0;
       for (let i = 0; i < moves; i++) component.handleInput("\u001b[B");
       component.handleInput("\r");
     }, input: () => destination,

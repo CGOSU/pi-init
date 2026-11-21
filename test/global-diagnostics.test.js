@@ -2,6 +2,8 @@ import "../scripts/test-bootstrap.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as fs from "node:fs/promises";
+import { dirname } from "node:path";
+import { diagnosticPath } from "./support/diagnostic-paths.js";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -27,7 +29,7 @@ test("全局白名单仅存自身故障元数据，跨项目隔离并与项目�
   box.observe(ctx, "pi-init.command_failed", { message: secret, stack: secret, code: secret, input: secret, result: secret });
   await box.flush();
   const first = (await rows())[0];
-  const local = await fs.readFile(join(ctx.cwd, ".pi", "diagnostics", "runtime.jsonl"), "utf8");
+  const local = await fs.readFile(diagnosticPath("project", ctx, agentDir()), "utf8");
   assert.ok(local.includes(first.diagnosticEventId));
   assert.ok(local.includes(first.diagnosticProjectId));
   assert.ok(local.includes(first.diagnosticSessionId));
@@ -123,7 +125,8 @@ test("故障风暴有界，存活或遗留锁不被抢占且不反复等待", { 
 });
 
 test("项目写入失败不阻止全局诊断，未信任项目不写入", async () => fixture(async ({ ctx, agentDir, rows }) => {
-  await fs.mkdir(ctx.cwd, { recursive: true }); await fs.writeFile(join(ctx.cwd, ".pi"), "blocked");
+  const directory = dirname(diagnosticPath("project", ctx, agentDir()));
+  await fs.mkdir(dirname(directory), { recursive: true }); await fs.writeFile(directory, "blocked");
   const box = createRuntimeDiagnostics(() => ({}), { global: { agentDir } });
   box.observe(ctx, "pi-init.initialization_failed"); await box.flush();
   assert.equal((await rows()).length, 1);

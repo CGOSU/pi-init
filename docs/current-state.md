@@ -85,8 +85,8 @@
 
 ## 诊断现状
 
-- 已有独立的 pi-init 本地诊断采集入口，支持显式项目 runtime、关联 session 和可选详细日志的来源核对、去重、加载版本分组与 JSON/Markdown 报告；运行时补齐 execution_end 和 SDK 退出码观察。耦合评估、使用与仍待改进的存储边界统一见[本地诊断采集](diagnostics-collection.md)，验证见[会话记录](session-log.md)。
-- 项目黑匣子日志为 `<项目>/.pi/diagnostics/runtime.jsonl`，本机全局 pi-init 日志位于 SDK `getAgentDir()/diagnostics/pi-init/runtime.jsonl`；各自最多当前文件和 `.1`，项目文件超过 2 MiB 轮转，全局文件上限 1 MiB 且保留 7 天。查看、脱敏导出与确认清理可从控制中心或 `/blackbox` 完成；导出不上传，清理不涉及会话/工作流数据。详细边界见[运行黑匣子](runtime-diagnostics.md)。
+- 独立离线采集支持 `--project` / `--session-id` / `--since` 有界发现、显式旧日志和关联 session、来源核对、去重、加载版本分组与 JSON/Markdown 报告。只支持人工前后对照，不控制运行策略；见[本地诊断采集](diagnostics-collection.md)。
+- 黑匣子和详细交接日志按项目、会话分别保存在 Pi Agent 目录的 `diagnostics/pi-init/sessions` 与 `handoff` 侧车树；全局最小摘要仍在 `diagnostics/pi-init/runtime.jsonl`。不自动扫描、迁移或删除旧项目日志，不写 Pi 原始会话。留存及 `/blackbox` 维护边界见[运行黑匣子](runtime-diagnostics.md)。
 
 ## 角色交接现状
 

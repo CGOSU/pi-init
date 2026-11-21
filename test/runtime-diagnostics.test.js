@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile, stat, utimes, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { diagnosticPath } from "./support/diagnostic-paths.js";
 import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
@@ -16,15 +17,17 @@ async function withBox(fn, options = {}) {
   const handlers = new Map();
   const notices = [];
   const ctx = { cwd, isProjectTrusted: () => true, sessionManager: { getSessionId: () => "s1" }, ui: { notify: (...args) => notices.push(args) } };
+  const agent = join(cwd, "agent");
+  const file = (scope, context = ctx) => diagnosticPath(scope, context, agent);
   const state = createExtensionRuntimeState();
-  const monitor = createHandoffDiagnostics({ on: (name, handler) => handlers.set(name, handler) }, state, { mode: "automatic", ...options });
+  const monitor = createHandoffDiagnostics({ on: (name, handler) => handlers.set(name, handler) }, state, { mode: "automatic", agentDir: () => agent, ...options });
   const emit = async (name, event = {}) => handlers.get(name)?.(event, ctx);
-  const rows = async () => { await monitor.flush(); return (await readFile(join(cwd, ".pi", "diagnostics", "runtime.jsonl"), "utf8")).trim().split("\n").map(JSON.parse); };
-  try { await fn({ cwd, ctx, state, monitor, emit, rows, notices }); }
+  const rows = async () => { await monitor.flush(); return (await readFile(file("project"), "utf8")).trim().split("\n").map(JSON.parse); };
+  try { await fn({ cwd, ctx, state, monitor, emit, rows, notices, agent, file }); }
   finally { await monitor.flush(); await rm(cwd, { recursive: true, force: true }); }
 }
 test("黑匣子正常回合仅保存摘要，记录用量且不创建详细日志", async () => {
-  await withBox(async ({ cwd, emit, rows }) => {
+  await withBox(async ({ cwd, emit, rows, file }) => {
     await emit("before_agent_start");
     await emit("tool_call", { toolName: "read", toolCallId: "c1", input: { path: "missing-secret.ts" } });
     await emit("tool_result", { toolName: "read", toolCallId: "c1", input: {}, content: [{ text: "private-output" }] });
@@ -38,7 +41,8 @@ test("黑匣子正常回合仅保存摘要，记录用量且不创建详细日�
     assert.match(data[0].runtimeIdentity.sourceFingerprint, /^[a-f0-9]{64}$/);
     assert.match(data[0].runtimeIdentity.sdkVersion, /^\d+\./);
     assert.ok(Number.isFinite(Date.parse(data[0].runtimeIdentity.loadedAt)));
-    assert.deepEqual(await readdir(join(cwd, ".pi")), ["diagnostics"]);
+    assert.deepEqual(await readdir(cwd), ["agent"]);
+    await assert.rejects(stat(file("handoff")), { code: "ENOENT" });
     assert.equal(JSON.stringify(data).includes("private"), false);
   });
 });
@@ -100,13 +104,13 @@ test("故障后续现场在回合或事件预算封口，无关回合不重写�
   });
 });
 test("黑匣子未信任项目及完全关闭模式不记录", async () => {
-  for (const mode of ["automatic", "off"]) await withBox(async ({ cwd, ctx, emit, monitor }) => {
+  for (const mode of ["automatic", "off"]) await withBox(async ({ agent, ctx, emit, monitor }) => {
     if (mode === "automatic") ctx.isProjectTrusted = () => false;
     await emit("before_agent_start");
     await emit("tool_result", { toolName: "bash", toolCallId: "e", isError: true });
     await emit("agent_settled");
     await monitor.flush();
-    assert.deepEqual(await readdir(cwd), []);
+    await assert.rejects(stat(agent), { code: "ENOENT" });
   }, { mode });
 });
 
@@ -118,7 +122,7 @@ test("默认自动记录，显式 0 关闭，1 保留详细诊断兼容模式", 
     process.env.PI_INIT_HANDOFF_LOG = "0";
     await withBox(async ({ cwd, emit, monitor }) => { await emit("before_agent_start"); await emit("agent_settled"); await monitor.flush(); assert.deepEqual(await readdir(cwd), []); }, { mode: undefined });
     process.env.PI_INIT_HANDOFF_LOG = "1";
-    await withBox(async ({ cwd, emit, monitor }) => { await emit("before_agent_start"); await emit("agent_settled"); await monitor.flush(); assert.ok((await readFile(join(cwd, ".pi/logs/handoff.jsonl"), "utf8")).includes("agent.settled")); }, { mode: undefined });
+    await withBox(async ({ file, emit, monitor }) => { await emit("before_agent_start"); await emit("agent_settled"); await monitor.flush(); assert.ok((await readFile(file("handoff"), "utf8")).includes("agent.settled")); }, { mode: undefined });
   } finally { if (previous === undefined) delete process.env.PI_INIT_HANDOFF_LOG; else process.env.PI_INIT_HANDOFF_LOG = previous; }
 });
 test("Provider 错误分开分类，缺少响应及取消不推断为网络故障", async () => {
@@ -145,7 +149,8 @@ test("会话与 branch 切换隔离现场和计数，问题汇总保留各窗口
     await emit("session_tree");
     await emit("before_agent_start"); await emit("tool_result", error); await emit("agent_settled");
     const data = await rows();
-    assert.equal(new Set(data.filter(row => row.kind === "issue").map(row => row.captureId)).size, 3);
+    assert.equal(new Set(data.filter(row => row.kind === "issue").map(row => row.captureId)).size, 2);
+    assert.ok(data.every(row => row.sessionId === "s2"));
     assert.match(await monitor.report(ctx), /bash：3 次观察/);
   });
 });
@@ -167,8 +172,8 @@ test("错误首次立即留证，长现场受限，shutdown 保存未收敛回�
   });
 });
 test("写入故障只通知一次，不影响工具和回合", async () => {
-  await withBox(async ({ cwd, emit, monitor, notices }) => {
-    await writeFile(join(cwd, ".pi"), "not-a-directory");
+  await withBox(async ({ agent, emit, monitor, notices }) => {
+    await writeFile(agent, "not-a-directory");
     await emit("before_agent_start");
     await emit("tool_result", { toolName: "bash", toolCallId: "e", isError: true });
     await monitor.flush();
@@ -177,10 +182,10 @@ test("写入故障只通知一次，不影响工具和回合", async () => {
   });
 });
 test("磁盘轮转、保留期限和截断行在报告中有明确边界", async () => {
-  await withBox(async ({ cwd, ctx, emit, monitor, rows }) => {
+  await withBox(async ({ file, ctx, emit, monitor, rows }) => {
     for (let i = 0; i < 800; i++) { await emit("before_agent_start"); await emit("agent_settled"); if (i % 20 === 0) await monitor.flush(); }
     await monitor.flush();
-    const path = join(cwd, ".pi/diagnostics/runtime.jsonl");
+    const path = file("project");
     assert.ok((await stat(path)).size <= 128 * 1024);
     assert.ok((await stat(path + ".1")).size <= 128 * 1024);
     await appendFile(path, "{broken\n");
@@ -191,7 +196,7 @@ test("磁盘轮转、保留期限和截断行在报告中有明确边界", async
     await utimes(path, old, old); await utimes(path + ".1", old, old);
     await emit("before_agent_start"); await emit("agent_settled"); await monitor.flush();
     assert.equal((await rows()).length, 1);
-    assert.deepEqual(await readdir(join(cwd, ".pi/diagnostics")), ["runtime.jsonl"]);
+    assert.deepEqual(await readdir(dirname(path)), [basename(path)]);
   }, { maxBytes: 128 * 1024 });
 });
 test("真实扩展提供只读 blackbox 命令，不触发模型或修改工作流", async () => {
@@ -256,10 +261,10 @@ test("第二版复用语义循环判断，只保存结构化线索且不重复�
   });
 });
 test("第二版耗时基线先积累健康同配置样本，再对异常慢回合留证", async () => {
-  await withBox(async ({ ctx, rows }) => {
+  await withBox(async ({ ctx, rows, agent }) => {
     let now = 0;
     ctx.model = { provider: "test", id: "model-a" };
-    const box = createRuntimeDiagnostics(() => ({}), { now: () => now });
+    const box = createRuntimeDiagnostics(() => ({}), { now: () => now, agentDir: () => agent });
     const round = async (ms, aborted = false) => {
       box.observe(ctx, "agent.before_start", { profile: { provider: "test", model: "model-a", role: "session", thinkingLevel: "high" } });
       now += ms;
@@ -297,9 +302,9 @@ test("持续的疑似循环不重复告警，但每个回合仍标记为非健�
 });
 
 test("耗时基线不跨模型配置，回合内换模型或推理强度不进入基线", async () => {
-  await withBox(async ({ ctx, rows }) => {
+  await withBox(async ({ ctx, rows, agent }) => {
     let now = 0;
-    const box = createRuntimeDiagnostics(() => ({}), { now: () => now });
+    const box = createRuntimeDiagnostics(() => ({}), { now: () => now, agentDir: () => agent });
     const profile = { provider: "test", model: "a", role: "session", thinkingLevel: "high" };
     async function round(config, ms, change) {
       ctx.model = { provider: config.provider, id: config.model };
@@ -352,9 +357,9 @@ test("routing rejection stages count eight calls once and retain both observatio
   });
 });
 test("bounded evidence preserves first and refreshes latest trigger snapshot", async () => {
-  await withBox(async ({ ctx, rows }) => {
+  await withBox(async ({ ctx, rows, agent }) => {
     let generation = 1;
-    const box = createRuntimeDiagnostics(() => ({ generation }));
+    const box = createRuntimeDiagnostics(() => ({ generation }), { agentDir: () => agent });
     box.observe(ctx, "tool.result", { toolName: "bash", toolCallId: "first", isError: true });
     for (let i = 0; i < 90; i++) box.observe(ctx, "input");
     generation = 2;
@@ -527,11 +532,11 @@ test("healthy rounds retain only bounded projection summaries without creating i
 });
 
 async function withDirectDiagnostics(fn) {
-  await withBox(async ({ cwd, ctx }) => {
-    const box = createRuntimeDiagnostics(() => ({}));
+  await withBox(async ({ agent, ctx, file }) => {
+    const box = createRuntimeDiagnostics(() => ({}), { agentDir: () => agent });
     const rows = async () => {
       await box.flush();
-      return (await readFile(join(cwd, ".pi/diagnostics/runtime.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+      return (await readFile(file("project"), "utf8")).trim().split("\n").map(JSON.parse);
     };
     try { await fn({ ctx, box, rows }); } finally { await box.flush(); }
   });

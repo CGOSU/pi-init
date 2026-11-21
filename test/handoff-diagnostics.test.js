@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { diagnosticPath } from "./support/diagnostic-paths.js";
 import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
@@ -14,9 +15,11 @@ async function withMonitor(run, options = {}) {
   const notifications = [];
   const state = createExtensionRuntimeState();
   const ctx = { cwd, isProjectTrusted: () => true, sessionManager: { getSessionId: () => "session-1" }, ui: { notify: (...args) => notifications.push(args) } };
-  const monitor = createHandoffDiagnostics({ on(name, handler) { handlers.set(name, handler); } }, state, { enabled: true, ...options });
-  const read = async () => (await readFile(join(cwd, ".pi", "logs", "handoff.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
-  try { await run({ cwd, ctx, state, handlers, monitor, notifications, read }); }
+  const agent = join(cwd, "agent");
+  const file = diagnosticPath("handoff", ctx, agent);
+  const monitor = createHandoffDiagnostics({ on(name, handler) { handlers.set(name, handler); } }, state, { enabled: true, agentDir: () => agent, ...options });
+  const read = async () => (await readFile(file, "utf8")).trim().split("\n").map(JSON.parse);
+  try { await run({ cwd, ctx, state, handlers, monitor, notifications, read, agent, file }); }
   finally { await monitor.flush(); await rm(cwd, { recursive: true, force: true }); }
 }
 
@@ -71,18 +74,23 @@ test("未信任项目或关闭日志时不创建文件", async () => {
 });
 
 test("日志轮转仅保留当前文件和一个备份", async () => {
-  await withMonitor(async ({ cwd, ctx, state, monitor, read }) => {
-    const peer = createHandoffDiagnostics({ on() {} }, state, { enabled: true, maxBytes: 1 });
-      for (let i = 0; i < 5; i++) { monitor.trace(ctx, "test", { index: i }); peer.trace(ctx, "test", { index: i + 0.5 }); await Promise.all([monitor.flush(), peer.flush()]); }
-    assert.deepEqual((await readdir(join(cwd, ".pi", "logs"))).sort(), ["handoff.jsonl", "handoff.jsonl.1"]);
+  await withMonitor(async ({ agent, file, ctx, state, monitor, read }) => {
+    const peer = createHandoffDiagnostics({ on() {} }, state, { enabled: true, maxBytes: 2048, agentDir: () => agent });
+    const padding = "x".repeat(1100);
+    for (let i = 0; i < 5; i++) {
+      monitor.trace(ctx, "test", { index: i, padding });
+      peer.trace(ctx, "test", { index: i + 0.5, padding });
+      await Promise.all([monitor.flush(), peer.flush()]);
+    }
+    assert.deepEqual((await readdir(dirname(file))).sort(), [basename(file), basename(file) + ".1"]);
     assert.equal((await read()).at(-1).data.index, 4.5);
-    assert.equal(JSON.parse((await readFile(join(cwd, ".pi", "logs", "handoff.jsonl.1"), "utf8")).trim()).data.index, 4);
-  }, { maxBytes: 1 });
+    assert.equal(JSON.parse((await readFile(file + ".1", "utf8")).trim()).data.index, 4);
+  }, { maxBytes: 2048 });
 });
 
 test("写入失败只提醒一次，不向调用者抛异常", async () => {
-  await withMonitor(async ({ cwd, ctx, monitor, notifications }) => {
-    await writeFile(join(cwd, ".pi"), "not a directory");
+  await withMonitor(async ({ agent, ctx, monitor, notifications }) => {
+    await writeFile(agent, "not a directory");
     assert.doesNotThrow(() => monitor.trace(ctx, "first"));
     await monitor.flush();
     monitor.trace(ctx, "second");
@@ -117,7 +125,7 @@ test("开启监控后不抢占职责守卫，shutdown 刷新真实扩展的交�
     assert.equal((await emitExtensionEvent(harness, "tool_call", { toolName: "edit", input: {} })).block, true);
     await emitExtensionEvent(harness, "agent_settled");
     await emitExtensionEvent(harness, "session_shutdown");
-    const rows = (await readFile(join(cwd, ".pi", "logs", "handoff.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    const rows = (await readFile(diagnosticPath("handoff", harness.context), "utf8")).trim().split("\n").map(JSON.parse);
     assert.ok(rows.some((row) => row.event === "workflow.schedule"));
     assert.equal(rows.at(-1).event, "session.shutdown");
     assert.equal(harness.sentMessages.length, 0);

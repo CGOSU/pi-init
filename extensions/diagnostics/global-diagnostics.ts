@@ -1,10 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { diagnosticDirectory } from "./diagnostic-storage.ts";
+import { diagnosticKeys } from "./diagnostic-layout.ts";
 import { createDiagnosticWriter } from "./diagnostic-writer.ts";
 import { loadedRuntimeIdentity } from "./runtime-identity.ts";
-import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Deliberately omit dynamic messages, stacks, codes and payloads rather than attempt
 // best-effort redaction. This is not a host-wide exception or telemetry collector.
@@ -19,7 +18,6 @@ const categories = new Map([
   ["workflow.delivery.fallback_failed", "delivery"],
 ]);
 export function isGlobalDiagnosticEvent(event: string) { return categories.has(event); }
-const hash = (domain: string, value: string) => createHash("sha256").update(domain + "\0" + value).digest("hex");
 
 export function createGlobalDiagnostics(options: {
   agentDir?: () => string; maxBytes?: number; retentionMs?: number; now?: () => number;
@@ -31,18 +29,15 @@ export function createGlobalDiagnostics(options: {
   const now = options.now ?? Date.now;
   const runtimeId = randomUUID();
   const writer = createDiagnosticWriter({
-    file: "runtime.jsonl", maxBytes, maxPending: 128, retentionMs, now, io,
-    rejectOversize: true, discardOversize: true, warnOnDrop: true,
-    directory: () => diagnosticDirectory((options.agentDir ?? getAgentDir)(), ["diagnostics", "pi-init"], true, io),
-    queueKey: () => join((options.agentDir ?? getAgentDir)(), "diagnostics", "pi-init", "runtime.jsonl"),
+    scope: "global", maxBytes, maxPending: 128, retentionMs, now, io, agentDir: options.agentDir,
+    discardOversize: true, warnOnDrop: true,
     warning: "全局本地诊断写入失败，部分故障未记录；不影响任务执行。可查看运行诊断中的写入状态。",
   });
   function observe(ctx: ExtensionContext, event: string) {
     try {
       if (!categories.has(event) || !ctx.isProjectTrusted()) return undefined;
-      const projectId = hash("pi-init-project-v1", resolve(ctx.cwd));
-      const sessionId = hash("pi-init-session-v1", projectId + "\0" + ctx.sessionManager.getSessionId());
-      const correlation = { diagnosticEventId: randomUUID(), diagnosticProjectId: projectId, diagnosticSessionId: sessionId };
+      const { projectKey, sessionKey } = diagnosticKeys(ctx.cwd, ctx.sessionManager.getSessionId());
+      const correlation = { diagnosticEventId: randomUUID(), diagnosticProjectId: projectKey, diagnosticSessionId: sessionKey };
       writer.write(ctx, () => ({ version: 1, timestamp: new Date(now()).toISOString(), runtimeIdentity: loadedRuntimeIdentity, runtimeId, ...correlation, event, category: categories.get(event) }));
       return correlation;
     } catch (error) { writer.recordFailure(ctx, error); return undefined; }
