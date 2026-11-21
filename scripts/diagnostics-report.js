@@ -2,15 +2,17 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { readSources, SOURCE_LIMITS } from "./diagnostics/sources.js";
+import { discoverDiagnosticSources, parseSince } from "./diagnostics/discovery.js";
 import { summarizeRuntime } from "./diagnostics/runtime-report.js";
 import { summarizeSessions } from "./diagnostics/session-report.js";
 import { summarizeHandoff } from "./diagnostics/handoff-report.js";
 
 export const HELP = `pi-init 本地诊断采集（离线，不上传）
-用法：node scripts/diagnostics-report.js --runtime <文件> [--session <文件>] [--handoff <文件>] --output <新目录>
-
-各来源参数可重复，轮转文件需显式指定；至少指定一个项目 runtime 文件。
-只读取指定文件，不遍历用户目录，不执行会话中的工具或指令。
+用法：node scripts/diagnostics-report.js --project <路径> [--session-id <ID>] [--since <时长>] --output <新目录>
+   或 node scripts/diagnostics-report.js --runtime <文件> --output <新目录>
+两种方式均可追加 --runtime/--handoff/--session <文件>，可重复，显式输入的轮转文件需单列。
+--project 只在 Pi Agent 目录中查找所选项目的侧车；--since 以段文件的最后修改时间筛选（如 48h、7d），不筛逐条事件或显式文件。
+不扫描工作区或 Pi 原始会话，不执行会话中的工具或指令。
 生成 manifest.json、report.json、report.md；拒绝覆盖已有目录。
 manifest 包含本地来源路径；报告只保留元数据、聚合结果与来源行号。
 这是所选字节范围的派生报告，不是原始日志备份或完整任务成功率统计。
@@ -18,25 +20,44 @@ manifest 包含本地来源路径；报告只保留元数据、聚合结果与�
 
 export function parseArguments(args) {
   const inputs = [];
-  let output;
+  const options = {};
+  const keys = { "--project": "project", "--session-id": "sessionId", "--since": "sinceMs", "--output": "output" };
   if (args.length === 1 && ["--help", "-h"].includes(args[0])) return { help: true };
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index];
     const value = args[index + 1];
-    if (!["--runtime", "--session", "--handoff", "--output"].includes(flag) || !value || value.startsWith("--")) {
+    const sourceFlag = ["--runtime", "--session", "--handoff"].includes(flag);
+    if (!(sourceFlag || Object.hasOwn(keys, flag)) || !value || value.startsWith("--")) {
       throw new Error("参数无效；使用 --help 查看用法");
     }
-    if (flag === "--output") {
-      if (output !== undefined) throw new Error("只能指定一个输出目录");
-      output = resolve(value);
-    } else inputs.push({ kind: flag.slice(2), path: value });
+    if (sourceFlag) {
+      inputs.push({ kind: flag.slice(2), path: value });
+      continue;
+    }
+    const key = keys[flag];
+    if (Object.hasOwn(options, key)) throw new Error(`只能指定一次 ${flag}`);
+    const parsed = flag === "--since" ? parseSince(value) : { ok: true, value: flag === "--session-id" ? value : resolve(value) };
+    if (!parsed.ok) throw new Error(parsed.message);
+    options[key] = parsed.value;
   }
-  if (!output || !inputs.some(input => input.kind === "runtime")) throw new Error("必须指定 --runtime 和 --output");
-  return { inputs, output };
+  if (!options.output || !(options.project || inputs.some(input => input.kind === "runtime"))) {
+    throw new Error("必须指定 --output 及 --project 或 --runtime");
+  }
+  if (!options.project && (options.sessionId !== undefined || options.sinceMs !== undefined)) {
+    throw new Error("--session-id 和 --since 仅用于 --project 发现");
+  }
+  if (inputs.length > SOURCE_LIMITS.files) throw new Error(`最多指定 ${SOURCE_LIMITS.files} 个日志文件`);
+  return { inputs, ...options };
 }
 
-export async function collectDiagnostics(inputs) {
-  const { sources, records } = await readSources(inputs);
+export async function collectDiagnostics(inputs, selection) {
+  const { sources, records, unavailable } = !inputs.length && selection
+    ? { sources: [], records: { runtime: [], session: [], handoff: [] }, unavailable: [] }
+    : await readSources(inputs);
+  const discovery = selection && { ...selection, streams: selection.streams.map(stream => ({ ...stream,
+    read: sources.filter(source => source.kind === stream.kind && source.selection === "discovered").length,
+  })) };
+  const selectionIncomplete = discovery?.streams.some(stream => stream.omittedByBudget > 0 || Object.keys(stream.warnings).length > 0) ?? false;
   const runtime = summarizeRuntime(records.runtime);
   const sessionIds = [...new Set(records.runtime.flatMap(({ row }) => row.version === 1
     && ["summary", "issue", "provider-request", "cache-request"].includes(row.kind)
@@ -51,10 +72,13 @@ export async function collectDiagnostics(inputs) {
       invalidLines, oversizedLines, omittedRecords }) => ({ sourceId, kind, sha256, byteRange, parsed,
       changedDuringRead, unterminatedTail, invalidLines, oversizedLines, omittedRecords })),
     runtime, sessions, handoff,
-    sourceIntegrity: { hasReadGaps: sourceProblems.length > 0, affectedSources: sourceProblems.map(source => source.sourceId),
-      scope: "explicit-files-only", crossFileSnapshot: "sequential-not-atomic", rawLogsArchived: false },
+    sourceIntegrity: { hasReadGaps: sourceProblems.length > 0 || selectionIncomplete || unavailable.length > 0,
+      affectedSources: [...sourceProblems, ...unavailable].map(source => source.sourceId),
+      scope: discovery ? "project-discovery-and-explicit" : "explicit-files-only",
+      crossFileSnapshot: "sequential-not-atomic", rawLogsArchived: false,
+      ...(discovery && { discovery, unavailable: unavailable.map(({ sourceId, kind, code }) => ({ sourceId, kind, code })) }) },
     limitations: [
-      "只覆盖显式指定的文件与读取时的字节范围；未自动寻找轮转文件或其他 session。没有记录不代表没有故障。",
+      "只覆盖所选文件与读取时的字节范围。发现只查所选项目的诊断侧车；没有记录不代表没有故障。",
       "runtime、session、handoff 是不同观察口径，可能描述同一调用，数字不能相加成为总失败数。",
       "issue count 是同一故障类的累计观察，已折叠快照；不是独立根因数、失败请求数或任务失败率。",
       "正常模型停止和工具无失败标志都不证明需求已验收；版本比较还受任务复杂度、模型和样本缺失影响。",
@@ -64,12 +88,13 @@ export async function collectDiagnostics(inputs) {
   };
   const packageVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
   const collectorHash = createHash("sha256");
-  for (const path of ["diagnostics-report.js", "diagnostics/sources.js", "diagnostics/runtime-report.js",
-    "diagnostics/session-report.js", "diagnostics/handoff-report.js", "handoff-report.js", "../src/record-guard.js"]) {
+  for (const path of ["diagnostics-report.js", "diagnostics/sources.js", "diagnostics/discovery.js", "diagnostics/runtime-report.js",
+    "diagnostics/session-report.js", "diagnostics/handoff-report.js", "handoff-report.js", "../src/record-guard.js", "../src/diagnostic-paths.ts"]) {
     collectorHash.update(path + "\0").update(await readFile(new URL(path, import.meta.url))).update("\0");
   }
   return { report, manifest: { schemaVersion: 1, collector: "pi-init/diagnostics-report", packageVersion,
-    collectorSourceFingerprint: collectorHash.digest("hex"), generatedAt: report.generatedAt, limits: SOURCE_LIMITS, sources } };
+    collectorSourceFingerprint: collectorHash.digest("hex"), generatedAt: report.generatedAt, limits: SOURCE_LIMITS, sources,
+    ...(discovery && { discovery, unavailable }) } };
 }
 
 function cell(value) {
@@ -79,9 +104,18 @@ function cell(value) {
 export function renderReport(report) {
   const runtime = report.runtime;
   const lines = ["# pi-init 本地诊断报告", "", `采集时间：${report.generatedAt}`, "",
-    `输入 ${report.sources.length} 个文件。来源读取缺口：${report.sourceIntegrity.hasReadGaps ? "存在，见 report.json" : "未发现；不代表日志覆盖完整"}。`, "",
-    "## 运行时观察", "", `累计故障观察：${runtime.issues.observations}；已记录回合：${runtime.rounds.count}；健康基线样本：${runtime.rounds.healthySamples}。`, "",
-    "| 故障类别 | 错误码 | 工具 | 观察次数 |", "| --- | --- | --- | --- |"];
+    `成功读取 ${report.sources.length} 个文件。来源读取缺口：${report.sourceIntegrity.hasReadGaps ? "存在，见 report.json" : "未发现；不代表日志覆盖完整"}。`, ""];
+  const discovery = report.sourceIntegrity.discovery;
+  if (discovery) {
+    lines.push("## 项目侧车发现", "", `按段文件修改时间选取（起点：${discovery.since ?? "不限"}）。`);
+    for (const stream of discovery.streams) {
+      const kind = stream.kind === "runtime" ? "黑匣子" : "详细交接日志";
+      lines.push(`- ${kind}：发现读取 ${stream.read}/${stream.selected} 段，时间排除 ${stream.excludedByTime} 段，数量上限排除 ${stream.omittedByBudget} 段。${stream.read ? "" : "未取得该类侧车样本。"}`);
+    }
+    lines.push("", "目录状态、扫描和读入问题见 report.json；显式文件不受发现范围或时间过滤。", "");
+  }
+  lines.push("## 运行时观察", "", `累计故障观察：${runtime.issues.observations}；已记录回合：${runtime.rounds.count}；健康基线样本：${runtime.rounds.healthySamples}。`, "",
+    "| 故障类别 | 错误码 | 工具 | 观察次数 |", "| --- | --- | --- | --- |");
   for (const issue of runtime.issues.entries.slice(0, 30)) {
     lines.push(`| ${cell(issue.category)} | ${cell(issue.code)} | ${cell(issue.toolName)} | ${issue.count} |`);
   }
@@ -118,7 +152,8 @@ export async function writeBundle(output, bundle) {
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   if (options.help) { console.log(HELP); return; }
-  const bundle = await collectDiagnostics(options.inputs);
+  const found = options.project && await discoverDiagnosticSources(options, options.inputs.length);
+  const bundle = await collectDiagnostics([...options.inputs, ...(found ? found.inputs : [])], found ? found.selection : undefined);
   await writeBundle(options.output, bundle);
   console.log(`pi-init 本地诊断已保存：${options.output}`);
 }

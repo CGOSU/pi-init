@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { ExtensionRuntimeState } from "../runtime-state.ts";
 import { fingerprint, summarizeToolInput, summarizeToolResult } from "./handoff-tool-diagnostics.ts";
 import { createDiagnosticWriter, createRuntimeDiagnostics } from "./runtime-diagnostics.ts";
-import type { DiagnosticScope, DiagnosticResumeResult } from "./diagnostic-storage.ts";
+import { captureDiagnosticScope, matchesDiagnosticScope, type DiagnosticScope, type DiagnosticResumeResult } from "./diagnostic-storage.ts";
 import { createCacheRequestDiagnostics } from "./cache-request-diagnostics.ts";
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
@@ -51,18 +51,24 @@ function handoffSnapshot(state: ExtensionRuntimeState) {
   };
 }
 
-export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRuntimeState, options: { enabled?: boolean; mode?: "automatic" | "verbose" | "off"; maxBytes?: number } = {}) {
+export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRuntimeState, options: { enabled?: boolean; mode?: "automatic" | "verbose" | "off"; maxBytes?: number; agentDir?: () => string } = {}) {
   const mode = options.mode ?? (options.enabled !== undefined ? options.enabled ? "verbose" : "off" : process.env.PI_INIT_HANDOFF_LOG === "0" ? "off" : process.env.PI_INIT_HANDOFF_LOG === "1" ? "verbose" : "automatic");
   const enabled = mode === "verbose";
-  const blackbox = createRuntimeDiagnostics(() => handoffSnapshot(state), { maxBytes: options.maxBytes });
+  const blackbox = createRuntimeDiagnostics(() => handoffSnapshot(state), { maxBytes: options.maxBytes, agentDir: options.agentDir });
   const flush = async () => { await writer.flush(); await blackbox.flush(); };
-  const report = (ctx: ExtensionContext) => mode === "off" ? Promise.resolve("运行黑匣子已关闭。") : blackbox.report(ctx);
+  async function report(ctx: ExtensionContext, sessionKey?: string) {
+    if (mode === "off") return "运行黑匣子已关闭。";
+    const summary = await blackbox.report(ctx, sessionKey);
+    return writer.failed && ctx.isProjectTrusted()
+      ? summary + "\n详细交接诊断已停录（" + writer.failureCode + "）；排除原因后使用 /blackbox resume handoff。"
+      : summary;
+  }
   async function resume(ctx: ExtensionContext, scope: DiagnosticScope): Promise<DiagnosticResumeResult> {
     if (mode === "off" || scope === "handoff" && !enabled) return { ok: false, code: "DIAGNOSTIC_RECORDER_DISABLED", message: "该记录器未启用；恢复操作不会开启已关闭或详细诊断模式" };
     return scope === "handoff" ? writer.resume(ctx) : blackbox.resume(ctx, scope);
   }
 
-  const writer = createDiagnosticWriter({ file: "logs/handoff.jsonl", maxBytes: options.maxBytes ?? MAX_LOG_BYTES, maxPending: MAX_PENDING, warning: "角色交接诊断日志写入失败；已停用日志，不影响任务执行。" });
+  const writer = createDiagnosticWriter({ scope: "handoff", agentDir: options.agentDir, maxBytes: options.maxBytes ?? MAX_LOG_BYTES, maxPending: MAX_PENDING, warning: "角色交接诊断日志写入失败；已停用日志，不影响任务执行。" });
   const cache = createCacheRequestDiagnostics(state, (ctx, event, data) => trace(ctx, event, data));
   const runtimeId = randomUUID();
   let sequence = 0;
@@ -185,8 +191,10 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
   async function observeTool(ctx: ExtensionContext, event: string, toolName: string, toolCallId: string, input: unknown, extra: Record<string, unknown> = {}, inspectFiles = false) {
     try {
       if (writer.failed || !ctx.isProjectTrusted()) return;
-      const summary = enabled ? await summarizeToolInput(ctx.cwd, input, inspectFiles) : {};
-      trace(ctx, event, { toolName, toolCallId, ...summary, ...extra });
+      const initial = captureDiagnosticScope(ctx);
+      const summary = enabled ? await summarizeToolInput(initial.cwd, input, inspectFiles) : {};
+      // Never attribute delayed file metadata to a different session or branch.
+      if (matchesDiagnosticScope(ctx, initial)) trace(ctx, event, { toolName, toolCallId, ...summary, ...extra });
     } catch {
       // A malformed diagnostic payload must not interrupt a tool.
     }
@@ -236,7 +244,9 @@ export function createHandoffDiagnostics(pi: ExtensionAPI, state: ExtensionRunti
       finishProvider(ctx, "assistant", providerErrorHint(message.errorMessage));
     } catch {}
     if (!Array.isArray(message.content)) return;
+    const initial = captureDiagnosticScope(ctx);
     for (const item of message.content) {
+      if (!matchesDiagnosticScope(ctx, initial)) return;
       if (item.type === "toolCall") {
         await observeTool(ctx, routingTools.has(item.name) ? "routing.model_proposed" : "tool.model_proposed", item.name, item.id, item.arguments,
           routingTools.has(item.name) ? routingFields(item.arguments) : {});

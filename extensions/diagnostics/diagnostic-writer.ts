@@ -1,17 +1,15 @@
 import * as fs from "node:fs/promises";
-import { dirname, join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { diagnosticKeys, diagnosticLocation, DIAGNOSTIC_MAX_BYTES, withDiagnosticLocation, writableDiagnosticFile } from "./diagnostic-layout.ts";
 import {
-  appendDiagnosticRecord, captureDiagnosticScope, diagnosticDirectory, diagnosticErrorCode,
-  matchesDiagnosticScope, probeDiagnosticFile, withDiagnosticLock, type DiagnosticResumeResult,
+  appendDiagnosticRecord, captureDiagnosticScope, diagnosticErrorCode, matchesDiagnosticScope,
+  probeDiagnosticFile, type DiagnosticResumeResult, type DiagnosticScope,
 } from "./diagnostic-storage.ts";
 
 type Data = Record<string, unknown>;
 type WriterOptions = {
-  file: string; maxBytes: number; maxPending: number; warning: string;
-  retentionMs?: number; rejectOversize?: boolean; directoryMode?: number;
-  directory?: (ctx: ExtensionContext) => Promise<string>;
-  queueKey?: (ctx: ExtensionContext) => string;
+  scope: DiagnosticScope; maxBytes: number; maxPending: number; warning: string;
+  retentionMs?: number; agentDir?: () => string;
   io?: typeof fs; now?: () => number; discardOversize?: boolean; warnOnDrop?: boolean;
 };
 
@@ -23,9 +21,9 @@ export function createDiagnosticWriter(options: WriterOptions) {
   let pending = 0, dropped = 0, totalDropped = 0, written = 0;
   let failureCode: string | undefined;
   let tail = Promise.resolve();
-  const directory = options.directory ?? ((ctx: ExtensionContext) => diagnosticDirectory(ctx.cwd,
-    [".pi", ...dirname(options.file).split(/[\\/]/).filter(part => part !== ".")], true, io, options.directoryMode));
-  const filename = options.directory ? options.file : options.file.split(/[\\/]/).at(-1)!;
+  const maxBytes = options.scope === "global" ? options.maxBytes : Math.min(DIAGNOSTIC_MAX_BYTES, options.maxBytes);
+  const locate = ({ cwd, sessionId }: { cwd: string; sessionId: string }) =>
+    diagnosticLocation((options.agentDir ?? getAgentDir)(), options.scope, cwd, diagnosticKeys(cwd, sessionId).sessionKey);
   function warn(ctx: ExtensionContext) {
     if (warned) return;
     warned = true;
@@ -48,22 +46,25 @@ export function createDiagnosticWriter(options: WriterOptions) {
         if (options.warnOnDrop) warn(ctx);
         return false;
       }
-      const writeContext = { ...ctx, cwd: ctx.cwd };
+      // Context can switch sessions while queued. Only trust is rechecked; never recompute the destination.
+      const location = locate(captureDiagnosticScope(ctx));
       const current = () => ctx.isProjectTrusted();
       const line = JSON.stringify(record(dropped)) + "\n";
-      if (options.rejectOversize && Buffer.byteLength(line) > options.maxBytes) { drop(); return false; }
-      const key = options.queueKey?.(writeContext) ?? join(writeContext.cwd, ".pi", options.file);
+      if (Buffer.byteLength(line) > maxBytes) { drop(); return false; }
+      const key = JSON.stringify([location.root, location.lock]);
       dropped = 0; pending++;
       const work = (queues.get(key) ?? Promise.resolve()).then(async () => {
         if (failed || !current()) { drop(); return; }
-        const target = await directory(writeContext);
-        await withDiagnosticLock(target, async () => {
+        await withDiagnosticLocation(location, { create: true, io, current }, async root => {
+          const target = await writableDiagnosticFile(location, root, io);
           if (!current()) { drop(); return; }
-          if (await directory(writeContext) !== target) throw Object.assign(new Error("诊断目录已变化"), { code: "DIAGNOSTIC_SCOPE_CHANGED" });
-          await appendDiagnosticRecord(join(target, filename), line, { ...options, io });
+          await appendDiagnosticRecord(target, line, { ...options, maxBytes, io });
           written++;
-        }, io);
-      }).catch(error => { recordFailure(ctx, error); }).finally(() => { pending--; });
+        });
+      }).catch(error => {
+        if (diagnosticErrorCode(error) === "DIAGNOSTIC_SCOPE_CHANGED" && !current()) drop();
+        else recordFailure(ctx, error);
+      }).finally(() => { pending--; });
       queues.set(key, work);
       void work.then(() => { if (queues.get(key) === work) queues.delete(key); });
       tail = Promise.all([tail, work]).then(() => { });
@@ -79,13 +80,13 @@ export function createDiagnosticWriter(options: WriterOptions) {
       await tail;
       if (!matchesDiagnosticScope(ctx, scope)) return { ok: false, code: "DIAGNOSTIC_SCOPE_CHANGED", message: "项目、会话或分支已变化，未恢复诊断记录" };
       const alreadyEnabled = !failed;
-      const target = await directory(ctx);
-      await withDiagnosticLock(target, async () => {
-        if (!matchesDiagnosticScope(ctx, scope) || await directory(ctx) !== target) {
-          throw Object.assign(new Error("诊断恢复范围已变化"), { code: "DIAGNOSTIC_SCOPE_CHANGED" });
-        }
-        await probeDiagnosticFile(join(target, filename), options.maxBytes, io);
-      }, io);
+      const location = locate(scope);
+      const current = () => matchesDiagnosticScope(ctx, scope);
+      await withDiagnosticLocation(location, { create: true, io, current }, async root => {
+        const target = await writableDiagnosticFile(location, root, io);
+        if (!current()) throw Object.assign(new Error("诊断恢复范围已变化"), { code: "DIAGNOSTIC_SCOPE_CHANGED" });
+        await probeDiagnosticFile(target, maxBytes, io);
+      });
       if (!matchesDiagnosticScope(ctx, scope)) return { ok: false, code: "DIAGNOSTIC_SCOPE_CHANGED", message: "项目、会话或分支已变化，未恢复诊断记录" };
       failed = false; failureCode = undefined; warned = false; queueFull = false;
       return { ok: true, value: { alreadyEnabled } };
