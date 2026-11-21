@@ -189,7 +189,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     report: workflowReport,
     store: workflowStore,
     taskMemory,
-    freshSession: sessionHandoff.fresh, resumeExecution: userControl.resume,
+    freshSession: sessionHandoff.fresh, resumeExecution: userControl.resume, startNewTask: userControl.startNewTask,
   });
   let scaffoldRuntimePromise: Promise<ScaffoldRuntime> | undefined;
   function loadScaffoldRuntime() {

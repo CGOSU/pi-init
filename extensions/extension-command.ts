@@ -13,7 +13,7 @@ type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
 export function registerExtensionCommand(pi: ExtensionAPI, runtimeState: ExtensionRuntimeState, dependencies: {
   roleRuntime: ReturnType<typeof createRoleRuntime>;
   workflowActions: Pick<ReturnType<typeof createWorkflowActions>, "workflowCommand">;
-  userControl: Pick<ReturnType<typeof createWorkflowUserControl>, "suspend" | "resume">;
+  userControl: Pick<ReturnType<typeof createWorkflowUserControl>, "suspend">;
   sessionHandoff: Pick<ReturnType<typeof createSessionHandoff>, "fresh">;
   loadScaffoldRuntime: () => Promise<ScaffoldRuntime>;
   diagnosticsCommand: ReturnType<typeof createDiagnosticControls>["command"];
@@ -89,7 +89,6 @@ export function registerExtensionCommand(pi: ExtensionAPI, runtimeState: Extensi
           if (workflowAction === "stop") { userControl.suspend(ctx, "user-command"); ctx.ui.notify("自动续跑已停止；未完成、取消或重试任务。", "info"); return; }
 
           await workflowActions.workflowCommand(workflowAction, tokens.shift(), ctx, tokens.includes("--confirm-unknown-outcome"));
-          if (workflowAction === "cancel" && runtimeState.workflowState?.status === "cancelled") userControl.resume(ctx);
           return;
         }
         ctx.ui.notify("用法：/pi-init [init|advanced|config|save|role|workflow|fresh|diagnostics] [参数]", "error");

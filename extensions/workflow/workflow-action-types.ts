@@ -15,6 +15,7 @@ export type WorkflowActionDependencies = {
   taskMemory?: TaskMemoryRuntime;
   freshSession?: (ctx: ExtensionCommandContext) => Promise<void>;
   resumeExecution?: (ctx: ExtensionContext) => boolean;
+  startNewTask?: (ctx: ExtensionContext) => void;
 };
 
 export type WorkflowActionResult = {

@@ -1,12 +1,14 @@
 import { isCoreReadOnlyTool } from "../../src/tool-classification.ts";
 import { formatWorkflowVerification } from "../../src/workflow-verification.ts";
-import { constants } from "node:fs";
+import { constants, statSync } from "node:fs";
 import { open, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isExternalRunSource } from "../../src/run-timing.ts";
 import { isWorkflowContinuationInput, parseWorkflowControlInput } from "../../src/workflow-input-intent.ts";
 import { textOf, type ExtensionRuntimeState } from "../runtime-state.ts";
+import { outgoingTransfer } from "../session/session-handoff-runtime.ts";
+import { hasStoppedTerminalWorkflow, NEW_TASK_PANEL_LABEL, newTaskReleaseBlockReason } from "./workflow-action-policy.ts";
 const ENTRY = "pi-init-user-control";
 
 export function isWorkflowReadOnlyTool(toolName: string, input?: unknown) {
@@ -26,6 +28,7 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
   function suspend(ctx: ExtensionContext, reason: string, interrupt = state.agentRunActive, resumeGuard?: (ctx: ExtensionContext) => boolean) {
     if (resumeGuard || interrupt) continuationGuard = resumeGuard;
     state.userStopRequested = true;
+    state.userStopGeneration += 1;
     externalTurn = false;
     state.internalContinuationPending = false;
     deps.retire();
@@ -42,6 +45,10 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
   }
   function resume(ctx: ExtensionContext) {
     if (!state.userStopRequested) return true;
+    if (hasStoppedTerminalWorkflow(state)) {
+      ctx.ui.notify(`旧工作流已结束，会话仍暂停。请从 /pi-init workflow status 选择「${NEW_TASK_PANEL_LABEL}」。`, "warning");
+      return false;
+    }
     if (continuationGuard) {
       let allowed = false;
       try { allowed = continuationGuard(ctx); } catch {}
@@ -50,11 +57,43 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
         return false;
       }
     }
-    try { persist(ctx, false, "explicit-continue"); }
+    return release(ctx, "explicit-continue", true);
+  }
+  function startNewTask(ctx: ExtensionContext) {
+    const blocked = newTaskReleaseBlockReason(state);
+    if (blocked) { ctx.ui.notify(blocked, "warning"); return; }
+    if (state.workflowState?.sessionId !== ctx.sessionManager.getSessionId()) {
+      ctx.ui.notify("工作流不属于当前会话；未解除暂停。", "warning");
+      return;
+    }
+    if (!ctx.isProjectTrusted() || !ctx.isIdle() || ctx.hasPendingMessages()) {
+      ctx.ui.notify("请在受信任且无待处理消息的空闲会话中解除暂停。", "warning");
+      return;
+    }
+    if (outgoingTransfer(ctx, state.workflowState)) {
+      ctx.ui.notify("会话交接尚未确认；未解除暂停。", "warning");
+      return;
+    }
+    try {
+      const file = ctx.sessionManager.getSessionFile();
+      if (!file || !statSync(file, { throwIfNoEntry: false })?.isFile()) {
+        ctx.ui.notify("当前会话没有持久化文件；未解除暂停。", "warning");
+        return;
+      }
+    } catch (error) {
+      ctx.ui.notify(`无法核对会话持久化文件；未解除暂停：${textOf(error)}`, "warning");
+      return;
+    }
+    if (release(ctx, "explicit-new-task", false)) {
+      ctx.ui.notify("会话暂停已解除。请发送新任务；旧工作流不会恢复。", "info");
+    }
+  }
+  function release(ctx: ExtensionContext, reason: string, allowExternalTurn: boolean) {
+    try { persist(ctx, false, reason); }
     catch (error) { ctx.ui.notify("停止状态未解除：" + textOf(error), "warning"); return false; }
     state.userStopRequested = false;
     continuationGuard = undefined;
-    externalTurn = true;
+    externalTurn = allowExternalTurn;
     return true;
   }
   function restore(ctx: ExtensionContext) {
@@ -114,5 +153,5 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
     if (!state.userStopRequested || isWorkflowReadOnlyTool(event.toolName, event.input)) return undefined;
     return { block: true as const, reason: "[pi-init-user-stop] 自动执行已停止；仅允许只读观察。用户明确继续或恢复后仍须通过原有身份与未知结果保护。" };
   }
-  return { input, suspend, resume, restore, guardToolCall, allowsExternalTurn: () => externalTurn, settled: () => { externalTurn = false; } };
+  return { input, suspend, resume, startNewTask, restore, guardToolCall, allowsExternalTurn: () => externalTurn, settled: () => { externalTurn = false; } };
 }
