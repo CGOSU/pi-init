@@ -23,6 +23,7 @@ export type ExtensionRuntimeState = {
   traceHandoff?: (ctx: ExtensionContext, event: string, data?: Record<string, unknown>) => void;
   agentRunActive: boolean;
   userStopRequested: boolean;
+  userStopGeneration: number;
   activeRole?: ActiveRole;
   sessionRoleConfigOverrides: Record<string, unknown>;
   configuredRoleNames: string[];
@@ -53,6 +54,7 @@ export function createExtensionRuntimeState(): ExtensionRuntimeState {
   return {
     agentRunActive: false,
     userStopRequested: false,
+    userStopGeneration: 0,
     sessionRoleConfigOverrides: {},
     configuredRoleNames: [],
     controlCenterGuideShown: false,

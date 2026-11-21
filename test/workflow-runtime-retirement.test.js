@@ -121,6 +121,7 @@ test("显式命令和工具取消都清除工作流状态段", async () => {
 
       const persisted = latestWorkflowEntry(harness)?.data;
       assert.equal(persisted.status, "cancelled");
+      assert.equal(harness.branch.some(entry => entry.customType === "pi-init-user-control"), false);
       assert.doesNotMatch(currentStatus(), /已暂停|\b\d+\/\d+\b/);
     });
   }

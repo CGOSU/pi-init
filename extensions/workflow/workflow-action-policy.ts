@@ -1,7 +1,25 @@
-import type { RuntimeStateView } from "../runtime-state.ts";
+import { hasRecoveryGate, isWorkflowUnfinished, type RuntimeStateView } from "../runtime-state.ts";
+import { transferFrozen } from "../../src/session-handoff.ts";
 import { getNextWorkflowTask } from "../../src/workflow.ts";
 
 type PolicyState = Pick<RuntimeStateView, "workflowState" | "pendingWorkflowRecovery" | "roleRecoveryPending" | "roleRecoveryPersistenceFailed" | "workflowRestoreError" | "userStopRequested">;
+export function hasStoppedTerminalWorkflow(state: Pick<PolicyState, "workflowState" | "userStopRequested">) {
+  return state.userStopRequested && Boolean(state.workflowState) && !isWorkflowUnfinished(state.workflowState);
+}
+
+export function newTaskReleaseBlockReason(state: RuntimeStateView): string | undefined {
+  if (state.runtimeDisposed) return "当前运行时已退出，请重新打开面板。";
+  if (!hasStoppedTerminalWorkflow(state)) return "只有旧队列已结束且会话仍暂停时，才能解除暂停开始新任务。";
+  if (hasRecoveryGate(state)) return "恢复尚未确认；请先核对恢复提示。";
+  if (transferFrozen(state.workflowState)) return "会话交接尚未确认；未解除暂停。";
+  if (state.agentRunActive || state.workflowDispatchInFlight || state.internalContinuationPending) {
+    return "执行或交接仍在进行；请等待会话空闲。";
+  }
+}
+
+export const NEW_TASK_PANEL_LABEL = "解除暂停，开始新任务";
+const NEW_TASK_PANEL_GUIDANCE = "旧工作流已结束，会话仍暂停；请在 /pi-init workflow status 的操作页选择「" + NEW_TASK_PANEL_LABEL + "」。";
+
 export type WorkflowNextAction = {
   action: "none" | "recover" | "finish-current-task" | "schedule-replan";
   recovery?: "role" | "workflow" | "wait" | "stop";
@@ -26,6 +44,9 @@ export function nextWorkflowAction(state: PolicyState): WorkflowNextAction {
   const requiredRole = task?.role ?? unknownTask?.role ?? (!workflow?.currentTaskId && workflow?.pendingRevision ? "architect" : nextTask?.role);
   const taskId = workflow?.currentTaskId ?? unknownTask?.id ?? nextTask?.id;
   const taskScope = { ...(taskId ? { taskId } : {}), ...(requiredRole ? { requiredRole } : {}) };
+  if (hasStoppedTerminalWorkflow(state)) return { action: "recover", recovery: "stop", code: "WORKFLOW_USER_STOPPED",
+    message: NEW_TASK_PANEL_GUIDANCE,
+    nextAction: "等待用户在面板确认后另发新任务。不要恢复旧队列、重试、切角或重复查询状态。" };
   if (state.userStopRequested) return { action: "recover", recovery: "stop", code: "WORKFLOW_USER_STOPPED", message: "自动执行已停止，等待用户明确继续或恢复。", nextAction: "不要继续原任务、切角、重试写入或重复状态轮询。停止不等于任务完成、取消或未知副作用确认；只有用户明确继续/恢复后才重新检查原有授权。" };
   const activeWorkflow = workflow && !["completed", "cancelled"].includes(workflow.status);
   const switchAction = requiredRole ? `switch_role(role="${requiredRole}")` : "switch_role";

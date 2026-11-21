@@ -3,6 +3,7 @@ import { formatWorkflowVerification } from "../../src/workflow-verification.ts";
 import { Box, Key, matchesKey, SelectList, Text, truncateToWidth, type SelectItem } from "@earendil-works/pi-tui";
 import type { ExtensionRuntimeState } from "../runtime-state.ts";
 import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
+import { hasStoppedTerminalWorkflow } from "./workflow-action-policy.ts";
 import { formatWorkflowStatusText, workflowStatusActivityLabel, workflowStatusTaskItems } from "./workflow-status-renderer.ts";
 import { workflowPanelChoices, type WorkflowPanelRequest } from "./workflow-panel-actions.ts";
 import { SESSION_HANDOFF_IMPORTED, SESSION_HANDOFF_REVIEW } from "../../src/session-handoff.ts";
@@ -11,8 +12,9 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
   let timer: ReturnType<typeof setInterval> | undefined;
   try {
     return await ctx.ui.custom<WorkflowPanelRequest | undefined>((tui, theme, _bindings, done) => {
-      let page: "tasks" | "detail" | "actions" | "technical" = state.workflowState?.status === "paused"
-        && [SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_IMPORTED].includes(state.workflowState.pauseReason ?? "") ? "actions" : "tasks";
+      let page: "tasks" | "detail" | "actions" | "technical" = hasStoppedTerminalWorkflow(state)
+        || (state.workflowState?.status === "paused"
+          && [SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_IMPORTED].includes(state.workflowState.pauseReason ?? "")) ? "actions" : "tasks";
       let actionOrigin: "tasks" | "detail" = "tasks";
       let technicalOrigin: "tasks" | "detail" | "actions" = "tasks";
       let scroll = 0;
@@ -81,7 +83,10 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
               const choice = workflowPanelChoices(state).find((entry) => entry.value === item.value);
               if (!choice || choice.disabledReason) { notice = choice?.disabledReason ?? "当前没有可执行操作"; return; }
               if (!ctx.isProjectTrusted()) { notice = "项目尚未受信任，未执行操作"; return; }
-              if (state.workflowState) done({ choice, workflow: state.workflowState, contextGeneration: state.roleContextGeneration, sessionId: ctx.sessionManager.getSessionId() });
+              if (state.workflowState) done({
+                choice, workflow: state.workflowState, contextGeneration: state.roleContextGeneration,
+                stopGeneration: state.userStopGeneration, sessionId: ctx.sessionManager.getSessionId(),
+              });
             } else {
               selectedTaskId = item.value;
               detailId = item.value;
@@ -115,10 +120,13 @@ export async function showWorkflowPanel(ctx: ExtensionCommandContext, state: Ext
               : [width < 32 ? "↑↓滚动 · Esc返回" : width < 55 ? "↑↓ 滚动 · Esc 返回" : "↑↓ / PgUp / PgDn 滚动 · Esc 返回"];
           const totalBudget = Math.max(1, height - footer.length - 3);
           const budget = Math.max(1, totalBudget - (notice ? 1 : 0));
+          const terminalStopped = hasStoppedTerminalWorkflow(state);
           const headline = view.kind === "workflow"
-            ? theme.fg("accent", theme.bold(listWidth < 40
-              ? `${view.status === "running" ? "●" : view.status === "completed" ? "✓" : "⏸"} 工作流 · ${view.status === "running" ? "运行" : view.status === "completed" ? "完成" : "暂停"}`
-              : `● 工作流 · ${workflowStatusActivityLabel(view.activity)}`))
+            ? theme.fg("accent", theme.bold(terminalStopped
+              ? `队列${view.status === "cancelled" ? "已取消" : "已完成"} · 会话仍暂停`
+              : listWidth < 40 && !["cancelled", "completed"].includes(view.status)
+                ? `${view.status === "running" ? "●" : "⏸"} 工作流 · ${view.status === "running" ? "运行" : "暂停"}`
+                : `● 工作流 · ${workflowStatusActivityLabel(view.activity)}`))
             : theme.fg(view.kind === "restore-error" ? "error" : "muted", theme.bold(view.kind === "restore-error" ? "! 工作流恢复失败" : "○ 暂无活动工作流"));
           const headerContent: string[] = [headline];
           if (view.kind === "workflow") {

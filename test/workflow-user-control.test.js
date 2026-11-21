@@ -8,8 +8,9 @@ import { createRepeatedRejectionGuard } from "../extensions/workflow/workflow-st
 import { registerWorkflowTool } from "../extensions/workflow/workflow-tool.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowState } from "../src/workflow.ts";
+import { SESSION_HANDOFF_ENTRY } from "../src/session-handoff.ts";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { createReadTool } from "@earendil-works/pi-coding-agent";
+import { createReadTool, SessionManager } from "@earendil-works/pi-coding-agent";
 import { createExtensionHarness, emitExtensionEvent, emitToolResult } from "./support/extension-harness.js";
 function fixture(cwd) {
   const state = createExtensionRuntimeState();
@@ -138,11 +139,22 @@ test("真实扩展的停止输入不会产生模型消息或settled续跑", asyn
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
-async function runningHarness(cwd) {
+async function runningHarness(cwd, { persisted = false, appendEntry, ...options } = {}) {
   await mkdir(join(cwd, ".pi"), { recursive: true });
   await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({ schemaVersion: 2, mode: "auto", workflowMode: "on", roleModels: {} }));
-  const initial = createWorkflowState({ sessionId: "test-session", summary: "整体生命周期与预算", tasks: [{ id: "owned", role: "developer-test", task: "当前任务", files: ["src"], acceptanceCriteria: ["安全处理"] }] });
-  const h = createExtensionHarness([{ type: "custom", customType: "pi-init-workflow", data: initial }], { cwd, trusted: true, deferSendMessagePersistence: true });
+  const manager = persisted ? SessionManager.create(cwd, cwd) : undefined;
+  const sessionId = manager?.getSessionId() ?? "test-session";
+  const initial = createWorkflowState({ sessionId, summary: "整体生命周期与预算", tasks: [{ id: "owned", role: "developer-test", task: "当前任务", files: ["src"], acceptanceCriteria: ["安全处理"] }] });
+  manager?.appendMessage({ role: "user", content: "执行初始任务", timestamp: Date.now() });
+  manager?.appendCustomEntry("pi-init-workflow", initial);
+  const h = createExtensionHarness(manager?.getBranch() ?? [{ type: "custom", customType: "pi-init-workflow", data: initial }], {
+    cwd, sessionId, trusted: true, deferSendMessagePersistence: true, ...options,
+    appendEntry(type, data) {
+      appendEntry?.(type, data);
+      manager?.appendCustomEntry(type, data);
+    },
+  });
+  h.context.sessionManager.getSessionFile = () => manager?.getSessionFile();
   await emitExtensionEvent(h, "session_start");
   const task = h.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message;
   await emitExtensionEvent(h, "agent_start");
@@ -172,6 +184,165 @@ test("活动任务停止后进入未知结果保护，继续输入不授权重�
     } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
 });
+const lastWorkflow = h => h.branch.findLast(entry => entry.customType === "pi-init-workflow").data;
+const lastStop = h => h.branch.findLast(entry => entry.customType === "pi-init-user-control").data;
+const command = (h, args) => h.commands.get("pi-init").handler(args, h.context);
+const messages = h => [h.sentMessages.length, h.sentUserMessages.length];
+
+for (const source of ["command", "panel"]) {
+  test(`停止后通过 ${source} 取消只结束旧队列，不解除会话停止或重放`, async () => {
+    await withTempDirectory(async cwd => {
+      const h = await runningHarness(cwd, {
+        mode: "tui", select: (_title, items) => items[1],
+        custom: call => {
+          call.component.handleInput("a");
+          call.component.handleInput("\u001b[B");
+          call.component.handleInput("\u001b[B");
+          call.component.handleInput("\r");
+        },
+      });
+      try {
+        const sent = messages(h);
+        await writeFile(join(cwd, "existing.txt"), "已经发生的修改");
+        await command(h, "workflow stop");
+        await emitExtensionEvent(h, "agent_settled");
+        const stopped = lastStop(h);
+        const blocked = lastWorkflow(h).tasks[0];
+        assert.equal(blocked.outcomeUnknown, true);
+        await command(h, source === "command" ? "workflow cancel" : "workflow status");
+        const cancelled = lastWorkflow(h);
+        assert.equal(cancelled.status, "cancelled");
+        assert.deepEqual(cancelled.tasks[0], blocked);
+        assert.equal(lastStop(h), stopped);
+
+        await command(h, "workflow resume");
+        await command(h, "workflow retry owned --confirm-unknown-outcome");
+        assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "handled" });
+        await emitExtensionEvent(h, "agent_settled");
+        assert.equal(lastStop(h), stopped);
+        assert.equal(lastWorkflow(h), cancelled);
+        assert.deepEqual(messages(h), sent);
+        assert.equal(await readFile(join(cwd, "existing.txt"), "utf8"), "已经发生的修改");
+      } finally { await emitExtensionEvent(h, "session_shutdown"); }
+    });
+  });
+}
+
+const selectNewTask = call => call.component.handleInput("\r");
+
+async function stopAndCancel(h) {
+  await command(h, "workflow stop");
+  await emitExtensionEvent(h, "agent_settled");
+  await command(h, "workflow cancel");
+  assert.equal(lastWorkflow(h).status, "cancelled");
+  assert.equal(lastStop(h).stopped, true);
+}
+
+test("终态面板确认仅持久化解除暂停；新输入走原有职责检查，旧队列不恢复", async () => {
+  await withTempDirectory(async cwd => {
+    let confirm = false;
+    const h = await runningHarness(cwd, {
+      persisted: true, mode: "tui", custom: selectNewTask, select: (_title, items) => items[confirm ? 1 : 0],
+    });
+    try {
+      await stopAndCancel(h);
+      const cancelled = structuredClone(lastWorkflow(h));
+      const stopped = lastStop(h);
+      const sent = messages(h);
+      const aborts = h.aborts.length;
+      await command(h, "workflow new-task"); // Only the confirmed panel request is an entry point.
+      await command(h, "workflow status");
+      assert.equal(lastStop(h), stopped);
+
+      confirm = true;
+      await command(h, "workflow status");
+      await emitExtensionEvent(h, "agent_settled");
+      assert.deepEqual(lastStop(h), { ...stopped, stopped: false, reason: "explicit-new-task" });
+      assert.deepEqual(messages(h), sent);
+      assert.deepEqual(lastWorkflow(h), cancelled);
+      assert.equal(h.aborts.length, aborts);
+
+      assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "核对另一份独立报告" }), { action: "continue" });
+      await emitExtensionEvent(h, "agent_start");
+      const role = h.tools.find(tool => tool.name === "switch_role");
+      const switched = await role.execute("check-role", { role: "developer-test" }, undefined, undefined, h.context);
+      assert.equal(switched.details.role, "developer-test");
+      assert.equal(await emitExtensionEvent(h, "tool_call", { toolName: "bash", toolCallId: "new-input", input: { command: "not executed" } }), undefined);
+      await emitExtensionEvent(h, "agent_settled");
+      assert.equal(h.aborts.length, aborts);
+      assert.deepEqual(lastWorkflow(h), cancelled);
+      assert.deepEqual(messages(h), sent);
+    } finally { await emitExtensionEvent(h, "session_shutdown"); }
+  });
+});
+
+for (const release of [false, true]) {
+  test(`重载保留终态会话的${release ? "已解除" : "暂停"}记录，职责恢复仍独立生效`, async () => {
+    await withTempDirectory(async cwd => {
+      const h = await runningHarness(cwd, { persisted: true, mode: "tui", select: (_title, items) => items[1], custom: selectNewTask });
+      await stopAndCancel(h);
+      if (release) await command(h, "workflow status");
+      assert.equal(lastStop(h).stopped, !release);
+      await emitExtensionEvent(h, "session_shutdown");
+
+      const manager = SessionManager.open(h.context.sessionManager.getSessionFile(), cwd);
+      const reopened = createExtensionHarness(manager.getBranch(), {
+        cwd, sessionId: manager.getSessionId(), trusted: true, mode: "tui",
+        select: (_title, items) => items[1], custom: selectNewTask,
+        appendEntry: (type, data) => manager.appendCustomEntry(type, data),
+      });
+      reopened.context.sessionManager.getSessionFile = () => manager.getSessionFile();
+      try {
+        await emitExtensionEvent(reopened, "session_start", { reason: "reload" });
+        const stop = lastStop(reopened);
+        assert.equal(stop.stopped, !release);
+        await command(reopened, "workflow status");
+        assert.equal(lastStop(reopened), stop);
+        assert.deepEqual(await emitExtensionEvent(reopened, "input", { source: "interactive", text: "继续" }), { action: release ? "continue" : "handled" });
+        const tool = await emitExtensionEvent(reopened, "tool_call", { toolName: "bash", toolCallId: "after-reload", input: { command: "not executed" } });
+        assert.match(tool.reason, /职责尚未重新确认/);
+        assert.deepEqual(lastWorkflow(reopened), JSON.parse(JSON.stringify(lastWorkflow(h))));
+        assert.deepEqual(messages(reopened), [0, 0]);
+      } finally { await emitExtensionEvent(reopened, "session_shutdown"); }
+    });
+  });
+}
+
+for (const failure of ["再次停止", "写入失败", "职责待确认", "交接待确认", "宿主有待处理消息", "会话不落盘"]) {
+  test(`确认新任务时${failure}，保持暂停且不调度`, async () => {
+    await withTempDirectory(async cwd => {
+      const h = await runningHarness(cwd, {
+        persisted: failure !== "会话不落盘", mode: "tui", custom: selectNewTask,
+        appendEntry(type, data) {
+          if (failure === "写入失败" && type === "pi-init-user-control" && !data.stopped) throw new Error("disk full");
+        },
+        async select(_title, items) {
+          if (failure === "再次停止") await command(h, "workflow stop");
+          if (failure === "职责待确认") await emitExtensionEvent(h, "session_compact", { reason: "manual" });
+          if (failure === "交接待确认") h.branch.push({ type: "custom", customType: SESSION_HANDOFF_ENTRY, data: {
+            version: 1, kind: "outgoing", phase: "prepared", sourceSessionId: h.context.sessionManager.getSessionId(), workflowId: lastWorkflow(h).workflowId,
+          } });
+          if (failure === "宿主有待处理消息") h.context.hasPendingMessages = () => true;
+          return items[1];
+        },
+      });
+      try {
+        await stopAndCancel(h);
+        const sent = messages(h);
+        const cancelled = structuredClone(lastWorkflow(h));
+        await command(h, "workflow status");
+        assert.equal(h.selectCalls.length, 1);
+        assert.equal(lastStop(h).stopped, true);
+        assert.equal(h.branch.some(entry => entry.customType === "pi-init-user-control" && !entry.data.stopped), false);
+        if (failure === "写入失败") assert.match(h.notifications.at(-1).message, /disk full/);
+        await emitExtensionEvent(h, "agent_settled");
+        assert.deepEqual(lastWorkflow(h), cancelled);
+        assert.deepEqual(messages(h), sent);
+      } finally { await emitExtensionEvent(h, "session_shutdown"); }
+    });
+  });
+}
+
 test("连续角色拒绝只结束重复回合，普通读取不绕过保护，未派发新角色或重试任务", async () => {
   await withTempDirectory(async cwd => {
     const h = await runningHarness(cwd);

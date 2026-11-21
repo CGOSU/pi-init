@@ -98,6 +98,8 @@ JS/TS项目无既定工具链时默认使用pnpm。快速/高级初始化推断�
 | `/blackbox resume <scope>` | 检查后仅恢复 `project`、`global` 或 `handoff` 记录器的后续采集；不重放任务 |
 | `/large [--scope 目录] [--exclude 目录] [--include-temporary]` | 按范围扫描大型代码文件并启动建议审阅 |
 
+**开始新任务，不恢复旧队列**：`/pi-init workflow cancel` 和面板中的「取消当前工作流」都只结束旧队列，不回滚副作用，也不解除 `/pi-init workflow stop` 或「停止工作」留下的会话暂停。旧队列已取消或完成、会话仍暂停时，在空闲的 TUI 会话中打开 `/pi-init workflow status`，选择「解除暂停，开始新任务」并确认，再另发新任务。面板不会自动发送消息、重试旧任务或确认未知副作用；`resume`、`retry` 和「继续」不能代替这一步。若仍有职责恢复、会话交接等保护，或会话无法写入解除记录，操作会被拒绝，会话仍暂停。
+
 标准职责包括 `architect`（分析与规划，可按当前决策使用受限的本地只读工具）、`developer-test`（同一实现交付的连续调查、实现与验证）和 `docs-commit`（独立文档/版本或明确分配的统一收尾）；项目也可以配置自定义角色。`architect` 不执行、不写入、不使用 shell/codemode/MCP，也不能作为工作流执行角色；活动任务显式角色和用户指定职责优先。完整边界见[连续任务与轻量角色交接](docs/role-continuity.md)。模型和推理强度策略只有以下两种，均自动应用，不再提供 `auto`/`confirm`/`manual` 角色切换方式，也不在模型或强度变化时额外询问确认。
 
 - **按职责配置（`roles`，默认）**：在「角色与模型」中为标准或自定义职责配置 `provider`、`model` 和 `thinkingLevel`。职责切换时自动应用对应映射；未配置映射时沿用当前 Pi 会话模型及推理强度。

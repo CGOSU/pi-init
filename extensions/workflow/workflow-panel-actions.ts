@@ -1,12 +1,13 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { ExtensionRuntimeState, WorkflowState } from "../runtime-state.ts";
 import { transferFrozen, handoffBoundary, SESSION_HANDOFF_IMPORTED, SESSION_HANDOFF_REVIEW } from "../../src/session-handoff.ts";
+import { hasStoppedTerminalWorkflow, NEW_TASK_PANEL_LABEL, newTaskReleaseBlockReason } from "./workflow-action-policy.ts";
 
 export type WorkflowPanelChoice = {
   value: string;
   label: string;
   description: string;
-  action: "resume" | "retry" | "cancel" | "cancel-all" | "fresh";
+  action: "resume" | "retry" | "cancel" | "cancel-all" | "fresh" | "new-task";
   taskId?: string;
   confirmUnknownOutcome?: boolean;
   disabledReason?: string;
@@ -15,11 +16,19 @@ export type WorkflowPanelRequest = {
   choice: WorkflowPanelChoice;
   workflow: WorkflowState;
   contextGeneration: number;
+  stopGeneration: number;
   sessionId: string;
 };
 
 export function workflowPanelChoices(state: ExtensionRuntimeState): WorkflowPanelChoice[] {
   const workflow = state.workflowState;
+  if (hasStoppedTerminalWorkflow(state)) {
+    return [{
+      value: "new-task", action: "new-task", label: NEW_TASK_PANEL_LABEL,
+      description: "旧队列已结束；确认后等待新输入，不恢复或重试旧任务",
+      disabledReason: newTaskReleaseBlockReason(state),
+    }];
+  }
   if (!workflow || ["completed", "cancelled"].includes(workflow.status)) return [];
   const imported = workflow.pauseReason === SESSION_HANDOFF_IMPORTED;
   const choices: WorkflowPanelChoice[] = [];
@@ -47,20 +56,32 @@ export async function runWorkflowPanelRequest(
   ctx: ExtensionCommandContext,
   state: ExtensionRuntimeState,
   run: (action: string, taskId: string | undefined, confirmUnknownOutcome: boolean) => Promise<WorkflowCommandResult>,
+  startNewTask?: () => void,
 ): Promise<WorkflowCommandResult> {
   const current = () => !state.runtimeDisposed && state.workflowState === request.workflow && state.roleContextGeneration === request.contextGeneration
-    && ctx.sessionManager.getSessionId() === request.sessionId;
+    && ctx.sessionManager.getSessionId() === request.sessionId
+    && (request.choice.value !== "new-task" || request.stopGeneration === state.userStopGeneration);
   const validate = () => {
-    if (!current()) { if (!state.runtimeDisposed) ctx.ui.notify("工作流已变化，未执行旧面板操作；请重新打开进度面板。", "warning"); return false; }
-    if (!ctx.isProjectTrusted()) { ctx.ui.notify("项目尚未受信任，未执行工作流操作。", "warning"); return false; }
+    if (!current()) { if (!state.runtimeDisposed) ctx.ui.notify("工作流已变化或停止记录已更新，未执行旧面板操作；请重新打开进度面板。", "warning"); return; }
+    if (!ctx.isProjectTrusted()) { ctx.ui.notify("项目尚未受信任，未执行工作流操作。", "warning"); return; }
     const choice = workflowPanelChoices(state).find(item => item.value === request.choice.value);
-    if (!choice || choice.disabledReason) { ctx.ui.notify(choice?.disabledReason ?? "当前状态已不支持该操作。", "warning"); return false; }
-    if (["resume", "retry", "fresh"].includes(choice.action) && !ctx.isIdle()) { ctx.ui.notify("Agent 仍在运行；空闲后再继续或重试。", "warning"); return false; }
-    if (choice.action === "fresh" && request.workflow.pauseReason !== SESSION_HANDOFF_IMPORTED && typeof ctx.newSession !== "function") { ctx.ui.notify("宿主尚未提供安全的新会话接口，未执行交接。", "warning"); return false; }
-    return true;
+    if (!choice || choice.disabledReason) { ctx.ui.notify(choice?.disabledReason ?? "当前状态已不支持该操作。", "warning"); return; }
+    if (["resume", "retry", "fresh", "new-task"].includes(choice.action) && !ctx.isIdle()) { ctx.ui.notify("Agent 仍在运行；请在空闲后重新打开面板。", "warning"); return; }
+    if (choice.action === "fresh" && request.workflow.pauseReason !== SESSION_HANDOFF_IMPORTED && typeof ctx.newSession !== "function") { ctx.ui.notify("宿主尚未提供安全的新会话接口，未执行交接。", "warning"); return; }
+    return choice;
   };
-  if (!validate()) return;
-  const choice = request.choice;
+  const choice = validate();
+  if (!choice) return;
+  if (choice.action === "new-task") {
+    if (!startNewTask) { ctx.ui.notify("当前面板未接通新任务入口。", "warning"); return; }
+    const confirm = "确认解除暂停";
+    const selected = await ctx.ui.select(
+      "旧队列保持终态；不恢复旧任务、不确认未知副作用。解除暂停后请另发新任务。",
+      ["返回，不执行", confirm],
+    );
+    if (selected === confirm && validate()) startNewTask();
+    return;
+  }
   if (choice.action === "fresh" || choice.action === "cancel" || choice.action === "cancel-all" || choice.confirmUnknownOutcome || request.workflow.pauseReason === "architecture-review") {
     const confirm = choice.action === "fresh" ? "确认" + choice.label : choice.confirmUnknownOutcome ? "已核对副作用，授权创建新尝试" : choice.action === "resume" ? "已完成审阅，继续原计划" : "确认" + choice.label;
     const warning = choice.action === "fresh" ? request.workflow.pauseReason === SESSION_HANDOFF_IMPORTED ? "只核对当前目标会话导入，不再创建新会话或重复执行任务。" : "旧队列将冻结；新会话只继续剩余任务，历史验证不是本次新执行。" : choice.confirmUnknownOutcome ? "旧执行可能已产生副作用。请先核对实际结果；确认后才创建新尝试。" : choice.action === "resume" ? "仅在已完成架构审阅后继续。" : "只停止后续编排，不回滚修改，也不保证正在运行的工具或进程停止。";

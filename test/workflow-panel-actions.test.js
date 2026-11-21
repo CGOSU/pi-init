@@ -16,7 +16,10 @@ function fixture() {
   return state;
 }
 function request(state, value) {
-  return { choice: workflowPanelChoices(state).find((item) => item.value === value), workflow: state.workflowState, contextGeneration: state.roleContextGeneration, sessionId: "test-session" };
+  return {
+    choice: workflowPanelChoices(state).find((item) => item.value === value), workflow: state.workflowState,
+    contextGeneration: state.roleContextGeneration, stopGeneration: state.userStopGeneration, sessionId: "test-session",
+  };
 }
 function context(select = async () => undefined) {
   const warnings = [];
@@ -55,6 +58,11 @@ test("AI 审阅等待、恢复异常和终态不提供可绕过守卫的操作",
   assert.ok(workflowPanelChoices(state).every(item => item.disabledReason));
   state.workflowState.status = "completed";
   assert.deepEqual(workflowPanelChoices(state), []);
+
+  state.userStopRequested = true;
+  assert.ok(workflowPanelChoices(state).find(item => item.action === "new-task").disabledReason);
+  delete state.workflowRestoreError;
+  assert.deepEqual(workflowPanelChoices(state).filter(item => !item.disabledReason).map(item => item.action), ["new-task"]);
 });
 test("详情滚动可到最后一行，窄终端保留返回提示且行宽受限", async () => {
   const state = fixture(); state.workflowState.tasks[0].verification = Array.from({ length: 50 }, (_, i) => "验证结果 " + i);

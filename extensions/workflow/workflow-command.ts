@@ -8,7 +8,7 @@ import { runWorkflowPanelRequest } from "./workflow-panel-actions.ts";
 import type { WorkflowActionDependencies } from "./workflow-action-types.ts";
 import type { createWorkflowRecoveryActions } from "./workflow-recovery-actions.ts";
 
-type WorkflowCommandDependencies = Pick<WorkflowActionDependencies, "dispatch" | "report" | "freshSession" | "resumeExecution"> & {
+type WorkflowCommandDependencies = Pick<WorkflowActionDependencies, "dispatch" | "report" | "freshSession" | "resumeExecution" | "startNewTask"> & {
   recoveryActions: ReturnType<typeof createWorkflowRecoveryActions>;
   commitLifecycleTransition: (transition: WorkflowLifecycleTransition, ctx: ExtensionContext) => void;
 };
@@ -60,7 +60,12 @@ export function createWorkflowCommand(state: ExtensionRuntimeState, deps: Workfl
     if (action === undefined || action === "status") {
       const request = await deps.report.showWorkflowProgress(ctx);
       if (request) {
-        const result = await runWorkflowPanelRequest(request, ctx, state, (nextAction, nextTaskId, confirmed) => workflowCommand(nextAction, nextTaskId, ctx, confirmed));
+        const startNewTask = deps.startNewTask;
+        const result = await runWorkflowPanelRequest(
+          request, ctx, state,
+          (nextAction, nextTaskId, confirmed) => workflowCommand(nextAction, nextTaskId, ctx, confirmed),
+          startNewTask && (() => startNewTask(ctx)),
+        );
         if (result === "close-panel") return result;
       }
       const diagnostic = recoveryActions.diagnostic();
@@ -107,7 +112,8 @@ export function createWorkflowCommand(state: ExtensionRuntimeState, deps: Workfl
       if (action === "cancel" || action === "cancel-all") {
         const transition = transitionWorkflowLifecycle(state.workflowState, { type: "workflow-cancelled", identity: workflowActionIdentity(state.workflowState) }, Date.now());
         commitLifecycleTransition(transition, ctx);
-        ctx.ui.notify("工作流已取消；副作用未自动回滚。", "info");
+        ctx.ui.notify("工作流已取消；副作用未自动回滚。"
+          + (state.userStopRequested ? " 会话仍暂停；请在工作流状态面板解除暂停后再发送新任务。" : ""), "info");
         return;
       }
       ctx.ui.notify("用法：/pi-init workflow [status|acknowledge|resume|retry <taskId> [--confirm-unknown-outcome]|cancel|cancel-all|discard-recovery <entryId> --confirm-unknown-outcome]", "error");
