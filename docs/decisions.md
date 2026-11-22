@@ -8,6 +8,31 @@
 
 ## 已确认决策
 
+### 2026-11-22：任务记忆观察按派生版本核对，并由单一规则判定工具失败
+
+- 决定：`src/task-memory-protocol.ts` 的 `TASK_OBSERVATION_DERIVATION`（当前为 3）标识观察的派生方式，包括摘要截断（`observationSummary`，512 字符）、输入/输出指纹及失败规则；快照写入时记录 `derivation`，缺失视为 1。加载时同版本逐字节比对，防止篡改摘要或结果；版本不同只核对 SDK 分配的 `id`、`messageEntryId`、`toolCallId`、`toolName`，再改用按当前规则重新派生的观察，历史 checkpoint 的进展比较同样使用重新派生的来源。观察 outcome、checkpoint 进展排除及 `verificationSources` 共用 `toolResultFailed`：`isError`，或 details/嵌套调用中出现 `status` error/unfinished、`ok:false`、非零 `exitCode`/`exit_code` 即为失败。
+- 原因：旧实现逐字节比对派生结果，任何截断、指纹或失败规则调整都会让升级后进行中的任务报“来源缺失/快照损坏”并暂停，交接也随之失败；原有两套失败规则使嵌套调用失败的结果不算进展，却能作为验证成功证据。
+- 约束：改动任何派生字段必须递增派生版本。解析上限仍按当前值校验旧快照，只能放宽不能收紧（摘要解析上限因此保留 1024）；收紧须同样按版本区分。降级到不认识 `derivation` 的旧插件不在支持范围。统一失败规则后，跨会话读取历史验证来源同样更严格。
+
+### 2026-11-22：回合末任务记忆快照按批保存，历史证据读取缓存来源文件
+
+- 决定：回合末首个结果立即保存快照，之后累计 `snapshotEveryResults`（8）个未保存结果再写入；checkpoint 写入不变。`readEvidence` 读取来源 session 文件时使用 `readHandoffArchiveCached`，按文件 dev/ino/size/mtime 判断复用，最多缓存 4 个文件，失败结果不缓存。
+- 原因：每回合追加一份最大约 61 KB 的完整快照会使长任务的 session 迅速膨胀，并拉长 checkpoint 时的历史解析；跨会话读取 8 项证据曾需把来源文件完整解析 16 次。加载本就从水位后重新派生全部结果，按批保存与逐回合保存得到相同的观察集合与省略计数，快照只缩短加载时的扫描范围。
+- 约束：每回合仍加载并核对记忆，快照损坏与来源不一致照常即时发现。缓存的 SessionManager 为共享只读对象，不得修改；交接激活与 `fresh` 的安全核对继续使用非缓存读取。
+
+### 2026-11-22：派发锁由持有交接身份的调度路径释放，重规划发送失败退回待派发
+
+- 决定：`prepareAndDispatchCurrentTask` 与 `scheduleWorkflowReplan` 在 `finally` 中，仅当交接身份仍与本次调度一致时释放 `workflowDispatchInFlight`；身份已变化时由改变身份的路径负责，不覆盖新工作流的调度状态。新增 `replan-dispatch-failed` 迁移：仅 `dispatching` 且身份匹配时退回 `pending` 并更换 `handoffId`；只有消息发送本身抛错才回退，消息已发出、仅 `queued` 持久化失败时仍停在 `dispatching`、不重发。
+- 原因：角色切换 await 期间用户停止会直接返回而遗留锁，“继续”只清除停止标记，`agent_settled` 的自动调度随后一直被跳过；重规划发送失败后停在 `dispatching`，调度与 resume 都不会处理，只能 reload。更换 `handoffId` 与 reload 恢复一致，迟到的旧消息无法据此提交重规划。
+- 约束：不改变正常发送、暂停、取消路径的锁行为；锁仍有多处写入点，后续宜收敛为“加锁者负责解锁”。
+
+### 2026-11-22：冻结的交接来源只经用户确认放弃
+
+- 决定：来源因工作流交接冻结（最新 outgoing 为 `prepared` 或工作流为 `session-transfer-pending`）时，再次执行 `/pi-init fresh` 进入处理流程：先在来源 session 所在目录查找含同一交接 ID incoming 记录的会话，找到则拒绝放弃并给出其路径；未找到时说明检查范围与无法读取的文件，经用户确认后追加 `phase: "cancelled"`，工作流恢复为 `task-blocked`（存在阻塞任务时）或 `session-handoff-review`。`cancelled` 已写入而工作流状态未保存时，下次 `fresh` 不再询问，直接补全恢复。
+- 原因：`newSession` 在写入目标之前失败或冻结状态保存失败时，原实现只记控制台警告，来源永久冻结且再次 `fresh` 只提示“核对已有目标”，工作流在当前会话无法继续。Pi SDK 1.5.0 在出现首条 user/assistant 消息时落盘，目标 setup 写入 user 种子消息，故已接收交接的目标会出现在来源同目录。
+- 约束：不自动解冻，不新增命令。遗漏在其他目录且未激活的目标激活时读取来源意图，`cancelled` 会使其拒绝激活；已在其他目录激活的目标无法检测，由确认框提示用户取消。普通会话交接（`general-session-transfer.ts`）的同类冻结尚未处理。
+- 验证（以上四项）：调整与新增的回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js` 与新增的 `test/session-replacement.test.js`。记录时尚未取得 `node ./scripts/test.js` 与 `tsc --noEmit` 的实际输出，不视为已通过，结果待补。
+
 ### 2026-11-21：待审计划的重复读取只结束本轮
 
 - 决定：首任务尚未派发的 `architecture-review` 使用独立的只读观察范围，复用现有的第 3 次重复提示、第 6 次重复止损。原生 `read` 按相对于项目解析的路径、起始行和可见返回内容判重；只换相对/绝对路径或不改变返回内容的 `limit` 不算进展。
