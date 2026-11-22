@@ -12,7 +12,36 @@ const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const docs = { provider: "openai-codex", id: "gpt-5.6-docs" };
 const developer = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
-async function makeHarness(directory, options = {}) {
+const task = (id, goal) => ({ id, task: goal, files: ["src"], acceptanceCriteria: [goal], role: "developer-test" });
+const input = (h, text, source = "interactive") => emitExtensionEvent(h, "input", { source, text });
+const execute = (h, id, args) => h.tools.find(tool => tool.name === "task_workflow").execute(id, args, undefined, undefined, h.context);
+const dispatches = h => h.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task");
+const reply = direction => ({ stopReason: "stop", content: [{ type: "text", text: JSON.stringify({ direction }) }] });
+
+function stubArchitect(...replies) {
+  const calls = [];
+  return {
+    calls,
+    streamSimple(model, context, options) {
+      calls.push({ model, context, options });
+      assert.ok(replies.length, "未预期的架构判断请求");
+      return { result: async () => replies.shift() };
+    },
+  };
+}
+
+async function startTask(h, next = []) {
+  await execute(h, "plan", { action: "plan", summary: "查询已发布数据", tasks: [task("check", "验证本地已发布数据查询"), ...next] });
+  await emitExtensionEvent(h, "agent_settled");
+  const dispatch = dispatches(h).at(-1).message;
+  await emitExtensionEvent(h, "agent_start");
+  await emitExtensionEvent(h, "message_start", { message: { ...dispatch, role: "custom", timestamp: Date.now() } });
+  h.persistSentMessage(dispatch);
+  assert.equal(latestWorkflow(h).handoff.phase, "executing");
+  return dispatch.details;
+}
+
+async function makeHarness(directory, options = {}, config = {}) {
   await mkdir(path.join(directory, ".pi"), { recursive: true });
   await writeFile(path.join(directory, ".pi", "role-models.json"), `${JSON.stringify({
     schemaVersion: 2,
@@ -21,8 +50,9 @@ async function makeHarness(directory, options = {}) {
     roleModels: {
       architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" },
       "docs-commit": { provider: docs.provider, model: docs.id, thinkingLevel: "high" },
-      "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "max" },
+      "developer-test": { provider: developer.provider, model: developer.id, thinkingLevel: "high" },
     },
+    ...config,
   }, null, 2)}\n`);
   const harness = createExtensionHarness([], {
     cwd: directory,
@@ -97,69 +127,257 @@ test("普通继续输入不创建 pendingRevision，中断后沿原计划继续�
 
 test("待审计划按用户方向修订，恢复后仍须审批修订版才派发", async () => {
   await withTempDirectory(async (directory) => {
-    const h = await makeHarness(directory);
-    const execute = (id, args) => h.tools.find(tool => tool.name === "task_workflow").execute(id, args, undefined, undefined, h.context);
-    const task = (id, objective) => ({ id, task: objective, files: ["src"], acceptanceCriteria: [objective], role: "developer-test" });
-    const toolDispatches = () => h.sentMessages.filter(({ message }) => message.customType === "pi-init-workflow-task");
+    const architectModel = stubArchitect(reply("replan"));
+    const h = await makeHarness(directory, architectModel);
     try {
-      await execute("plan", { action: "plan", summary: "原计划", reviewRequired: true, tasks: [task("original", "检查项目元信息")] });
-      const direction = "重规划：不要再读 package.json，只验证本地 D1 查询";
-      await emitExtensionEvent(h, "input", { source: "interactive", text: direction });
+      await execute(h, "plan", { action: "plan", summary: "原计划", reviewRequired: true, tasks: [task("original", "检查项目元信息")] });
+      const direction = "不要再读 package.json，只验证本地 D1 查询，先给我看新方案";
+      await emitExtensionEvent(h, "agent_start");
+      assert.equal((await input(h, direction)).action, "handled");
       assert.equal(latestWorkflow(h).status, "replanning");
+      assert.equal(architectModel.calls.length, 1);
+      assert.equal(JSON.parse(architectModel.calls[0].context.messages[0].content).contract.currentTask, undefined);
+      assert.equal(h.sentMessages.length, 0, "当前回合收敛前不启动架构重规划");
+      await emitExtensionEvent(h, "agent_settled");
       assert.match(h.sentMessages.at(-1).message.content, /只验证本地 D1 查询/);
-      assert.equal(toolDispatches().length, 0);
+      assert.equal(dispatches(h).length, 0);
 
       await emitExtensionEvent(h, "session_start");
       const identity = workflowMessageIdentity(h, "pi-init-workflow-replan");
-      await execute("apply", { action: "replan", ...identity, summary: "修订计划", tasks: [task("d1", "验证本地 D1 查询")] });
+      await execute(h, "apply", { action: "replan", ...identity, summary: "修订计划", tasks: [task("d1", "验证本地 D1 查询")] });
       await emitExtensionEvent(h, "agent_settled");
       assert.equal(latestWorkflow(h).pauseReason, "architecture-review");
       assert.equal(latestWorkflow(h).currentTaskId, undefined);
       assert.deepEqual(latestWorkflow(h).tasks.map(t => t.id), ["d1"]);
-      assert.equal(toolDispatches().length, 0);
-      await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" });
+      assert.equal(dispatches(h).length, 0);
+      await input(h, "继续");
       await emitExtensionEvent(h, "agent_settled");
-      assert.equal(toolDispatches().length, 0);
+      assert.equal(dispatches(h).length, 0);
 
       await h.commands.get("pi-init").handler("workflow resume", h.context);
       assert.equal(latestWorkflow(h).currentTaskId, "d1");
-      assert.equal(toolDispatches().length, 1);
+      assert.equal(dispatches(h).length, 1);
+      assert.equal(architectModel.calls.length, 1);
     } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
 });
 
 test("同任务纠偏只传递一个用户输入，改目标仍走任务边界重规划", async () => {
   await withTempDirectory(async (directory) => {
-    const h = await makeHarness(directory, { deferSendMessagePersistence: true });
-    const workflow = h.tools.find(tool => tool.name === "task_workflow");
-    const steer = text => emitExtensionEvent(h, "input", { source: "interactive", text });
+    const architectModel = stubArchitect(reply(null), reply("correction"), reply("replan"));
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
     try {
-      await workflow.execute("plan-for-steering", { action: "plan", summary: "验证查询", tasks: [
-        { id: "check", task: "验证本地查询", files: ["src"], acceptanceCriteria: ["能查已发布数据"], role: "developer-test" },
-      ] }, undefined, undefined, h.context);
-      await emitExtensionEvent(h, "agent_settled");
-      const dispatch = h.sentMessages.findLast(({ message }) => message.customType === "pi-init-workflow-task").message;
-      await emitExtensionEvent(h, "agent_start");
-      await emitExtensionEvent(h, "message_start", { message: { ...dispatch, role: "custom", timestamp: Date.now() } });
-      h.persistSentMessage(dispatch);
+      const identity = await startTask(h);
       const before = structuredClone(latestWorkflow(h));
       assert.equal(before.handoff.phase, "executing");
       const sent = h.sentMessages.length;
-      const result = await steer("任务纠偏：绑定已确认；不要再查配置；下一步只验证已发布数据查询。");
+      const result = await input(h, "任务纠偏：绑定已确认；不要再查配置；下一步只验证已发布数据查询。");
       assert.equal(result.action, "transform");
       assert.match(result.text, /绑定已确认；不要再查配置；下一步只验证已发布数据查询/);
       assert.deepEqual(latestWorkflow(h), before);
       assert.equal(h.sentMessages.length, sent);
       assert.equal(h.sentUserMessages.length, 0);
 
-      await steer("重规划：改为验证未发布文章的访问权限");
-      assert.equal(latestWorkflow(h).currentTaskId, "check");
-      assert.match(latestWorkflow(h).pendingRevision.direction, /未发布文章的访问权限/);
-      assert.equal((await steer("任务纠偏：直接测试新目标")).action, "handled");
+      assert.equal((await input(h, "改成内部分流消息", "extension")).action, "continue");
+      assert.equal((await input(h, "这个任务有哪些限制？")).action, "continue");
+      const sameTask = "跳过配置检查，先验证已发布数据查询。";
+      const corrected = await input(h, sameTask);
+      assert.equal(corrected.action, "transform");
+      assert.ok(corrected.text.includes(sameTask));
+      assert.deepEqual(latestWorkflow(h), before);
+      assert.equal(h.context.model, developer);
+      assert.equal(h.getThinkingLevel(), "high");
       assert.equal(h.sentMessages.length, sent);
+      assert.equal(h.sentUserMessages.length, 0);
+
+      const call = architectModel.calls[1];
+      assert.equal(call.model, architect);
+      assert.equal(call.options.reasoning, "max");
+      assert.equal(call.context.tools, undefined);
+      assert.equal(call.context.messages.length, 1);
+      assert.deepEqual(JSON.parse(call.context.messages[0].content), {
+        contract: {
+          goal: "查询已发布数据",
+          constraints: [],
+          currentTask: { goal: "验证本地已发布数据查询", acceptanceCriteria: ["验证本地已发布数据查询"] },
+        },
+        userInstruction: sameTask,
+      });
+
+      const changeGoal = "改为验证未发布文章的访问权限";
+      assert.equal((await input(h, changeGoal)).action, "handled");
+      assert.equal(latestWorkflow(h).currentTaskId, "check");
+      assert.deepEqual(latestWorkflow(h).handoff, before.handoff);
+      assert.equal(latestWorkflow(h).pendingRevision.direction, changeGoal);
+      assert.equal((await input(h, "任务纠偏：直接测试新目标")).action, "handled");
+      assert.equal(architectModel.calls.length, 3);
+      assert.equal(h.sentMessages.length, sent);
+
+      await execute(h, "block", { ...identity, action: "block", reason: "目标改变，旧任务不能按新契约执行。" });
+      await emitExtensionEvent(h, "agent_settled");
+      h.persistSentMessage();
+      const revision = workflowMessageIdentity(h, "pi-init-workflow-replan");
+      await execute(h, "apply", { ...revision, action: "replan", summary: changeGoal, tasks: [task("permissions", changeGoal)] });
+      await emitExtensionEvent(h, "agent_settled");
+      assert.equal(latestWorkflow(h).pauseReason, "architecture-review");
+      assert.equal(dispatches(h).length, 1, "未批准的新计划不派发首任务");
+      await h.commands.get("pi-init").handler("workflow resume", h.context);
+      assert.equal(latestWorkflow(h).currentTaskId, "permissions");
+      assert.equal(dispatches(h).length, 2);
     } finally { await emitExtensionEvent(h, "session_shutdown"); }
   });
 });
+
+test("Auto 使用固定模型的架构强度，不切换当前执行者", async () => {
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(reply("correction"));
+    const fixed = { ...developer, reasoning: true };
+    const h = await makeHarness(directory, { ...architectModel, model: fixed, availableModels: [fixed, architect], deferSendMessagePersistence: true }, {
+      schemaVersion: 3,
+      mode: undefined,
+      modelStrategy: "auto",
+      autoModel: { provider: developer.provider, model: developer.id, initialThinkingLevel: "medium", minThinkingLevel: "low", maxThinkingLevel: "high" },
+    });
+    await h.tools.find(tool => tool.name === "switch_role").execute("architect", { role: "architect" }, undefined, undefined, h.context);
+    await startTask(h);
+    const before = latestWorkflow(h);
+    assert.equal(h.getThinkingLevel(), "medium");
+    assert.equal((await input(h, "跳过已核实的配置，直接查询", "rpc")).action, "transform");
+    assert.equal(architectModel.calls.length, 1);
+    assert.equal(architectModel.calls[0].model, fixed);
+    assert.equal(architectModel.calls[0].options.reasoning, "high");
+    assert.equal(h.context.model, fixed);
+    assert.equal(h.getThinkingLevel(), "medium");
+    assert.deepEqual(latestWorkflow(h), before);
+  });
+});
+
+test("普通会话、未信任项目、显式入口不调用架构模型", async () => {
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect();
+    const h = await makeHarness(directory, architectModel);
+    assert.equal((await input(h, "把搜索范围缩小到文档")).action, "continue");
+    await execute(h, "plan", { action: "plan", summary: "等待审阅", reviewRequired: true, tasks: [task("first", "检查方案")] });
+    const before = latestWorkflow(h);
+    h.context.isProjectTrusted = () => false;
+    assert.equal((await input(h, "改为只验证本地查询")).action, "continue");
+    assert.deepEqual(latestWorkflow(h), before);
+    h.context.isProjectTrusted = () => true;
+    assert.equal((await input(h, "/pi-init status")).action, "continue");
+    assert.equal((await input(h, "继续原计划")).action, "continue");
+    assert.equal((await input(h, "重规划：只验证本地查询")).action, "handled");
+    assert.equal(latestWorkflow(h).pendingRevision.reviewRequired, true);
+    assert.equal(architectModel.calls.length, 0);
+  });
+});
+
+test("roles 缺少 architect 配置时不借用当前执行模型，保留显式纠偏入口", async () => {
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect();
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
+    await startTask(h);
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ schemaVersion: 3, workflowMode: "on", roleModels: {} }));
+    const before = latestWorkflow(h);
+    assert.equal((await input(h, "跳过已核实的配置，直接查询")).action, "handled");
+    assert.match(h.notifications.at(-1).message, /没有可用的已配置架构模型.*任务纠偏/);
+    assert.equal(architectModel.calls.length, 0);
+    assert.equal((await input(h, "任务纠偏：跳过已核实的配置，直接查询")).action, "transform");
+    assert.deepEqual(latestWorkflow(h), before);
+  });
+});
+
+test("模型失败、非法动作、待审计划收到纠偏结果都不会改变工作流或自动批准", async () => {
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(
+      { stopReason: "error", content: [], errorMessage: "provider internal detail" },
+      { stopReason: "stop", content: [{ type: "text", text: '{"direction":"replan","action":"resume"}' }] },
+      { stopReason: "toolUse", content: [{ type: "toolCall", name: "task_workflow" }] },
+      reply("correction"),
+    );
+    const h = await makeHarness(directory, architectModel);
+    await execute(h, "plan", { action: "plan", summary: "等待审阅", reviewRequired: true, tasks: [task("first", "检查方案")] });
+    const before = latestWorkflow(h);
+    for (const message of [/判断失败/, /未返回合法方向/, /未返回合法方向/, /没有执行中任务/]) {
+      assert.equal((await input(h, "只验证本地查询")).action, "handled");
+      assert.match(h.notifications.at(-1).message, message);
+      assert.doesNotMatch(h.notifications.at(-1).message, /provider internal detail/);
+      assert.deepEqual(latestWorkflow(h), before);
+    }
+    assert.equal(architectModel.calls.length, 4);
+    assert.equal(h.sentMessages.length, 0);
+  });
+});
+
+test("方向判断超时不转交执行者，也不重试", async t => {
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(new Promise(() => {}));
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
+    await startTask(h);
+    const before = latestWorkflow(h);
+    const started = Promise.withResolvers();
+    const stream = h.context.modelRegistry.streamSimple;
+    h.context.modelRegistry.streamSimple = (...args) => {
+      started.resolve();
+      return stream(...args);
+    };
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const request = input(h, "改为验证写入路径");
+    await Promise.race([started.promise, request.then(() => assert.fail("没有启动架构判断"))]);
+    t.mock.timers.tick(60_000);
+    assert.equal((await request).action, "handled");
+    assert.equal(architectModel.calls[0].options.signal.aborted, true);
+    assert.equal(architectModel.calls.length, 1);
+    assert.match(h.notifications.at(-1).message, /判断超时/);
+    assert.deepEqual(latestWorkflow(h), before);
+  });
+});
+
+for (const race of ["下一任务", "停止", "新输入", "切换分支"]) {
+  test(`架构判断未结束时${race}，不能应用过期方向`, async () => {
+    await withTempDirectory(async (directory) => {
+      const response = Promise.withResolvers();
+      const started = Promise.withResolvers();
+      const first = stubArchitect(response.promise, reply(null));
+      const h = await makeHarness(directory, {
+        deferSendMessagePersistence: true,
+        streamSimple(...args) {
+          const stream = first.streamSimple(...args);
+          started.resolve();
+          return stream;
+        },
+      });
+      const identity = await startTask(h, [task("next", "检查分页")]);
+      const request = input(h, "把工作流改为验证写入路径");
+      await Promise.race([started.promise, request.then(() => assert.fail("没有启动架构判断"))]);
+      if (race === "下一任务") {
+        await execute(h, "complete", {
+          ...identity,
+          action: "complete",
+          completionSummary: "本地已发布数据查询已验证",
+          implementationRationale: "复用当前验收的查询入口",
+          verification: [{ check: "本地查询", status: "passed", details: "测试夹具已返回预期数据" }],
+        });
+        await emitExtensionEvent(h, "agent_settled");
+        assert.equal(latestWorkflow(h).currentTaskId, "next");
+      } else if (race === "停止") {
+        assert.equal((await input(h, "停止")).action, "handled");
+        assert.equal(latestWorkflow(h).pauseReason, "handoff-outcome-unknown");
+        await input(h, "只验证只读路径");
+        assert.equal(first.calls.length, 1, "停止后不发送新的方向判断请求");
+      } else if (race === "新输入") {
+        assert.equal((await input(h, "为什么选择本地查询？")).action, "continue");
+      } else {
+        const oldLeafId = h.context.sessionManager.getLeafId();
+        await emitExtensionEvent(h, "session_tree", { oldLeafId, newLeafId: "different-branch" });
+      }
+      response.resolve(reply("replan"));
+      assert.equal((await request).action, "handled");
+      assert.equal(latestWorkflow(h).pendingRevision, undefined);
+      assert.equal(h.sentMessages.some(({ message }) => message.customType === "pi-init-workflow-replan"), false);
+      if (race !== "下一任务") assert.equal(first.calls[0].options.signal.aborted, true);
+    });
+  });
+}
 
 test("讨论和纠正不被自动吞成子流程，待规划期间也不污染请求", async () => {
   await withTempDirectory(async (directory) => {

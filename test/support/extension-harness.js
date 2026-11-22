@@ -155,6 +155,10 @@ function createExtensionHarness(branch = [], options = {}) {
     model: defaultModel,
     scopedModels: options.scopedModels ?? [],
     modelRegistry: {
+      streamSimple(...args) {
+        if (!options.streamSimple) throw new Error("test harness streamSimple 未配置");
+        return options.streamSimple(...args);
+      },
       async getApiKeyAndHeaders() {
         return options.setModelResult === false ? { ok: false, error: "Missing credentials" } : { ok: true };
       },
@@ -238,6 +242,7 @@ function createExtensionHarness(branch = [], options = {}) {
     },
     sessionManager: {
       getSessionId: () => options.sessionId ?? "test-session",
+      getLeafId: () => branch.findLast(entry => entry.id)?.id ?? null,
       getBranch() {
         return branch;
       },
@@ -265,6 +270,7 @@ function createExtensionHarness(branch = [], options = {}) {
     sentUserMessages,
     persistSentMessage,
     completeCompaction,
+    getThinkingLevel: pi.getThinkingLevel,
   };
 }
 
