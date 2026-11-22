@@ -210,6 +210,7 @@ function createExtensionHarness(branch = [], options = {}) {
       async input(title, placeholder) {
         return options.input?.(title, placeholder);
       },
+      ...(typeof options.confirm === "function" ? { confirm: options.confirm } : {}),
       async custom(factory, customOptions) {
         const call = { options: customOptions };
         customCalls.push(call);

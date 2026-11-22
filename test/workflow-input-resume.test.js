@@ -8,7 +8,7 @@ import { createExtensionHarness, emitExtensionEvent } from "./support/extension-
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput } from "../src/workflow-input-intent.ts";
+import { isExplicitWorkflowReplanInput, isWorkflowContinuationInput, parseExplicitWorkflowQuestionInput } from "../src/workflow-input-intent.ts";
 
 const architect = { provider: "openai-codex", id: "gpt-5.6-sol" };
 const docs = { provider: "openai-codex", id: "gpt-5.6-docs" };
@@ -490,5 +490,191 @@ test("讨论和纠正不被自动吞成子流程，待规划期间也不污染�
     assert.equal(latestWorkflow(harness).pendingRevision.kind, "replan");
     assert.match(latestWorkflow(harness).pendingRevision.direction, /独立检查部署环境/);
     assert.match(latestWorkflow(harness).pendingRevision.direction, /补测试/);
+  });
+});
+
+test("显式问答与讨论前缀不调用架构模型并直接剥离放行，空正文不误剥离", async () => {
+  assert.equal(parseExplicitWorkflowQuestionInput("问答：目前已经验证了哪些边界情况？"), "目前已经验证了哪些边界情况？");
+  assert.equal(parseExplicitWorkflowQuestionInput("讨论: 为什么选择这套实现？"), "为什么选择这套实现？");
+  assert.equal(parseExplicitWorkflowQuestionInput("问答：   "), undefined);
+
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect({ stopReason: "error", content: [], errorMessage: "down" });
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
+    await execute(h, "plan", { action: "plan", summary: "待审计划", reviewRequired: true, tasks: [task("first", "检查方案")] });
+    const reviewBefore = latestWorkflow(h);
+    const reviewResult = await input(h, "问答：这个计划覆盖了哪些验收点？");
+    assert.equal(reviewResult.action, "transform");
+    assert.equal(reviewResult.text, "这个计划覆盖了哪些验收点？");
+    assert.deepEqual(latestWorkflow(h), reviewBefore);
+    assert.equal(architectModel.calls.length, 0);
+  });
+
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(reply(null));
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
+    await startTask(h);
+    const before = latestWorkflow(h);
+    const q1 = await input(h, "问答：目前已经验证了哪些边界情况？");
+    assert.equal(q1.action, "transform");
+    assert.equal(q1.text, "目前已经验证了哪些边界情况？");
+    const q2 = await input(h, "  讨论: 这个约束为什么存在？ ");
+    assert.equal(q2.action, "transform");
+    assert.equal(q2.text, "这个约束为什么存在？");
+    assert.equal(architectModel.calls.length, 0);
+    assert.equal((await input(h, "问答：   ")).action, "continue");
+    assert.equal(architectModel.calls.length, 1);
+    assert.deepEqual(latestWorkflow(h), before);
+  });
+});
+
+test("已配置架构模型故障或超时时，交互确认允许按普通消息发送，取消或非交互来源保持拦截", async t => {
+  for (const [label, errorCase] of [
+    ["model-failed", { reply: { stopReason: "error", content: [], errorMessage: "upstream 503" } }],
+    ["invalid-response", { reply: { stopReason: "stop", content: [{ type: "text", text: "not json" }] } }],
+    ["model-unavailable", { unavailable: true }],
+  ]) {
+    await withTempDirectory(async (directory) => {
+      const architectModel = errorCase.unavailable ? stubArchitect() : stubArchitect(errorCase.reply, errorCase.reply);
+      const confirms = [];
+      let answer = true;
+      const h = await makeHarness(directory, {
+        ...architectModel,
+        ...(errorCase.unavailable ? { availableModels: [developer, docs] } : {}),
+        deferSendMessagePersistence: true,
+        confirm: async (title, message) => { confirms.push({ title, message }); return answer; },
+      });
+      await startTask(h);
+      const before = latestWorkflow(h);
+
+      assert.equal((await input(h, "目前已经验证了哪些边界情况？", "interactive")).action, "continue", label);
+      assert.equal(confirms.length, 1);
+      assert.match(confirms[0].title, /按普通消息发送/);
+      assert.match(confirms[0].message, /问答：<内容>/);
+      assert.deepEqual(latestWorkflow(h), before);
+
+      answer = false;
+      assert.equal((await input(h, "目前已经验证了哪些边界情况？", "interactive")).action, "handled", label);
+      assert.equal(confirms.length, 2);
+      assert.match(h.notifications.at(-1).message, /「问答：<内容>」、「任务纠偏：<指令>」或「重规划：<新方向>」/);
+      assert.deepEqual(latestWorkflow(h), before);
+    });
+  }
+
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(
+      { stopReason: "error", content: [], errorMessage: "upstream 503" },
+      { stopReason: "error", content: [], errorMessage: "upstream 503" },
+    );
+    const confirms = [];
+    const h = await makeHarness(directory, {
+      ...architectModel,
+      deferSendMessagePersistence: true,
+      confirm: async (title, message) => { confirms.push({ title, message }); return true; },
+    });
+    await startTask(h);
+    const before = latestWorkflow(h);
+
+    assert.equal((await input(h, "目前已经验证了哪些边界情况？", "rpc")).action, "handled");
+    assert.equal(confirms.length, 0);
+    assert.match(h.notifications.at(-1).message, /「问答：<内容>」/);
+
+    h.context.hasUI = false;
+    assert.equal((await input(h, "目前已经验证了哪些边界情况？", "interactive")).action, "handled");
+    assert.equal(confirms.length, 0);
+    assert.deepEqual(latestWorkflow(h), before);
+  });
+
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(new Promise(() => {}));
+    const confirms = [];
+    const h = await makeHarness(directory, {
+      ...architectModel,
+      deferSendMessagePersistence: true,
+      confirm: async (title, message) => { confirms.push({ title, message }); return true; },
+    });
+    await startTask(h);
+    const started = Promise.withResolvers();
+    const stream = h.context.modelRegistry.streamSimple;
+    h.context.modelRegistry.streamSimple = (...args) => { started.resolve(); return stream(...args); };
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const req = input(h, "目前已经验证了哪些边界情况？", "interactive");
+    await Promise.race([started.promise, req.then(() => assert.fail("没有启动架构判断"))]);
+    t.mock.timers.tick(60_000);
+    assert.equal((await req).action, "continue");
+    assert.equal(confirms.length, 1);
+    assert.match(confirms[0].message, /超时/);
+  });
+});
+
+test("方向判断确认期间出现新输入或工作流变化，即使确认也拒绝放行，且记录 fallback-continue 诊断", async () => {
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect({ stopReason: "error", content: [], errorMessage: "err1" });
+    const gate = Promise.withResolvers();
+    const confirmOpened = Promise.withResolvers();
+    const h = await makeHarness(directory, {
+      ...architectModel,
+      deferSendMessagePersistence: true,
+      confirm: async () => {
+        confirmOpened.resolve();
+        return await gate.promise;
+      },
+    });
+    await startTask(h);
+
+    const firstReq = input(h, "目前已经验证了哪些边界情况？", "interactive");
+    await confirmOpened.promise;
+    await input(h, "停止", "interactive");
+    gate.resolve(true);
+    assert.equal((await firstReq).action, "handled");
+  });
+
+  await withTempDirectory(async (directory) => {
+    const state = createExtensionRuntimeState();
+    const traces = [];
+    state.traceHandoff = (_ctx, event, data) => { traces.push({ event, ...data }); };
+    const architectModel = stubArchitect(
+      { stopReason: "error", content: [], errorMessage: "err1" },
+      { stopReason: "error", content: [], errorMessage: "err2" },
+    );
+    let confirmGate = Promise.withResolvers();
+    const h = await makeHarness(directory, {
+      ...architectModel,
+      deferSendMessagePersistence: true,
+      confirm: async () => await confirmGate.promise,
+    });
+    await startTask(h);
+    state.workflowState = latestWorkflow(h);
+    state.activeRole = { role: "developer-test", provider: developer.provider, model: developer.id, thinkingLevel: "high" };
+    const direction = createWorkflowDirectionInput(state, {
+      readConfig: async () => ({
+        modelStrategy: "roles",
+        schemaVersion: 3,
+        workflowMode: "on",
+        workflowExecutor: "local",
+        roleModels: { architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" } },
+      }),
+      activeRoleFor: () => state.activeRole,
+      revise: async () => false,
+      hasOutgoingTransfer: () => false,
+    });
+
+    const gen1 = direction.invalidate();
+    const p1 = direction.handle({ source: "interactive", text: "目前已经验证了哪些边界情况？" }, h.context, gen1);
+    confirmGate.resolve(true);
+    assert.equal(await p1, undefined);
+    assert.equal(traces.findLast(t => t.outcome === "fallback-continue")?.code, "model-failed");
+
+    confirmGate = Promise.withResolvers();
+    const opened2 = Promise.withResolvers();
+    h.context.ui.confirm = async () => { opened2.resolve(); return await confirmGate.promise; };
+    const gen2 = direction.invalidate();
+    const p2 = direction.handle({ source: "interactive", text: "目前已经验证了哪些边界情况？" }, h.context, gen2);
+    await opened2.promise;
+    h.branch.splice(0, h.branch.length, { type: "custom", id: "branch-shift", customType: "pi-init-workflow", data: state.workflowState });
+    confirmGate.resolve(true);
+    assert.equal((await p2).action, "handled");
+    assert.equal(traces.at(-1).outcome, "stale-state");
+    assert.match(h.notifications.at(-1).message, /确认期间会话或工作流状态已经变化/);
   });
 });

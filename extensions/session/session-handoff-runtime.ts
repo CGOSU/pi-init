@@ -6,7 +6,19 @@ import { registerGeneralSessionHandoff } from "./general-session-handoff-runtime
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { createGeneralSessionTransfer, generalOutgoingTransfer } from "./general-session-transfer.ts";
-import { findTransferTarget, readHandoffArchive as readArchive, readHandoffArchiveCached as readArchiveCached, replaceHandoffSession } from "./session-replacement.ts";
+import {
+  abortPreparedTransfer,
+  cancelTransferUnderLock,
+  commitTransferDecision,
+  preflightTransferAbandon,
+  readHandoffArchive as readArchive,
+  readHandoffArchiveCached as readArchiveCached,
+  replaceHandoffSession,
+  scanTransferAbandonBlocker,
+  verifyTargetActivationDecision,
+  withTransferLock,
+  type TransferCoordinationKey,
+} from "./session-replacement.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cloneState } from "../../src/workflow.ts";
 import type { WorkflowState } from "../../src/workflow-types.ts";
@@ -40,6 +52,9 @@ function latestOutgoing(ctx: ExtensionContext, workflow: WorkflowState | undefin
   return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" && entry.data.id.length > 0
     ? entry.data as unknown as Outgoing
     : undefined;
+}
+function transferKey(sourceFile: string, sourceSessionId: string, intentId: string): TransferCoordinationKey {
+  return { sourceFile, customType: SESSION_HANDOFF_ENTRY, sourceSessionId, intentId };
 }
 function incomingTransfer(ctx: ExtensionContext): Incoming | undefined {
   const entry = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
@@ -139,31 +154,47 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     activating = true;
     const generation = state.roleContextGeneration;
     try {
-      const { packet } = sourceManager(record, ctx);
-      if (!state.workflowState) {
-        deps.restore(ctx);
-        if (!state.workflowState && !state.workflowRestoreError && !state.pendingWorkflowRecovery) {
-          const hasSeed = ctx.sessionManager.getBranch().some(entry => entry.type === "message" && entry.message.role === "user");
-          if (!hasSeed) throw new Error("交接正文尚未完整保存，不能自动激活");
-          deps.persist(importedWorkflow(packet, record.targetSessionId), ctx);
+      if (realpathSync(ctx.cwd) !== record.projectRoot) throw new Error("交接项目已变化");
+      const key = transferKey(record.sourceFile, record.sourceSessionId, record.id);
+      const next = await withTransferLock(key, () => {
+        if (state.runtimeDisposed || state.roleContextGeneration !== generation) return undefined;
+        const decisionCheck = verifyTargetActivationDecision(key, record.targetSessionId);
+        if (!decisionCheck.ok) throw new Error(decisionCheck.message);
+        const { packet } = sourceManager(record, ctx);
+        if (!state.workflowState) {
+          deps.restore(ctx);
+          if (!state.workflowState && !state.workflowRestoreError && !state.pendingWorkflowRecovery) {
+            const hasSeed = ctx.sessionManager.getBranch().some(entry => entry.type === "message" && entry.message.role === "user");
+            if (!hasSeed) throw new Error("交接正文尚未完整保存，不能自动激活");
+            deps.persist(importedWorkflow(packet, record.targetSessionId), ctx);
+          }
         }
-      }
-      const current = state.workflowState;
-      if (!current || current.workflowId !== record.workflowId || current.sessionId !== record.targetSessionId
-        || current.pauseReason !== SESSION_HANDOFF_IMPORTED) return;
-      const expected = importedWorkflow(packet, record.targetSessionId);
-      if (workflowContentHash(current) !== workflowContentHash(expected)) throw new Error("导入的任务或约束已变化，未自动激活");
-      if (state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError || state.userStopRequested) throw new Error("恢复或停止守卫未解除");
-      const next = cloneState(current);
-      if (packet.workflow.pauseReason === "task-blocked") {
-        next.status = "paused"; next.pauseReason = "task-blocked";
-        next.taskPauseReason = packet.workflow.taskPauseReason;
-        delete next.continuation;
-      } else {
-        next.status = "running"; delete next.pauseReason; delete next.taskPauseReason;
-        next.continuation = { kind: "schedule", phase: "pending", reason: "resume" };
-      }
-      deps.persist(next, ctx);
+        const current = state.workflowState;
+        if (!current || current.workflowId !== record.workflowId || current.sessionId !== record.targetSessionId
+          || current.pauseReason !== SESSION_HANDOFF_IMPORTED) return undefined;
+        const expected = importedWorkflow(packet, record.targetSessionId);
+        if (workflowContentHash(current) !== workflowContentHash(expected)) throw new Error("导入的任务或约束已变化，未自动激活");
+        if (state.roleRecoveryPersistenceFailed || state.pendingWorkflowRecovery || state.workflowRestoreError || state.userStopRequested) throw new Error("恢复或停止守卫未解除");
+        const nextState = cloneState(current);
+        if (packet.workflow.pauseReason === "task-blocked") {
+          nextState.status = "paused"; nextState.pauseReason = "task-blocked";
+          nextState.taskPauseReason = packet.workflow.taskPauseReason;
+          delete nextState.continuation;
+        } else {
+          nextState.status = "running"; delete nextState.pauseReason; delete nextState.taskPauseReason;
+          nextState.continuation = { kind: "schedule", phase: "pending", reason: "resume" };
+        }
+        const targetFile = ctx.sessionManager.getSessionFile?.();
+        const committed = commitTransferDecision(key, {
+          decision: "activated",
+          targetSessionId: record.targetSessionId,
+          ...(targetFile ? { targetFile } : {}),
+        });
+        if (!committed.ok) throw new Error(committed.message);
+        deps.persist(nextState, ctx);
+        return nextState;
+      });
+      if (!next) return;
       if (next.status === "running") await deps.schedule(ctx);
       if (state.runtimeDisposed || state.roleContextGeneration !== generation) return;
       ctx.ui.notify(next.pauseReason === "task-blocked"
@@ -278,8 +309,10 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
           await freshContext.sendMessage({ customType: SESSION_HANDOFF_ACTIVATE, content: "核对已确认的跨session交接", display: false, details: { id: intent.id, hash: packetHash } }, { triggerTurn: false });
         },
         // A confirmed cancellation before setup leaves the original context valid.
-        cancel() {
-          pi.appendEntry(SESSION_HANDOFF_ENTRY, { ...intent, phase: "cancelled" });
+        async cancel() {
+          await abortPreparedTransfer(transferKey(resolvedSourceFile, intent.sourceSessionId, intent.id), () => {
+            pi.appendEntry(SESSION_HANDOFF_ENTRY, { ...intent, phase: "cancelled" });
+          });
           const restored = cloneState(current);
           if (restored.pauseReason !== "task-blocked") {
             restored.status = "paused"; restored.pauseReason = SESSION_HANDOFF_REVIEW;
@@ -297,7 +330,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
   }
   // Exit for a frozen source whose transfer never reached a target (newSession failed before setup,
   // or the freeze itself could not be saved). Only an explicit user confirmation abandons it; a found
-  // target always wins. The cancelled intent also stops any unactivated target from activating later.
+  // or unverified target freezes the source, and target activation shares this lock and decision record.
   async function resolveStalledTransfer(ctx: ExtensionCommandContext, intent: Outgoing) {
     const current = state.workflowState;
     const sourceFile = ctx.sessionManager.getSessionFile?.();
@@ -308,37 +341,41 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       [!sourceFile, "[TRANSFER_PENDING] 当前session未持久化，无法核对交接目标；来源保持冻结。"],
     ]);
     if (blocked) { ctx.ui.notify(blocked, "warning"); return; }
+    const key = transferKey(sourceFile!, intent.sourceSessionId, intent.id);
+    const generation = state.roleContextGeneration;
+    const sourceUnchanged = () => state.roleContextGeneration === generation && state.workflowState === current
+      && latestOutgoing(ctx, current)?.id === intent.id && latestOutgoing(ctx, current)?.phase === intent.phase
+      && !state.runtimeDisposed && ctx.isProjectTrusted() && ctx.isIdle() && !ctx.hasPendingMessages()
+      && !state.agentRunActive && ctx.sessionManager.getSessionId() === current!.sessionId;
+    const appendCancelled = () => pi.appendEntry(SESSION_HANDOFF_ENTRY, { ...intent, phase: "cancelled" });
+    const preflight = preflightTransferAbandon(key);
+    if (preflight.status === "blocked") { ctx.ui.notify(preflight.message, preflight.level); return; }
     if (intent.phase === "cancelled") {
       // The abandon was already recorded; only the restored workflow state failed to save last time.
       restoreAbandonedWorkflow(ctx, current!);
       return;
     }
-    const scan = findTransferTarget(sourceFile!, SESSION_HANDOFF_ENTRY, intent.id);
-    if (scan.found) {
-      ctx.ui.notify(`[TRANSFER_PENDING] 已找到接收此交接的会话：${scan.found}。请在该会话执行 /pi-init fresh 核对，不在来源放弃或重建。`, "warning");
+    if (preflight.status === "already-cancelled") {
+      const recovery = await cancelTransferUnderLock({ key, isUnchanged: sourceUnchanged, appendCancelled });
+      if (!recovery.ok) { ctx.ui.notify(recovery.message, recovery.level); return; }
+      restoreAbandonedWorkflow(ctx, current!);
       return;
     }
+    const scanBlocker = scanTransferAbandonBlocker(key);
+    if (scanBlocker) { ctx.ui.notify(scanBlocker.message, scanBlocker.level); return; }
     if (!ctx.hasUI) { ctx.ui.notify("[TRANSFER_PENDING] 放弃交接需要交互确认；来源保持冻结。", "warning"); return; }
     const message = [
       `交接 ${intent.id} 未在会话目录中找到接收方（已检查 ${dirname(sourceFile!)}）。`,
-      ...(scan.incomplete ? ["注意：" + scan.incomplete + "。"] : []),
       "确认后：记录本次交接已取消，之后出现的未激活目标会话也无法再激活；工作流回到当前会话，可重新 /pi-init fresh，或 /pi-init workflow resume 留在这里。",
       "如果你已在另一个会话继续这个工作流，请选择取消。",
     ].join("\n");
-    const generation = state.roleContextGeneration;
     confirming = true;
     let confirmed = false;
     try { confirmed = await ctx.ui.confirm("放弃未完成的会话交接？", message); }
     finally { confirming = false; }
     if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "warning"); return; }
-    if (state.roleContextGeneration !== generation || state.workflowState !== current || latestOutgoing(ctx, current)?.id !== intent.id
-      || state.runtimeDisposed || !ctx.isProjectTrusted() || !ctx.isIdle() || ctx.hasPendingMessages() || state.agentRunActive
-      || ctx.sessionManager.getSessionId() !== current!.sessionId) {
-      ctx.ui.notify("确认期间工作流或交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
-      return;
-    }
-    try { pi.appendEntry(SESSION_HANDOFF_ENTRY, { ...intent, phase: "cancelled" }); }
-    catch (error) { ctx.ui.notify("放弃记录未保存，来源保持冻结：" + textOf(error), "error"); return; }
+    const outcome = await cancelTransferUnderLock({ key, isUnchanged: sourceUnchanged, appendCancelled });
+    if (!outcome.ok) { ctx.ui.notify(outcome.message, outcome.level); return; }
     restoreAbandonedWorkflow(ctx, current!);
   }
   function restoreAbandonedWorkflow(ctx: ExtensionContext, current: WorkflowState) {

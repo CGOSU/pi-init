@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createWorkflowToolBinding } from "../extensions/workflow/workflow-tool-binding.ts";
@@ -586,5 +586,90 @@ test("corrupted outgoing transfer lock refuses abandon without false recovery, a
     assert.match(h.notices.at(-1).message, /确认期间会话或交接记录已变化/);
     assert.equal(h.manager.getLeafEntry().data.phase, "prepared");
     assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
+  });
+});
+
+test("ordinary transfer refuses abandon on incomplete scan (>500 files or symlink) and when target activates during confirm", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    h.ctx.newSession = async () => { throw new Error("failed before setup"); };
+    await h.api.fresh(h.ctx);
+    await Promise.all(Array.from({ length: 501 }, (_, i) => writeFile(path.join(cwd, `sibling-${i}.jsonl`), "{}\n")));
+    const asked = h.confirmations.length;
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, asked);
+    assert.match(h.notices.at(-1).message, /超过 500 个文件.*来源保持冻结/);
+    assert.equal(h.manager.getLeafEntry().data.phase, "prepared");
+    assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
+  });
+
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    h.ctx.newSession = async () => { throw new Error("failed before setup"); };
+    await h.api.fresh(h.ctx);
+    const outside = path.join(cwd, "outside.target");
+    await writeFile(outside, "{}\n");
+    await symlink(outside, path.join(cwd, "linked.jsonl"));
+    const asked = h.confirmations.length;
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, asked);
+    assert.match(h.notices.at(-1).message, /无法完整核对会话目录.*来源保持冻结/);
+    assert.equal(h.manager.getLeafEntry().data.phase, "prepared");
+  });
+
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    let savedOptions;
+    h.ctx.newSession = async options => { savedOptions = options; throw new Error("uncertain outcome"); };
+    await h.api.fresh(h.ctx);
+
+    let target;
+    h.ctx.ui.confirm = async (title, content) => {
+      h.confirmations.push({ title, content });
+      target = fixture(cwd);
+      await savedOptions.setup(target.manager);
+      await savedOptions.withSession(target.ctx);
+      return true;
+    };
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, 2);
+    assert.equal(h.manager.getLeafEntry().data.phase, "prepared");
+    assert.match(h.notices.at(-1).message, /已由目标会话激活/);
+    assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
+    assert.equal(target.notices.at(-1).level, "info");
+  });
+
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    let savedOptions;
+    h.ctx.newSession = async options => { savedOptions = options; throw new Error("uncertain after setup"); };
+    await h.api.fresh(h.ctx);
+    const hiddenDir = path.join(cwd, "elsewhere");
+    await mkdir(hiddenDir);
+    const hiddenManager = SessionManager.create(cwd, hiddenDir);
+    const target = fixture(cwd, hiddenManager);
+    await savedOptions.setup(hiddenManager);
+    const append = h.manager.appendCustomEntry.bind(h.manager);
+    let failAppend = true;
+    h.manager.appendCustomEntry = (type, data) => {
+      if (failAppend && type === GENERAL_TRANSFER_ENTRY && data.phase === "cancelled") {
+        failAppend = false;
+        throw new Error("source entry disk full");
+      }
+      return append(type, data);
+    };
+    const asked = h.confirmations.length;
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, asked + 1);
+    assert.equal(h.manager.getLeafEntry().data.phase, "prepared");
+
+    await target.api.fresh(target.ctx);
+    assert.equal(target.notices.at(-1).level, "warning");
+    assert.match(target.notices.at(-1).message, /SOURCE_LOCK/);
+
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, asked + 1);
+    assert.equal(h.manager.getLeafEntry().data.phase, "cancelled");
+    assert.equal((await h.emit("tool_call"))[0], undefined);
   });
 });

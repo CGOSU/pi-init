@@ -803,6 +803,181 @@ test("workflow preview cancellation or changing source state cannot freeze or re
   });
 });
 
+async function createIndependentTarget(cwd, source, options, { activate = true, sessionDir = path.join(cwd, "sessions") } = {}) {
+  const manager = SessionManager.create(cwd, sessionDir);
+  const target = createExtensionHarness(manager.getBranch(), {
+    cwd,
+    sessionId: manager.getSessionId(),
+    trusted: true,
+    model: source.context.model,
+    appendEntry: (type, data) => manager.appendCustomEntry(type, data),
+    beforeSendMessagePersist: message => manager.appendCustomMessageEntry(message.customType, message.content, message.display ?? false, message.details),
+  });
+  target.manager = manager;
+  target.context.ui.confirm = async () => true;
+  target.context.sessionManager.getSessionFile = () => manager.getSessionFile();
+  target.context.sessionManager.getLeafId = () => manager.getLeafId();
+  target.context.sessionManager.getEntries = () => manager.getEntries();
+  await emitExtensionEvent(target, "session_start", { reason: "new" });
+  try { await options.setup(manager); }
+  finally { target.branch.splice(0, target.branch.length, ...manager.getBranch()); }
+  target.context.sendMessage = async (message, sendOptions) => {
+    manager.appendCustomMessageEntry(message.customType, message.content, message.display ?? false, message.details);
+    target.branch.push(manager.getLeafEntry());
+    target.sentMessages.push({ message, options: sendOptions });
+    await emitExtensionEvent(target, "message_end", { message: { role: "custom", ...message, timestamp: Date.now() } });
+  };
+  if (activate) await options.withSession(target.context);
+  return target;
+}
+
+test("incomplete directory scan (>500 files) keeps frozen workflow source locked without abandon confirm", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.newSession = async () => { throw new Error("uncertain switch outcome"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+
+    const dir = path.dirname(h.manager.getSessionFile());
+    await Promise.all(Array.from({ length: 501 }, (_, i) => writeFile(path.join(dir, `extra-${i}.jsonl`), "{}\n")));
+
+    let asked = 0;
+    h.context.ui.confirm = async () => { asked++; return true; };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 0);
+    assert.equal(latestOutgoing(h).phase, "prepared");
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    assert.match(h.notifications.at(-1).message, /超过 500 个文件.*来源保持冻结/);
+
+    await h.commands.get("pi-init").handler("workflow resume", h.context);
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("target appearing or activating during abandon confirmation blocks abandon and prevents duplicate dispatch", async () => {
+  for (const activate of [true, false]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    let savedOptions;
+    h.context.newSession = async options => { savedOptions = options; throw new Error("uncertain after intent"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+
+    let target;
+    let asked = 0;
+    h.context.ui.confirm = async () => {
+      asked++;
+      target = await createIndependentTarget(cwd, h, savedOptions, { activate });
+      return true;
+    };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 1);
+    assert.ok(target);
+    assert.equal(latestOutgoing(h).phase, "prepared");
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    await h.commands.get("pi-init").handler("workflow resume", h.context);
+    assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
+
+    if (activate) {
+      assert.equal(latest(target).currentTaskId, "second");
+      assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
+    } else {
+      assert.equal(latest(target).pauseReason, "session-handoff-imported");
+      await target.commands.get("pi-init").handler("fresh", target.context);
+      assert.equal(latest(target).currentTaskId, "second");
+      assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
+    }
+    await emitExtensionEvent(h, "session_shutdown");
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("concurrent target activation and source abandon are strictly mutually exclusive", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    let savedOptions;
+    h.context.newSession = async options => { savedOptions = options; throw new Error("uncertain outcome"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+
+    const hiddenDir = path.join(cwd, "elsewhere");
+    await mkdir(hiddenDir);
+    const target = await createIndependentTarget(cwd, h, savedOptions, { activate: false, sessionDir: hiddenDir });
+
+    const gate = Promise.withResolvers();
+    h.context.ui.confirm = async () => {
+      await gate.promise;
+      return true;
+    };
+    const abandonPromise = h.commands.get("pi-init").handler("fresh", h.context);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    gate.resolve();
+    const activatePromise = savedOptions.withSession(target.context);
+    await Promise.all([abandonPromise, activatePromise]);
+
+    const sourceCancelled = latestOutgoing(h).phase === "cancelled";
+    const targetActivated = latest(target).currentTaskId === "second";
+    assert.notEqual(sourceCancelled, targetActivated, JSON.stringify({
+      sourcePhase: latestOutgoing(h).phase,
+      sourcePause: latest(h).pauseReason,
+      targetTask: latest(target).currentTaskId,
+      targetPause: latest(target).pauseReason,
+    }));
+    if (sourceCancelled) {
+      assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 0);
+      await h.commands.get("pi-init").handler("workflow resume", h.context);
+      assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 2);
+    } else {
+      assert.equal(latest(h).pauseReason, "session-transfer-pending");
+      assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
+      assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 1);
+    }
+    await emitExtensionEvent(h, "session_shutdown");
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("committed atomic abandon completes source entry on retry without re-confirming and blocks target", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    let savedOptions;
+    h.context.newSession = async options => { savedOptions = options; throw new Error("uncertain before target"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+
+    const hiddenDir = path.join(cwd, "elsewhere");
+    await mkdir(hiddenDir);
+    const target = await createIndependentTarget(cwd, h, savedOptions, { activate: false, sessionDir: hiddenDir });
+
+    const append = h.manager.appendCustomEntry.bind(h.manager);
+    let failCancelledAppend = true;
+    h.manager.appendCustomEntry = (type, data) => {
+      if (failCancelledAppend && type === "pi-init-session-handoff" && data.kind === "outgoing" && data.phase === "cancelled") {
+        failCancelledAppend = false;
+        throw new Error("source entry disk full");
+      }
+      return append(type, data);
+    };
+
+    let asked = 0;
+    h.context.ui.confirm = async () => { asked++; return true; };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 1);
+    assert.equal(latestOutgoing(h).phase, "prepared");
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 1);
+    assert.equal(latestOutgoing(h).phase, "cancelled");
+    assert.equal(latest(h).pauseReason, "session-handoff-review");
+
+    await target.commands.get("pi-init").handler("fresh", target.context);
+    assert.equal(latest(target).pauseReason, "session-handoff-imported");
+    assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 0);
+    await emitExtensionEvent(h, "session_shutdown");
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
 
 
 
