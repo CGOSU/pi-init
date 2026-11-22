@@ -2,6 +2,7 @@ import { latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
+import { acquireDispatchLock, resetDispatchLock } from "../extensions/workflow/dispatch-lock.ts";
 import { createWorkflowDispatch } from "../extensions/workflow/workflow-dispatch.ts";
 import { cancelWorkflow, createWorkflowState, hydrateWorkflowState } from "../src/workflow.ts";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
@@ -188,13 +189,14 @@ test("迟到的重规划异常不告警旧工作流或清除新工作流调度",
 
   const dispatching = dispatch.scheduleWorkflowReplan(ctx);
   state.workflowState = cancelWorkflow(workflow, 120);
-  state.workflowDispatchInFlight = false;
+  resetDispatchLock(state);
   state.workflowState = localWorkflow();
-  state.workflowDispatchInFlight = true;
+  const replacementLease = acquireDispatchLock(state);
   rejectSelection(new Error("迟到的角色切换失败"));
   await dispatching;
 
   assert.equal(state.workflowDispatchInFlight, true);
+  assert.equal(state.workflowDispatchLease, replacementLease);
   assert.equal(notifications.some(({ message }) => message.includes("暂停等待架构师重规划")), false);
 });
 

@@ -129,5 +129,6 @@ export function recoverWorkflowState(
   // Time since the last saved snapshot is unobserved after reload, not confirmed execution.
   const recovered = cloneState({ ...migrated, status: "paused" });
   recovered.status = migrated.status;
+  delete recovered.stoppedAt;
   return { ok: true, value: recovered, changed: true };
 }

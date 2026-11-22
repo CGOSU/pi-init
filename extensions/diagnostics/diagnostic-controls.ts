@@ -5,11 +5,16 @@ import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { captureDiagnosticScope, diagnosticErrorCode, matchesDiagnosticScope, readDiagnosticText, type DiagnosticScope, type DiagnosticResumeResult } from "./diagnostic-storage.ts";
-import { diagnosticKeys, diagnosticLocation, DIAGNOSTIC_MAX_BYTES, findDiagnosticFiles, isDiagnosticSessionKey, recentDiagnosticFiles, removeEmptyDiagnosticProject, withDiagnosticLocation, type DiagnosticFile } from "./diagnostic-layout.ts";
+import {
+  clearManagedSidecars, DIAGNOSTIC_BASE, diagnosticKeys, diagnosticLocation, DIAGNOSTIC_MAX_BYTES,
+  findDiagnosticFiles, isDiagnosticSessionKey, recentDiagnosticFiles, removeEmptyDiagnosticProject,
+  withDiagnosticLocation, type DiagnosticFile,
+} from "./diagnostic-layout.ts";
 import { isGlobalDiagnosticEvent } from "./global-diagnostics.ts";
 import { showMenu, isMenuBack, MENU_BACK } from "../ui.ts";
 
 type Scope = DiagnosticScope;
+type ClearScope = Scope | "expired" | "sidecars";
 type Result<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
 function inside(directory: string, file: string) {
   const child = relative(directory, file);
@@ -54,7 +59,7 @@ export function createDiagnosticControls(deps: {
   const currentKey = (ctx: ExtensionCommandContext) => diagnosticKeys(ctx.cwd, ctx.sessionManager.getSessionId()).sessionKey;
   const locate = (ctx: ExtensionCommandContext, scope: Scope, sessionKey?: string) => diagnosticLocation(agentDir(), scope, ctx.cwd, sessionKey);
 
-  function failure(error: unknown): Result<never> {
+  function failure(error: unknown): { ok: false; code: string; message: string } {
     const code = diagnosticErrorCode(error);
     const reasons: Record<string, string> = {
       RESERVED_DIAGNOSTIC_TARGET: "不能导出到受管诊断目录或旧日志路径。",
@@ -72,8 +77,8 @@ export function createDiagnosticControls(deps: {
     };
     return { ok: false, code, message: `诊断操作失败（${code}）：${reasons[code] ?? "请检查文件权限、目录及活动锁。"} 清理若中途失败，已删除的文件不会恢复；导出写入若失败，目标可能含不完整内容。` };
   }
-  async function operate<T>(ctx: ExtensionCommandContext, location: ReturnType<typeof locate>,
-    action: (files: DiagnosticFile[], root: string, current: () => boolean) => Promise<T>): Promise<Result<T>> {
+  async function withStore<T>(ctx: ExtensionCommandContext, location: ReturnType<typeof locate>,
+    action: (root: string, current: () => boolean) => Promise<T>): Promise<Result<T>> {
     if (!ctx.isProjectTrusted()) return { ok: false, code: "UNTRUSTED", message: "未信任项目，不能操作诊断文件。" };
     const initial = captureDiagnosticScope(ctx);
     const current = () => matchesDiagnosticScope(ctx, initial) && resolve(agentDir()) === location.root;
@@ -81,13 +86,18 @@ export function createDiagnosticControls(deps: {
       await deps.flush();
       if (!current()) throw scopeChanged();
       return {
-        ok: true, value: await withDiagnosticLocation(location, { current }, async root => {
-          const files = await findDiagnosticFiles(location, root);
-          if (!current()) throw scopeChanged();
-          return action(files, root, current);
-        }),
+        ok: true, value: await withDiagnosticLocation(location, { current }, root => action(root, current)),
       };
     } catch (error) { return failure(error); }
+  }
+
+  async function operate<T>(ctx: ExtensionCommandContext, location: ReturnType<typeof locate>,
+    action: (files: DiagnosticFile[], root: string, current: () => boolean) => Promise<T>): Promise<Result<T>> {
+    return withStore(ctx, location, async (root, current) => {
+      const files = await findDiagnosticFiles(location, root);
+      if (!current()) throw scopeChanged();
+      return action(files, root, current);
+    });
   }
 
   async function exportFile(ctx: ExtensionCommandContext, scope: Scope, target: string, sessionKey?: string): Promise<Result<{ path: string; count: number; limited: boolean }>> {
@@ -95,7 +105,10 @@ export function createDiagnosticControls(deps: {
     if (!target.trim()) return { ok: false, code: "MISSING_TARGET", message: "请提供导出目标文件路径。" };
     const path = resolve(ctx.cwd, target);
     const cwd = resolve(ctx.cwd);
-    return operate(ctx, locate(ctx, scope, sessionKey), async (files, root, current) => {
+    let location: ReturnType<typeof locate>;
+    try { location = locate(ctx, scope, sessionKey); }
+    catch (error) { return failure(error); }
+    return operate(ctx, location, async (files, root, current) => {
       const recent = recentDiagnosticFiles(files, DIAGNOSTIC_MAX_BYTES);
       if (!recent.files.length && recent.limited) throw Object.assign(new Error("诊断文件过大"), { code: "DIAGNOSTIC_TOO_LARGE" });
       let limited = recent.limited;
@@ -121,15 +134,42 @@ export function createDiagnosticControls(deps: {
     });
   }
 
-  async function clear(ctx: ExtensionCommandContext, scope: Scope, sessionKey?: string): Promise<Result<{ count: number }> | undefined> {
+  async function clearSidecars(ctx: ExtensionCommandContext, mode: "expired" | "sidecars"): Promise<Result<{ count: number }> | undefined> {
+    if (!ctx.isProjectTrusted() || !ctx.hasUI) return { ok: false, code: "CONFIRMATION_REQUIRED", message: "清理需要受信任项目和交互式确认，未删除文件。" };
+    const initial = captureDiagnosticScope(ctx);
+    let location: ReturnType<typeof locate>;
+    try { location = locate(ctx, "project"); }
+    catch (error) { return failure(error); }
+    const baseRoot = join(location.root, ...DIAGNOSTIC_BASE);
+    const description = mode === "expired"
+      ? `目标：${baseRoot} 下所有项目超过 7 天的已过期会话黑匣子与详细交接日志（.jsonl / .jsonl.1）。删除后不可恢复；不清理 Pi 会话、本机全局摘要或旧项目日志。`
+      : `目标：${baseRoot} 下所有项目的全部会话黑匣子与详细交接日志（释放全部 128 组全局名额）。删除后不可恢复；不清理 Pi 会话、本机全局摘要或旧项目日志。不会自动恢复停录，请另行使用 /blackbox resume project。`;
+    if (!await ctx.ui.confirm(mode === "expired" ? "清理所有项目已过期诊断？" : "清理所有项目全部会话诊断？", description)) return undefined;
+    try {
+      if (!matchesDiagnosticScope(ctx, initial) || locate(ctx, "project").root !== location.root) return failure(scopeChanged());
+    } catch (error) { return failure(error); }
+    return withStore(ctx, location, async (root, current) => ({
+      count: await clearManagedSidecars(root, { expiredOnly: mode === "expired", current }),
+    }));
+  }
+
+  async function clear(ctx: ExtensionCommandContext, scope: ClearScope, sessionKey?: string): Promise<Result<{ count: number }> | undefined> {
+    if (scope === "expired" || scope === "sidecars") {
+      if (sessionKey !== undefined) return { ok: false, code: "INVALID_SCOPE", message: "跨项目清理不支持指定会话键。" };
+      return clearSidecars(ctx, scope);
+    }
     if (!validScope(scope)) return invalidScope;
     if (!ctx.isProjectTrusted() || !ctx.hasUI) return { ok: false, code: "CONFIRMATION_REQUIRED", message: "清理需要受信任项目和交互式确认，未删除文件。" };
     const initial = captureDiagnosticScope(ctx);
-    const location = locate(ctx, scope, sessionKey);
+    let location: ReturnType<typeof locate>;
+    try { location = locate(ctx, scope, sessionKey); }
+    catch (error) { return failure(error); }
     const label = labels[scope] + (sessionKey ? "（选定会话）" : "");
     const detail = location.name ? "及其 .1 备份" : "内的受管会话 .jsonl 和 .jsonl.1 文件";
     if (!await ctx.ui.confirm(`清理${label}诊断？`, `目标：${location.path} ${detail}。删除后不可恢复；不清理 Pi 会话、旧项目日志或工作流。不会自动恢复停录，请另行使用 /blackbox resume ${scope}。`)) return undefined;
-    if (!matchesDiagnosticScope(ctx, initial) || locate(ctx, scope, sessionKey).path !== location.path) return failure(scopeChanged());
+    try {
+      if (!matchesDiagnosticScope(ctx, initial) || locate(ctx, scope, sessionKey).path !== location.path) return failure(scopeChanged());
+    } catch (error) { return failure(error); }
     return operate(ctx, location, async (files, root, current) => {
       for (const file of files) {
         if (!current()) throw scopeChanged();
@@ -141,6 +181,9 @@ export function createDiagnosticControls(deps: {
   }
 
   async function status(ctx: ExtensionCommandContext, sessionKey?: string) {
+    if (sessionKey !== undefined && !isDiagnosticSessionKey(sessionKey)) {
+      return failure(Object.assign(new Error("会话标识不是诊断会话键"), { code: "INVALID_DIAGNOSTIC_SESSION" })).message;
+    }
     const initial = captureDiagnosticScope(ctx);
     const lines = [await deps.report(ctx, sessionKey)];
     if (!ctx.isProjectTrusted()) return lines.join("\n");
@@ -207,6 +250,10 @@ export function createDiagnosticControls(deps: {
         { value: "session", label: "选定会话黑匣子" },
         { value: "handoff-session", label: "选定会话详细交接日志" },
       ]),
+      ...(selected === "clear" ? [
+        { value: "expired", label: "所有项目已过期诊断（7 天前）" },
+        { value: "sidecars", label: "所有项目全部会话诊断（释放全局名额）" },
+      ] : []),
       { value: MENU_BACK, label: "← 取消" },
     ]);
     if (!range || isMenuBack(range)) return;
@@ -238,9 +285,13 @@ export function createDiagnosticControls(deps: {
       return;
     }
     if (action === "menu" && !range) return menu(ctx);
+    if (action === "clear" && (range === "expired" || range === "sidecars") && !destination.length) {
+      notifyResult(ctx, await clear(ctx, range));
+      return;
+    }
     const scope = range === "session" ? "project" : range === "handoff-session" ? "handoff" : range;
     if (!validScope(scope) || !["export", "clear", "resume"].includes(action) || (action !== "export" && destination.length) || (action === "resume" && scope !== range)) {
-      ctx.ui.notify("用法：/blackbox [status [session [会话键]]|menu|export <范围> <新文件>|clear <范围>|resume <project|global|handoff>]；查看/导出/清理的会话范围可选 session 或 handoff-session（命令中的操作范围为当前会话）。", "warning");
+      ctx.ui.notify("用法：/blackbox [status [session [会话键]]|menu|export <范围> <新文件>|clear <范围|expired|sidecars>|resume <project|global|handoff>]；查看/导出/清理的会话范围可选 session 或 handoff-session（命令中的操作范围为当前会话）。", "warning");
       return;
     }
     const sessionKey = scope !== range ? currentKey(ctx) : undefined;

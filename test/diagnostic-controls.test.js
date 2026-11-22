@@ -170,3 +170,16 @@ test("命令必须选择范围，错误和取消不伪装成功，状态不读�
   ctx.isProjectTrusted = () => false;
   await controls.status(ctx); assert.equal(flushed(), 0);
 }));
+
+test("无效诊断会话键在导出、清理与状态查询中返回结构化错误而非抛异常", () => fixture(async ({ root, ctx, controls }) => {
+  const exported = await controls.exportFile(ctx, "project", join(root, "out.json"), "bad-key");
+  assert.equal(exported.ok, false);
+  assert.equal(exported.code, "INVALID_DIAGNOSTIC_SESSION");
+
+  const cleared = await controls.clear(ctx, "project", "bad-key");
+  assert.equal(cleared.ok, false);
+  assert.equal(cleared.code, "INVALID_DIAGNOSTIC_SESSION");
+
+  const status = await controls.status(ctx, "bad-key");
+  assert.match(status, /INVALID_DIAGNOSTIC_SESSION/);
+}));

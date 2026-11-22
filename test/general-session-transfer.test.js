@@ -560,3 +560,31 @@ test("corrupted packets, missing target body, foreign source, and source persist
     await h.api.fresh(h.ctx); assert.equal(h.calls, undefined);
   });
 });
+
+test("corrupted outgoing transfer lock refuses abandon without false recovery, and confirm rechecks session state", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd);
+    h.manager.appendMessage({ role: "user", content: "anchor", timestamp: Date.now() });
+    h.manager.appendCustomEntry(GENERAL_TRANSFER_ENTRY, {
+      version: 1, kind: "outgoing", id: 123, sourceSessionId: h.manager.getSessionId(), phase: "prepared",
+    });
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, 0);
+    assert.equal(h.notices.at(-1).level, "error");
+    assert.match(h.notices.at(-1).message, /冻结记录损坏/);
+    assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
+    assert.ok((await h.emit("input")).some(result => result?.action === "handled"));
+  });
+
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    h.ctx.newSession = async () => { throw new Error("failed before setup"); };
+    await h.api.fresh(h.ctx);
+    h.ctx.ui.confirm = async () => { h.state.roleContextGeneration += 1; return true; };
+    await h.api.fresh(h.ctx);
+    assert.equal(h.notices.at(-1).level, "warning");
+    assert.match(h.notices.at(-1).message, /确认期间会话或交接记录已变化/);
+    assert.equal(h.manager.getLeafEntry().data.phase, "prepared");
+    assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
+  });
+});

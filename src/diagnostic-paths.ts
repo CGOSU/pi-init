@@ -5,6 +5,7 @@ export type DiagnosticScope = "project" | "global" | "handoff";
 export const DIAGNOSTIC_BASE = ["diagnostics", "pi-init"] as const;
 export const DIAGNOSTIC_STREAMS = { project: "sessions", handoff: "handoff" } as const;
 export const SIDECAR_LIMIT = 128;
+export const DIAGNOSTIC_RETENTION_MS = 7 * 86_400_000;
 export const DIAGNOSTIC_MAX_BYTES = 2 * 1024 * 1024;
 // Bound traversal even if foreign files are placed in the managed tree.
 export const DIAGNOSTIC_ENTRY_LIMIT = SIDECAR_LIMIT * 3;

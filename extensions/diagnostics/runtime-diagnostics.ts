@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { diagnosticLocation, findDiagnosticFiles, recentDiagnosticFiles, withDiagnosticLocation } from "./diagnostic-layout.ts";
+import { DIAGNOSTIC_RETENTION_MS, diagnosticLocation, findDiagnosticFiles, isDiagnosticSessionKey, recentDiagnosticFiles, withDiagnosticLocation } from "./diagnostic-layout.ts";
 import { fingerprint } from "./handoff-tool-diagnostics.ts";
 import { formatRuntimeIdentity, loadedRuntimeIdentity } from "./runtime-identity.ts";
 import { cacheDiagnosticFields } from "./cache-request-diagnostics.ts";
@@ -17,7 +17,7 @@ type Data = Record<string, unknown>;
 type Observation = { sequence: number; timestamp: string; event: string; data: Data };
 type Issue = { id: string; category: string; code: string; stage: string; toolName?: string; count: number; firstSeen: string; lastSeen: string; events: Observation[]; snapshot: unknown; latestSnapshot: unknown; latestTrigger: Observation; evidenceTruncated: boolean; incomplete: boolean; dirty: boolean; remainingEvents: number };
 
-const RETENTION_MS = 7 * 86400000;
+const RETENTION_MS = DIAGNOSTIC_RETENTION_MS;
 const MAX_RING_BYTES = 32 * 1024;
 const MAX_ISSUES = 24;
 const MAX_PENDING = 32;
@@ -255,6 +255,7 @@ export function createRuntimeDiagnostics(snapshot: () => unknown, options: { max
   }
   async function report(ctx: ExtensionContext, sessionKey?: string) {
     if (!ctx.isProjectTrusted()) return "运行黑匣子：未信任项目，不读取诊断。";
+    if (sessionKey !== undefined && !isDiagnosticSessionKey(sessionKey)) return "运行黑匣子：无效的诊断会话键。";
     const initial = captureDiagnosticScope(ctx);
     const current = () => matchesDiagnosticScope(ctx, initial);
     await Promise.all([writer.flush(), global.flush()]);

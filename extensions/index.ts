@@ -148,7 +148,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
       const next = stopped ? markWorkflowStopped(current) : clearWorkflowStopped(current);
       if (next === current) return;
       try { workflowStore.persistWorkflowState(next, ctx); }
-      catch (error) { ctx.ui.notify("工作流计时标记未保存：" + textOf(error) + "；本次停止期间可能计入运行耗时，不影响任务状态。", "warning"); }
+      catch (error) {
+        ctx.ui.notify(
+          stopped
+            ? "工作流计时标记未保存：" + textOf(error) + "；本次停止期间可能计入运行耗时，不影响任务状态。"
+            : "工作流计时标记未保存：" + textOf(error) + "；本次继续后的运行耗时可能少计，下一次状态保存将恢复计时，不影响任务状态。",
+          "warning",
+        );
+      }
     },
   });
   pi.on("tool_call", (event, ctx) => {
@@ -244,8 +251,8 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("input", async (event, ctx) => {
-    const inputGeneration = isExternalRunSource(event.source) ? directionInput.invalidate() : undefined;
     if (typeof event.text === "string" && event.text.trim().startsWith("/")) return { action: "continue" };
+    const inputGeneration = isExternalRunSource(event.source) ? directionInput.invalidate() : undefined;
     const handled = (await userControl.input(event, ctx))
       ?? ((await captureWorkflowRevisionInput(event, ctx)) ? { action: "handled" as const } : undefined);
     if (handled) return handled;

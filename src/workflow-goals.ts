@@ -65,6 +65,7 @@ export function createWorkflowGoalState(state: WorkflowState, input: unknown, no
   const pending = state.tasks.filter(task => task.status === "pending").map(task => task.id);
   if (retained.length !== pending.length || retained.some(id => !pending.includes(id))) throw new Error("插入目标必须通过 retainTaskIds 明确确认保留全部原有待执行任务；替换任务请使用普通重规划");
   const next = cloneState(state, now);
+  delete next.stoppedAt;
   const id = "goal-" + randomUUID();
   const added = plan.tasks.map(task => ({ ...cloneTask(task), goalId: id, priority: task.priority ?? 0 }));
   const revision = next.revisions.find(revision => revision.revisionId === state.pendingRevision!.revisionId);

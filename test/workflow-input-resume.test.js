@@ -1,3 +1,5 @@
+import { createWorkflowDirectionInput } from "../extensions/workflow/workflow-direction-input.ts";
+import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { latestWorkflow, workflowMessageIdentity } from "./support/workflow-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -192,7 +194,7 @@ test("同任务纠偏只传递一个用户输入，改目标仍走任务边界�
 
       const call = architectModel.calls[1];
       assert.equal(call.model, architect);
-      assert.equal(call.options.reasoning, "max");
+      assert.equal(call.options.reasoning, "low");
       assert.equal(call.context.tools, undefined);
       assert.equal(call.context.messages.length, 1);
       assert.deepEqual(JSON.parse(call.context.messages[0].content), {
@@ -245,10 +247,24 @@ test("Auto 使用固定模型的架构强度，不切换当前执行者", async 
     assert.equal((await input(h, "跳过已核实的配置，直接查询", "rpc")).action, "transform");
     assert.equal(architectModel.calls.length, 1);
     assert.equal(architectModel.calls[0].model, fixed);
-    assert.equal(architectModel.calls[0].options.reasoning, "high");
+    assert.equal(architectModel.calls[0].options.reasoning, "low");
     assert.equal(h.context.model, fixed);
     assert.equal(h.getThinkingLevel(), "medium");
     assert.deepEqual(latestWorkflow(h), before);
+  });
+  await withTempDirectory(async (directory) => {
+    const architectModel = stubArchitect(reply("correction"));
+    const fixed = { ...developer, reasoning: true };
+    const h = await makeHarness(directory, { ...architectModel, model: fixed, availableModels: [fixed, architect], deferSendMessagePersistence: true }, {
+      schemaVersion: 3,
+      mode: undefined,
+      modelStrategy: "auto",
+      autoModel: { provider: developer.provider, model: developer.id, initialThinkingLevel: "high", minThinkingLevel: "medium", maxThinkingLevel: "high" },
+    });
+    await h.tools.find(tool => tool.name === "switch_role").execute("architect", { role: "architect" }, undefined, undefined, h.context);
+    await startTask(h);
+    assert.equal((await input(h, "跳过已核实的配置，直接查询", "rpc")).action, "transform");
+    assert.equal(architectModel.calls[0].options.reasoning, "medium");
   });
 });
 
@@ -271,40 +287,115 @@ test("普通会话、未信任项目、显式入口不调用架构模型", async
   });
 });
 
-test("roles 缺少 architect 配置时不借用当前执行模型，保留显式纠偏入口", async () => {
+test("roles 未配置 architect 时普通输入直通，配置不可用时明确拒绝，均不借用当前执行模型", async () => {
   await withTempDirectory(async (directory) => {
     const architectModel = stubArchitect();
     const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
     await startTask(h);
     await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({ schemaVersion: 3, workflowMode: "on", roleModels: {} }));
     const before = latestWorkflow(h);
+    assert.equal((await input(h, "跳过已核实的配置，直接查询")).action, "continue");
+    assert.equal(architectModel.calls.length, 0);
+    assert.deepEqual(latestWorkflow(h), before);
+    assert.equal((await input(h, "任务纠偏：跳过已核实的配置，直接查询")).action, "transform");
+
+    await writeFile(path.join(directory, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 3, workflowMode: "on",
+      roleModels: { architect: { provider: "missing", model: "missing", thinkingLevel: "high" } },
+    }));
     assert.equal((await input(h, "跳过已核实的配置，直接查询")).action, "handled");
     assert.match(h.notifications.at(-1).message, /没有可用的已配置架构模型.*任务纠偏/);
     assert.equal(architectModel.calls.length, 0);
-    assert.equal((await input(h, "任务纠偏：跳过已核实的配置，直接查询")).action, "transform");
     assert.deepEqual(latestWorkflow(h), before);
   });
 });
 
-test("模型失败、非法动作、待审计划收到纠偏结果都不会改变工作流或自动批准", async () => {
+test("模型失败、非法动作、围栏格式边界与待审计划收到纠偏结果都不会改变工作流或自动批准", async () => {
   await withTempDirectory(async (directory) => {
     const architectModel = stubArchitect(
       { stopReason: "error", content: [], errorMessage: "provider internal detail" },
       { stopReason: "stop", content: [{ type: "text", text: '{"direction":"replan","action":"resume"}' }] },
+      { stopReason: "stop", content: [{ type: "text", text: '```json\n{"direction":"replan","action":"resume"}\n```' }] },
+      { stopReason: "stop", content: [{ type: "text", text: '说明：\n```json\n{"direction":"replan"}\n```' }] },
       { stopReason: "toolUse", content: [{ type: "toolCall", name: "task_workflow" }] },
       reply("correction"),
     );
     const h = await makeHarness(directory, architectModel);
     await execute(h, "plan", { action: "plan", summary: "等待审阅", reviewRequired: true, tasks: [task("first", "检查方案")] });
     const before = latestWorkflow(h);
-    for (const message of [/判断失败/, /未返回合法方向/, /未返回合法方向/, /没有执行中任务/]) {
+    for (const message of [/判断失败/, /未返回合法方向/, /未返回合法方向/, /未返回合法方向/, /未返回合法方向/, /没有执行中任务/]) {
       assert.equal((await input(h, "只验证本地查询")).action, "handled");
       assert.match(h.notifications.at(-1).message, message);
       assert.doesNotMatch(h.notifications.at(-1).message, /provider internal detail/);
       assert.deepEqual(latestWorkflow(h), before);
     }
-    assert.equal(architectModel.calls.length, 4);
+    assert.equal(architectModel.calls.length, 6);
     assert.equal(h.sentMessages.length, 0);
+  });
+  await withTempDirectory(async (directory) => {
+    const fencedCorrection = { stopReason: "stop", content: [{ type: "text", text: '```json\n{"direction":"correction"}\n```' }] };
+    const architectModel = stubArchitect(fencedCorrection);
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
+    await startTask(h);
+    const result = await input(h, "跳过配置检查，直接验证查询");
+    assert.equal(result.action, "transform");
+    assert.match(result.text, /跳过配置检查，直接验证查询/);
+  });
+});
+
+test("方向判断进行中发送斜杠命令不失效当前判断；已有 pendingRevision 时跳过模型判断", async () => {
+  await withTempDirectory(async (directory) => {
+    const response = Promise.withResolvers();
+    const started = Promise.withResolvers();
+    const stub = stubArchitect(response.promise);
+    const h = await makeHarness(directory, {
+      deferSendMessagePersistence: true,
+      streamSimple(...args) {
+        const stream = stub.streamSimple(...args);
+        started.resolve();
+        return stream;
+      },
+    });
+    await startTask(h);
+    const request = input(h, "跳过已核实配置，直接验证查询");
+    await Promise.race([started.promise, request.then(() => assert.fail("没有启动架构判断"))]);
+    assert.equal((await input(h, "/pi-init status")).action, "continue");
+    response.resolve(reply("correction"));
+    const result = await request;
+    assert.equal(result.action, "transform");
+    assert.match(result.text, /跳过已核实配置/);
+
+    assert.equal((await input(h, "重规划：改为验证写入权限")).action, "handled");
+    assert.equal(stub.calls.length, 1);
+    assert.equal((await input(h, "顺便问一下进度")).action, "continue");
+    assert.equal(stub.calls.length, 1, "已有 pendingRevision 时不再调用架构模型");
+  });
+});
+
+test("replan 无法应用时给出未应用提示而非静默吞掉输入", async () => {
+  await withTempDirectory(async (directory) => {
+    const state = createExtensionRuntimeState();
+    const architectModel = stubArchitect(reply("replan"));
+    const h = await makeHarness(directory, { ...architectModel, deferSendMessagePersistence: true });
+    await startTask(h);
+    state.workflowState = latestWorkflow(h);
+    state.activeRole = { role: "developer-test", provider: developer.provider, model: developer.id, thinkingLevel: "high" };
+    const direction = createWorkflowDirectionInput(state, {
+      readConfig: async () => ({
+        modelStrategy: "roles",
+        schemaVersion: 3,
+        workflowMode: "on",
+        workflowExecutor: "local",
+        roleModels: { architect: { provider: architect.provider, model: architect.id, thinkingLevel: "max" } },
+      }),
+      activeRoleFor: () => state.activeRole,
+      revise: async () => false,
+      hasOutgoingTransfer: () => false,
+    });
+    const gen = direction.invalidate();
+    const res = await direction.handle({ source: "interactive", text: "改为验证写入权限" }, h.context, gen);
+    assert.equal(res.action, "handled");
+    assert.match(h.notifications.at(-1).message, /未应用这条输入：当前工作流状态不能记录重规划/);
   });
 });
 

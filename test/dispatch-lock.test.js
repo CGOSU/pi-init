@@ -25,11 +25,19 @@ test("a lease superseded by a reset or a newer lease cannot clear the lock", () 
   assert.equal(state.workflowDispatchInFlight, false);
 });
 
-test("a lease never clears the lock on behalf of another workflow", () => {
+test("a lease never leaves a zombie lock and never clears a replacement workflow's newer lease", () => {
   const state = lockState("old");
   const lease = acquireDispatchLock(state);
   state.workflowState = { workflowId: "new" };
   releaseDispatchLock(state, lease);
-  assert.equal(state.workflowDispatchInFlight, true);
+  assert.equal(state.workflowDispatchInFlight, false);
   assert.equal(state.workflowDispatchLease, undefined);
+
+  const oldLease = acquireDispatchLock(state);
+  resetDispatchLock(state);
+  state.workflowState = { workflowId: "replacement" };
+  const newLease = acquireDispatchLock(state);
+  releaseDispatchLock(state, oldLease);
+  assert.equal(state.workflowDispatchInFlight, true);
+  assert.equal(state.workflowDispatchLease, newLease);
 });

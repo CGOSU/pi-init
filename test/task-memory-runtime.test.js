@@ -620,3 +620,26 @@ test("with several blocked tasks and no current task, memory is read for the tas
   assert.equal(view.memory.identity.taskId, "task");
   assert.match(taskMemoryText(view), /91 passed/);
 });
+
+test("repeated write failures after continuing warn once with TASK_MEMORY_WRITE_FAILED without repeating stop notice", async () => {
+  const f = fixture();
+  f.setFail(true);
+  const stopNotices = () => f.notices.filter(([message]) => message.includes("自动推进已停止")).length;
+  const continueWarnings = () => f.notices.filter(([message]) => message.includes("任务记忆仍不可用")).length;
+
+  await f.commit("first result", false, "cmd-1");
+  assert.equal(f.stops, 1);
+  assert.equal(stopNotices(), 1);
+  assert.equal(continueWarnings(), 0);
+
+  f.state.userStopGeneration++;
+  await f.commit("second result", false, "cmd-2");
+  assert.equal(f.stops, 1);
+  assert.equal(stopNotices(), 1, "does not claim auto-run stopped again after user continued");
+  assert.equal(continueWarnings(), 1);
+  assert.match(f.notices.findLast(([message]) => message.includes("任务记忆仍不可用"))[0], /TASK_MEMORY_WRITE_FAILED/);
+
+  await f.commit("third result", false, "cmd-3");
+  assert.equal(stopNotices(), 1);
+  assert.equal(continueWarnings(), 1);
+});

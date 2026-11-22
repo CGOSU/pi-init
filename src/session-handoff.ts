@@ -167,6 +167,7 @@ export function sessionHandoffSeed(packet: SessionHandoffPacket, snapshot: Sessi
 export function importedWorkflow(packet: SessionHandoffSnapshot, sessionId: string) {
   if (!sessionId || sessionId === packet.workflow.sessionId) throw new Error("目标必须是新的session");
   const next = cloneState(packet.workflow);
+  delete next.stoppedAt;
   next.sessionId = sessionId;
   next.recoveryGeneration++;
   next.status = "paused";

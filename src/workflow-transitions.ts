@@ -26,6 +26,7 @@ export function startWorkflowTask(state: WorkflowState, taskId?: string, now = D
   }
 
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   const task = getWorkflowTask(result, next.id);
   if (!task) throw workflowError("WORKFLOW_NO_RUNNABLE_TASK", "工作流没有可启动的下一个任务");
   task.status = "in_progress";
@@ -76,6 +77,7 @@ export function markWorkflowTaskStarted(state: WorkflowState, taskId: string, no
   if (state.handoff.phase === "executing" && task.executionStartedAt !== undefined) return state;
 
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   if (!result.handoff) throw workflowError("WORKFLOW_HANDOFF_MISSING", "当前任务缺少可验证的 handoff 身份");
   result.handoff.phase = "executing";
   result.handoff.startedAt ??= now;
@@ -105,6 +107,7 @@ export function completeWorkflowTask(
   if (!parsed.ok) throw Object.assign(new Error(parsed.message), { code: parsed.code });
   const checks = parsed.value;
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   const task = getWorkflowTask(result, taskId);
   if (!task) throw workflowError("WORKFLOW_NOT_CURRENT_TASK", `只能完成当前任务 ${state.currentTaskId ?? "（无）"}`);
   task.status = "completed";
@@ -179,6 +182,7 @@ export function blockWorkflowTask(state: WorkflowState, { taskId, reason }: Task
   result.pauseReason = task.outcomeUnknown ? "handoff-outcome-unknown" : "task-blocked";
   result.nudgeCount = 0;
   if (result.pendingRevision && !result.tasks.some(item => item.outcomeUnknown)) {
+    delete result.stoppedAt;
     result.status = "replanning";
     result.pauseReason = "workflow-replan";
     result.continuation = { kind: "replan", revisionId: result.pendingRevision.revisionId, phase: "pending", reason: "replan-requested" };
@@ -194,6 +198,7 @@ export function retryWorkflowTask(
 ): WorkflowState {
   if (!state || state.status !== "paused") throw workflowError("WORKFLOW_NOT_PAUSED", "只有暂停的工作流才能重试任务");
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   const blockedTaskId = taskId ?? result.tasks.find((item) => item.status === "blocked")?.id;
   const task = blockedTaskId === undefined ? undefined : getWorkflowTask(result, blockedTaskId);
   if (!task || task.status !== "blocked") throw workflowError("WORKFLOW_NO_BLOCKED_TASK", "没有可重试的阻塞任务");
@@ -229,6 +234,7 @@ export function resumeWorkflow(state: WorkflowState, now = Date.now()): Workflow
   if (!state || state.status !== "paused") throw workflowError("WORKFLOW_NOT_PAUSED", "工作流当前不在暂停状态");
   if (["boundary-compaction-failed", "boundary-compaction-interrupted"].includes(state.pauseReason ?? "")) {
     const result = cloneState(state, now);
+    delete result.stoppedAt;
     if (!result.continuation || result.continuation.kind === "review") throw workflowError("WORKFLOW_RESUME_BOUNDARY_MISSING", "任务边界缺少可恢复的交接身份");
     result.status = result.pendingRevision ? "replanning" : "running";
     delete result.pauseReason;
@@ -242,6 +248,7 @@ export function resumeWorkflow(state: WorkflowState, now = Date.now()): Workflow
   }
 
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   result.status = "running";
   delete result.pauseReason;
   delete result.taskPauseReason;
@@ -258,6 +265,7 @@ export function cancelWorkflow(state: WorkflowState, now = Date.now()): Workflow
     throw workflowError("WORKFLOW_ALREADY_FINISHED", "工作流已经结束");
   }
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   result.status = "cancelled";
   const activeTask = result.currentTaskId ? getWorkflowTask(result, result.currentTaskId) : undefined;
   if (activeTask?.status === "in_progress") {

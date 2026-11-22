@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createDiagnosticControls } from "../extensions/diagnostics/diagnostic-controls.ts";
-import { SIDECAR_LIMIT } from "../extensions/diagnostics/diagnostic-layout.ts";
+import { DIAGNOSTIC_RETENTION_MS, SIDECAR_LIMIT } from "../extensions/diagnostics/diagnostic-layout.ts";
 import { withDiagnosticLock } from "../extensions/diagnostics/diagnostic-storage.ts";
 import { createDiagnosticWriter } from "../extensions/diagnostics/diagnostic-writer.ts";
 import { createHandoffDiagnostics } from "../extensions/diagnostics/handoff-diagnostics.ts";
@@ -200,4 +200,62 @@ test("independent processes share one bounded quota across both kinds; clear and
   assert.equal((await active.resume(ctx)).ok, true);
   active.write(ctx, () => ({ after: true })); await active.flush();
   assert.deepEqual(await read(diagnosticPath("project", ctx, agent)), [{ after: true }]);
+}));
+
+test("full quota automatically reclaims expired sidecars across projects while keeping fresh sidecars bounded", async () => withTempDirectory(async root => {
+  const agent = join(root, "agent"), cwdA = join(root, "proj-a"), cwdB = join(root, "proj-b");
+  const expiredAt = new Date(Date.now() - DIAGNOSTIC_RETENTION_MS - 60_000);
+  const expiredFile = diagnosticPath("project", fixtureContext(cwdA, "expired-0"), agent);
+  const expiredBackup = expiredFile + ".1";
+  await put(expiredFile, "{}\n");
+  await put(expiredBackup, "{}\n");
+  await fs.utimes(expiredFile, expiredAt, expiredAt);
+  await fs.utimes(expiredBackup, expiredAt, expiredAt);
+  await fs.utimes(dirname(expiredFile), expiredAt, expiredAt);
+  for (let i = 1; i < SIDECAR_LIMIT; i++) {
+    await put(diagnosticPath("project", fixtureContext(cwdA, `fresh-${i}`), agent), "{}\n");
+  }
+
+  const writer = createDiagnosticWriter({ ...writerOptions, scope: "project", agentDir: () => agent });
+  const incoming = fixtureContext(cwdB, "new-session");
+  writer.write(incoming, () => ({ reclaimed: true }));
+  await writer.flush();
+  assert.equal(writer.failureCode, undefined);
+  assert.deepEqual(await read(diagnosticPath("project", incoming, agent)), [{ reclaimed: true }]);
+  await assert.rejects(fs.stat(expiredFile), { code: "ENOENT" });
+  await assert.rejects(fs.stat(expiredBackup), { code: "ENOENT" });
+
+  // Now all 128 streams are fresh: another new stream is still rejected by quota.
+  writer.write(fixtureContext(cwdB, "over-quota"), () => ({ blocked: true }));
+  await writer.flush();
+  assert.equal(writer.failureCode, "DIAGNOSTIC_QUOTA_EXCEEDED");
+}));
+
+test("clear expired and clear sidecars clean across projects without touching global runtime or project .pi", async () => withTempDirectory(async root => {
+  const agent = join(root, "agent"), cwdA = join(root, "proj-a"), cwdB = join(root, "proj-b");
+  const ctxA = fixtureContext(cwdA, "a-session"), ctxB = fixtureContext(cwdB, "b-session");
+  const expired = diagnosticPath("project", ctxA, agent);
+  const fresh = diagnosticPath("handoff", ctxB, agent);
+  const globalFile = diagnosticPath("global", ctxA, agent);
+  const projectFile = join(cwdA, ".pi", "workflow.json");
+  await put(expired, "{}\n");
+  await put(fresh, "{}\n");
+  await put(globalFile, "{}\n");
+  await put(projectFile, "keep");
+  const oldTime = new Date(Date.now() - DIAGNOSTIC_RETENTION_MS - 60_000);
+  await fs.utimes(expired, oldTime, oldTime);
+
+  const controls = createDiagnosticControls({ agentDir: () => agent, flush: async () => {}, report: async () => "", resume: async () => ({ ok: true, value: { alreadyEnabled: true } }) });
+  const clearedExpired = await controls.clear(ctxA, "expired");
+  assert.deepEqual(clearedExpired, { ok: true, value: { count: 1 } });
+  await assert.rejects(fs.stat(expired), { code: "ENOENT" });
+  assert.equal(await fs.readFile(fresh, "utf8"), "{}\n");
+  assert.equal(await fs.readFile(globalFile, "utf8"), "{}\n");
+  assert.equal(await fs.readFile(projectFile, "utf8"), "keep");
+
+  const clearedAll = await controls.clear(ctxA, "sidecars");
+  assert.deepEqual(clearedAll, { ok: true, value: { count: 1 } });
+  await assert.rejects(fs.stat(fresh), { code: "ENOENT" });
+  assert.equal(await fs.readFile(globalFile, "utf8"), "{}\n");
+  assert.equal(await fs.readFile(projectFile, "utf8"), "keep");
 }));

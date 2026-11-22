@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  blockWorkflowTask, clearWorkflowStopped, cloneState, completeWorkflowTask, createWorkflowState, getWorkflowExecutionDuration, markWorkflowStopped,
-  hydrateWorkflowState, markWorkflowTaskStarted, recoverWorkflowState, resumeWorkflow, retryWorkflowTask,
+  applyWorkflowReplan, blockWorkflowTask, cancelWorkflow, clearWorkflowStopped, cloneState, completeWorkflowTask, createWorkflowState, getWorkflowExecutionDuration, markWorkflowStopped,
+  hydrateWorkflowState, markWorkflowTaskStarted, recoverWorkflowState, requestWorkflowReplan, resumeWorkflow, retryWorkflowTask,
   setWorkflowHandoffPhase, startWorkflowTask,
 } from "../src/workflow.ts";
 import { createWorkflowStatusView } from "../extensions/workflow/workflow-status-view.ts";
@@ -108,4 +108,45 @@ test("time while the user has stopped auto-run is excluded from active time, onc
   assert.equal(state.pausedMilliseconds, 1100, "the stop and the pause inside it are each counted once");
   assert.equal(getWorkflowExecutionDuration(state, 1500), 200);
   assert.equal(markWorkflowStopped(state, 1600), state, "a paused workflow already excludes the time");
+});
+
+test("stoppedAt is cleared on retry, completion, cancellation, replan, and reload recovery", (t) => {
+  let state = start(plan(100), 200);
+  state = markWorkflowStopped(state, 300);
+  state = blockWorkflowTask(state, { taskId: "task", reason: "Stopped" }, 400);
+  state = retryWorkflowTask(state, "task", 1000);
+  assert.equal(state.stoppedAt, undefined);
+  assert.equal(state.pausedMilliseconds, 700);
+  state = start(state, 1000);
+  assert.equal(getWorkflowExecutionDuration(state, 1150), 250, "active time resumes counting after retry");
+
+  // Even if clearing stoppedAt on continue failed to persist, task completion clears it.
+  let completed = markWorkflowStopped(state, 1150);
+  completed = finish(completed, 1500);
+  assert.equal(completed.stoppedAt, undefined);
+  assert.equal(completed.pausedMilliseconds, 1050);
+  assert.equal(getWorkflowExecutionDuration(completed, 2000), 250);
+
+  let cancelled = markWorkflowStopped(state, 1150);
+  cancelled = cancelWorkflow(cancelled, 1500);
+  assert.equal(cancelled.stoppedAt, undefined);
+  assert.equal(cancelled.pausedMilliseconds, 1050);
+
+  let replanning = requestWorkflowReplan(state, { direction: "Change task" }, 1150);
+  replanning = blockWorkflowTask(replanning, { taskId: "task", reason: "Boundary" }, 1200);
+  replanning = markWorkflowStopped(replanning, 1300);
+  const replanned = applyWorkflowReplan(replanning, {
+    revisionId: replanning.pendingRevision.revisionId,
+    summary: "New plan",
+    tasks: [{ id: "next-task", task: "Next", files: ["src"], acceptanceCriteria: ["Done"] }],
+  }, 1600);
+  assert.equal(replanned.stoppedAt, undefined);
+  assert.equal(replanned.pausedMilliseconds, 1000);
+  assert.equal(getWorkflowExecutionDuration(replanned, 1700), 500);
+
+  t.mock.timers.enable({ apis: ["Date"], now: 2000 });
+  const stoppedRunning = markWorkflowStopped(state, 1500);
+  const recovered = recoverWorkflowState(stoppedRunning, "timing");
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.value.stoppedAt, undefined);
 });
