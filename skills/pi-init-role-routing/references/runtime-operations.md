@@ -2,12 +2,6 @@
 
 只在对应工具使用、参数或恢复问题出现时参考；正常任务不例行加载。工具schema与运行时校验是实际契约，本文不授予执行权限。
 
-## 原文读取与结构审阅
-
-- 大文件结构审阅按需使用独立脚本 `node <package>/scripts/check-line-count.js`，不常驻扩展运行时；Markdown 不在代码审阅范围。
-- `node <package>/scripts/check-line-count.js [scan] [--scope <项目相对目录>] [--exclude <项目相对目录>] [--include-temporary] [--all]` 扫描超过 500 行的代码文件，默认跳过当前 SHA-256 指纹已在 `.pi/file-review.json` 中登记过的文件（`--all` 显示全部并标注已登记结论）。
-- 用 `read` 读全当前文件原文并完成结构分析后，可执行 `node <package>/scripts/check-line-count.js record <path> <keep|recommend-split> <rationale> [--fingerprint <sha256>]`（12-2000 字符理由）将当前指纹结论写入 `.pi/file-review.json`；文件内容变化后指纹自动失效。
-
 ## 检查点与历史来源
 
 - checkpoint按需保存进展，不是complete、block或交接的新增前置条件；携带expectedMemoryRevision及step/accomplished/remaining/blockers/nextStep。有已知有效来源和当前revision时直接复用，缺少来源时按需一次`task_workflow(action="status", detail="full")`，从任务记忆正文JSON取`observations[].id`及`revision`（结构化路径为`details.taskMemory.memory`）。

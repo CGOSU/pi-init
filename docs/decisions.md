@@ -8,12 +8,12 @@
 
 ## 已确认决策
 
-### 2026-11-22：退役扩展内常驻大文件审阅，下沉为独立 CLI 脚本与增量指纹账本
+### 2026-11-22：移除大文件结构审阅子系统与行数检查脚本
 
-- 决定：从扩展常驻运行时中移除 `extensions/file-review/`（`file_review` 工具、`/large` 命令、`session_start`/`session_tree`/`agent_settled` 全仓后台扫描及 `tool_result` 覆盖率监听）与 `src/*review*.ts`，将大文件结构审阅收敛至独立按需 CLI `scripts/check-line-count.js` 与公共 Skill 指引。`scripts/check-line-count.js` 支持 `[scan] [--scope <目录>] [--exclude <目录>] [--include-temporary] [--all]` 扫描超过 500 行的代码文件，以及 `record <path> <keep|recommend-split> <rationale> [--fingerprint <sha256>]` 将当前 SHA-256 指纹结论记入项目 `.pi/file-review.json` 增量账本（校验非符号链接、行数阈值、指纹一致性与 12-2000 字符理由）；未变更指纹在后续默认扫描中自动跳过。
-- 原因：常驻扩展内的 `file-review` 子系统（约 3,710 行源码与测试）在每次会话启动、切分支和每回合结束时都会遍历项目文件系统并监听每次 `read` 工具结果，但实际代码整理是按需、低频动作；下沉为独立 CLI 后保留了范围过滤与跨会话增量指纹账本能力，同时消除了常驻扩展的每回合 I/O 开销与约 3,500 行维护负担。
-- 约束：不保留 `/large` 命令与 `file_review` 扩展工具；历史会话中的旧 `pi-init-file-review` 自定义条目在会话历史中自然忽略，不影响工作流或交接恢复。审阅结论仍须在通过 `read` 完整读取当前原文后按需调用脚本登记。
-- 验证：`pnpm run typecheck` 通过；`pnpm test` 1124/1124 通过。
+- 决定：完整移除大文件结构审阅子系统 `extensions/file-review/`（`file_review` 工具、`/large` 命令、`session_start`/`session_tree`/`agent_settled` 全仓后台扫描及 `tool_result` 覆盖率监听）、`src/*review*.ts`、`scripts/check-line-count.js` 及对应的专属测试与公共 Skill 条款。
+- 原因：大文件审阅在常驻扩展与独立脚本中占约 3,800 行源码与测试，每次会话启动、切分支和每回合结束都会遍历项目文件系统，而 `scripts/check-line-count.js` 无自动触发入口也未安装到全局命令；日常代码整理与重构已可直接通过 `codemode`/`rg`/`pi-graph` 探针配合 `task_workflow` 扁平队列完成。
+- 约束：不保留 `/large` 命令、`file_review` 扩展工具及 `scripts/check-line-count.js`；历史会话中的旧 `pi-init-file-review` 自定义条目在会话历史中自然忽略，不影响工作流或交接恢复。
+- 验证：`pnpm run typecheck` 通过；`pnpm test` 1118/1118 通过。
 
 ### 2026-11-22：自然语言方向分流与运行时审查后续收口
 
