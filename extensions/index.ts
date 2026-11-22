@@ -4,7 +4,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { findMatchingRole } from "../src/roles.ts";
 import { clearRoleConfigNotice, showRoleConfigNotice } from "./role/role-config-notice.ts";
-import { evaluateFileReviewDispatch } from "./file-review/file-review-dispatch-policy.ts";
 import { clearWorkflowStopped, isWorkflowRunning, markWorkflowStopped, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
 import { createWorkflowRevisionInput, workflowTaskCorrectionInput } from "./workflow/workflow-revision-input.ts";
 import { createWorkflowDirectionInput } from "./workflow/workflow-direction-input.ts";
@@ -25,7 +24,6 @@ import { createWorkflowStore, type WorkflowStore } from "./workflow/workflow-sto
 import { createRunTimingView } from "./run-timing-view.ts";
 import { renderRunTimingReport } from "./run-timing-renderer.ts";
 import { createEditGuardTool } from "./edit-guard.ts";
-import { createFileReviewRuntime } from "./file-review/file-review-runtime.ts";
 import { createRoleRecovery } from "./role/role-recovery.ts";
 import { createRoleContextView } from "./role/role-context-view.ts";
 import { createRoleContextPipeline } from "./role/role-context-pipeline.ts";
@@ -164,15 +162,6 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     return result;
   });
 
-  createFileReviewRuntime(pi, {
-    getActiveRole: roleRuntime.activeRoleFor,
-    canReview: () => !runtimeState.roleRecoveryPending && !runtimeState.roleRecoveryPersistenceFailed,
-    roleRecoveryPending: () => runtimeState.roleRecoveryPending,
-    getDispatchBlockReason: (ctx) => {
-      const decision = evaluateFileReviewDispatch(runtimeState, ctx);
-      return decision.allowed ? undefined : decision.message;
-    },
-  });
   const runtimeRoutingContext = createRuntimeRoutingContext(runtimeState, {
     getActiveRole: roleRuntime.activeRoleFor,
     getThinkingLevel: () => pi.getThinkingLevel(),

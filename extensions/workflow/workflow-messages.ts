@@ -34,7 +34,7 @@ function taskRoleGuidance(role: string) {
 
 function taskToolGuidance(role: string) {
   return role === "architect"
-    ? `${ARCHITECT_RUNTIME_GUIDANCE} 不得调用 browser、shell/bash、codemode、file_review、edit/write、init_project、subtask、agent_message、MCP/mcpScript 或任何未知工具。`
+    ? `${ARCHITECT_RUNTIME_GUIDANCE} 不得调用 browser、shell/bash、codemode、edit/write、init_project、subtask、agent_message、MCP/mcpScript 或任何未知工具。`
     : GENERIC_TASK_TOOL_GUIDANCE;
 }
 

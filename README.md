@@ -142,9 +142,7 @@ JS/TS项目无既定工具链时默认使用pnpm。快速/高级初始化推断�
 
 ## 按范围审阅与状态查询
 
-`/large --scope src --exclude src/generated` 只审阅指定目录；路径为项目相对目录前缀，可加引号，`--exclude` 可以重复，不支持 glob。默认排除项目顶层 `.tmp`、`.tmp-*` 临时目录，可用 `--include-temporary` 明确纳入；其他隐藏源码和普通 `tmp` 不因此排除。报告显示目录分布、排除项和当前范围。范围只在当前 session 生效，`/large` 无参数恢复默认，reload 或新 session 重置；Agent 忙碌时不更改范围。
-
-`file_review(action="list")` 的分页正文直接包含路径、行数、fingerprint 和下一页 offset；清单、读取及结论登记遵循当前扫描范围。审阅只产生建议，同一交付物连续读取、分析和登记，不逐文件切换角色；真正需要确定新公共契约或跨模块设计时，再集中交接决策。
+`node scripts/check-line-count.js [scan] [--scope src] [--exclude src/generated] [--include-temporary] [--all]` 按需扫描超过 500 行的代码文件并输出路径、行数与 SHA-256 fingerprint；路径为项目相对目录前缀，`--exclude` 可以重复，不支持 glob，默认排除项目顶层 `.tmp`、`.tmp-*` 临时目录。通读当前文件原文并完成职责判断后，可执行 `node scripts/check-line-count.js record <path> <keep|recommend-split> <rationale> [--fingerprint <sha256>]` 将结论记入项目 `.pi/file-review.json` 增量账本；同一指纹后续扫描自动跳过（`--all` 可列出全部），文件修改后自动重新进入待审候选。审阅只产生建议，同一交付物连续读取、分析和登记，不逐文件切换角色；真正需要确定新公共契约或跨模块设计时，再集中交接决策。
 
 `task_workflow(action="status")` 默认返回当前进度、阻塞原因和下一步；需要完整计划、历史任务、身份与任务记忆时使用 `detail="full"`。`evidenceIds` 仍可定向读取真实来源，UI 展开详情保留完整视图。恢复提示直接给出待确认的任务角色；已有当前状态时执行该恢复动作，不重复查询。等待调度时同角色确认会结束当前回合，由现有调度器派发一次；普通同角色确认继续当前工作。无变化等待状态的重复查询仍会结束当前回合，查询本身不会确认恢复或重放任务。
 
