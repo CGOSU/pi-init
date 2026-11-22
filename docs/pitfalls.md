@@ -10,7 +10,7 @@
 ### 2026-11-22：await 后的提前 return 会遗留调度锁
 
 - `workflowDispatchInFlight` 在 await 角色切换前置位，等待期间用户停止后直接 return，没有释放；“继续”只清除停止标记，此后自动调度一律被锁跳过，只能手动 resume 或 reload。原测试只断言“停止后未派发”，没有断言“继续后能恢复”。
-- 预防：跨 await 的锁在 `finally` 中按身份释放；停止类测试同时覆盖恢复后的下一次调度。
+- 预防：通过 `dispatch-lock.ts` 租约加解锁并在 `finally` 中释放当前租约，且测试同样经租约/`resetDispatchLock` 写入，不直接改写 `workflowDispatchInFlight`；停止类测试同时覆盖恢复后的下一次调度。
 
 ### 2026-11-16：Policy 表必须保留短路与结构化拒绝语义
 

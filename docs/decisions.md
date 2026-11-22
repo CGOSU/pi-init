@@ -8,6 +8,15 @@
 
 ## 已确认决策
 
+### 2026-11-22：自然语言方向分流与运行时审查后续收口
+
+- 决定（自然语言方向分流）：受信任项目中，待审计划（`architecture-review`）或已启动的当前执行任务可将非命令、非“继续”的外部输入交给 `extensions/role/architect-direction-model.ts` 与 `extensions/workflow/workflow-direction-input.ts` 做一次无工具方向分类：普通问答（`direction: null`）原样放行；仅改执行做法而目标/验收/公共契约/权限不变时转为当前任务纠偏输入（`transform`）；否则或待审计划收到方向变更时登记需审阅的 `replan`（仍须 `/pi-init workflow resume` 批准）。分类推理档位封顶 `low`（Auto 下遵守 `minThinkingLevel` 下限），超时 30 秒，容忍单一 JSON 代码块围栏；已有 `pendingRevision` 时跳过分类；`roles` 未配置 `architect` 模型或待自动迁移时直通普通输入且不借用当前执行模型；已配置模型不可用、判断失败、超时、返回多余字段或正文、或 `revise` 返回 false 时均不应用并提示显式入口；斜杠命令直接放行且不中止在途分类请求；记录去敏 `workflow.direction_classified` 诊断。
+- 决定（侧车配额回收与跨项目清理）：诊断侧车共有 `SIDECAR_LIMIT`（128）组上限；满额时 `admitSidecar` 自动跨项目回收全部段均已超过 7 天留存期的过期侧车流及空过期项目目录，不自动删除 7 天内的活跃或近期流；`/blackbox clear` 与菜单新增 `expired`（跨项目清理过期侧车）和 `sidecars`（跨项目清理全部侧车），保留本机全局摘要与项目 `.pi/`；`exportFile`/`clear`/`status`/`report` 对非法会话键直接返回结构化错误或可读提示。
+- 决定（状态与交接边界修复）：各活跃、暂停迁移（仅离开暂停时）、重规划应用、目标插入、重载恢复及会话导入统一清除 `stoppedAt`，`stopTimer` 持久化失败按停止/继续方向提示；`general-session-transfer.ts` 遇到损坏的冻结记录直接报错拒绝放弃并保留锁定，不再误走 `storageUncertain`，并在确认后复核会话/上下文状态；`findTransferTarget` 改为 256 KiB 前缀读取，同时保护 `realpathSync` 异常与符号链接；任务记忆重复写失败时通过 `suspend` 统一区分首次停止提示与续跑后的 `TASK_MEMORY_WRITE_FAILED` 单次警告。
+- 原因：未配置 `architect` 时阻断普通问答会令日常对话失效；高推理档位 + 裸 JSON 解析 + 20 秒超时与斜杠命令误打断会误杀合理输入；128 组全局侧车无跨项目回收或清理入口会在数周后令全机黑匣子停录；`stoppedAt` 漏清、损坏冻结锁与重复写失败双通知均已在代码审查中证实可造成状态冻结、死循环或矛盾反馈。
+- 约束：不因方向分流自动批准待审计划、自动重试或切换当前会话角色与模型；仅传输计划摘要、约束、当前任务验收与本次用户输入，不附加历史或凭据；在线模型分类准确率与真实 Pi TUI 交互仍待端到端验证。
+- 验证：`pnpm run typecheck` 通过；`pnpm test` 1195/1195 通过（含上述各修复与边界回归）。
+
 ### 2026-11-22：重规划记录只保存任务 ID 与被移除的任务
 
 - 决定：新应用的重规划和目标插入不再写入 `previousTasks`（重规划前的完整任务列表）和 `newPlan`（新计划及新增任务），改为 `previousTaskIds`；保留 `previousPlan`、`replacedTaskIds`、`retainedTaskIds`、`addedTaskIds`，以及被移出队列任务的完整 `replacedTasks`。历史任务 ID 统一由 `workflowHistoricalTaskIds` 汇总，同时读取新旧两种记录。
@@ -23,9 +32,9 @@
 
 ### 2026-11-22：派发锁只经租约读写，身份比较收敛为一组函数
 
-- 决定：`workflowDispatchInFlight` 只通过 `extensions/workflow/dispatch-lock.ts` 写入。调度调用在等待角色选择或发送前 `acquireDispatchLock` 取得租约，并在 `finally` 中 `releaseDispatchLock`；只有当前租约能释放，且不替另一个工作流释放。恢复、显式 resume、结果提交与不可派发计划等生命周期边界调用 `resetDispatchLock`。发送消息的 `workflow-messages.ts` 不再触碰派发锁。身份比较统一为 `src/workflow-handoff.ts` 的 `sameWorkflowActionIdentity`、`sameWorkflowHandoffIdentity`、`sameWorkflowReplanIdentity`，各自只比较声明的字段，替代派发、编排器、消息发送与任务记忆中的五种写法。
-- 原因：锁原先在三个文件有十五处写入，部分退出分支依赖别处稍后清除，已导致停止后卡住；按交接身份判断是否释放，又会在发送结果未知、等待期间追加重规划方向等身份变化场景下遗留锁。按调用方自己的字段集合比较身份，字段增减时容易遗漏。
-- 约束：本条替代下方“派发锁由持有交接身份的调度路径释放”中按交接身份决定是否释放的条件；该条的重规划发送失败回退不变。锁仍以布尔字段供各处读取，租约只在内存中，不持久化。
+- 决定：`workflowDispatchInFlight` 只通过 `extensions/workflow/dispatch-lock.ts` 写入。调度调用在等待角色选择或发送前 `acquireDispatchLock` 取得租约，并在 `finally` 中 `releaseDispatchLock`；只有当前租约能释放，释放当前租约时同时清除 `workflowDispatchLease` 与 `workflowDispatchInFlight`，维持 `workflowDispatchInFlight === (workflowDispatchLease !== undefined)` 不变量，不再因工作流已切换而遗留无租约僵尸锁。恢复、显式 resume、新建 `plan`、结果提交与不可派发计划等生命周期边界调用 `resetDispatchLock`。发送消息的 `workflow-messages.ts` 不再触碰派发锁。身份比较统一为 `src/workflow-handoff.ts` 的 `sameWorkflowActionIdentity`、`sameWorkflowHandoffIdentity`、`sameWorkflowReplanIdentity`，各自只比较声明的字段，替代派发、编排器、消息发送与任务记忆中的五种写法。
+- 原因：锁原先在三个文件有十五处写入，部分退出分支依赖别处稍后清除，已导致停止后卡住；按交接身份判断是否释放，又会在发送结果未知、等待期间追加重规划方向等身份变化场景下遗留锁；释放当前租约时仅按旧 `workflowId` 跳过清布尔位也会遗留无租约锁。按调用方自己的字段集合比较身份，字段增减时容易遗漏。
+- 约束：本条替代下方“派发锁由持有交接身份的调度路径释放”中按交接身份决定是否释放的条件；该条的重规划发送失败回退不变。锁仍以布尔字段供各处读取，租约只在内存中，不持久化；测试亦统一经租约或 `resetDispatchLock` 写入。
 
 ### 2026-11-22：取消工作流时未应用的重规划记为 discarded
 
@@ -57,7 +66,7 @@
 - 原因：`newSession` 在写入目标之前失败或冻结状态保存失败时，原实现只记控制台警告，来源永久冻结且再次 `fresh` 只提示“核对已有目标”，工作流在当前会话无法继续。Pi SDK 1.5.0 在出现首条 user/assistant 消息时落盘，目标 setup 写入 user 种子消息，故已接收交接的目标会出现在来源同目录。
 - 普通会话交接（`general-session-transfer.ts`）采用同一出口：来源被冻结时再次 `/pi-init fresh`，在同目录找到含同一 ID 的 incoming 则拒绝；未找到时经确认追加 `cancelled` 并清除内存中的未确认标记。冻结记录本身未写入时只清除未确认标记，效果与重新加载相同。放弃后须用 `session_handoff` 重新准备才能再次交接。两种交接共用 `session-replacement.ts` 的 `findTransferTarget`。
 - 约束：不自动解冻，不新增命令。遗漏在其他目录且未激活的目标激活时读取来源意图，`cancelled` 会使其拒绝激活；已在其他目录激活的目标无法检测，由确认框提示用户取消。
-- 验证（以上四项）：调整与新增的回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js`、`test/general-session-transfer.test.js` 与新增的 `test/session-replacement.test.js`。记录时尚未取得 `node ./scripts/test.js` 与 `tsc --noEmit` 的实际输出，不视为已通过，结果待补。
+- 验证（以上四项及今日后续审修）：相关回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js`、`test/general-session-transfer.test.js`、`test/session-replacement.test.js`、`test/workflow-runtime-retirement.test.js` 等；全量 `pnpm test` 1195/1195 与 `pnpm run typecheck` 已通过（未在真实 Pi TUI 交互验收）。
 
 ### 2026-11-21：待审计划的重复读取只结束本轮
 
