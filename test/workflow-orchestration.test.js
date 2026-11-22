@@ -224,7 +224,6 @@ test("重规划消息发送失败时退回待派发并更换交接身份，之�
   assert.equal(rolledBack.phase, "pending");
   assert.notEqual(rolledBack.handoffId, originalHandoff);
   assert.equal(h.state.internalContinuationPending, false);
-  assert.equal(h.state.workflowDispatchInFlight, false);
   assert.equal(selectWorkflowScheduleEffect(h.state.workflowState)?.kind, "replan");
 
   fail = false;

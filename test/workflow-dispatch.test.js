@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { createWorkflowDispatch } from "../extensions/workflow/workflow-dispatch.ts";
-import { createWorkflowState, ensureWorkflowReplanHandoff, requestWorkflowReplan, setWorkflowHandoffPhase, startWorkflowTask } from "../src/workflow.ts";
+import { appendWorkflowReplanDirection, createWorkflowState, ensureWorkflowReplanHandoff, markWorkflowTaskOutcomeUnknown, requestWorkflowReplan, setWorkflowHandoffPhase, startWorkflowTask } from "../src/workflow.ts";
 
 function fixture(automaticRole = async role => ({ result: { role } })) {
   const state = createExtensionRuntimeState();
@@ -152,5 +152,64 @@ test("a stop during architect selection releases the replan dispatch lock", asyn
   resolveRole({ result: { role: "architect" } });
   await scheduling;
   assert.deepEqual(sent, []);
+  assert.equal(state.workflowDispatchInFlight, false);
+});
+
+test("a dispatch whose send ends in an unknown outcome still releases the lock", async () => {
+  const h = fixture();
+  h.state.workflowDispatchInFlight = false;
+  h.dispatch = createWorkflowDispatch(h.state, {
+    roleRuntime: { automaticRole: async role => ({ result: { role } }) },
+    messages: {
+      sendWorkflowTaskMessage(_ctx, taskId) {
+        // Mirrors a send that could not be confirmed: the attempt is closed as unknown.
+        h.state.workflowState = markWorkflowTaskOutcomeUnknown(h.state.workflowState, { taskId, reason: "交接结果未确认" });
+        return false;
+      },
+    },
+    store: {
+      persistWorkflowState(next) { h.state.workflowState = next; },
+      restoreSnapshot(next) { h.state.workflowState = next; },
+    },
+    report: { updateWorkflowStatus() { }, formatWorkflowPauseSummary: () => "暂停" },
+    setCurrentContext() { },
+  });
+  await h.dispatch.scheduleWorkflow(h.ctx);
+  assert.equal(h.state.workflowState.pauseReason, "handoff-outcome-unknown");
+  assert.equal(h.state.workflowDispatchInFlight, false);
+  assert.equal(h.state.workflowDispatchLease, undefined);
+});
+
+test("a replan direction appended during architect selection does not strand the lock", async () => {
+  const state = createExtensionRuntimeState();
+  state.workflowState = ensureWorkflowReplanHandoff(requestWorkflowReplan(createWorkflowState({
+    summary: "追加方向",
+    sessionId: "session",
+    executor: "local",
+    tasks: [{ id: "task", role: "developer-test", task: "实现", files: ["src"], acceptanceCriteria: ["完成"] }],
+  }), { direction: "调整计划" }));
+  let resolveRole;
+  let calls = 0;
+  const sent = [];
+  const dispatch = createWorkflowDispatch(state, {
+    roleRuntime: { automaticRole: () => calls++ === 0 ? new Promise(resolve => { resolveRole = resolve; }) : Promise.resolve({ result: { role: "architect" } }) },
+    messages: { sendWorkflowReplanMessage(_ctx, identity) { sent.push(identity); return true; } },
+    store: {
+      persistWorkflowState(next) { state.workflowState = next; },
+      restoreSnapshot(next) { state.workflowState = next; },
+    },
+    report: { updateWorkflowStatus() { }, formatWorkflowPauseSummary: () => "" },
+    setCurrentContext() { },
+  });
+  const ctx = { ui: { notify() { } } };
+  const scheduling = dispatch.scheduleWorkflow(ctx);
+  state.workflowState = appendWorkflowReplanDirection(state.workflowState, "补充一条方向");
+  resolveRole({ result: { role: "architect" } });
+  await scheduling;
+  assert.deepEqual(sent, [], "the superseded replan handoff must not be sent");
+  assert.equal(state.workflowDispatchInFlight, false);
+  await dispatch.scheduleWorkflow(ctx);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].handoffId, state.workflowState.continuation.handoffId);
   assert.equal(state.workflowDispatchInFlight, false);
 });

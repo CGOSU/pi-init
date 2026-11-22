@@ -42,9 +42,10 @@ import { createCurrentWorkflowStatusView } from "./workflow-status-view.ts";
 import { workflowStatusToolSummary } from "./workflow-status-tool-text.ts";
 import { transferFrozen } from "../../src/session-handoff.ts";
 import { outgoingTransfer } from "../session/session-handoff-runtime.ts";
+import { resetDispatchLock } from "./dispatch-lock.ts";
 
 export function createWorkflowActions(
-  state: RuntimeStateAccess<"workflowDispatchInFlight" | "workflowModeStatus" | "workflowRestoreError">,
+  state: RuntimeStateAccess<"workflowDispatchInFlight" | "workflowDispatchLease" | "workflowModeStatus" | "workflowRestoreError">,
   deps: WorkflowActionDependencies,
 ) {
   const recoveryActions = createWorkflowRecoveryActions(state, { report: deps.report, store: deps.store });
@@ -68,8 +69,7 @@ export function createWorkflowActions(
 
   function commitLifecycleTransition(transition: WorkflowLifecycleTransition, ctx: ExtensionContext) {
     const persisted = deps.store.persistWorkflowState(transition.state, ctx);
-
-    state.workflowDispatchInFlight = false;
+    resetDispatchLock(state);
     return persisted;
   }
 
@@ -307,7 +307,7 @@ export function createWorkflowActions(
           retainTaskIds: params.retainTaskIds, confirmUnknownOutcome: params.confirmUnknownOutcome === true, reason: params.reason,
         });
         deps.store.persistWorkflowState(next, ctx);
-        state.workflowDispatchInFlight = false;
+        resetDispatchLock(state);
         const nextStep = next.pauseReason === "architecture-review"
           ? nextWorkflowAction({ ...state, workflowState: next }).nextAction
           : "新计划将自动开始。";

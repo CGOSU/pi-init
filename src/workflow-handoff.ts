@@ -14,6 +14,26 @@ import type {
 } from "./workflow-types.ts";
 
 const BASE_IDENTITY_FIELDS = ["workflowId", "planVersion", "sessionId", "recoveryGeneration"] as const;
+const HANDOFF_IDENTITY_FIELDS = [...BASE_IDENTITY_FIELDS, "taskId", "attemptId", "handoffId"] as const;
+const REPLAN_IDENTITY_FIELDS = [...BASE_IDENTITY_FIELDS, "revisionId", "handoffId"] as const;
+
+function sameIdentityFields<T extends object>(fields: readonly (keyof T)[], left: T | undefined, right: T | undefined) {
+  return left !== undefined && right !== undefined && fields.every((field) => left[field] === right[field]);
+}
+
+/*
+ * The one way to compare workflow identities. Each compares exactly its declared fields, so extra
+ * properties on either side (a full handoff record, tool parameters) never affect the result.
+ */
+export function sameWorkflowActionIdentity(left: WorkflowActionIdentity | undefined, right: WorkflowActionIdentity | undefined) {
+  return sameIdentityFields(BASE_IDENTITY_FIELDS, left, right);
+}
+export function sameWorkflowHandoffIdentity(left: WorkflowHandoffIdentity | undefined, right: WorkflowHandoffIdentity | undefined) {
+  return sameIdentityFields(HANDOFF_IDENTITY_FIELDS, left, right);
+}
+export function sameWorkflowReplanIdentity(left: WorkflowReplanIdentity | undefined, right: WorkflowReplanIdentity | undefined) {
+  return sameIdentityFields(REPLAN_IDENTITY_FIELDS, left, right);
+}
 
 function failure(
   code: string,
@@ -173,7 +193,7 @@ export function workflowHandoffAnchorMatches(
     anchors,
     WORKFLOW_TASK_MESSAGE_TYPE,
     identity,
-    [...BASE_IDENTITY_FIELDS, "taskId", "attemptId", "handoffId"],
+    HANDOFF_IDENTITY_FIELDS,
   );
 }
 

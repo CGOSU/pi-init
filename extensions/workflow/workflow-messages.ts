@@ -5,11 +5,13 @@ import { ARCHITECT_ALLOWED_ACTIONS_TEXT, ARCHITECT_READ_ONLY_TOOLS_TEXT } from "
 import {
   getWorkflowTask,
   markWorkflowTaskOutcomeUnknown,
+  sameWorkflowHandoffIdentity,
+  sameWorkflowReplanIdentity,
   workflowHandoffIdentity,
   workflowReplanIdentity,
 } from "../../src/workflow.ts";
 import type {
-  RuntimeStateAccess,
+  RuntimeStateView,
   WorkflowHandoffIdentity,
   WorkflowReplanIdentity,
   WorkflowState,
@@ -52,7 +54,8 @@ export type WorkflowMessageDependencies = {
 };
 
 export function createWorkflowMessages(
-  state: RuntimeStateAccess<"workflowDispatchInFlight">,
+  // Sending never touches the dispatch lock; the scheduling call that holds it releases it.
+  state: RuntimeStateView,
   deps: WorkflowMessageDependencies,
 ) {
   let lastContext: ExtensionContext | undefined;
@@ -103,7 +106,7 @@ export function createWorkflowMessages(
     const current = state.workflowState;
     const identity = current ? workflowHandoffIdentity(current) : undefined;
     if (!current || current.currentTaskId !== taskId || !identity
-      || (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowHandoffIdentity] === expectedIdentity[key as keyof WorkflowHandoffIdentity]))) {
+      || (expectedIdentity && !sameWorkflowHandoffIdentity(identity, expectedIdentity))) {
       return false;
     }
     const type = current.handoff?.phase === "executing" ? "task-reminder-requested" : "task-dispatch-requested";
@@ -156,8 +159,6 @@ export function createWorkflowMessages(
           : `任务 ${taskId} 的状态已变化或提醒消息发送失败；未伪造完成或自动重放。${textOf(error)}`;
       ctx.ui.notify(failureMessage, "error");
       return false;
-    } finally {
-      state.workflowDispatchInFlight = false;
     }
   }
 
@@ -186,7 +187,7 @@ export function createWorkflowMessages(
     if (!current || current.status !== "replanning" || !revision || continuation?.kind !== "replan" || !continuation.handoffId) return false;
     const identity = workflowReplanIdentity(current);
     if (!identity) return false;
-    if (expectedIdentity && !Object.keys(expectedIdentity).every((key) => identity[key as keyof WorkflowReplanIdentity] === expectedIdentity[key as keyof WorkflowReplanIdentity])) return false;
+    if (expectedIdentity && !sameWorkflowReplanIdentity(identity, expectedIdentity)) return false;
     const transition = transitionWorkflowDispatch(current, { type: "replan-dispatch-requested", identity }, Date.now());
     if (!transition.effects.length) return false;
     let sending = false;
@@ -218,8 +219,6 @@ export function createWorkflowMessages(
       if (sending && !sent) rollbackReplanDispatch(ctx, identity, error);
       else ctx.ui.notify(`无法确认架构重规划交接：${textOf(error)}；不会伪造派发成功`, "error");
       return false;
-    } finally {
-      state.workflowDispatchInFlight = false;
     }
   }
 

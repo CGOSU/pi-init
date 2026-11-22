@@ -6,7 +6,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { applyParsedTaskCheckpoint, createTaskMemory, recordTaskObservations, parseTaskMemory, parseTaskCheckpoint, taskMemoryScope, taskMemoryError, type TaskMemory, type TaskObservation, type TaskSourceVersion, parseTaskMemoryIdentity } from "../../src/task-memory.ts";
-import { workflowHandoffIdentity } from "../../src/workflow-handoff.ts";
+import { sameWorkflowHandoffIdentity, workflowHandoffIdentity } from "../../src/workflow-handoff.ts";
 import type { WorkflowHandoffIdentity } from "../../src/workflow-types.ts";
 import { firstPolicyMatch, hasRecoveryGate, onEvents, type RuntimeStateView } from "../runtime-state.ts";
 import { fingerprint } from "../diagnostics/handoff-tool-diagnostics.ts";
@@ -16,7 +16,7 @@ import type { TaskMemoryParseResult } from "../../src/task-memory-parsing.ts";
 type Entry = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>[number];
 type MemoryBinding = { source: (message: object, ctx: ExtensionContext) => WorkflowHandoffIdentity | undefined };
 export type TaskMemoryView = { status: "available" | "legacy" | "unavailable"; memory?: TaskMemory; reason?: string; applicability?: "historical" | "matches-checkpoint-files" | "changed" | "unverified"; evidence?: TaskEvidence[] };
-function bounded(text: string, maximum: number) {
+export function bounded(text: string, maximum: number) {
   if (text.length <= maximum) return text;
   const marker = "\n[中间省略；可按来源读取]\n";
   const head = Math.floor((maximum - marker.length) / 2);
@@ -24,9 +24,6 @@ function bounded(text: string, maximum: number) {
 }
 export function contentText(content: unknown) {
   return Array.isArray(content) ? content.filter(item => item && typeof item === "object" && item.type === "text" && typeof item.text === "string").map(item => item.text).join("\n") : "";
-}
-function taskMemoryIdentityMatches(left: WorkflowHandoffIdentity, right: WorkflowHandoffIdentity) {
-  return Object.keys(left).every(key => left[key as keyof WorkflowHandoffIdentity] === right[key as keyof WorkflowHandoffIdentity]);
 }
 function failedReceipt(value: unknown) {
   if (!isRecord(value)) return false;
@@ -213,7 +210,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     if (!current) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆缺少当前可信身份");
     const blocked = firstPolicyMatch([
       [!workflowHandoffMessageOnBranch(ctx, current), "branch-anchor"],
-      [!taskMemoryIdentityMatches(current, submitted), "stale-identity"],
+      [!sameWorkflowHandoffIdentity(current, submitted), "stale-identity"],
       [workflow?.status !== "running", "workflow-not-running"],
       [workflow?.handoff?.phase !== "executing", "handoff-not-executing"],
       [task?.status !== "in_progress", "task-not-executing"],
@@ -259,7 +256,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     if (!resolved.ok) { suspend(ctx); return; }
     const current = resolved.value;
     const bound = binding.source(event.message, ctx);
-    if (!current || !bound || !taskMemoryIdentityMatches(current, bound) || event.message.role !== "assistant" || event.toolResultEntryIds.length !== event.toolResults.length) return;
+    if (!current || !bound || !sameWorkflowHandoffIdentity(current, bound) || event.message.role !== "assistant" || event.toolResultEntryIds.length !== event.toolResults.length) return;
     try {
       const { memory, saved, found, unsaved } = load(ctx, current);
       // load() re-derives every result after the saved watermark, and batching them yields the same

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { cloneState } from "./workflow-state.ts";
 import { getWorkflowTask, getNextWorkflowTask } from "./workflow-queries.ts";
-import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "./workflow-handoff.ts";
+import {
+  sameWorkflowActionIdentity, sameWorkflowHandoffIdentity, sameWorkflowReplanIdentity,
+  workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity,
+} from "./workflow-handoff.ts";
 import {
   markWorkflowTaskStarted,
   setWorkflowHandoffPhase,
@@ -31,10 +34,6 @@ export type WorkflowScheduleEffect =
   | { kind: "replan" }
   | { kind: "start-task" | "dispatch-task" | "nudge-task"; taskId: string };
 
-function sameIdentity<T extends object>(actual: T | undefined, expected: T): boolean {
-  return actual !== undefined && (Object.keys(actual) as (keyof T)[]).every((key) => actual[key] === expected[key]);
-}
-
 export function selectWorkflowScheduleEffect(state: WorkflowState): WorkflowScheduleEffect | undefined {
   if (state.continuation?.kind !== "review" && state.continuation?.phase === "compacting") return;
   if (state.status === "replanning") {
@@ -52,7 +51,7 @@ export function selectWorkflowScheduleEffect(state: WorkflowState): WorkflowSche
   const identity = workflowHandoffIdentity(state);
   const task = getWorkflowTask(state, state.currentTaskId);
   if (!identity || identity.taskId !== state.currentTaskId || task?.status !== "in_progress"
-    || !sameIdentity(workflowActionIdentity(state), identity)) return;
+    || !sameWorkflowActionIdentity(workflowActionIdentity(state), identity)) return;
   if (["prepared", "waiting-role", "compacting"].includes(state.handoff!.phase)) {
     return { kind: "dispatch-task", taskId: task.id };
   }
@@ -65,9 +64,9 @@ export function transitionWorkflowDispatch(
   now: number,
 ): WorkflowDispatchTransition {
   const unchanged: WorkflowDispatchTransition = { state, effects: [] };
-  if (!sameIdentity(workflowActionIdentity(state), event.identity)) return unchanged;
+  if (!sameWorkflowActionIdentity(workflowActionIdentity(state), event.identity)) return unchanged;
   if (event.type === "replan-dispatch-requested" || event.type === "replan-queued" || event.type === "replan-dispatch-failed") {
-    if (!sameIdentity(workflowReplanIdentity(state), event.identity) || state.continuation?.kind !== "replan") return unchanged;
+    if (!sameWorkflowReplanIdentity(workflowReplanIdentity(state), event.identity) || state.continuation?.kind !== "replan") return unchanged;
     if (event.type === "replan-dispatch-failed") {
       // 发送本身失败：退回待派发并更换交接身份，与 reload 恢复的处理一致；
       // 即使旧消息迟到，architect 的 replan 调用也会因 handoffId 不符被拒绝。
@@ -84,7 +83,7 @@ export function transitionWorkflowDispatch(
   }
   if (state.status !== "running" || state.currentTaskId !== event.identity.taskId
     || getWorkflowTask(state, event.identity.taskId)?.status !== "in_progress"
-    || !sameIdentity(workflowHandoffIdentity(state), event.identity)) return unchanged;
+    || !sameWorkflowHandoffIdentity(workflowHandoffIdentity(state), event.identity)) return unchanged;
   const phase = state.handoff!.phase;
   if (event.type === "task-started") {
     if (!["dispatching", "queued"].includes(phase)) return unchanged;
@@ -120,14 +119,14 @@ export function transitionWorkflowLifecycle(
   event: WorkflowLifecycleEvent,
   now: number,
 ): WorkflowLifecycleTransition {
-  if (!sameIdentity(workflowActionIdentity(state), event.identity)) {
+  if (!sameWorkflowActionIdentity(workflowActionIdentity(state), event.identity)) {
     throw Object.assign(new Error("工作流生命周期事件身份已过期；请读取当前状态"), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
   }
   let next: WorkflowState;
   switch (event.type) {
     case "task-completed":
     case "task-blocked": {
-      if (!sameIdentity(workflowHandoffIdentity(state), event.identity) || state.currentTaskId !== event.identity.taskId) {
+      if (!sameWorkflowHandoffIdentity(workflowHandoffIdentity(state), event.identity) || state.currentTaskId !== event.identity.taskId) {
         throw Object.assign(new Error("任务生命周期事件与当前 handoff 不匹配"), { code: "WORKFLOW_ACTION_IDENTITY_STALE" });
       }
       if (state.handoff?.phase !== "executing" && state.handoff?.phase !== "queued") {
