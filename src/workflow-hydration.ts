@@ -358,6 +358,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflow
   if (pausedMilliseconds !== undefined && pausedMilliseconds < 0) {
     throw new Error("已保存的工作流 pausedMilliseconds 不得为负数");
   }
+  const stoppedAt = normalizeTimestamp(state.stoppedAt, "已保存的工作流 stoppedAt");
   const nudgeCount = state.nudgeCount === undefined
     ? undefined
     : normalizePlanVersion(state.nudgeCount, "已保存的工作流 nudgeCount");
@@ -380,6 +381,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflow
     ...(createdAt !== undefined ? { createdAt } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(pausedMilliseconds !== undefined ? { pausedMilliseconds } : {}),
+    ...(stoppedAt !== undefined ? { stoppedAt } : {}),
     ...(nudgeCount !== undefined ? { nudgeCount } : {}),
     ...(pauseReason !== undefined ? { pauseReason } : {}),
     ...(taskPauseReason !== undefined ? { taskPauseReason } : {}),

@@ -46,6 +46,8 @@ export {
   cancelWorkflow,
   resetWorkflowNudges,
   recordWorkflowNudge,
+  markWorkflowStopped,
+  clearWorkflowStopped,
 } from "./workflow-transitions.ts";
 export {
   requestWorkflowReplan,

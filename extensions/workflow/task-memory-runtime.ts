@@ -52,13 +52,24 @@ function sameObservationSource(actual: TaskObservation, expected: TaskObservatio
 export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateView, binding: MemoryBinding, onFailure?: (ctx: ExtensionContext) => void, historicalEvidence?: (ctx: ExtensionContext, id: string, dependencies: string[]) => TaskEvidence | undefined, onProgress?: (ctx: ExtensionContext) => void) {
   const failures = new Set<string>();
   const stopped = new Set<string>();
-  function suspend(ctx: ExtensionContext) {
+  const noticed = new Set<string>();
+  // A task stops once per memory failure; the user's "continue" accepts running without saved memory.
+  // After that, a repeated failure warns once per continue instead of stopping again: a damaged snapshot
+  // that stopped on every continue would leave the task impossible to resume.
+  function suspend(ctx: ExtensionContext, reason = "TASK_MEMORY_UNAVAILABLE") {
     const resolved = identity(ctx);
     const key = resolved.ok ? resolved.value && scope(ctx, resolved.value)
       : JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), state.workflowState?.workflowId, state.workflowState?.planVersion, state.workflowState?.recoveryGeneration, state.workflowState?.currentTaskId]);
-    if (!key || stopped.has(key)) return;
-    stopped.add(key);
-    onFailure?.(ctx);
+    if (!key) return;
+    if (!stopped.has(key)) {
+      stopped.add(key);
+      onFailure?.(ctx);
+      return;
+    }
+    const notice = JSON.stringify([key, state.userStopGeneration]);
+    if (state.userStopRequested || noticed.has(notice)) return;
+    noticed.add(notice);
+    ctx.ui.notify(`任务记忆仍不可用（${reason}）：已按你的继续执行，不再自动停止；此后的进展可能无法作为可恢复记忆保存。可用 /pi-init workflow status 核对，需要中止请说“停止工作”。`, "warning");
   }
   function identity(ctx: ExtensionContext): TaskMemoryParseResult<WorkflowHandoffIdentity | undefined> {
     const workflow = ctx.isProjectTrusted() ? state.workflowState : undefined;
@@ -253,7 +264,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
   pi.on("turn_end", (event: TurnEndEvent, ctx) => {
     if (!ctx.isProjectTrusted() || state.runtimeDisposed || state.userStopRequested) return;
     const resolved = identity(ctx);
-    if (!resolved.ok) { suspend(ctx); return; }
+    if (!resolved.ok) { suspend(ctx, resolved.code); return; }
     const current = resolved.value;
     const bound = binding.source(event.message, ctx);
     if (!current || !bound || !sameWorkflowHandoffIdentity(current, bound) || event.message.role !== "assistant" || event.toolResultEntryIds.length !== event.toolResults.length) return;
@@ -264,7 +275,8 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
       if (memory !== saved && (!found || unsaved >= TASK_MEMORY_LIMITS.snapshotEveryResults)) persist(ctx, { ...memory, identity: current });
     } catch (error) {
       failures.add(scope(ctx, current));
-      if (!(error && typeof error === "object" && "code" in error && error.code === "TASK_MEMORY_WRITE_FAILED")) suspend(ctx);
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "TASK_MEMORY_UNAVAILABLE";
+      if (code !== "TASK_MEMORY_WRITE_FAILED") suspend(ctx, code);
     }
   });
   function verificationSources(ctx: ExtensionContext, ids: string[]) {
@@ -291,7 +303,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     // It has no prior task observations to restore; do not treat that SDK ordering as corruption.
     if (current && !workflowHandoffMessageOnBranch(ctx, current)) return;
     const memory = read(ctx);
-    if (memory.status === "unavailable") suspend(ctx);
+    if (memory.status === "unavailable") suspend(ctx, memory.reason);
     const content = taskMemoryText(memory);
     if (content) return { customType: TASK_MEMORY_MESSAGE, content, display: false,
       details: { summarizedToolCallIds: memory.status === "available" ? memory.memory?.observations.map(item => item.toolCallId) ?? [] : [] } };
@@ -305,7 +317,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     // The SDK appends safely after a running turn's tool results, without starting another turn.
     if (message) pi.sendMessage(message, { triggerTurn: false });
   });
-  function reset() { failures.clear(); stopped.clear(); lastBoundary = undefined; }
+  function reset() { failures.clear(); stopped.clear(); noticed.clear(); lastBoundary = undefined; }
   onEvents(pi, ["session_start", "session_tree", "session_shutdown"], reset);
   return { read, checkpoint, verificationSources, suspend };
 }

@@ -311,3 +311,21 @@ export function recordWorkflowNudge(
   }
   return result;
 }
+
+/**
+ * A user stop leaves a running workflow in its status, so without a marker the stop would count as active time.
+ * The marker makes cloneWorkflowStateCore accrue the interval like a pause, and an overlapping pause is accrued once.
+ */
+export function markWorkflowStopped(state: WorkflowState, now = Date.now()): WorkflowState {
+  if (!["running", "replanning"].includes(state.status) || state.stoppedAt !== undefined || state.pausedMilliseconds === undefined) return state;
+  const result = cloneState(state, now);
+  result.stoppedAt = now;
+  return result;
+}
+
+export function clearWorkflowStopped(state: WorkflowState, now = Date.now()): WorkflowState {
+  if (state.stoppedAt === undefined) return state;
+  const result = cloneState(state, now);
+  delete result.stoppedAt;
+  return result;
+}

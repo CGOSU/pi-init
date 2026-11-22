@@ -90,7 +90,7 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
   const { startedAt } = getWorkflowExecutionBounds(state);
   const pauseStart = Math.max(startedAt ?? now, state.updatedAt ?? now);
   const pausedMilliseconds = state.pausedMilliseconds === undefined ? undefined
-    : state.status === "paused" && startedAt !== undefined
+    : (state.status === "paused" || state.stoppedAt !== undefined) && startedAt !== undefined
       ? state.pausedMilliseconds + Math.max(0, now - pauseStart)
       : state.pausedMilliseconds;
   return {

@@ -515,3 +515,18 @@ test("否定保存不会停止或写入，单独明确停止仍生效但不保�
     assert.equal(await readFile(join(cwd, "TODO.md"), "utf8"), "unchanged");
   });
 });
+
+test("stop, continue and restore keep the workflow stop timer in line with the stop state", async () => {
+  await withTempDirectory(async cwd => {
+    const f = fixture(cwd);
+    const calls = [];
+    const control = createWorkflowUserControl(f.pi, f.state, { retire() {}, stopTimer: (_ctx, stopped) => calls.push(stopped) });
+    control.suspend(f.ctx, "user-stop");
+    assert.deepEqual(calls, [true]);
+    assert.equal(control.resume(f.ctx), true);
+    assert.deepEqual(calls, [true, false]);
+    control.suspend(f.ctx, "user-stop");
+    control.restore(f.ctx);
+    assert.deepEqual(calls, [true, false, true, true]);
+  });
+});

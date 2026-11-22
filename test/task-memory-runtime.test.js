@@ -583,3 +583,25 @@ test("a batched snapshot derives the same memory as deriving every result from t
   assert.deepEqual(batched.observations, derived.observations);
   assert.equal(batched.omittedObservations, derived.omittedObservations);
 });
+
+test("after the user continues past a memory failure, a repeat warns once per continue instead of stopping again", async () => {
+  const f = fixture();
+  await f.commit();
+  f.branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data.observations[0].summary = "fabricated success";
+  const warnings = () => f.notices.filter(([message]) => message.includes("任务记忆仍不可用")).length;
+  f.state.userStopRequested = true;
+  await f.emit("before_agent_start");
+  assert.equal(f.stops, 1);
+  assert.equal(warnings(), 0, "no warning while the stop is still in effect");
+  f.state.userStopRequested = false; // the user continues
+  await f.commit("next result", false, "next-command");
+  assert.equal(f.stops, 1, "the same failure does not stop the task again");
+  assert.equal(warnings(), 1);
+  assert.match(f.notices.findLast(([message]) => message.includes("任务记忆仍不可用"))[0], /TASK_MEMORY_SOURCE_MISSING/);
+  await f.commit("another result", false, "another-command");
+  assert.equal(warnings(), 1, "one warning per continue");
+  f.state.userStopGeneration++; // a later stop and continue
+  await f.commit("later result", false, "later-command");
+  assert.equal(warnings(), 2);
+  assert.equal(f.stops, 1);
+});

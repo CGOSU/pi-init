@@ -146,6 +146,8 @@ export type WorkflowStateCore = {
   legacySourceVersion?: number;
   /** Accumulated paused time through updatedAt; absent on unmeasured historical workflows. */
   pausedMilliseconds?: number;
+  /** The user stopped auto-run at this time while the workflow was running; that time is not active time. */
+  stoppedAt?: number;
 };
 export type WorkflowState = WorkflowStateCore;
 

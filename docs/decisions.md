@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-11-22：用户停止期间不计入运行耗时；任务记忆重复故障只提示
+
+- 决定：用户停止自动续跑时，若工作流仍为 running/replanning，写入 `stoppedAt`；`cloneWorkflowStateCore` 对 paused 或带 `stoppedAt` 的区间统一累加 `pausedMilliseconds`，重叠的暂停只计一次；`getWorkflowExecutionDuration` 在停止期间冻结。继续（release）时清除，会话启动/切换分支时按停止记录同步。维护者已确认“暂停不记时”。
+- 决定：任务记忆故障仍按任务只停止一次；用户“继续”后同一任务再次故障不再停止，而是按每次继续提示一次（附故障码），说明进展可能无法保存为可恢复记忆。维护者已确认“给出提示”。
+- 原因：模型请求失败等停止不中断回合、不改变工作流状态，原实现把停止到“继续”之间的等待（可能数小时）计为运行耗时。重复停止会使损坏的记忆快照让任务每次继续都立即停止，无法推进；原实现完全静默又与“关键记忆不可用走停止边界”的说明不一致。
+- 约束：计时标记保存失败只提示，不影响任务状态；`stoppedAt` 仅影响计时，不参与交接内容 hash。旧版插件会保留未知字段 `stoppedAt` 但不据此计时。停止中的回合不重复提示。
+
 ### 2026-11-22：派发锁只经租约读写，身份比较收敛为一组函数
 
 - 决定：`workflowDispatchInFlight` 只通过 `extensions/workflow/dispatch-lock.ts` 写入。调度调用在等待角色选择或发送前 `acquireDispatchLock` 取得租约，并在 `finally` 中 `releaseDispatchLock`；只有当前租约能释放，且不替另一个工作流释放。恢复、显式 resume、结果提交与不可派发计划等生命周期边界调用 `resetDispatchLock`。发送消息的 `workflow-messages.ts` 不再触碰派发锁。身份比较统一为 `src/workflow-handoff.ts` 的 `sameWorkflowActionIdentity`、`sameWorkflowHandoffIdentity`、`sameWorkflowReplanIdentity`，各自只比较声明的字段，替代派发、编排器、消息发送与任务记忆中的五种写法。

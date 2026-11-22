@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  blockWorkflowTask, cloneState, completeWorkflowTask, createWorkflowState, getWorkflowExecutionDuration,
+  blockWorkflowTask, clearWorkflowStopped, cloneState, completeWorkflowTask, createWorkflowState, getWorkflowExecutionDuration, markWorkflowStopped,
   hydrateWorkflowState, markWorkflowTaskStarted, recoverWorkflowState, resumeWorkflow, retryWorkflowTask,
   setWorkflowHandoffPhase, startWorkflowTask,
 } from "../src/workflow.ts";
@@ -85,4 +85,27 @@ test("legacy workflows do not fabricate pause accounting and malformed counters 
     assert.equal(hydrateWorkflowState({ ...old, pausedMilliseconds }).ok, false);
   }
   assert.equal(getWorkflowExecutionDuration({ ...old, pausedMilliseconds: 150 }), undefined);
+});
+
+test("time while the user has stopped auto-run is excluded from active time, once even when it overlaps a pause", () => {
+  let state = start(plan(100), 200);
+  state = markWorkflowStopped(state, 300);
+  assert.equal(state.stoppedAt, 300);
+  assert.equal(markWorkflowStopped(state, 400), state, "marking is idempotent");
+  assert.equal(getWorkflowExecutionDuration(state, 900), 100, "active time freezes while stopped");
+  const restored = hydrateWorkflowState(structuredClone(state));
+  assert.equal(restored.ok, true, restored.message);
+  assert.equal(restored.value.stoppedAt, 300);
+  state = clearWorkflowStopped(state, 1000);
+  assert.equal(state.stoppedAt, undefined);
+  assert.equal(state.pausedMilliseconds, 700);
+  assert.equal(getWorkflowExecutionDuration(state, 1100), 200);
+  assert.equal(clearWorkflowStopped(state, 1100), state);
+
+  state = markWorkflowStopped(state, 1100);
+  state = blockWorkflowTask(state, { taskId: "task", reason: "Stopped mid-task" }, 1200);
+  state = clearWorkflowStopped(state, 1500);
+  assert.equal(state.pausedMilliseconds, 1100, "the stop and the pause inside it are each counted once");
+  assert.equal(getWorkflowExecutionDuration(state, 1500), 200);
+  assert.equal(markWorkflowStopped(state, 1600), state, "a paused workflow already excludes the time");
 });
