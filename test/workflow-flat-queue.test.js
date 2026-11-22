@@ -135,6 +135,12 @@ test("归属分组本身不改变调度，省略优先级的新任务追加到�
   const requested = requestWorkflowGoal(root(), { direction: "普通追加目标" }, 101);
   const next = createWorkflowGoalState(requested, { summary: "普通目标", tasks: [{ ...task("normal"), priority: undefined }], retainTaskIds: ["original"] }, 102);
   assert.equal(next.tasks[1].priority, 0);
+  const revision = next.revisions.at(-1);
+  assert.deepEqual(revision.previousTaskIds, ["original"]);
+  assert.deepEqual(revision.addedTaskIds, ["normal"]);
+  assert.equal(revision.previousTasks, undefined);
+  assert.equal(revision.newPlan, undefined);
+  assert.equal(next.goals.at(-1).summary, "普通目标");
   assert.equal(getNextWorkflowTask(next).id, "original");
 });
 

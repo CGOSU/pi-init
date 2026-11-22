@@ -107,6 +107,9 @@ function normalizeRevisionRecord(revision: unknown, index: number): WorkflowRevi
       `已保存的工作流 revision ${revision.revisionId} 的 discardedAt`,
     );
   }
+  if (revision.previousTaskIds !== undefined) {
+    result.previousTaskIds = normalizeTaskIds(revision.previousTaskIds, `已保存的工作流 revision ${revision.revisionId} 的 previousTaskIds`);
+  }
   if (revision.retainedTaskIds !== undefined) {
     result.retainedTaskIds = normalizeTaskIds(revision.retainedTaskIds, `已保存的工作流 revision ${revision.revisionId} 的 retainedTaskIds`);
   }

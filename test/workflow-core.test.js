@@ -170,7 +170,7 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
     requestedAt: 130,
     appliedAt: 140,
     previousPlan: { summary: "原始计划", constraints: ["保持兼容"] },
-    previousTasks: requested.tasks,
+    previousTaskIds: ["schema", "keep", "obsolete"],
     replacedTaskIds: ["obsolete"],
     replacedTasks: [{
       ...getWorkflowTask(requested, "obsolete"),
@@ -180,12 +180,8 @@ test("工作流重规划保留已完成任务、支持新增并审计被替换�
     }],
     retainedTaskIds: ["keep"],
     addedTaskIds: ["cache"],
-    newPlan: {
-      summary: "扩展后的计划",
-      constraints: ["保持兼容", "缓存可回滚"],
-      tasks: [getWorkflowTask(applied, "cache")],
-    },
   });
+  assert.deepEqual(applied.plan, { summary: "扩展后的计划", constraints: ["保持兼容", "缓存可回滚"] });
 
   const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(applied))).value;
   assert.equal(restored.version, 7);
@@ -397,3 +393,53 @@ test("已移除的委派执行器明确拒绝，历史 delegation 不改变本�
   assert.deepEqual(blocked.tasks[0].delegation, legacyDelegation);
 });
 
+test("revision records stay compact as the queue and the number of replans grow", () => {
+  const verified = { completionSummary: "完成" + "细节".repeat(200), implementationRationale: "原因",
+    verification: [{ check: "全量测试", status: "passed", details: "通过".repeat(200) }] };
+  let state = createWorkflowState({
+    summary: "长任务", constraints: ["保持兼容"],
+    tasks: Array.from({ length: 12 }, (_, index) => ({ id: "t" + index, task: "任务" + index, files: ["src/" + index + ".js"], acceptanceCriteria: ["完成"] })),
+  }, 100);
+  state = { ...state, tasks: state.tasks.map((task, index) => index < 10 ? { ...task, status: "completed", completedAt: 101, ...verified } : task) };
+  const sizes = [];
+  for (let round = 0; round < 6; round++) {
+    const requested = requestWorkflowReplan(state, { revisionId: "r" + round, direction: "调整第 " + round + " 轮" }, 200 + round * 10);
+    const pending = requested.tasks.filter((task) => task.status === "pending").map((task) => task.id);
+    state = applyWorkflowReplan(requested, {
+      revisionId: "r" + round, summary: "第 " + round + " 轮计划",
+      retainTaskIds: pending.slice(1),
+      tasks: [{ id: "n" + round, task: "新任务", files: ["src/n.js"], acceptanceCriteria: ["完成"] }],
+    }, 205 + round * 10);
+    const revision = state.revisions.at(-1);
+    assert.equal(revision.previousTasks, undefined);
+    assert.equal(revision.newPlan, undefined);
+    assert.deepEqual(revision.previousTaskIds, requested.tasks.map((task) => task.id));
+    sizes.push(JSON.stringify(revision).length);
+  }
+  assert.ok(Math.max(...sizes) < 2000, "a revision no longer copies completed tasks with their verification: " + sizes);
+  assert.equal(hydrateWorkflowState(JSON.parse(JSON.stringify(state))).ok, true);
+  const replay = requestWorkflowReplan(state, { revisionId: "reuse", direction: "复用旧 ID" }, 400);
+  for (const id of ["t11", "n0"]) {
+    assert.throws(() => applyWorkflowReplan(replay, { revisionId: "reuse", summary: "复用", tasks: [{ id, task: "复用", files: ["src"], acceptanceCriteria: ["完成"] }] }, 401), /历史任务 ID/, id);
+  }
+});
+
+test("legacy revisions with full task copies still load and still reserve their task IDs", () => {
+  const planned = createWorkflowState({
+    summary: "旧记录", tasks: [{ id: "kept", task: "保留", files: ["src"], acceptanceCriteria: ["完成"] }],
+  }, 100);
+  const legacyTask = { id: "legacy-only", task: "只在旧记录里", role: "developer-test", files: ["src"], acceptanceCriteria: ["完成"], dependsOn: [], status: "superseded" };
+  const legacy = {
+    ...planned,
+    revisions: [{
+      revisionId: "old", direction: "旧格式", status: "applied", requestedAt: 90, appliedAt: 95,
+      previousPlan: { summary: "更早", constraints: [] }, previousTasks: [legacyTask],
+      newPlan: { summary: "旧记录", constraints: [], tasks: [] },
+    }],
+  };
+  const restored = hydrateWorkflowState(JSON.parse(JSON.stringify(legacy)));
+  assert.equal(restored.ok, true, restored.message);
+  assert.equal(restored.value.revisions[0].previousTasks[0].id, "legacy-only");
+  const requested = requestWorkflowReplan(restored.value, { revisionId: "next", direction: "继续" }, 110);
+  assert.throws(() => applyWorkflowReplan(requested, { revisionId: "next", summary: "复用", tasks: [{ id: "legacy-only", task: "复用", files: ["src"], acceptanceCriteria: ["完成"] }] }, 111), /历史任务 ID/);
+});

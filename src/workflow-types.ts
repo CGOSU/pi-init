@@ -86,8 +86,13 @@ export type WorkflowRevision = WorkflowPendingRevision & {
   replacedTaskIds?: string[];
   addedTaskIds?: string[];
   previousPlan?: WorkflowPlanSummary;
-  previousTasks?: WorkflowTask[];
+  /** Task IDs before this revision. New revisions store IDs only; completed and retained tasks stay in state.tasks. */
+  previousTaskIds?: string[];
+  /** Full records of the tasks this revision removed from the queue; the only remaining copy of them. */
   replacedTasks?: WorkflowTask[];
+  /** Legacy only: full task list before the revision. Read for history, never written. */
+  previousTasks?: WorkflowTask[];
+  /** Legacy only: plan after the revision, equal to the next revision's previousPlan or the current plan. Never written. */
   newPlan?: WorkflowPlanSnapshot;
 };
 

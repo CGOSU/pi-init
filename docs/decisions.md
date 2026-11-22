@@ -8,6 +8,12 @@
 
 ## 已确认决策
 
+### 2026-11-22：重规划记录只保存任务 ID 与被移除的任务
+
+- 决定：新应用的重规划和目标插入不再写入 `previousTasks`（重规划前的完整任务列表）和 `newPlan`（新计划及新增任务），改为 `previousTaskIds`；保留 `previousPlan`、`replacedTaskIds`、`retainedTaskIds`、`addedTaskIds`，以及被移出队列任务的完整 `replacedTasks`。历史任务 ID 统一由 `workflowHistoricalTaskIds` 汇总，同时读取新旧两种记录。
+- 原因：已完成、保留和新增任务仍在 `tasks` 中，新计划就是当前 `plan` 或下一条记录的 `previousPlan`，完整副本是重复数据；每次重规划都复制整个队列（含已完成任务的验证记录），工作流状态随“任务数 × 重规划次数”增长，而每次状态迁移都会整体追加写入一次。被移除的任务只在 `replacedTasks` 中留存，因此保留完整记录。
+- 约束：已保存的旧记录不迁移、不在加载时压缩；hydration 继续接受旧字段。加载时压缩会使交接核对中“原始记录 hash 与当前状态 hash 一致”的检查失败。每次迁移仍追加完整工作流状态，本条只缩小状态本身。
+
 ### 2026-11-22：用户停止期间不计入运行耗时；任务记忆重复故障只提示
 
 - 决定：用户停止自动续跑时，若工作流仍为 running/replanning，写入 `stoppedAt`；`cloneWorkflowStateCore` 对 paused 或带 `stoppedAt` 的区间统一累加 `pausedMilliseconds`，重叠的暂停只计一次；`getWorkflowExecutionDuration` 在停止期间冻结。继续（release）时清除，会话启动/切换分支时按停止记录同步。维护者已确认“暂停不记时”。

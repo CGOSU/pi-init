@@ -36,6 +36,7 @@ export function cloneRevision(revision: WorkflowRevision): WorkflowRevision {
     ...(revision.replacedTaskIds ? { replacedTaskIds: [...revision.replacedTaskIds] } : {}),
     ...(revision.addedTaskIds ? { addedTaskIds: [...revision.addedTaskIds] } : {}),
     ...(revision.previousPlan ? { previousPlan: clonePlan(revision.previousPlan) } : {}),
+    ...(revision.previousTaskIds ? { previousTaskIds: [...revision.previousTaskIds] } : {}),
     ...(revision.previousTasks ? { previousTasks: revision.previousTasks.map(cloneTask) } : {}),
     ...(revision.replacedTasks ? { replacedTasks: revision.replacedTasks.map(cloneTask) } : {}),
     ...(revision.newPlan
