@@ -23,6 +23,16 @@ async function fixture(cwd, { taskCount = 2, ...options } = {}) {
   return h;
 }
 function latest(h) { return h.branch.findLast(e => e.customType === "pi-init-workflow").data; }
+// A provider failure stops auto-run without pausing the workflow, so stop bookkeeping (stoppedAt,
+// pausedMilliseconds, updatedAt) changes while the task is held; identity, progress and outcome must not.
+function progressOf(state) {
+  const { updatedAt: _updatedAt, stoppedAt: _stoppedAt, pausedMilliseconds: _pausedMilliseconds, ...rest } = state;
+  return rest;
+}
+function assertProgressUnchanged(actual, before) {
+  assert.deepEqual(progressOf(actual), progressOf(before));
+  assert.ok(actual.pausedMilliseconds >= before.pausedMilliseconds, "stopped time is only ever added to paused time");
+}
 function assistant(h, content = [], stopReason = "error", errorMessage = "fetch failed") {
   return { role: "assistant", content, stopReason, errorMessage, timestamp: ++sequence, provider: h.context.model.provider, model: h.context.model.id };
 }
@@ -97,7 +107,8 @@ test("paired permitted observations after a provider hold preserve continuation 
     }
     const observedMessages = h.branch.filter(e => e.type === "message").length;
     assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
+    assert.equal(latest(h).stoppedAt, undefined, "continuing clears the stop marker");
     assert.equal(h.sentMessages.length, sent);
     assert.equal(h.branch.filter(e => e.type === "message").length, observedMessages);
     await emitExtensionEvent(h, "session_shutdown");
@@ -111,10 +122,12 @@ test("a failed codemode batch with complete matching native read receipts is a k
       readOnlyNested: [{ name: "read" }, { name: "read" }, { name: "read", isError: true }] });
     const before = structuredClone(latest(h));
     await failure(h);
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
+    assert.equal(typeof latest(h).stoppedAt, "number", "the held task records when auto-run stopped");
     assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.reason, "provider-request-failed");
     assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
+    assert.equal(latest(h).stoppedAt, undefined, "continuing clears the stop marker");
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
@@ -146,10 +159,12 @@ test("paired historical read failures do not turn a later provider failure into 
       if (nextRun) await emitExtensionEvent(h, "agent_start");
       const before = structuredClone(latest(h));
       await failure(h);
-      assert.deepEqual(latest(h), before);
+      assertProgressUnchanged(latest(h), before);
+      assert.equal(typeof latest(h).stoppedAt, "number", "the held task records when auto-run stopped");
       assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.reason, "provider-request-failed");
       assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
-      assert.deepEqual(latest(h), before);
+      assertProgressUnchanged(latest(h), before);
+      assert.equal(latest(h).stoppedAt, undefined, "continuing clears the stop marker");
       await emitExtensionEvent(h, "session_shutdown");
     });
   }
@@ -179,14 +194,16 @@ test("settled request-only failure preserves executing identity and one user con
     const before = structuredClone(latest(h));
     const sent = h.sentMessages.length;
     await failure(h);
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
+    assert.equal(typeof latest(h).stoppedAt, "number", "the held task records when auto-run stopped");
     assert.equal(h.sentMessages.length, sent);
     assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.reason, "provider-request-failed");
     await emitExtensionEvent(h, "agent_settled", { aborted: false });
     assert.equal(h.sentMessages.length, sent);
     assert.equal((await emitExtensionEvent(h, "tool_call", { toolName: "bash", toolCallId: "held", input: {} })).block, true);
     assert.deepEqual(await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" }), { action: "continue" });
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
+    assert.equal(latest(h).stoppedAt, undefined, "continuing clears the stop marker");
     assert.equal(h.sentMessages.length, sent);
     await emitExtensionEvent(h, "agent_start");
     await h.tools.find(t => t.name === "task_workflow").execute("done", { action: "complete", ...workflowMessageIdentity(h), completionSummary: "完成", implementationRationale: "沿原身份完成", verification: [{ check: "fixture check", status: "passed", details: "通过" }] }, undefined, undefined, h.context);
@@ -202,10 +219,11 @@ test("persisted successful tools including nested calls are not replayed or mark
     const before = structuredClone(latest(h));
     const sources = h.branch.filter(e => e.type === "message").length;
     await failure(h);
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
+    assert.equal(typeof latest(h).stoppedAt, "number", "the held task records when auto-run stopped");
     await emitExtensionEvent(h, "input", { source: "interactive", text: "继续" });
     assert.equal(h.branch.filter(e => e.type === "message").length, sources);
-    assert.deepEqual(latest(h), before);
+    assertProgressUnchanged(latest(h), before);
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
@@ -291,7 +309,8 @@ test("quota and authentication failures preserve safe task progress but never au
       const before = structuredClone(latest(h));
       const sent = h.sentMessages.length;
       await failure(h, assistant(h, [], "error", error));
-      assert.deepEqual(latest(h), before);
+      assertProgressUnchanged(latest(h), before);
+      assert.equal(typeof latest(h).stoppedAt, "number", "the held task records when auto-run stopped");
       assert.equal(h.sentMessages.length, sent);
       assert.equal(h.branch.findLast(e => e.customType === "pi-init-user-control").data.stopped, true);
       await emitExtensionEvent(h, "session_shutdown");
