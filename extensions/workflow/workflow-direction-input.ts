@@ -104,11 +104,11 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
       }
       const message = [
         `${reason}，无法确认这条输入是否为普通问答。`,
-        "选择确认：原样作为普通问答/消息发送（不会修改计划、重规划或自动批准）。",
+        "选择确认：原样发送，不会自动登记重规划或批准计划；接收方仍可按当前权限执行工具和操作，不是只读问答。",
         `选择取消：暂不发送，可改用${choices}明确指定。`,
       ].join("\n");
       let confirmed = false;
-      try { confirmed = Boolean(await ctx.ui.confirm("架构方向判断未完成，按普通消息发送？", message)); }
+      try { confirmed = Boolean(await ctx.ui.confirm("架构方向判断未完成，按普通消息发送（沿用当前权限）？", message)); }
       catch { confirmed = false; }
       if (inputGeneration !== generation) return HANDLED;
       if (!isCurrent()) {
