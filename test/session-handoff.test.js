@@ -4,7 +4,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { createWorkflowState, workflowMessageIdentity } from "./support/workflow-fixtures.js";
 import { withTempDirectory } from "./support/temp-directory.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildSessionHandoff, handoffBoundary, resolveHandoffSnapshot, SESSION_HANDOFF_MAX_BYTES } from "../src/session-handoff.ts";
 import { createTaskMemory } from "../src/task-memory.ts";
@@ -235,11 +235,116 @@ test("uncertain replacement freezes the old owner and repeated fresh cannot crea
     h.context.newSession = async () => { calls++; throw new Error("unknown switch outcome"); };
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
     assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    let asked = 0;
+    h.context.ui.confirm = async () => { asked++; return false; }; // decline the abandon offer
     await h.commands.get("pi-init").handler("workflow fresh", h.context);
+    assert.equal(asked, 1);
     assert.equal(calls, 1);
     await h.commands.get("pi-init").handler("workflow resume", h.context);
     assert.equal(latest(h).pauseReason, "session-transfer-pending");
     await assert.rejects(h.tools.find(t => t.name === "task_workflow").execute("old-plan", { action: "plan", summary: "旧会话重排", tasks: [] }, undefined, undefined, h.context), error => error.code === "WORKFLOW_SESSION_TRANSFERRED");
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+function latestOutgoing(h) {
+  return h.branch.findLast(e => e.customType === "pi-init-session-handoff" && e.data.kind === "outgoing")?.data;
+}
+
+test("a transfer that never reached a target can be abandoned after confirmation and resumed", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    let calls = 0;
+    h.context.newSession = async () => { calls++; throw new Error("failed before setup"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    let asked = 0;
+    h.context.ui.confirm = async () => { asked++; return true; };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 1);
+    assert.equal(calls, 1, "abandoning must not create a session");
+    assert.equal(latestOutgoing(h).phase, "cancelled");
+    assert.equal(latest(h).pauseReason, "session-handoff-review");
+    await h.commands.get("pi-init").handler("workflow resume", h.context);
+    assert.equal(latest(h).status, "running", JSON.stringify(h.notifications));
+    assert.equal(h.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 2);
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("an abandoned transfer can be retried with a fresh session", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.newSession = async () => { throw new Error("failed before setup"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    await h.commands.get("pi-init").handler("fresh", h.context); // confirm defaults to true
+    assert.equal(latest(h).pauseReason, "session-handoff-review");
+    h.context.newSession = options => replaceSession(h, options);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.ok(h.target, JSON.stringify(h.notifications));
+    assert.equal(latest(h.target).workflowId, latest(h).workflowId);
+    assert.equal(latest(h.target).pauseReason, undefined);
+    await emitExtensionEvent(h.target, "session_shutdown");
+  });
+});
+
+test("abandoning is refused while a session that received the transfer exists", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.newSession = options => replaceSession(h, options, { skipActivate: true });
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    await emitExtensionEvent(h, "session_start"); // the source session is reopened
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    let asked = 0;
+    h.context.ui.confirm = async () => { asked++; return true; };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 0);
+    assert.ok(h.notifications.some(n => n.message.includes(h.target.manager.getSessionFile())), JSON.stringify(h.notifications));
+    assert.equal(latestOutgoing(h).phase, "prepared");
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    await emitExtensionEvent(h, "session_shutdown");
+  });
+});
+
+test("an unactivated target that was missed by the search cannot activate after the transfer is abandoned", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.newSession = options => replaceSession(h, options, { skipActivate: true });
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const target = h.target;
+    await mkdir(path.join(cwd, "elsewhere"));
+    await rename(target.manager.getSessionFile(), path.join(cwd, "elsewhere", path.basename(target.manager.getSessionFile())));
+    await emitExtensionEvent(h, "session_start");
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(latestOutgoing(h).phase, "cancelled");
+    await target.commands.get("pi-init").handler("fresh", target.context);
+    assert.equal(latest(target).pauseReason, "session-handoff-imported");
+    assert.equal(target.sentMessages.filter(e => e.message.customType === "pi-init-workflow-task").length, 0);
+    assert.ok(target.notifications.some(n => n.message.includes("交接未确认")), JSON.stringify(target.notifications));
+    await emitExtensionEvent(h, "session_shutdown");
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("a recorded abandon whose workflow restore failed completes on the next fresh without asking again", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    h.context.newSession = async () => { throw new Error("failed before setup"); };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const append = h.manager.appendCustomEntry.bind(h.manager);
+    let fail = true;
+    h.manager.appendCustomEntry = (type, data) => {
+      if (fail && type === "pi-init-workflow" && data.pauseReason === "session-handoff-review") { fail = false; throw new Error("disk full"); }
+      return append(type, data);
+    };
+    let asked = 0;
+    h.context.ui.confirm = async () => { asked++; return true; };
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(latestOutgoing(h).phase, "cancelled");
+    assert.equal(latest(h).pauseReason, "session-transfer-pending");
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.equal(asked, 1);
+    assert.equal(latest(h).pauseReason, "session-handoff-review");
     await emitExtensionEvent(h, "session_shutdown");
   });
 });
