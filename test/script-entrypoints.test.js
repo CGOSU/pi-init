@@ -5,7 +5,7 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { withTempDirectory } from "./support/temp-directory.js";
 
-for (const name of ["pi-usage", "install-launchers", "diagnostics-report", "handoff-report", "test"]) {
+for (const name of ["pi-usage", "install-launchers", "diagnostics-report", "handoff-report", "check-line-count", "test"]) {
   test(`${name} executes and reports errors when invoked through a symlink`, async (t) => {
     await withTempDirectory(async (directory) => {
       const link = path.join(directory, name + ".js");

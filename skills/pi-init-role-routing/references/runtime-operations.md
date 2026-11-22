@@ -4,10 +4,9 @@
 
 ## 原文读取与结构审阅
 
-- file_review list是项目候选库存，path不筛选库存；read/complete才使用path。Markdown不在代码审阅范围。
-- read从第1行开始，默认100行、最多200行，每页原文最多16 KiB UTF-8；只登记完整返回行，按nextOffset至eof。单行过长失败，不算部分覆盖。
-- 覆盖绑定当前指纹；失败、取消、内容或session/branch变化不产生覆盖。可传fingerprint拒绝混合版本，complete须全文覆盖和有效理由。
-- 缺原生read可用内置read；宿主schema仍只允许list/complete时先核实加载路径并reload新版本，不用脚本摘要或测试runtime伪造当前session覆盖。
+- 大文件结构审阅按需使用独立脚本 `node <package>/scripts/check-line-count.js`，不常驻扩展运行时；Markdown 不在代码审阅范围。
+- `node <package>/scripts/check-line-count.js [scan] [--scope <项目相对目录>] [--exclude <项目相对目录>] [--include-temporary] [--all]` 扫描超过 500 行的代码文件，默认跳过当前 SHA-256 指纹已在 `.pi/file-review.json` 中登记过的文件（`--all` 显示全部并标注已登记结论）。
+- 用 `read` 读全当前文件原文并完成结构分析后，可执行 `node <package>/scripts/check-line-count.js record <path> <keep|recommend-split> <rationale> [--fingerprint <sha256>]`（12-2000 字符理由）将当前指纹结论写入 `.pi/file-review.json`；文件内容变化后指纹自动失效。
 
 ## 检查点与历史来源
 

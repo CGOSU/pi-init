@@ -8,6 +8,13 @@
 
 ## 已确认决策
 
+### 2026-11-22：退役扩展内常驻大文件审阅，下沉为独立 CLI 脚本与增量指纹账本
+
+- 决定：从扩展常驻运行时中移除 `extensions/file-review/`（`file_review` 工具、`/large` 命令、`session_start`/`session_tree`/`agent_settled` 全仓后台扫描及 `tool_result` 覆盖率监听）与 `src/*review*.ts`，将大文件结构审阅收敛至独立按需 CLI `scripts/check-line-count.js` 与公共 Skill 指引。`scripts/check-line-count.js` 支持 `[scan] [--scope <目录>] [--exclude <目录>] [--include-temporary] [--all]` 扫描超过 500 行的代码文件，以及 `record <path> <keep|recommend-split> <rationale> [--fingerprint <sha256>]` 将当前 SHA-256 指纹结论记入项目 `.pi/file-review.json` 增量账本（校验非符号链接、行数阈值、指纹一致性与 12-2000 字符理由）；未变更指纹在后续默认扫描中自动跳过。
+- 原因：常驻扩展内的 `file-review` 子系统（约 3,710 行源码与测试）在每次会话启动、切分支和每回合结束时都会遍历项目文件系统并监听每次 `read` 工具结果，但实际代码整理是按需、低频动作；下沉为独立 CLI 后保留了范围过滤与跨会话增量指纹账本能力，同时消除了常驻扩展的每回合 I/O 开销与约 3,500 行维护负担。
+- 约束：不保留 `/large` 命令与 `file_review` 扩展工具；历史会话中的旧 `pi-init-file-review` 自定义条目在会话历史中自然忽略，不影响工作流或交接恢复。审阅结论仍须在通过 `read` 完整读取当前原文后按需调用脚本登记。
+- 验证：`pnpm run typecheck` 通过；`pnpm test` 1124/1124 通过。
+
 ### 2026-11-22：自然语言方向分流与运行时审查后续收口
 
 - 决定（自然语言方向分流）：受信任项目中，待审计划（`architecture-review`）或已启动的当前执行任务可将非命令、非“继续”的外部输入交给 `extensions/role/architect-direction-model.ts` 与 `extensions/workflow/workflow-direction-input.ts` 做一次无工具方向分类：普通问答（`direction: null`）原样放行；支持显式 `问答：<内容>` / `讨论：<内容>` 前缀直接剥离并按普通对话放行（不调分类模型，空正文不误剥离）；仅改执行做法而目标/验收/公共契约/权限不变时转为当前任务纠偏输入（`transform`）；否则或待审计划收到方向变更时登记需审阅的 `replan`（仍须 `/pi-init workflow resume` 批准）。分类推理档位封顶 `low`（Auto 下遵守 `minThinkingLevel` 下限），超时 30 秒，容忍单一 JSON 代码块围栏；已有 `pendingRevision` 时跳过分类；`roles` 未配置 `architect` 模型或待自动迁移时直通普通输入且不借用当前执行模型；已配置模型不可用、判断失败、超时或返回多余字段/正文时，若为 `interactive` 输入且宿主提供 `ui.confirm` 则弹出确认框（确认后再次核对代次与会话/分支未变化后按普通输入放行，记录 `fallback-continue`），取消、状态变化、无 UI 或非交互来源（`rpc` 等）及 `revise` 返回 false 时均拦截并提示含 `问答：` 在内的显式入口；斜杠命令直接放行且不中止在途分类请求；记录去敏 `workflow.direction_classified` 诊断。显式问答前缀及故障确认放行仅绕过分类，不建立只读权限；确认框明确告知发送后仍沿用当前权限。
