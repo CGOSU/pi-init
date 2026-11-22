@@ -271,7 +271,7 @@ export function cancelWorkflow(state: WorkflowState, now = Date.now()): Workflow
   delete result.continuation;
   delete result.pendingRevision;
   for (const revision of result.revisions) {
-    if (revision.status === "requested") { revision.status = "applied"; revision.appliedAt = now; }
+    if (revision.status === "requested") { revision.status = "discarded"; revision.discardedAt = now; }
   }
   result.nudgeCount = 0;
   return result;

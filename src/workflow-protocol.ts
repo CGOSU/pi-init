@@ -35,4 +35,4 @@ export const TASK_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const WORKFLOW_STATUSES = ["running", "paused", "replanning", "completed", "cancelled"] as const satisfies readonly WorkflowStatus[];
 export const WORKFLOW_TASK_STATUSES = ["pending", "in_progress", "completed", "blocked"] as const satisfies readonly WorkflowTaskStatus[];
 export const WORKFLOW_AUDIT_TASK_STATUSES = [...WORKFLOW_TASK_STATUSES, "superseded"] as const satisfies readonly WorkflowTaskStatus[];
-export const WORKFLOW_REVISION_STATUSES = ["requested", "applied"] as const satisfies readonly WorkflowRevisionStatus[];
+export const WORKFLOW_REVISION_STATUSES = ["requested", "applied", "discarded"] as const satisfies readonly WorkflowRevisionStatus[];

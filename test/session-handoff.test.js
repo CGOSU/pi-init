@@ -11,7 +11,7 @@ import { createTaskMemory } from "../src/task-memory.ts";
 import { TASK_MEMORY_ENTRY } from "../src/task-memory-protocol.ts";
 import { readFile } from "node:fs/promises";
 
-async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = false } = {}) {
+async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = false, evidenceText = "declared verification source" } = {}) {
   await mkdir(path.join(cwd, ".pi"), { recursive: true });
   await writeFile(path.join(cwd, ".pi", "role-models.json"), JSON.stringify({ schemaVersion: 2, mode: "auto", workflowMode: "on", roleModels: {} }));
   const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
@@ -38,7 +38,7 @@ async function fixture(cwd, { tokens = 90000, evidence = false, threeTasks = fal
   let evidenceIds;
   if (evidence) {
     manager.appendMessage({ role: "assistant", content: [{ type: "toolCall", id: "historical-check", name: "read", arguments: { path: "src/a.ts" } }], provider: "test", model: "model", api: "test", timestamp: Date.now(), stopReason: "toolUse", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
-    const id = manager.appendMessage({ role: "toolResult", toolCallId: "historical-check", toolName: "read", content: [{ type: "text", text: "declared verification source" }], isError: false, timestamp: Date.now() });
+    const id = manager.appendMessage({ role: "toolResult", toolCallId: "historical-check", toolName: "read", content: [{ type: "text", text: evidenceText }], isError: false, timestamp: Date.now() });
     evidenceIds = [id];
     h.branch.splice(0, h.branch.length, ...manager.getBranch());
   }
@@ -211,6 +211,44 @@ test("confirmed fresh session imports only remaining execution, preserves histor
     const tools = target.tools.find(t => t.name === "task_workflow");
     await assert.rejects(tools.execute("forged-verification", { action: "complete", ...workflowMessageIdentity(target), completionSummary: "不能冒充本次验证", implementationRationale: "历史来源只读", verification: [{ check: "fixture check", status: "passed", details: "历史" }], evidenceIds: h.evidenceIds }, undefined, undefined, target.context));
     await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("cross-session historical evidence keeps the end of long tool output", async () => {
+  await withTempDirectory(async cwd => {
+    const h = await fixture(cwd, { evidence: true, evidenceText: "head " + "x".repeat(6000) + " TAIL-FAILURE-LINE" });
+    h.context.newSession = options => replaceSession(h, options);
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    const target = h.target;
+    assert.ok(target, JSON.stringify(h.notifications));
+    const status = await target.tools.find(t => t.name === "task_workflow").execute("history", { action: "status", evidenceIds: h.evidenceIds }, undefined, undefined, target.context);
+    const evidence = status.details.taskMemory.evidence[0];
+    assert.equal(evidence.truncated, true);
+    assert.ok(evidence.text.length <= 4096);
+    assert.match(evidence.text, /^head /);
+    assert.match(evidence.text, /TAIL-FAILURE-LINE$/);
+    await emitExtensionEvent(target, "session_shutdown");
+  });
+});
+
+test("workflow handoff preview is a readable bounded summary, not the raw packet", async () => {
+  for (const large of [false, true]) await withTempDirectory(async cwd => {
+    const h = await fixture(cwd);
+    if (large) enlargeWorkflow(h);
+    let preview;
+    h.context.ui.confirm = async (_title, content) => { preview = content; return false; };
+    h.context.newSession = () => assert.fail("a declined preview must not replace the session");
+    await h.commands.get("pi-init").handler("fresh", h.context);
+    assert.ok(preview, JSON.stringify(h.notifications));
+    assert.doesNotMatch(preview, /^\s*[{[]/);
+    assert.match(preview, /目标：安全换会话/);
+    assert.match(preview, /first：第一项完成/);
+    assert.match(preview, /待执行（1）：second/);
+    assert.match(preview, /保留数据边界/);
+    assert.ok(preview.length < 8000, String(preview.length));
+    if (large) assert.match(preview, /超过 32 KiB/);
+    assert.equal(latest(h).pauseReason, undefined);
+    await emitExtensionEvent(h, "session_shutdown");
   });
 });
 

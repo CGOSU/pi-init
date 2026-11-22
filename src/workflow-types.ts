@@ -4,7 +4,7 @@ export type { WorkflowExecutor } from "./role-types.ts";
 
 export type WorkflowStatus = "running" | "paused" | "replanning" | "completed" | "cancelled";
 export type WorkflowTaskStatus = "pending" | "in_progress" | "completed" | "blocked" | "superseded";
-export type WorkflowRevisionStatus = "requested" | "applied";
+export type WorkflowRevisionStatus = "requested" | "applied" | "discarded";
 export type WorkflowHandoffPhase = "prepared" | "waiting-role" | "compacting" | "dispatching" | "queued" | "executing" | "uncertain";
 export type WorkflowContinuationPhase = "pending" | "compacting" | "dispatching" | "queued";
 export type WorkflowContinuationReason = "plan-created" | "task-completed" | "replan-applied" | "retry" | "resume" | "replan-requested";
@@ -80,6 +80,8 @@ export type WorkflowPendingRevision = {
 export type WorkflowRevision = WorkflowPendingRevision & {
   status: WorkflowRevisionStatus;
   appliedAt?: number;
+  /** Set when the workflow ended before this requested revision was applied. */
+  discardedAt?: number;
   retainedTaskIds?: string[];
   replacedTaskIds?: string[];
   addedTaskIds?: string[];

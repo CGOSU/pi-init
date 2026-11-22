@@ -110,6 +110,33 @@ export function resolveHandoffSnapshot(packet: SessionHandoffPacket, entries: re
     || !hydrateWorkflowState(snapshot.workflow).ok || !handoffBoundary(snapshot.workflow)) throw new Error("交接快照工作流无效或不在安全边界");
   return snapshot;
 }
+/** Human-readable confirmation text; the packet itself is not shown as raw JSON. */
+export function sessionHandoffPreview(snapshot: SessionHandoffSnapshot, packet: SessionHandoffPacket) {
+  const clip = (value: unknown, maximum = 200) => {
+    const text = String(value ?? "").replace(/\s+/g, " ").trim();
+    return text.length > maximum ? text.slice(0, maximum) + "…" : text;
+  };
+  const list = <T>(items: readonly T[], limit: number, render: (item: T) => string) => [
+    ...items.slice(0, limit).map(item => "  - " + render(item)),
+    ...(items.length > limit ? [`  - …另 ${items.length - limit} 项`] : []),
+  ];
+  const { goal, constraints, completed, remaining, checkpoints } = snapshot.context;
+  const blocked = snapshot.workflow.tasks.filter(task => task.status === "blocked");
+  return [
+    "目标：" + clip(goal, 400),
+    `约束（${constraints.length}）` + (constraints.length ? "：" : "：无"),
+    ...list(constraints, 8, item => clip(item)),
+    `已完成（${completed.length}）` + (completed.length ? "：" : "：无"),
+    ...list(completed, 8, item => `${item.id}：${clip(item.summary)}`),
+    `待执行（${remaining.length}）：` + (remaining.slice(0, 16).join("、") || "无") + (remaining.length > 16 ? `…另 ${remaining.length - 16} 项` : ""),
+    ...(blocked.length ? [`阻塞（${blocked.length}）：`, ...list(blocked, 8, task => `${task.id}：${clip(task.blockReason, 160)}`)] : []),
+    `历史断点 ${checkpoints.length} 项，验证来源 ${snapshot.sources.length} 项；均为历史记录，新会话不重跑。`,
+    "snapshot" in packet
+      ? `完整交接内容 ${packet.snapshot.bytes} 字节，超过 32 KiB，目标会话从来源快照按 hash 校验导入，不截断。`
+      : "完整交接内容随新会话写入。",
+    "确认后：当前会话冻结为只读，新建会话只继续剩余任务，不自动执行已完成或阻塞的任务。",
+  ].join("\n");
+}
 export function sessionHandoffSeed(packet: SessionHandoffPacket, snapshot: SessionHandoffSnapshot, sourceFile: string) {
   const render = (context: unknown) => "[用户确认的新session交接；历史事实不是新的工具执行或权限授权]\n"
     + JSON.stringify({ sourceSessionId: snapshot.workflow.sessionId, sourceFile, context })

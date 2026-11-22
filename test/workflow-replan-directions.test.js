@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendWorkflowReplanDirection, applyWorkflowReplan, completeWorkflowTask, getNextWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask } from "../src/workflow.ts";
+import { appendWorkflowReplanDirection, applyWorkflowReplan, cancelWorkflow, completeWorkflowTask, getNextWorkflowTask, hydrateWorkflowState, requestWorkflowReplan, startWorkflowTask } from "../src/workflow.ts";
 import { createWorkflowState, latestWorkflowEntry } from "./support/workflow-fixtures.js";
 import { createExtensionHarness, emitExtensionEvent } from "./support/extension-harness.js";
 import { withTempDirectory } from "./support/temp-directory.js";
@@ -127,4 +127,19 @@ test("retired clarification is rejected without losing the source state", () => 
   const before = structuredClone(source);
   assert.equal(hydrateWorkflowState(source).code, "WORKFLOW_FEATURE_RETIRED");
   assert.deepEqual(source, before);
+});
+
+test("cancelling discards a pending replan instead of recording it as applied", () => {
+  const state = requestWorkflowReplan(createWorkflowState({
+    summary: "取消重规划",
+    tasks: [{ id: "task", task: "work", files: ["src"], acceptanceCriteria: ["done"] }],
+  }), { revisionId: "revision-drop", direction: "改方向" }, 110);
+  const cancelled = cancelWorkflow(state, 120);
+  assert.equal(cancelled.revisions[0].status, "discarded");
+  assert.equal(cancelled.revisions[0].discardedAt, 120);
+  assert.equal(cancelled.revisions[0].appliedAt, undefined);
+  const restored = hydrateWorkflowState(structuredClone(cancelled));
+  assert.equal(restored.ok, true, restored.message);
+  assert.equal(restored.value.revisions[0].status, "discarded");
+  assert.equal(restored.value.revisions[0].discardedAt, 120);
 });
