@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cloneState } from "./workflow-state.ts";
 import { getWorkflowTask, getNextWorkflowTask } from "./workflow-queries.ts";
 import { workflowActionIdentity, workflowHandoffIdentity, workflowReplanIdentity } from "./workflow-handoff.ts";
@@ -18,7 +19,8 @@ export type WorkflowDispatchEvent =
   | { type: "task-queued"; identity: WorkflowHandoffIdentity }
   | { type: "task-started"; identity: WorkflowHandoffIdentity }
   | { type: "replan-dispatch-requested"; identity: WorkflowReplanIdentity }
-  | { type: "replan-queued"; identity: WorkflowReplanIdentity };
+  | { type: "replan-queued"; identity: WorkflowReplanIdentity }
+  | { type: "replan-dispatch-failed"; identity: WorkflowReplanIdentity };
 
 export type WorkflowDispatchEffect =
   | { kind: "send-task"; identity: WorkflowHandoffIdentity }
@@ -64,8 +66,16 @@ export function transitionWorkflowDispatch(
 ): WorkflowDispatchTransition {
   const unchanged: WorkflowDispatchTransition = { state, effects: [] };
   if (!sameIdentity(workflowActionIdentity(state), event.identity)) return unchanged;
-  if (event.type === "replan-dispatch-requested" || event.type === "replan-queued") {
+  if (event.type === "replan-dispatch-requested" || event.type === "replan-queued" || event.type === "replan-dispatch-failed") {
     if (!sameIdentity(workflowReplanIdentity(state), event.identity) || state.continuation?.kind !== "replan") return unchanged;
+    if (event.type === "replan-dispatch-failed") {
+      // 发送本身失败：退回待派发并更换交接身份，与 reload 恢复的处理一致；
+      // 即使旧消息迟到，architect 的 replan 调用也会因 handoffId 不符被拒绝。
+      if (state.continuation.phase !== "dispatching") return unchanged;
+      const next = cloneState(state, now);
+      next.continuation = { ...state.continuation, phase: "pending", handoffId: randomUUID() };
+      return { state: next, effects: [] };
+    }
     const expectedPhase = event.type === "replan-dispatch-requested" ? "pending" : "dispatching";
     if (state.continuation.phase !== expectedPhase) return unchanged;
     const next = cloneState(state, now);

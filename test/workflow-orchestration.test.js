@@ -214,3 +214,43 @@ test("重规划发送过程中切换身份，迟到排队回执不覆盖新状�
   assert.equal(h.state.workflowState.continuation.phase, "dispatching");
   assert.equal(h.persisted.length, 1);
 });
+
+test("重规划消息发送失败时退回待派发并更换交接身份，之后可以重发", () => {
+  let fail = true;
+  const h = replanHarness({ send: () => { if (fail) throw new Error("socket closed"); } });
+  const originalHandoff = h.state.workflowState.continuation.handoffId;
+  assert.equal(h.messages.sendWorkflowReplanMessage(h.ctx), false);
+  const rolledBack = h.state.workflowState.continuation;
+  assert.equal(rolledBack.phase, "pending");
+  assert.notEqual(rolledBack.handoffId, originalHandoff);
+  assert.equal(h.state.internalContinuationPending, false);
+  assert.equal(h.state.workflowDispatchInFlight, false);
+  assert.equal(selectWorkflowScheduleEffect(h.state.workflowState)?.kind, "replan");
+
+  fail = false;
+  assert.equal(h.messages.sendWorkflowReplanMessage(h.ctx), true);
+  assert.equal(h.sent.length, 2);
+  assert.equal(h.sent[1].details.handoffId, rolledBack.handoffId);
+  assert.equal(h.state.workflowState.continuation.phase, "queued");
+});
+
+test("replan-dispatch-failed 只回退身份匹配且处于 dispatching 的重规划交接", () => {
+  const pending = ensureWorkflowReplanHandoff(requestWorkflowReplan(createWorkflowState({
+    sessionId: "test-session", summary: "回退边界", tasks: [
+      { id: "first", task: "执行任务", role: "developer-test", files: ["src"], acceptanceCriteria: ["测试通过"] },
+    ],
+  }, 100), { direction: "调整计划" }, 101));
+  const identity = workflowReplanIdentity(pending);
+  assert.equal(transitionWorkflowDispatch(pending, { type: "replan-dispatch-failed", identity }, 102).state, pending);
+
+  const dispatching = transitionWorkflowDispatch(pending, { type: "replan-dispatch-requested", identity }, 102).state;
+  const queued = transitionWorkflowDispatch(dispatching, { type: "replan-queued", identity }, 103).state;
+  assert.equal(transitionWorkflowDispatch(queued, { type: "replan-dispatch-failed", identity }, 104).state, queued);
+  const stale = { ...identity, handoffId: "stale-handoff" };
+  assert.equal(transitionWorkflowDispatch(dispatching, { type: "replan-dispatch-failed", identity: stale }, 104).state, dispatching);
+
+  const rolled = transitionWorkflowDispatch(dispatching, { type: "replan-dispatch-failed", identity }, 104);
+  assert.deepEqual(rolled.effects, []);
+  assert.equal(rolled.state.continuation.phase, "pending");
+  assert.notEqual(rolled.state.continuation.handoffId, identity.handoffId);
+});

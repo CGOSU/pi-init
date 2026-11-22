@@ -82,6 +82,11 @@ export function createWorkflowDispatch(
       && actual.handoffId === expected.handoffId;
   }
 
+  function replanIdentityUnchanged(expected: WorkflowReplanIdentity) {
+    const actual = workflowReplanIdentity(state.workflowState);
+    return actual !== undefined && sameReplanIdentity(actual, expected);
+  }
+
   async function scheduleWorkflowReplan(ctx: ExtensionContext) {
     if (
       state.workflowDispatchInFlight
@@ -120,6 +125,10 @@ export function createWorkflowDispatch(
       if (!latestIdentity || !sameReplanIdentity(latestIdentity, identity)) return;
       state.workflowDispatchInFlight = false;
       ctx.ui.notify(`工作流已暂停等待架构师重规划：${textOf(error)}`, "warning");
+    } finally {
+      // 交接身份未变时，本次调度仍持有派发锁：任何退出路径（await 期间用户停止、发送前早退）都要释放。
+      // 身份已变化时，锁由改变身份的路径负责，不能覆盖新工作流的调度状态。
+      if (replanIdentityUnchanged(identity)) state.workflowDispatchInFlight = false;
     }
   }
 
@@ -268,6 +277,10 @@ export function createWorkflowDispatch(
       });
       if (!persistDispatchPause(ctx, paused, taskId)) return;
       ctx.ui.notify(deps.report.formatWorkflowPauseSummary(paused), "error");
+    } finally {
+      // 角色切换 await 期间用户停止会直接 return；身份未变时必须释放锁，
+      // 否则“继续”后 agent_settled 的自动调度会一直被 workflowDispatchInFlight 跳过。
+      if (currentHandoff(identity)) state.workflowDispatchInFlight = false;
     }
   }
 
