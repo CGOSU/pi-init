@@ -6,7 +6,7 @@ import { registerGeneralSessionHandoff } from "./general-session-handoff-runtime
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createGeneralSessionTransfer, generalOutgoingTransfer } from "./general-session-transfer.ts";
-import { readHandoffArchive as readArchive, replaceHandoffSession } from "./session-replacement.ts";
+import { readHandoffArchive as readArchive, readHandoffArchiveCached as readArchiveCached, replaceHandoffSession } from "./session-replacement.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cloneState } from "../../src/workflow.ts";
 import type { WorkflowState } from "../../src/workflow-types.ts";
@@ -82,9 +82,9 @@ function incomingTransfer(ctx: ExtensionContext): Incoming | undefined {
     || handoffHash(record.packet) !== record.packetHash) return;
   return record;
 }
-function sourceManager(record: Incoming, ctx: ExtensionContext) {
+function sourceManager(record: Incoming, ctx: ExtensionContext, read = readArchive) {
   if (realpathSync(ctx.cwd) !== record.projectRoot) throw new Error("交接项目已变化");
-  const archive = readArchive(record.sourceFile, record.projectRoot, record.sourceSessionId);
+  const archive = read(record.sourceFile, record.projectRoot, record.sourceSessionId);
   if (!archive.ok) throw new Error(archive.code + ": " + archive.message);
   const manager = archive.value;
   if (manager.getSessionId() !== record.sourceSessionId || realpathSync(manager.getCwd()) !== record.projectRoot) throw new Error("来源session或项目不符");
@@ -387,11 +387,11 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     const record = incomingTransfer(ctx);
     if (!record || record.workflowId !== state.workflowState?.workflowId) return;
     try {
-      const { packet } = sourceManager(record, ctx);
+      const { packet } = sourceManager(record, ctx, readArchiveCached);
       const source = packet.sources.find(source => dependencies.includes(source.taskId) && source.evidenceIds.includes(id)
         && state.workflowState?.tasks.some(task => task.id === source.taskId && task.status === "completed"));
       if (!source?.sourceFile) return;
-      const archive = readArchive(source.sourceFile, record.projectRoot, source.sourceSessionId);
+      const archive = readArchiveCached(source.sourceFile, record.projectRoot, source.sourceSessionId);
       if (!archive.ok) return;
       const manager = archive.value;
       if (manager.getSessionId() !== source.sourceSessionId || realpathSync(manager.getCwd()) !== record.projectRoot) return;

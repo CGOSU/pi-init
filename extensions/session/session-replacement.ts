@@ -20,6 +20,29 @@ export function readHandoffArchive(file: string, root: string, sessionId: string
   } catch (error) { return fail("PERSISTENCE", "无法读取session文件：" + String(error)); }
 }
 
+const ARCHIVE_CACHE_LIMIT = 4;
+const archiveCache = new Map<string, { stamp: string; value: SessionManager }>();
+/**
+ * readHandoffArchive for repeated read-only lookups (historical evidence). The manager is shared
+ * between calls and must not be modified; any change to the file's identity, size or mtime re-reads it.
+ * Transfer safety checks keep using the uncached reader.
+ */
+export function readHandoffArchiveCached(file: string, root: string, sessionId: string): HandoffResult<SessionManager> {
+  let stamp: string;
+  try { const stats = statSync(file); stamp = [stats.dev, stats.ino, stats.size, stats.mtimeMs].join(":"); }
+  catch { return readHandoffArchive(file, root, sessionId); }
+  const key = JSON.stringify([file, root, sessionId]);
+  const hit = archiveCache.get(key);
+  archiveCache.delete(key);
+  if (hit?.stamp === stamp) { archiveCache.set(key, hit); return { ok: true, value: hit.value }; }
+  const result = readHandoffArchive(file, root, sessionId);
+  if (result.ok) {
+    archiveCache.set(key, { stamp, value: result.value });
+    for (const oldest of archiveCache.keys()) { if (archiveCache.size <= ARCHIVE_CACHE_LIMIT) break; archiveCache.delete(oldest); }
+  }
+  return result;
+}
+
 type ReplacementContext = Parameters<NonNullable<NonNullable<Parameters<ExtensionCommandContext["newSession"]>[0]>["withSession"]>>[0];
 
 /** One replacement lifecycle for both background and workflow transfers. Never use the old context after replacement. */

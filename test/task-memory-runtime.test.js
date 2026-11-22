@@ -1,4 +1,4 @@
-import { TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE, TASK_OBSERVATION_DERIVATION } from "../src/task-memory-protocol.ts";
+import { TASK_MEMORY_ENTRY, TASK_MEMORY_LIMITS, TASK_MEMORY_MESSAGE, TASK_OBSERVATION_DERIVATION } from "../src/task-memory-protocol.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -187,7 +187,7 @@ test("declared file hashes detect untracked changes without pretending to prove 
 test("long success and failure summaries remain bounded and checkpoint references remain readable", async () => {
   const f = fixture(); await f.commit("old failure".repeat(3000), true); await f.commit("x".repeat(6000) + " Tests 91 passed");
   const view = f.runtime.read(f.ctx); assert.equal(view.status, "available");
-  assert.ok(view.memory.observations.every(item => item.summary.length <= 1024));
+  assert.ok(view.memory.observations.every(item => item.summary.length <= TASK_MEMORY_LIMITS.observationSummary));
   const id = view.memory.observations.at(-1).id;
   f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
   for (let i = 0; i < 20; i++) await f.commit("status unchanged");
@@ -557,4 +557,29 @@ test("re-derived history sources cannot make an unchanged rerun look like new pr
   assert.equal(f.stops, 0, "loading legacy snapshots after a new turn must not suspend the task");
   f.runtime.checkpoint(f.ctx, f.identity, checkpoint(repeated), 1);
   assert.equal(f.progress, 1);
+});
+
+test("turn-end snapshots are written per batch of results while reads still see every result", async () => {
+  const f = fixture();
+  const snapshots = () => f.branch.filter(entry => entry.customType === TASK_MEMORY_ENTRY).length;
+  const batch = TASK_MEMORY_LIMITS.snapshotEveryResults;
+  await f.commit("first");
+  assert.equal(snapshots(), 1, "the first result is saved at once");
+  for (let i = 1; i < batch; i++) await f.commit("result " + i, false, "command-" + i);
+  assert.equal(snapshots(), 1);
+  assert.equal(f.runtime.read(f.ctx).memory.observations.length, batch);
+  await f.commit("result " + batch, false, "command-" + batch);
+  assert.equal(snapshots(), 2);
+  assert.equal(f.stops, 0);
+});
+
+test("a batched snapshot derives the same memory as deriving every result from the branch", async () => {
+  const f = fixture();
+  for (let i = 0; i < TASK_MEMORY_LIMITS.recentObservations + 9; i++) await f.commit("result " + i, false, "command-" + i);
+  const batched = f.runtime.read(f.ctx).memory;
+  assert.ok(batched.omittedObservations > 0, "the run must evict observations to exercise batching");
+  f.setBranch(f.branch.filter(entry => entry.customType !== TASK_MEMORY_ENTRY));
+  const derived = f.runtime.read(f.ctx).memory;
+  assert.deepEqual(batched.observations, derived.observations);
+  assert.equal(batched.omittedObservations, derived.omittedObservations);
 });

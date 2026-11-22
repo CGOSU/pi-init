@@ -122,7 +122,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
       if (observation) observations.push(observation);
     }
     const next = observations.length ? recordTaskObservations(memory, observations, observations.at(-1)!.id) : memory;
-    return { memory: next, saved: memory, found };
+    return { memory: next, saved: memory, found, unsaved: observations.length };
   }
   function files(ctx: ExtensionContext, paths: string[]): TaskSourceVersion[] {
     if (paths.length > TASK_MEMORY_LIMITS.files) return taskMemoryError("TASK_MEMORY_FILES_INVALID", "声明的相关文件不能超过16个");
@@ -261,8 +261,10 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     const bound = binding.source(event.message, ctx);
     if (!current || !bound || !taskMemoryIdentityMatches(current, bound) || event.message.role !== "assistant" || event.toolResultEntryIds.length !== event.toolResults.length) return;
     try {
-      const { memory, saved } = load(ctx, current);
-      if (memory !== saved) persist(ctx, { ...memory, identity: current });
+      const { memory, saved, found, unsaved } = load(ctx, current);
+      // load() re-derives every result after the saved watermark, and batching them yields the same
+      // memory as saving each turn; a snapshot only bounds that scan. Save the first one at once.
+      if (memory !== saved && (!found || unsaved >= TASK_MEMORY_LIMITS.snapshotEveryResults)) persist(ctx, { ...memory, identity: current });
     } catch (error) {
       failures.add(scope(ctx, current));
       if (!(error && typeof error === "object" && "code" in error && error.code === "TASK_MEMORY_WRITE_FAILED")) suspend(ctx);
@@ -345,6 +347,6 @@ export function readTaskSourceObservation(branch: Entry[], id: string, current: 
     const failed = toolResultFailed(message);
     return { id, messageEntryId: owner.id, toolCallId: message.toolCallId, toolName: message.toolName,
       inputHash: fingerprint(call.arguments)!, outputHash: fingerprint(message.content)!, outcome: failed ? "tool-error" : "tool-ok",
-      summary: bounded(text, 1024), truncated: text.length > 1024 };
+      summary: bounded(text, TASK_MEMORY_LIMITS.observationSummary), truncated: text.length > TASK_MEMORY_LIMITS.observationSummary };
   }
 export type TaskEvidence = { id: string; text: string; truncated: boolean; sourceTaskId: string; historical: true; sourceSessionId?: string };
