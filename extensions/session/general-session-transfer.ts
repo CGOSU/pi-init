@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ToolSettlement } from "./general-tool-settlement.ts";
 import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeRoleMatches, matchPolicy, isWorkflowUnfinished, type ExtensionRuntimeState } from "../runtime-state.ts";
 import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "../../src/session-handoff.ts";
 import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_TOOL, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../../src/general-session-handoff.ts";
 import { isRecord } from "../role/role-context-protocol.ts";
-import { readHandoffArchive, replaceHandoffSession } from "./session-replacement.ts";
+import { findTransferTarget, readHandoffArchive, replaceHandoffSession, type TransferTargetScan } from "./session-replacement.ts";
 import { getSessionEntries } from "./session-entries.ts";
 
 export const GENERAL_TRANSFER_ENTRY = "pi-init-general-transfer";
@@ -18,6 +19,12 @@ export function generalOutgoingTransfer(ctx: ExtensionContext) {
     && isRecord(e.data) && e.data.kind === "outgoing" && e.data.sourceSessionId === ctx.sessionManager.getSessionId());
   // Corruption of an existing lock must not silently unlock the source.
   return entry?.type === "custom" && isRecord(entry.data) && entry.data.phase !== "cancelled" ? entry : undefined;
+}
+// Latest transfer intent written by this session, whatever its phase.
+function latestOutgoing(ctx: ExtensionContext): Intent | undefined {
+  const entry = getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY
+    && isRecord(e.data) && e.data.kind === "outgoing" && e.data.sourceSessionId === ctx.sessionManager.getSessionId());
+  return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" ? entry.data as unknown as Intent : undefined;
 }
 function incomingEntry(ctx: ExtensionContext) {
   return getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
@@ -132,8 +139,55 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
     if (entry?.type !== "custom" || !isRecord(entry.data) || event.message.details.id !== entry.data.id || event.message.details.hash !== entry.data.hash) return;
     await activate(ctx, true);
   });
+  // Exit for a frozen source whose transfer never reached a target. Only an explicit user confirmation
+  // abandons it, and a target found next to the source always wins. The cancelled intent also makes a
+  // missed, unactivated target fail its source-lock check, so it cannot activate later.
+  async function resolveStalledTransfer(ctx: ExtensionCommandContext) {
+    const latest = latestOutgoing(ctx);
+    const pending = latest && latest.phase !== "cancelled" ? latest : undefined;
+    const sourceFile = ctx.sessionManager.getSessionFile?.();
+    const refusal = matchPolicy<string>([
+      [() => !ctx.isProjectTrusted() || !ctx.isIdle() || ctx.hasPendingMessages() || state.agentRunActive, "来源会话交接已冻结；请在受信任、空闲且无排队消息的会话中处理，来源保持冻结。"],
+      [() => !ctx.hasUI, "来源会话交接已冻结；放弃交接需要交互确认，来源保持冻结。"],
+      [() => Boolean(pending) && !sourceFile, "来源会话交接已冻结；当前session未持久化，无法核对交接目标，来源保持冻结。"],
+    ]);
+    if (refusal) { ctx.ui.notify(refusal, "warning"); return; }
+    let scan: TransferTargetScan = {};
+    if (pending) {
+      scan = findTransferTarget(sourceFile!, GENERAL_TRANSFER_ENTRY, pending.id);
+      if (scan.found) {
+        ctx.ui.notify(`来源会话交接已冻结：已找到接收此交接的会话 ${scan.found}。请在该会话执行 /pi-init fresh 核对，不在来源放弃或重建。`, "warning");
+        return;
+      }
+    }
+    const message = (pending ? [
+      `交接 ${pending.id} 未在会话目录中找到接收方（已检查 ${dirname(sourceFile!)}）。`,
+      ...(scan.incomplete ? ["注意：" + scan.incomplete + "。"] : []),
+      "确认后：记录本次交接已取消，之后出现的未激活目标会话也无法再激活；当前会话恢复可用。",
+    ] : [
+      "上次交接在保存冻结记录时结果未确认，未创建新会话。",
+      "确认后解除本次未确认状态，效果与重新加载会话相同。",
+    ]).concat("如果你已在另一个会话继续，请选择取消。重新交接前需先用 session_handoff 准备新的背景。").join("\n");
+    switching = true;
+    let confirmed = false;
+    try { confirmed = await ctx.ui.confirm("放弃未完成的会话交接？", message); }
+    finally { switching = false; }
+    if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "warning"); return; }
+    const current = latestOutgoing(ctx);
+    if (pending ? current?.id !== pending.id || current.phase !== pending.phase : current && current.phase !== "cancelled") {
+      ctx.ui.notify("确认期间交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
+      return;
+    }
+    if (pending) {
+      try { pi.appendEntry(GENERAL_TRANSFER_ENTRY, { ...pending, phase: "cancelled" }); }
+      catch (error) { ctx.ui.notify("放弃记录未保存，来源保持冻结：" + String(error), "error"); return; }
+    }
+    storageUncertain = false;
+    ctx.ui.notify("已放弃本次交接，当前会话恢复可用；如需交接，请先用 session_handoff 重新准备，再执行 /pi-init fresh。", "info");
+  }
   async function fresh(ctx: ExtensionCommandContext) {
-    if (switching || blocked(ctx)) { ctx.ui.notify("来源已冻结或交接结果未知；请检查目标，不重试创建。", "warning"); return; }
+    if (switching) { ctx.ui.notify("交接预览或会话切换正在进行，请等待结果。", "warning"); return; }
+    if (blocked(ctx)) { await resolveStalledTransfer(ctx); return; }
     const incoming = incomingEntry(ctx);
     const history = getSessionEntries(ctx);
     const preparation = history.findLast(e => e.type === "custom" && e.customType === GENERAL_HANDOFF_ENTRY);
@@ -214,7 +268,7 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
           pi.appendEntry(GENERAL_TRANSFER_ENTRY, { ...intent, phase: "cancelled" });
           ctx.ui.notify("已取消，未建立目标；旧会话保留，重新交接前请更新快照。", "info");
         },
-        uncertain() { storageUncertain = true; console.warn("[pi-init] 普通会话交接结果未知；来源保持冻结，请核对目标，不自动重建或重放。"); },
+        uncertain() { storageUncertain = true; console.warn("[pi-init] 普通会话交接结果未知；来源保持冻结。请核对目标；若确认未创建，可在来源再次执行 /pi-init fresh 选择放弃交接。"); },
       });
     } finally { switching = false; }
   }

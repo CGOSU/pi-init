@@ -3,17 +3,17 @@ import { textOf } from "../../src/error-utils.ts";
 import { randomUUID } from "node:crypto";
 import type { ToolSettlement } from "./general-tool-settlement.ts";
 import { registerGeneralSessionHandoff } from "./general-session-handoff-runtime.ts";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { createGeneralSessionTransfer, generalOutgoingTransfer } from "./general-session-transfer.ts";
-import { readHandoffArchive as readArchive, readHandoffArchiveCached as readArchiveCached, replaceHandoffSession } from "./session-replacement.ts";
+import { findTransferTarget, readHandoffArchive as readArchive, readHandoffArchiveCached as readArchiveCached, replaceHandoffSession } from "./session-replacement.ts";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cloneState } from "../../src/workflow.ts";
 import type { WorkflowState } from "../../src/workflow-types.ts";
-import { buildSessionHandoff, handoffBoundary, handoffHash, handoffEnvelope, resolveHandoffSnapshot, sessionHandoffSeed, importedWorkflow, workflowContentHash, SESSION_HANDOFF_ENTRY, SESSION_HANDOFF_ACTIVATE, SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_PENDING, SESSION_HANDOFF_IMPORTED, type SessionHandoffPacket, type SessionHandoffSnapshot } from "../../src/session-handoff.ts";
+import { buildSessionHandoff, sessionHandoffPreview, handoffBoundary, handoffHash, handoffEnvelope, resolveHandoffSnapshot, sessionHandoffSeed, importedWorkflow, workflowContentHash, SESSION_HANDOFF_ENTRY, SESSION_HANDOFF_ACTIVATE, SESSION_HANDOFF_REVIEW, SESSION_HANDOFF_PENDING, SESSION_HANDOFF_IMPORTED, type SessionHandoffPacket, type SessionHandoffSnapshot } from "../../src/session-handoff.ts";
 import { firstPolicyMatch, isWorkflowUnfinished, matchPolicy, type ExtensionRuntimeState } from "../runtime-state.ts";
 import { isRecord } from "../role/role-context-protocol.ts";
-import { readTaskSourceObservation, contentText } from "../workflow/task-memory-runtime.ts";
+import { bounded, readTaskSourceObservation, contentText } from "../workflow/task-memory-runtime.ts";
 import { parseTaskMemoryIdentity } from "../../src/task-memory.ts";
 import type { TaskEvidence } from "../workflow/task-memory-runtime.ts";
 import { showCapacityHandoffHint } from "../role/role-context-capacity.ts";
@@ -38,37 +38,6 @@ function latestOutgoing(ctx: ExtensionContext, workflow: WorkflowState | undefin
     && isRecord(entry.data) && entry.data.kind === "outgoing" && entry.data.workflowId === workflow.workflowId
     && entry.data.sourceSessionId === ctx.sessionManager.getSessionId());
   return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" ? entry.data as unknown as Outgoing : undefined;
-}
-const TARGET_SCAN_MAX_FILES = 500;
-const TARGET_SCAN_MAX_BYTES = 64 * 1024 * 1024;
-type TargetScan = { found: string; incomplete?: undefined } | { found?: undefined; incomplete?: string };
-// Pi creates the target session next to its source; a sibling holding this incoming record received the transfer.
-function findTransferTarget(sourceFile: string, intentId: string): TargetScan {
-  const directory = dirname(sourceFile);
-  let names: string[];
-  try { names = readdirSync(directory).filter(name => name.endsWith(".jsonl")); }
-  catch (error) { return { incomplete: "无法列出会话目录：" + textOf(error) }; }
-  if (names.length > TARGET_SCAN_MAX_FILES) return { incomplete: `会话目录超过 ${TARGET_SCAN_MAX_FILES} 个文件，未逐一检查` };
-  const unread: string[] = [];
-  const source = realpathSync(sourceFile);
-  for (const name of names) {
-    const file = join(directory, name);
-    try {
-      if (realpathSync(file) === source) continue;
-      const stats = statSync(file);
-      if (!stats.isFile() || stats.size > TARGET_SCAN_MAX_BYTES) { unread.push(name); continue; }
-      const text = readFileSync(file, "utf8");
-      if (!text.includes(intentId)) continue;
-      for (const line of text.split("\n")) {
-        if (!line.includes(intentId)) continue;
-        let entry: unknown;
-        try { entry = JSON.parse(line); } catch { unread.push(name); continue; }
-        if (isRecord(entry) && entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
-          && isRecord(entry.data) && entry.data.kind === "incoming" && entry.data.id === intentId) return { found: file };
-      }
-    } catch { unread.push(name); }
-  }
-  return unread.length ? { incomplete: `${unread.length} 个会话文件无法读取或解析：${unread.slice(0, 3).join("、")}` } : {};
 }
 function incomingTransfer(ctx: ExtensionContext): Incoming | undefined {
   const entry = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
@@ -262,7 +231,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     if (!ctx.hasUI) { ctx.ui.notify("需要交互式预览确认，未开始交接。", "warning"); return; }
     confirming = true;
     try {
-      if (!await ctx.ui.confirm("预览工作流短上下文交接", JSON.stringify(packet))) return;
+      if (!await ctx.ui.confirm("预览工作流短上下文交接", sessionHandoffPreview(snapshot, packet))) return;
       const confirmedReadiness = checkReady(ctx);
       if (!confirmedReadiness.ok) { ctx.ui.notify(`[${confirmedReadiness.code}] ${confirmedReadiness.message} 确认期间状态已变化，未开始交接。`, "warning"); return; }
       if (state.roleContextGeneration !== generation || ctx.sessionManager.getLeafId() !== sourceLeaf
@@ -342,7 +311,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       restoreAbandonedWorkflow(ctx, current!);
       return;
     }
-    const scan = findTransferTarget(sourceFile!, intent.id);
+    const scan = findTransferTarget(sourceFile!, SESSION_HANDOFF_ENTRY, intent.id);
     if (scan.found) {
       ctx.ui.notify(`[TRANSFER_PENDING] 已找到接收此交接的会话：${scan.found}。请在该会话执行 /pi-init fresh 核对，不在来源放弃或重建。`, "warning");
       return;
@@ -359,7 +328,7 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     let confirmed = false;
     try { confirmed = await ctx.ui.confirm("放弃未完成的会话交接？", message); }
     finally { confirming = false; }
-    if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "info"); return; }
+    if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "warning"); return; }
     if (state.roleContextGeneration !== generation || state.workflowState !== current || latestOutgoing(ctx, current)?.id !== intent.id) {
       ctx.ui.notify("确认期间工作流或交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
       return;
@@ -406,7 +375,8 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
       const entry = manager.getEntry(id);
       if (observation?.outcome !== "tool-ok" || entry?.type !== "message" || entry.message.role !== "toolResult") return;
       const text = contentText(entry.message.content);
-      return { id, text: text.slice(0, 4096), truncated: text.length > 4096, sourceTaskId: source.taskId, sourceSessionId: source.sourceSessionId, historical: true };
+      // Same head-and-tail bound as current-session evidence: failures are usually at the end.
+      return { id, text: bounded(text, 4096), truncated: text.length > 4096, sourceTaskId: source.taskId, sourceSessionId: source.sourceSessionId, historical: true };
     } catch { return; }
   }
   return { beforeDispatch, fresh, readEvidence, generalHandoff };

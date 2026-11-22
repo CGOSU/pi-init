@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createWorkflowToolBinding } from "../extensions/workflow/workflow-tool-binding.ts";
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
@@ -273,6 +274,7 @@ test("a previous incoming never unlocks a source with an uncertain outgoing, eve
     let attempts = 0;
     b.ctx.newSession = async () => { attempts++; return { cancelled: false }; };
     await b.api.fresh(b.ctx);
+    b.ctx.ui.confirm = async () => false; // decline the abandon offer
     await b.api.fresh(b.ctx);
     assert.equal(attempts, 1);
     assert.equal(b.notices.at(-1).level, "warning");
@@ -280,6 +282,7 @@ test("a previous incoming never unlocks a source with an uncertain outgoing, eve
     reopened.branch(beforeOutgoing);
     const recovered = fixture(cwd, reopened);
     recovered.ctx.newSession = async () => { attempts++; throw new Error("must not create again"); };
+    recovered.ctx.ui.confirm = async () => false;
     await recovered.api.fresh(recovered.ctx);
     assert.equal(attempts, 1);
     assert.equal(recovered.notices.at(-1).level, "warning");
@@ -453,13 +456,71 @@ test("confirmed native cancel unlocks only before setup; unknown outcome freezes
   await withTempDirectory(async cwd => {
     const h = fixture(cwd); await h.save(); const leaf = h.manager.getLeafId(); let calls = 0;
     h.ctx.newSession = async () => { calls++; throw new Error("unknown outcome"); };
-    await h.api.fresh(h.ctx); await h.api.fresh(h.ctx);
+    await h.api.fresh(h.ctx);
+    h.ctx.ui.confirm = async () => false; // decline the abandon offer from here on
+    await h.api.fresh(h.ctx);
     h.manager.branch(leaf);
     await h.emit("session_start");
     await h.api.fresh(h.ctx);
     assert.equal(calls, 1);
     assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
     assert.ok((await h.emit("input")).some(result => result?.action === "handled"));
+  });
+});
+
+test("a frozen source with no target can be abandoned after confirmation and hand off again", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save(); let calls = 0;
+    h.ctx.newSession = async () => { calls++; throw new Error("failed before setup"); };
+    await h.api.fresh(h.ctx);
+    assert.ok((await h.emit("tool_call")).some(result => result?.block === true));
+    const asked = h.confirmations.length;
+    await h.api.fresh(h.ctx);
+    assert.equal(h.confirmations.length, asked + 1);
+    assert.equal(h.confirmations.at(-1).title, "放弃未完成的会话交接？");
+    assert.equal(calls, 1, "abandoning must not create a session");
+    assert.equal(h.manager.getLeafEntry().data.phase, "cancelled");
+    assert.equal(h.notices.at(-1).level, "info");
+    assert.equal((await h.emit("tool_call"))[0], undefined);
+    assert.equal((await h.emit("input"))[0], undefined);
+    h.ctx.newSession = options => h.replace(options);
+    await h.save({ goal: "after abandon" });
+    await h.api.fresh(h.ctx);
+    assert.equal(h.calls, 1);
+    assert.equal(h.target.notices.at(-1).level, "info");
+  });
+});
+
+test("abandoning a frozen source is refused while a session that received the transfer exists", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    h.ctx.newSession = options => h.replace(options, { failAfterSetup: true });
+    await h.api.fresh(h.ctx);
+    const recovered = fixture(cwd, SessionManager.open(h.manager.getSessionFile(), cwd));
+    await recovered.api.fresh(recovered.ctx);
+    assert.equal(recovered.confirmations.length, 0);
+    assert.equal(recovered.notices.at(-1).level, "warning");
+    assert.ok(recovered.notices.at(-1).message.includes(h.target.manager.getSessionFile()), JSON.stringify(recovered.notices));
+    assert.ok((await recovered.emit("tool_call")).some(result => result?.block === true));
+  });
+});
+
+test("a missed target cannot activate after its source abandoned the transfer", async () => {
+  await withTempDirectory(async cwd => {
+    const h = fixture(cwd); await h.save();
+    h.ctx.newSession = options => h.replace(options, { skipActivation: true });
+    await h.api.fresh(h.ctx);
+    const targetFile = h.target.manager.getSessionFile();
+    const hidden = path.join(cwd, "elsewhere", path.basename(targetFile));
+    await mkdir(path.dirname(hidden));
+    await rename(targetFile, hidden); // the search misses it
+    const recovered = fixture(cwd, SessionManager.open(h.manager.getSessionFile(), cwd));
+    await recovered.api.fresh(recovered.ctx);
+    assert.equal(recovered.manager.getLeafEntry().data.phase, "cancelled");
+    await rename(hidden, targetFile);
+    await h.target.api.fresh(h.target.ctx);
+    assert.equal(h.target.notices.at(-1).level, "warning");
+    assert.match(h.target.notices.at(-1).message, /SOURCE_LOCK/);
   });
 });
 
