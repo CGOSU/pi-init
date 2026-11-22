@@ -8,7 +8,7 @@ import { isAwaitingArchitectureReview } from "./workflow-action-policy.ts";
 import { applyWorkflowTaskCorrection, type createWorkflowRevisionInput } from "./workflow-revision-input.ts";
 import { workflowHandoffMessageOnBranch } from "./workflow-session-adapter.ts";
 
-const DIRECTION_TIMEOUT_MS = 20_000;
+const DIRECTION_TIMEOUT_MS = 30_000;
 const HANDLED = { action: "handled" } as const;
 
 export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
@@ -33,7 +33,8 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
     const sessionId = session.getSessionId();
     const workflow = state.workflowState;
     if (!workflow || workflow.sessionId !== sessionId || !ctx.isProjectTrusted()
-      || isExecutionBlockedState(state) || transferFrozen(workflow) || workflow.tasks.some(task => task.outcomeUnknown)) return;
+      || isExecutionBlockedState(state) || transferFrozen(workflow)
+      || Boolean(workflow.pendingRevision) || workflow.tasks.some(task => task.outcomeUnknown)) return;
 
     const active = executingWorkflowTask(state, sessionId);
     const reviewing = isAwaitingArchitectureReview(workflow) && !workflow.handoff;
@@ -58,6 +59,7 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
     };
     const controller = new AbortController();
     pending = controller;
+    const startedAt = Date.now();
     const timer = setTimeout(() => controller.abort(), DIRECTION_TIMEOUT_MS);
     const cancelled = new Promise<undefined>(resolve => {
       controller.signal.addEventListener("abort", () => resolve(undefined), { once: true });
@@ -73,24 +75,51 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
     });
 
     if (inputGeneration !== generation) return HANDLED;
+    const trace = (outcome: string, code?: string) => {
+      state.traceHandoff?.(ctx, "workflow.direction_classified", {
+        outcome,
+        ...(code ? { code } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+    };
     function unapplied(reason: string) {
       const choices = active ? "「任务纠偏：<指令>」或「重规划：<新方向>」" : "「重规划：<新方向>」";
       ctx.ui.notify(`未应用这条输入：${reason}。请核对当前状态，可用${choices}明确指定；不会自动重试、恢复或批准。`, "warning");
       return HANDLED;
     }
-    if (!isCurrent()) return unapplied("会话或工作流状态已经变化");
-    if (controller.signal.aborted) return unapplied("架构方向判断超时");
+    if (!isCurrent()) {
+      trace("stale-state");
+      return unapplied("会话或工作流状态已经变化");
+    }
+    if (controller.signal.aborted) {
+      trace("timeout");
+      return unapplied("架构方向判断超时");
+    }
     if (!result || !result.ok) {
+      if (result?.code === "not-configured") {
+        trace("skipped", "not-configured");
+        return;
+      }
+      trace("failed", result?.code ?? "model-failed");
       const reason = result?.code === "model-unavailable" ? "没有可用的已配置架构模型"
         : result?.code === "invalid-response" ? "架构模型未返回合法方向" : "架构方向判断失败";
       return unapplied(reason);
     }
-    if (result.direction === null) return;
+    if (result.direction === null) {
+      trace("none");
+      return;
+    }
     if (result.direction === "correction") {
-      if (!active) return unapplied("待审计划没有执行中任务，不能接收任务纠偏");
+      if (!active) {
+        trace("rejected", "no-active-task");
+        return unapplied("待审计划没有执行中任务，不能接收任务纠偏");
+      }
+      trace("correction");
       return applyWorkflowTaskCorrection(state, event.text, ctx);
     }
-    await deps.revise(event, ctx, true);
+    trace("replan");
+    const applied = await deps.revise(event, ctx, true);
+    if (!applied) return unapplied("当前工作流状态不能记录重规划");
     return HANDLED;
   }
 

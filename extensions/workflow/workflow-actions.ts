@@ -252,6 +252,7 @@ export function createWorkflowActions(
           sessionId: ctx.sessionManager.getSessionId(),
         });
         deps.store.persistWorkflowState(next, ctx);
+        resetDispatchLock(state);
 
         if (next.status === "paused") {
           ctx.ui.notify("架构规划已保存，等待用户审阅。审阅后执行 /pi-init workflow resume。", "info");

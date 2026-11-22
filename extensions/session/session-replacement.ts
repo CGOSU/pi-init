@@ -1,6 +1,7 @@
-import { readdirSync, realpathSync, readFileSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SessionManager, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { textOf } from "../../src/error-utils.ts";
 import { isRecord } from "../role/role-context-protocol.ts";
 import type { HandoffResult } from "../../src/general-session-handoff.ts";
 
@@ -22,7 +23,7 @@ export function readHandoffArchive(file: string, root: string, sessionId: string
 }
 
 const TARGET_SCAN_MAX_FILES = 500;
-const TARGET_SCAN_MAX_BYTES = 64 * 1024 * 1024;
+const TARGET_SCAN_PREFIX_BYTES = 256 * 1024;
 export type TransferTargetScan = { found: string; incomplete?: undefined } | { found?: undefined; incomplete?: string };
 /**
  * Pi creates a replacement session next to its source, and target setup writes a user message, so a
@@ -30,19 +31,37 @@ export type TransferTargetScan = { found: string; incomplete?: undefined } | { f
  */
 export function findTransferTarget(sourceFile: string, customType: string, intentId: string): TransferTargetScan {
   const directory = dirname(sourceFile);
+  let source: string;
+  try { source = realpathSync(sourceFile); }
+  catch (error) { return { incomplete: "无法核对来源会话文件：" + textOf(error) }; }
   let names: string[];
   try { names = readdirSync(directory).filter(name => name.endsWith(".jsonl")); }
-  catch (error) { return { incomplete: "无法列出会话目录：" + String(error) }; }
+  catch (error) { return { incomplete: "无法列出会话目录：" + textOf(error) }; }
   if (names.length > TARGET_SCAN_MAX_FILES) return { incomplete: `会话目录超过 ${TARGET_SCAN_MAX_FILES} 个文件，未逐一检查` };
   const unread: string[] = [];
-  const source = realpathSync(sourceFile);
   for (const name of names) {
     const file = join(directory, name);
     try {
+      const stats = lstatSync(file);
+      if (!stats.isFile() || stats.nlink !== 1) { unread.push(name); continue; }
       if (realpathSync(file) === source) continue;
-      const stats = statSync(file);
-      if (!stats.isFile() || stats.size > TARGET_SCAN_MAX_BYTES) { unread.push(name); continue; }
-      const text = readFileSync(file, "utf8");
+      const targetBytes = Math.min(stats.size, TARGET_SCAN_PREFIX_BYTES);
+      const buffer = Buffer.allocUnsafe(targetBytes);
+      let bytesRead = 0;
+      const fd = openSync(file, "r");
+      try {
+        while (bytesRead < targetBytes) {
+          const chunk = readSync(fd, buffer, bytesRead, targetBytes - bytesRead, bytesRead);
+          if (chunk === 0) break;
+          bytesRead += chunk;
+        }
+      } finally { closeSync(fd); }
+      let text = buffer.toString("utf8", 0, bytesRead);
+      if (stats.size > bytesRead) {
+        const lastNewline = text.lastIndexOf("\n");
+        if (lastNewline < 0) { unread.push(name); continue; }
+        text = text.slice(0, lastNewline);
+      }
       if (!text.includes(intentId)) continue;
       for (const line of text.split("\n")) {
         if (!line.includes(intentId)) continue;

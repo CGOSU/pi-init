@@ -56,13 +56,14 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
   // A task stops once per memory failure; the user's "continue" accepts running without saved memory.
   // After that, a repeated failure warns once per continue instead of stopping again: a damaged snapshot
   // that stopped on every continue would leave the task impossible to resume.
-  function suspend(ctx: ExtensionContext, reason = "TASK_MEMORY_UNAVAILABLE") {
+  function suspend(ctx: ExtensionContext, reason = "TASK_MEMORY_UNAVAILABLE", firstStopNotice?: string) {
     const resolved = identity(ctx);
     const key = resolved.ok ? resolved.value && scope(ctx, resolved.value)
       : JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), state.workflowState?.workflowId, state.workflowState?.planVersion, state.workflowState?.recoveryGeneration, state.workflowState?.currentTaskId]);
     if (!key) return;
     if (!stopped.has(key)) {
       stopped.add(key);
+      if (firstStopNotice) ctx.ui.notify(firstStopNotice, "warning");
       onFailure?.(ctx);
       return;
     }
@@ -149,8 +150,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     try { pi.appendEntry(TASK_MEMORY_ENTRY, { ...memory, derivation: TASK_OBSERVATION_DERIVATION }); failures.delete(scope(ctx, memory.identity)); }
     catch {
       failures.add(scope(ctx, memory.identity));
-      ctx.ui.notify("任务记忆保存失败；原工具结果保留，自动推进已停止，不会重跑。", "warning");
-      suspend(ctx);
+      suspend(ctx, "TASK_MEMORY_WRITE_FAILED", "任务记忆保存失败；原工具结果保留，自动推进已停止，不会重跑。");
       return taskMemoryError("TASK_MEMORY_WRITE_FAILED", "任务记忆未保存，不能确认进展已持久化");
     }
   }

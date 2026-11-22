@@ -24,7 +24,9 @@ export function generalOutgoingTransfer(ctx: ExtensionContext) {
 function latestOutgoing(ctx: ExtensionContext): Intent | undefined {
   const entry = getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY
     && isRecord(e.data) && e.data.kind === "outgoing" && e.data.sourceSessionId === ctx.sessionManager.getSessionId());
-  return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" ? entry.data as unknown as Intent : undefined;
+  return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" && entry.data.id.length > 0
+    ? entry.data as unknown as Intent
+    : undefined;
 }
 function incomingEntry(ctx: ExtensionContext) {
   return getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
@@ -143,7 +145,12 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
   // abandons it, and a target found next to the source always wins. The cancelled intent also makes a
   // missed, unactivated target fail its source-lock check, so it cannot activate later.
   async function resolveStalledTransfer(ctx: ExtensionCommandContext) {
+    const locked = generalOutgoingTransfer(ctx);
     const latest = latestOutgoing(ctx);
+    if (locked && (!latest || latest.phase === "cancelled")) {
+      ctx.ui.notify("来源会话交接冻结记录损坏，无法安全核对或放弃；请手工检查会话文件，来源保持冻结。", "error");
+      return;
+    }
     const pending = latest && latest.phase !== "cancelled" ? latest : undefined;
     const sourceFile = ctx.sessionManager.getSessionFile?.();
     const refusal = matchPolicy<string>([
@@ -168,14 +175,23 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       "上次交接在保存冻结记录时结果未确认，未创建新会话。",
       "确认后解除本次未确认状态，效果与重新加载会话相同。",
     ]).concat("如果你已在另一个会话继续，请选择取消。重新交接前需先用 session_handoff 准备新的背景。").join("\n");
+    const sessionId = ctx.sessionManager.getSessionId();
+    const generation = state.roleContextGeneration;
+    const transitionGeneration = state.roleTransitionGeneration;
+    const sourceLeaf = ctx.sessionManager.getLeafId();
     switching = true;
     let confirmed = false;
     try { confirmed = await ctx.ui.confirm("放弃未完成的会话交接？", message); }
     finally { switching = false; }
     if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "warning"); return; }
     const current = latestOutgoing(ctx);
-    if (pending ? current?.id !== pending.id || current.phase !== pending.phase : current && current.phase !== "cancelled") {
-      ctx.ui.notify("确认期间交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
+    const unchanged = !state.runtimeDisposed && ctx.isProjectTrusted() && ctx.isIdle() && !ctx.hasPendingMessages() && !state.agentRunActive
+      && ctx.sessionManager.getSessionId() === sessionId
+      && state.roleContextGeneration === generation && state.roleTransitionGeneration === transitionGeneration
+      && (!sourceLeaf || ctx.sessionManager.getBranch().some(entry => entry.id === sourceLeaf))
+      && (pending ? current?.id === pending.id && current.phase === pending.phase : !generalOutgoingTransfer(ctx));
+    if (!unchanged) {
+      ctx.ui.notify("确认期间会话或交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
       return;
     }
     if (pending) {

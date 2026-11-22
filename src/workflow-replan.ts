@@ -229,6 +229,7 @@ export function applyWorkflowReplan(
   assertAcyclic(activeTasks);
 
   const result = cloneState(state, now);
+  delete result.stoppedAt;
   const revision = result.revisions.find((item) => item.revisionId === id);
   if (!revision || revision.status !== "requested") {
     throw new Error(`工作流重规划 revisionId 已应用或不存在：${id}`);

@@ -56,7 +56,7 @@ export function createDiagnosticWriter(options: WriterOptions) {
       const work = (queues.get(key) ?? Promise.resolve()).then(async () => {
         if (failed || !current()) { drop(); return; }
         await withDiagnosticLocation(location, { create: true, io, current }, async root => {
-          const target = await writableDiagnosticFile(location, root, io);
+          const target = await writableDiagnosticFile(location, root, io, { now: options.now, retentionMs: options.retentionMs });
           if (!current()) { drop(); return; }
           await appendDiagnosticRecord(target, line, { ...options, maxBytes, io });
           written++;
@@ -83,7 +83,7 @@ export function createDiagnosticWriter(options: WriterOptions) {
       const location = locate(scope);
       const current = () => matchesDiagnosticScope(ctx, scope);
       await withDiagnosticLocation(location, { create: true, io, current }, async root => {
-        const target = await writableDiagnosticFile(location, root, io);
+        const target = await writableDiagnosticFile(location, root, io, { now: options.now, retentionMs: options.retentionMs });
         if (!current()) throw Object.assign(new Error("诊断恢复范围已变化"), { code: "DIAGNOSTIC_SCOPE_CHANGED" });
         await probeDiagnosticFile(target, maxBytes, io);
       });

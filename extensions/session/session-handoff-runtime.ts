@@ -37,7 +37,9 @@ function latestOutgoing(ctx: ExtensionContext, workflow: WorkflowState | undefin
   const entry = getSessionEntries(ctx).findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
     && isRecord(entry.data) && entry.data.kind === "outgoing" && entry.data.workflowId === workflow.workflowId
     && entry.data.sourceSessionId === ctx.sessionManager.getSessionId());
-  return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" ? entry.data as unknown as Outgoing : undefined;
+  return entry?.type === "custom" && isRecord(entry.data) && typeof entry.data.id === "string" && entry.data.id.length > 0
+    ? entry.data as unknown as Outgoing
+    : undefined;
 }
 function incomingTransfer(ctx: ExtensionContext): Incoming | undefined {
   const entry = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === SESSION_HANDOFF_ENTRY
@@ -329,7 +331,9 @@ export function createSessionHandoff(pi: ExtensionAPI, state: ExtensionRuntimeSt
     try { confirmed = await ctx.ui.confirm("放弃未完成的会话交接？", message); }
     finally { confirming = false; }
     if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "warning"); return; }
-    if (state.roleContextGeneration !== generation || state.workflowState !== current || latestOutgoing(ctx, current)?.id !== intent.id) {
+    if (state.roleContextGeneration !== generation || state.workflowState !== current || latestOutgoing(ctx, current)?.id !== intent.id
+      || state.runtimeDisposed || !ctx.isProjectTrusted() || !ctx.isIdle() || ctx.hasPendingMessages() || state.agentRunActive
+      || ctx.sessionManager.getSessionId() !== current!.sessionId) {
       ctx.ui.notify("确认期间工作流或交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
       return;
     }

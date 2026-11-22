@@ -107,7 +107,7 @@ export function createWorkflowRevisionInput(runtimeState: ExtensionRuntimeState,
         replan
           ? next.currentTaskId
             ? `已记录工作流重规划，将在当前任务 ${next.currentTaskId} 到达安全边界后交给架构师。`
-            : "已记录父工作流重规划，等待架构师处理。"
+            : "已记录工作流重规划，等待架构师处理。"
           : next.currentTaskId
             ? `已记录共享队列新目标，将在当前任务 ${next.currentTaskId} 完成后规划；父工作流进度保留。`
             : "已记录共享队列新目标，等待架构师规划；原队列进度保留。",
