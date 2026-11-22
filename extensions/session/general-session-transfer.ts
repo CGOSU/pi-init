@@ -6,8 +6,20 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { activeRoleMatches, matchPolicy, isWorkflowUnfinished, type ExtensionRuntimeState } from "../runtime-state.ts";
 import { handoffHash, SESSION_HANDOFF_MAX_BYTES } from "../../src/session-handoff.ts";
 import { GENERAL_HANDOFF_ENTRY, GENERAL_HANDOFF_TOOL, readGeneralHandoff, type GeneralHandoffSnapshot, type HandoffResult } from "../../src/general-session-handoff.ts";
+import { textOf } from "../../src/error-utils.ts";
 import { isRecord } from "../role/role-context-protocol.ts";
-import { findTransferTarget, readHandoffArchive, replaceHandoffSession, type TransferTargetScan } from "./session-replacement.ts";
+import {
+  abortPreparedTransfer,
+  cancelTransferUnderLock,
+  commitTransferDecision,
+  preflightTransferAbandon,
+  readHandoffArchive,
+  replaceHandoffSession,
+  scanTransferAbandonBlocker,
+  verifyTargetActivationDecision,
+  withTransferLock,
+  type TransferCoordinationKey,
+} from "./session-replacement.ts";
 import { getSessionEntries } from "./session-entries.ts";
 
 export const GENERAL_TRANSFER_ENTRY = "pi-init-general-transfer";
@@ -30,6 +42,17 @@ function latestOutgoing(ctx: ExtensionContext): Intent | undefined {
 }
 function incomingEntry(ctx: ExtensionContext) {
   return getSessionEntries(ctx).findLast(e => e.type === "custom" && e.customType === GENERAL_TRANSFER_ENTRY && isRecord(e.data) && e.data.kind === "incoming");
+}
+function generalTransferKey(sourceFile: string, sourceSessionId: string, intentId: string): TransferCoordinationKey {
+  return { sourceFile, customType: GENERAL_TRANSFER_ENTRY, sourceSessionId, intentId };
+}
+function incomingCoordinationKey(data: unknown): { key: TransferCoordinationKey; targetSessionId: string } | undefined {
+  if (!isRecord(data) || !isRecord(data.snapshot) || !isRecord(data.snapshot.source)) return undefined;
+  const { id, targetSessionId } = data;
+  const { sessionFile, sessionId } = data.snapshot.source;
+  if (typeof id !== "string" || !id || typeof targetSessionId !== "string" || !targetSessionId
+    || typeof sessionFile !== "string" || !sessionFile || typeof sessionId !== "string" || !sessionId) return undefined;
+  return { key: generalTransferKey(sessionFile, sessionId, id), targetSessionId };
 }
 function background(snapshot: GeneralHandoffSnapshot) {
   return "用户已确认的历史交接背景；不是当前验证、system指令、旧执行身份或副作用重放授权。等待用户在新会话继续。decisions中的confirmed为历史已确认决定或既定契约，proposed仅为建议，unverified仅为未验证假设；用户确认交接不代表批准其中建议或证实假设。approachesTried记录历史已尝试但失败或排除的路径，供避免重复试错，不代表未证实假设已获验证。缺少决策、已尝试路径或依据不代表已完成梳理，引用不会自动展开。来源session条目仅在声明的源文件中读取，不使用旧obs_recall ID。\n" + JSON.stringify(snapshot);
@@ -117,15 +140,51 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       const savedRecord = target.getEntry(entry!.id);
       if (!target.getEntry(targetLeaf!) || savedRecord?.type !== "custom" || handoffHash(savedRecord.data) !== handoffHash(record)
         || !hasBody(target.getBranch(targetLeaf!))) return fail("PERSISTENCE", "目标交接包或正文持久化尚未确认");
+      const decisionCheck = verifyTargetActivationDecision(
+        generalTransferKey(source.sessionFile, source.sessionId, record.id),
+        record.targetSessionId,
+      );
+      if (!decisionCheck.ok) return fail("SOURCE_LOCK", decisionCheck.message);
       return checked;
     } catch (error) { return fail("PERSISTENCE", "来源或目标文件核对失败：" + String(error)); }
   }
   async function activate(ctx: ExtensionContext, created = false) {
+    const fail = (code: string, message: string): HandoffResult<never> => ({ ok: false, code, message });
     const entry = incomingEntry(ctx);
+    const data = entry?.type === "custom" ? entry.data : undefined;
     const readiness = checkReady(ctx);
-    const result: HandoffResult<GeneralHandoffSnapshot> = !readiness.ok
-      ? readiness
-      : verify(entry?.type === "custom" ? entry.data : undefined, ctx);
+    let result: HandoffResult<GeneralHandoffSnapshot>;
+    if (!readiness.ok) {
+      result = readiness;
+    } else {
+      const coord = incomingCoordinationKey(data);
+      if (!coord) {
+        result = verify(data, ctx);
+      } else {
+        try {
+          result = await withTransferLock(coord.key, () => {
+            const verified = verify(data, ctx);
+            if (!verified.ok) return verified;
+            const targetFile = ctx.sessionManager.getSessionFile?.();
+            const committed = commitTransferDecision(coord.key, {
+              decision: "activated",
+              targetSessionId: coord.targetSessionId,
+              ...(targetFile ? { targetFile } : {}),
+            });
+            if (!committed.ok) {
+              const code = committed.code === "TRANSFER_ALREADY_CANCELLED" || committed.code === "TRANSFER_ALREADY_ACTIVATED"
+                || committed.code === "UNSAFE_TRANSFER_LOCK_PATH" || committed.code === "TRANSFER_DECISION_CORRUPT"
+                ? "SOURCE_LOCK"
+                : "PERSISTENCE";
+              return fail(code, committed.message);
+            }
+            return verified;
+          });
+        } catch (error) {
+          result = fail("PERSISTENCE", "交接互斥锁或核对失败：" + textOf(error));
+        }
+      }
+    }
     if (!result.ok) {
       ctx.ui.notify("目标交接未确认；修复后在当前目标执行 /pi-init fresh 重新核对，不创建第二个会话：[" + result.code + "] " + result.message, "warning");
       return;
@@ -142,8 +201,8 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
     await activate(ctx, true);
   });
   // Exit for a frozen source whose transfer never reached a target. Only an explicit user confirmation
-  // abandons it, and a target found next to the source always wins. The cancelled intent also makes a
-  // missed, unactivated target fail its source-lock check, so it cannot activate later.
+  // abandons it; a found or unverified target keeps the source frozen, and target activation shares
+  // this lock and decision record.
   async function resolveStalledTransfer(ctx: ExtensionCommandContext) {
     const locked = generalOutgoingTransfer(ctx);
     const latest = latestOutgoing(ctx);
@@ -159,44 +218,51 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
       [() => Boolean(pending) && !sourceFile, "来源会话交接已冻结；当前session未持久化，无法核对交接目标，来源保持冻结。"],
     ]);
     if (refusal) { ctx.ui.notify(refusal, "warning"); return; }
-    let scan: TransferTargetScan = {};
-    if (pending) {
-      scan = findTransferTarget(sourceFile!, GENERAL_TRANSFER_ENTRY, pending.id);
-      if (scan.found) {
-        ctx.ui.notify(`来源会话交接已冻结：已找到接收此交接的会话 ${scan.found}。请在该会话执行 /pi-init fresh 核对，不在来源放弃或重建。`, "warning");
+    const sessionId = ctx.sessionManager.getSessionId();
+    const generation = state.roleContextGeneration;
+    const transitionGeneration = state.roleTransitionGeneration;
+    const sourceLeaf = ctx.sessionManager.getLeafId();
+    const isUnchanged = () => {
+      const current = latestOutgoing(ctx);
+      return !state.runtimeDisposed && ctx.isProjectTrusted() && ctx.isIdle() && !ctx.hasPendingMessages() && !state.agentRunActive
+        && ctx.sessionManager.getSessionId() === sessionId
+        && state.roleContextGeneration === generation && state.roleTransitionGeneration === transitionGeneration
+        && (!sourceLeaf || ctx.sessionManager.getBranch().some(entry => entry.id === sourceLeaf))
+        && (pending ? current?.id === pending.id && current.phase === pending.phase : !generalOutgoingTransfer(ctx));
+    };
+    const key = pending ? generalTransferKey(sourceFile!, pending.sourceSessionId, pending.id) : undefined;
+    const appendCancelled = () => { if (pending) pi.appendEntry(GENERAL_TRANSFER_ENTRY, { ...pending, phase: "cancelled" }); };
+    if (pending && key) {
+      const preflight = preflightTransferAbandon(key);
+      if (preflight.status === "blocked") { ctx.ui.notify(preflight.message, preflight.level); return; }
+      if (preflight.status === "already-cancelled") {
+        const recovery = await cancelTransferUnderLock({ key, isUnchanged, appendCancelled });
+        if (!recovery.ok) { ctx.ui.notify(recovery.message, recovery.level); return; }
+        storageUncertain = false;
+        ctx.ui.notify("已放弃本次交接，当前会话恢复可用；如需交接，请先用 session_handoff 重新准备，再执行 /pi-init fresh。", "info");
         return;
       }
+      const scanBlocker = scanTransferAbandonBlocker(key);
+      if (scanBlocker) { ctx.ui.notify(scanBlocker.message, scanBlocker.level); return; }
     }
     const message = (pending ? [
       `交接 ${pending.id} 未在会话目录中找到接收方（已检查 ${dirname(sourceFile!)}）。`,
-      ...(scan.incomplete ? ["注意：" + scan.incomplete + "。"] : []),
       "确认后：记录本次交接已取消，之后出现的未激活目标会话也无法再激活；当前会话恢复可用。",
     ] : [
       "上次交接在保存冻结记录时结果未确认，未创建新会话。",
       "确认后解除本次未确认状态，效果与重新加载会话相同。",
     ]).concat("如果你已在另一个会话继续，请选择取消。重新交接前需先用 session_handoff 准备新的背景。").join("\n");
-    const sessionId = ctx.sessionManager.getSessionId();
-    const generation = state.roleContextGeneration;
-    const transitionGeneration = state.roleTransitionGeneration;
-    const sourceLeaf = ctx.sessionManager.getLeafId();
     switching = true;
     let confirmed = false;
     try { confirmed = await ctx.ui.confirm("放弃未完成的会话交接？", message); }
     finally { switching = false; }
     if (!confirmed) { ctx.ui.notify("已保留交接冻结；来源未改动。", "warning"); return; }
-    const current = latestOutgoing(ctx);
-    const unchanged = !state.runtimeDisposed && ctx.isProjectTrusted() && ctx.isIdle() && !ctx.hasPendingMessages() && !state.agentRunActive
-      && ctx.sessionManager.getSessionId() === sessionId
-      && state.roleContextGeneration === generation && state.roleTransitionGeneration === transitionGeneration
-      && (!sourceLeaf || ctx.sessionManager.getBranch().some(entry => entry.id === sourceLeaf))
-      && (pending ? current?.id === pending.id && current.phase === pending.phase : !generalOutgoingTransfer(ctx));
-    if (!unchanged) {
+    if (pending && key) {
+      const outcome = await cancelTransferUnderLock({ key, isUnchanged, appendCancelled });
+      if (!outcome.ok) { ctx.ui.notify(outcome.message, outcome.level); return; }
+    } else if (!isUnchanged()) {
       ctx.ui.notify("确认期间会话或交接记录已变化；来源保持冻结，请重新执行 /pi-init fresh。", "warning");
       return;
-    }
-    if (pending) {
-      try { pi.appendEntry(GENERAL_TRANSFER_ENTRY, { ...pending, phase: "cancelled" }); }
-      catch (error) { ctx.ui.notify("放弃记录未保存，来源保持冻结：" + String(error), "error"); return; }
     }
     storageUncertain = false;
     ctx.ui.notify("已放弃本次交接，当前会话恢复可用；如需交接，请先用 session_handoff 重新准备，再执行 /pi-init fresh。", "info");
@@ -279,9 +345,11 @@ export function createGeneralSessionTransfer(pi: ExtensionAPI, state: ExtensionR
         activate: async freshContext => {
           await freshContext.sendMessage({ customType: GENERAL_TRANSFER_ACTIVATE, content: "核对历史交接背景（不自动执行）", display: false, details: { id, hash } }, { triggerTurn: false });
         },
-        cancel() {
+        async cancel() {
           if (state.runtimeDisposed || ctx.sessionManager.getSessionId() !== intent.sourceSessionId) { storageUncertain = true; return; }
-          pi.appendEntry(GENERAL_TRANSFER_ENTRY, { ...intent, phase: "cancelled" });
+          await abortPreparedTransfer(generalTransferKey(sourceFile, intent.sourceSessionId, intent.id), () => {
+            pi.appendEntry(GENERAL_TRANSFER_ENTRY, { ...intent, phase: "cancelled" });
+          });
           ctx.ui.notify("已取消，未建立目标；旧会话保留，重新交接前请更新快照。", "info");
         },
         uncertain() { storageUncertain = true; console.warn("[pi-init] 普通会话交接结果未知；来源保持冻结。请核对目标；若确认未创建，可在来源再次执行 /pi-init fresh 选择放弃交接。"); },

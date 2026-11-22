@@ -49,6 +49,12 @@ export function isExplicitWorkflowReplanInput(value: unknown): boolean {
 export function isExplicitWorkflowChildInput(value: unknown): boolean {
   return typeof value === "string" && /^(?:新目标|插入目标|子目标|创建子流程|子流程|独立子目标|start child workflow|insert goal)\s*[：:]\s*\S/iu.test(value.normalize("NFKC").trim());
 }
+
+export function parseExplicitWorkflowQuestionInput(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = /^(?:问答|讨论)\s*[：:]\s*(\S[\s\S]*)$/u.exec(value.trim());
+  return match?.[1];
+}
 export function parseWorkflowControlInput(value: unknown): { stop: true; saveTodo: boolean } | undefined {
   if (typeof value !== "string" || value.length > 4096) return undefined;
   const text = value.normalize("NFKC").trim();

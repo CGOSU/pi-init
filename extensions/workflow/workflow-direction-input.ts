@@ -1,6 +1,6 @@
 import type { ExtensionContext, InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { transferFrozen } from "../../src/session-handoff.ts";
-import { isWorkflowContinuationInput } from "../../src/workflow-input-intent.ts";
+import { isWorkflowContinuationInput, parseExplicitWorkflowQuestionInput } from "../../src/workflow-input-intent.ts";
 import { classifyWorkflowDirection, type DirectionContract } from "../role/architect-direction-model.ts";
 import type { RoleRuntime } from "../role/role-runtime.ts";
 import { executingWorkflowTask, isExecutionBlockedState, type RuntimeStateView } from "../runtime-state.ts";
@@ -42,6 +42,15 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
       || !workflowHandoffMessageOnBranch(ctx, active.handoff))) return;
     if (deps.hasOutgoingTransfer(ctx)) return;
 
+    const explicitQuestion = parseExplicitWorkflowQuestionInput(event.text);
+    if (explicitQuestion) {
+      state.traceHandoff?.(ctx, "workflow.direction_classified", {
+        outcome: "explicit-question",
+        durationMs: 0,
+      });
+      return { action: "transform", text: explicitQuestion };
+    }
+
     const branchAnchor = session.getLeafId();
     const contextGeneration = state.roleContextGeneration;
     const transitionGeneration = state.roleTransitionGeneration;
@@ -82,10 +91,35 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
         durationMs: Date.now() - startedAt,
       });
     };
+    const choices = active
+      ? "「问答：<内容>」、「任务纠偏：<指令>」或「重规划：<新方向>」"
+      : "「问答：<内容>」或「重规划：<新方向>」";
     function unapplied(reason: string) {
-      const choices = active ? "「任务纠偏：<指令>」或「重规划：<新方向>」" : "「重规划：<新方向>」";
       ctx.ui.notify(`未应用这条输入：${reason}。请核对当前状态，可用${choices}明确指定；不会自动重试、恢复或批准。`, "warning");
       return HANDLED;
+    }
+    async function confirmFallbackContinue(failureCode: string, reason: string): Promise<InputEventResult | undefined> {
+      if (event.source !== "interactive" || !ctx.hasUI || typeof ctx.ui?.confirm !== "function") {
+        return unapplied(reason);
+      }
+      const message = [
+        `${reason}，无法确认这条输入是否为普通问答。`,
+        "选择确认：原样作为普通问答/消息发送（不会修改计划、重规划或自动批准）。",
+        `选择取消：暂不发送，可改用${choices}明确指定。`,
+      ].join("\n");
+      let confirmed = false;
+      try { confirmed = Boolean(await ctx.ui.confirm("架构方向判断未完成，按普通消息发送？", message)); }
+      catch { confirmed = false; }
+      if (inputGeneration !== generation) return HANDLED;
+      if (!isCurrent()) {
+        trace("stale-state");
+        return unapplied("确认期间会话或工作流状态已经变化");
+      }
+      if (confirmed) {
+        trace("fallback-continue", failureCode);
+        return undefined;
+      }
+      return unapplied(reason);
     }
     if (!isCurrent()) {
       trace("stale-state");
@@ -93,17 +127,18 @@ export function createWorkflowDirectionInput(state: RuntimeStateView, deps: {
     }
     if (controller.signal.aborted) {
       trace("timeout");
-      return unapplied("架构方向判断超时");
+      return await confirmFallbackContinue("timeout", "架构方向判断超时");
     }
     if (!result || !result.ok) {
       if (result?.code === "not-configured") {
         trace("skipped", "not-configured");
         return;
       }
-      trace("failed", result?.code ?? "model-failed");
-      const reason = result?.code === "model-unavailable" ? "没有可用的已配置架构模型"
-        : result?.code === "invalid-response" ? "架构模型未返回合法方向" : "架构方向判断失败";
-      return unapplied(reason);
+      const code = result?.code ?? "model-failed";
+      trace("failed", code);
+      const reason = code === "model-unavailable" ? "没有可用的已配置架构模型"
+        : code === "invalid-response" ? "架构模型未返回合法方向" : "架构方向判断失败";
+      return await confirmFallbackContinue(code, reason);
     }
     if (result.direction === null) {
       trace("none");
