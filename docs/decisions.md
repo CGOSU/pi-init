@@ -10,12 +10,12 @@
 
 ### 2026-11-22：自然语言方向分流与运行时审查后续收口
 
-- 决定（自然语言方向分流）：受信任项目中，待审计划（`architecture-review`）或已启动的当前执行任务可将非命令、非“继续”的外部输入交给 `extensions/role/architect-direction-model.ts` 与 `extensions/workflow/workflow-direction-input.ts` 做一次无工具方向分类：普通问答（`direction: null`）原样放行；仅改执行做法而目标/验收/公共契约/权限不变时转为当前任务纠偏输入（`transform`）；否则或待审计划收到方向变更时登记需审阅的 `replan`（仍须 `/pi-init workflow resume` 批准）。分类推理档位封顶 `low`（Auto 下遵守 `minThinkingLevel` 下限），超时 30 秒，容忍单一 JSON 代码块围栏；已有 `pendingRevision` 时跳过分类；`roles` 未配置 `architect` 模型或待自动迁移时直通普通输入且不借用当前执行模型；已配置模型不可用、判断失败、超时、返回多余字段或正文、或 `revise` 返回 false 时均不应用并提示显式入口；斜杠命令直接放行且不中止在途分类请求；记录去敏 `workflow.direction_classified` 诊断。
+- 决定（自然语言方向分流）：受信任项目中，待审计划（`architecture-review`）或已启动的当前执行任务可将非命令、非“继续”的外部输入交给 `extensions/role/architect-direction-model.ts` 与 `extensions/workflow/workflow-direction-input.ts` 做一次无工具方向分类：普通问答（`direction: null`）原样放行；支持显式 `问答：<内容>` / `讨论：<内容>` 前缀直接剥离并按普通对话放行（不调分类模型，空正文不误剥离）；仅改执行做法而目标/验收/公共契约/权限不变时转为当前任务纠偏输入（`transform`）；否则或待审计划收到方向变更时登记需审阅的 `replan`（仍须 `/pi-init workflow resume` 批准）。分类推理档位封顶 `low`（Auto 下遵守 `minThinkingLevel` 下限），超时 30 秒，容忍单一 JSON 代码块围栏；已有 `pendingRevision` 时跳过分类；`roles` 未配置 `architect` 模型或待自动迁移时直通普通输入且不借用当前执行模型；已配置模型不可用、判断失败、超时或返回多余字段/正文时，若为 `interactive` 输入且宿主提供 `ui.confirm` 则弹出确认框（确认后再次核对代次与会话/分支未变化后按普通输入放行，记录 `fallback-continue`），取消、状态变化、无 UI 或非交互来源（`rpc` 等）及 `revise` 返回 false 时均拦截并提示含 `问答：` 在内的显式入口；斜杠命令直接放行且不中止在途分类请求；记录去敏 `workflow.direction_classified` 诊断。
 - 决定（侧车配额回收与跨项目清理）：诊断侧车共有 `SIDECAR_LIMIT`（128）组上限；满额时 `admitSidecar` 自动跨项目回收全部段均已超过 7 天留存期的过期侧车流及空过期项目目录，不自动删除 7 天内的活跃或近期流；`/blackbox clear` 与菜单新增 `expired`（跨项目清理过期侧车）和 `sidecars`（跨项目清理全部侧车），保留本机全局摘要与项目 `.pi/`；`exportFile`/`clear`/`status`/`report` 对非法会话键直接返回结构化错误或可读提示。
-- 决定（状态与交接边界修复）：各活跃、暂停迁移（仅离开暂停时）、重规划应用、目标插入、重载恢复及会话导入统一清除 `stoppedAt`，`stopTimer` 持久化失败按停止/继续方向提示；`general-session-transfer.ts` 遇到损坏的冻结记录直接报错拒绝放弃并保留锁定，不再误走 `storageUncertain`，并在确认后复核会话/上下文状态；`findTransferTarget` 改为 256 KiB 前缀读取，同时保护 `realpathSync` 异常与符号链接；任务记忆重复写失败时通过 `suspend` 统一区分首次停止提示与续跑后的 `TASK_MEMORY_WRITE_FAILED` 单次警告。
-- 原因：未配置 `architect` 时阻断普通问答会令日常对话失效；高推理档位 + 裸 JSON 解析 + 20 秒超时与斜杠命令误打断会误杀合理输入；128 组全局侧车无跨项目回收或清理入口会在数周后令全机黑匣子停录；`stoppedAt` 漏清、损坏冻结锁与重复写失败双通知均已在代码审查中证实可造成状态冻结、死循环或矛盾反馈。
+- 决定（状态与交接边界修复）：各活跃、暂停迁移（仅离开暂停时）、重规划应用、目标插入、重载恢复及会话导入统一清除 `stoppedAt`，`stopTimer` 持久化失败按停止/继续方向提示；`general-session-transfer.ts` 遇到损坏的冻结记录直接报错拒绝放弃并保留锁定，不再误走 `storageUncertain`，并在确认后复核会话/上下文状态；`findTransferTarget` 改为 256 KiB 前缀读取，同时保护 `realpathSync` 异常与符号链接；目录扫描不完整（超过 500 个 `.jsonl`、符号链接、不可读或解析失败文件）时工作流与普通交接均严格 fail-closed 保持冻结；目标激活与来源取消共享来源目录下 `.pi-init-transfers/` 的每 intent 跨进程 `mkdir` 锁与 `O_CREAT | O_EXCL | O_NOFOLLOW` 单次原子裁决文件（`"activated"` / `"cancelled"`），并在来源确认后、持锁状态下复核裁决记录与重新扫描目录；任务记忆重复写失败时通过 `suspend` 统一区分首次停止提示与续跑后的 `TASK_MEMORY_WRITE_FAILED` 单次警告。
+- 原因：未配置 `architect` 时阻断普通问答会令日常对话失效，已配置模型故障时无普通对话回退与显式问答入口也会卡死只读提问；高推理档位 + 裸 JSON 解析 + 20 秒超时与斜杠命令误打断会误杀合理输入；128 组全局侧车无跨项目回收或清理入口会在数周后令全机黑匣子停录；`stoppedAt` 漏清、损坏冻结锁、扫描不完整仍放行取消、无锁确认窗口竞态与重复写失败双通知均已在代码审查或复现中证实可造成状态冻结、双会话重复派发或矛盾反馈。
 - 约束：不因方向分流自动批准待审计划、自动重试或切换当前会话角色与模型；仅传输计划摘要、约束、当前任务验收与本次用户输入，不附加历史或凭据；在线模型分类准确率与真实 Pi TUI 交互仍待端到端验证。
-- 验证：`pnpm run typecheck` 通过；`pnpm test` 1195/1195 通过（含上述各修复与边界回归）。
+- 验证：`pnpm run typecheck` 通过；`pnpm test` 1205/1205 通过（含上述各修复与边界回归）。
 
 ### 2026-11-22：重规划记录只保存任务 ID 与被移除的任务
 
@@ -62,11 +62,11 @@
 
 ### 2026-11-22：冻结的交接来源只经用户确认放弃
 
-- 决定：来源因工作流交接冻结（最新 outgoing 为 `prepared` 或工作流为 `session-transfer-pending`）时，再次执行 `/pi-init fresh` 进入处理流程：先在来源 session 所在目录查找含同一交接 ID incoming 记录的会话，找到则拒绝放弃并给出其路径；未找到时说明检查范围与无法读取的文件，经用户确认后追加 `phase: "cancelled"`，工作流恢复为 `task-blocked`（存在阻塞任务时）或 `session-handoff-review`。`cancelled` 已写入而工作流状态未保存时，下次 `fresh` 不再询问，直接补全恢复。
-- 原因：`newSession` 在写入目标之前失败或冻结状态保存失败时，原实现只记控制台警告，来源永久冻结且再次 `fresh` 只提示“核对已有目标”，工作流在当前会话无法继续。Pi SDK 1.5.0 在出现首条 user/assistant 消息时落盘，目标 setup 写入 user 种子消息，故已接收交接的目标会出现在来源同目录。
-- 普通会话交接（`general-session-transfer.ts`）采用同一出口：来源被冻结时再次 `/pi-init fresh`，在同目录找到含同一 ID 的 incoming 则拒绝；未找到时经确认追加 `cancelled` 并清除内存中的未确认标记。冻结记录本身未写入时只清除未确认标记，效果与重新加载相同。放弃后须用 `session_handoff` 重新准备才能再次交接。两种交接共用 `session-replacement.ts` 的 `findTransferTarget`。
-- 约束：不自动解冻，不新增命令。遗漏在其他目录且未激活的目标激活时读取来源意图，`cancelled` 会使其拒绝激活；已在其他目录激活的目标无法检测，由确认框提示用户取消。
-- 验证（以上四项及今日后续审修）：相关回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js`、`test/general-session-transfer.test.js`、`test/session-replacement.test.js`、`test/workflow-runtime-retirement.test.js` 等；全量 `pnpm test` 1195/1195 与 `pnpm run typecheck` 已通过（未在真实 Pi TUI 交互验收）。
+- 决定：来源因工作流交接冻结（最新 outgoing 为 `prepared` 或工作流为 `session-transfer-pending`）时，再次执行 `/pi-init fresh` 进入处理流程：先检查来源目录下 `.pi-init-transfers/` 中每 intent 的单次原子裁决文件与扫描结果，若已有目标激活记录、会话目录中找到接收方、或目录扫描不完整（超过 500 个 `.jsonl` 文件、符号链接或不可读/解析失败文件）均直接拒绝放弃并保持冻结；未找到且扫描完整时经用户确认后，进入同一跨进程 `mkdir` 互斥锁内复核来源状态、裁决记录与重新扫描结果，通过后以 `O_CREAT | O_EXCL | O_NOFOLLOW` 原子写入 `"cancelled"` 裁决文件并追加 `phase: "cancelled"`，工作流恢复为 `task-blocked`（存在阻塞任务时）或 `session-handoff-review`。`cancelled` 已写入而后续状态未保存时，下次 `fresh` 不再重问，直接补全恢复；目标激活在同一互斥锁内校验裁决记录后才能写入 `"activated"` 并持久化运行状态。
+- 原因：`newSession` 在写入目标之前失败或冻结状态保存失败时，原实现只记控制台警告，来源永久冻结且再次 `fresh` 只提示“核对已有目标”，工作流在当前会话无法继续。Pi SDK 1.5.0 在出现首条 user/assistant 消息时落盘，目标 setup 写入 user 种子消息，故已接收交接的目标会出现在来源同目录；但若放行 `scan.incomplete` 或不在锁内统一仲裁激活与取消，>500 文件或确认窗口内目标激活会导致双会话同时派发同一任务。
+- 普通会话交接（`general-session-transfer.ts`）采用同一互斥、裁决文件与 fail-closed 出口：来源被冻结时再次 `/pi-init fresh`，若扫描不完整、已有目标激活或找到接收方则拒绝；确认后在锁内复核并提交 `"cancelled"` 裁决、追加 `cancelled` 与清除内存未确认标记；目标激活校验同一裁决记录与互斥锁，遇来源已取消返回 `SOURCE_LOCK`。冻结记录本身未写入时只清除未确认标记，效果与重新加载相同。放弃后须用 `session_handoff` 重新准备才能再次交接。两种交接共用 `session-replacement.ts` 的扫描、锁与原子裁决辅助。
+- 约束：不自动解冻，不新增命令；扫描不完整时也不得旁路放弃。即使遗漏在其他目录且尚未激活的目标随后尝试激活，也因共享锁及原子裁决文件被拒绝；损坏的裁决文件或符号链接目录/文件均 fail-closed。
+- 验证（以上四项及今日后续审修）：相关回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js`、`test/general-session-transfer.test.js`、`test/session-replacement.test.js`、`test/workflow-input-resume.test.js`、`test/workflow-runtime-retirement.test.js` 等；全量 `pnpm test` 1205/1205 与 `pnpm run typecheck` 已通过（未在真实 Pi TUI 交互验收）。
 
 ### 2026-11-21：待审计划的重复读取只结束本轮
 
