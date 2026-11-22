@@ -89,9 +89,13 @@ export function createRoleRuntime(
     }
   }
 
-  async function readSessionRoleConfig(ctx: ExtensionContext) {
+  async function resolveSessionRoleConfig(ctx: ExtensionContext): Promise<ResolvedRoleConfig> {
     const persisted = unwrapRoleResult(await readRoleConfig(ctx));
-    const resolved = unwrapRoleResult(resolveRoleConfig(persisted, state.sessionRoleConfigOverrides)) as ResolvedRoleConfig;
+    return unwrapRoleResult(resolveRoleConfig(persisted, state.sessionRoleConfigOverrides));
+  }
+
+  async function readSessionRoleConfig(ctx: ExtensionContext) {
+    const resolved = await resolveSessionRoleConfig(ctx);
     state.configuredRoleNames = unwrapRoleResult(getRoleNames(resolved));
     return resolved;
   }
@@ -357,6 +361,7 @@ export function createRoleRuntime(
     resumeAutoThinking: autoModel.resume,
 
     readSessionRoleConfig,
+    resolveSessionRoleConfig,
     hasPendingRoleConfigChanges,
     isRoleModelConfigPersisted,
     clearStagedRoleConfig,

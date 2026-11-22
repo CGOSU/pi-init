@@ -18,6 +18,7 @@ type WorkflowReplanRequest = {
   kind?: "replan" | "goal";
   goalParentId?: string;
   childGoal?: unknown;
+  reviewRequired?: true;
 };
 type WorkflowReplanApplication = {
   revisionId?: unknown;
@@ -47,9 +48,12 @@ export function normalizeReplanPlan(input: unknown): NormalizedReplanPlan {
   };
 }
 
-function workflowHistoricalTaskIds(state: WorkflowState): Set<string> {
+/** Every task ID the workflow has ever used, from current tasks and both compact and legacy revision records. */
+export function workflowHistoricalTaskIds(state: WorkflowState): Set<string> {
   const ids = new Set<string>((state.tasks ?? []).map((task) => task.id));
   for (const revision of state.revisions ?? []) {
+    for (const id of [...(revision.previousTaskIds ?? []), ...(revision.replacedTaskIds ?? []),
+      ...(revision.retainedTaskIds ?? []), ...(revision.addedTaskIds ?? [])]) ids.add(id);
     for (const task of revision.previousTasks ?? []) ids.add(task.id);
     for (const task of revision.replacedTasks ?? []) ids.add(task.id);
     for (const task of revision.newPlan?.tasks ?? []) ids.add(task.id);
@@ -59,12 +63,12 @@ function workflowHistoricalTaskIds(state: WorkflowState): Set<string> {
 
 export function requestWorkflowReplan(
   state: WorkflowState,
-  { revisionId, direction, kind = "replan", childGoal, goalParentId }: WorkflowReplanRequest = {},
+  { revisionId, direction, kind = "replan", childGoal, goalParentId, reviewRequired }: WorkflowReplanRequest = {},
   now = Date.now(),
 ): WorkflowState {
   const pausedWithoutTask = state?.status === "paused" && !state.currentTaskId && !state.handoff;
-  const reviewRequired = pausedWithoutTask && state.pauseReason === "architecture-review" && kind === "replan";
-  const pausedBoundary = reviewRequired || pausedWithoutTask && ["task-blocked", "task-not-completed", "handoff-outcome-unknown", "legacy-execution-outcome-unknown", "dependency-blocked"].includes(state.pauseReason ?? "");
+  const revisingReview = pausedWithoutTask && state.pauseReason === "architecture-review" && kind === "replan";
+  const pausedBoundary = revisingReview || pausedWithoutTask && ["task-blocked", "task-not-completed", "handoff-outcome-unknown", "legacy-execution-outcome-unknown", "dependency-blocked"].includes(state.pauseReason ?? "");
   const convertGoal = state?.pendingRevision?.kind === "goal" && kind === "replan" && (state.status === "replanning" || state.status === "running" || pausedBoundary);
   if (!state || (state.status !== "running" && !pausedBoundary && !convertGoal)) {
     throw new Error("只有运行中或在安全边界暂停的工作流才能请求重规划");
@@ -77,7 +81,7 @@ export function requestWorkflowReplan(
     pending.kind = "replan"; revision.kind = "replan";
     delete pending.childGoal; delete pending.goalParentId;
     delete revision.childGoal; delete revision.goalParentId;
-    return appendWorkflowReplanDirection(result, direction, now);
+    return appendWorkflowReplanDirection(result, direction, now, reviewRequired);
   }
   if (state.pendingRevision) throw new Error("工作流已有待处理的重规划请求");
 
@@ -95,7 +99,7 @@ export function requestWorkflowReplan(
     direction: normalizedDirection,
     requestedAt: now,
     ...(state.currentTaskId ? { requestedFromTaskId: state.currentTaskId } : {}),
-    ...(reviewRequired ? { reviewRequired: true as const } : {}),
+    ...(kind === "replan" && (revisingReview || reviewRequired) ? { reviewRequired: true as const } : {}),
     ...(kind === "goal"
       ? { kind, childGoal: requireText(childGoal ?? normalizedDirection, "插入目标"), ...(goalParentId ? { goalParentId } : {}) }
       : {}),
@@ -117,7 +121,9 @@ function mergeReplanDirections(directions: string[]): string {
   return directions.map((item) => item.trim()).filter(Boolean).join("\n");
 }
 
-export function appendWorkflowReplanDirection(state: WorkflowState, direction: unknown, now = Date.now()): WorkflowState {
+export function appendWorkflowReplanDirection(
+  state: WorkflowState, direction: unknown, now = Date.now(), reviewRequired?: true,
+): WorkflowState {
   if (!state || !state.pendingRevision) {
     throw new Error("工作流没有待处理的重规划请求");
   }
@@ -147,6 +153,7 @@ export function appendWorkflowReplanDirection(state: WorkflowState, direction: u
   if (!revision) throw new Error("工作流重规划 revisionId 已应用或不存在");
   revision.direction = merged;
   if (pendingRevision.kind === "goal") revision.childGoal = pendingRevision.childGoal;
+  else if (reviewRequired) pendingRevision.reviewRequired = revision.reviewRequired = true;
   return result;
 }
 
@@ -229,17 +236,15 @@ export function applyWorkflowReplan(
   revision.status = "applied";
   if (outcomeResolution) revision.direction += "\n未知结果核对处置：" + outcomeResolution;
   revision.appliedAt = now;
+  // Compact audit record: completed, retained and added tasks stay in result.tasks and the new plan is result.plan,
+  // so only IDs and the removed tasks are stored. Copying the whole queue every revision made state grow with
+  // tasks × revisions, and every persisted transition rewrites the whole state.
   revision.previousPlan = clonePlan(state.plan);
-  revision.previousTasks = state.tasks.map(cloneTask);
+  revision.previousTaskIds = state.tasks.map((task) => task.id);
   revision.replacedTaskIds = replacedTasks.map((task) => task.id);
   revision.replacedTasks = replacedTasks;
   revision.retainedTaskIds = retainedTasks.map((task) => task.id);
   revision.addedTaskIds = plan.tasks.map((task) => task.id);
-  revision.newPlan = {
-    summary: plan.summary,
-    constraints: [...plan.constraints],
-    tasks: plan.tasks.map(cloneTask),
-  };
 
   result.plan = {
     summary: plan.summary,

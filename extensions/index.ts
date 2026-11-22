@@ -5,8 +5,10 @@ import {
 import { findMatchingRole } from "../src/roles.ts";
 import { clearRoleConfigNotice, showRoleConfigNotice } from "./role/role-config-notice.ts";
 import { evaluateFileReviewDispatch } from "./file-review/file-review-dispatch-policy.ts";
-import { isWorkflowRunning, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
+import { clearWorkflowStopped, isWorkflowRunning, markWorkflowStopped, markWorkflowTaskOutcomeUnknown, resetWorkflowNudges, workflowActionIdentity } from "../src/workflow.ts";
 import { createWorkflowRevisionInput, workflowTaskCorrectionInput } from "./workflow/workflow-revision-input.ts";
+import { createWorkflowDirectionInput } from "./workflow/workflow-direction-input.ts";
+import { isExternalRunSource } from "../src/run-timing.ts";
 import { registerExtensionCommand } from "./extension-command.ts";
 import { registerProjectTool } from "./project-tool.ts";
 import { registerWorkflowTool } from "./workflow/workflow-tool.ts";
@@ -44,6 +46,13 @@ import { createSessionHandoff, outgoingTransfer } from "./session/session-handof
 
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
+/*
+ * Wiring order: several callbacks below reference collaborators declared further down (userControl,
+ * sessionHandoff, roleHandoff, rejectionGuard, directionInput, workflowStore, workflowDispatch). That is safe
+ * only because Pi calls these callbacks from event handlers, never while this factory runs. Do not invoke a
+ * callback during construction; a call before its target is declared throws a ReferenceError.
+ * extension-lifecycle tests construct the extension and emit events, which covers this contract.
+ */
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
   let assistantFailureScope: string | undefined;
@@ -125,13 +134,21 @@ export default function initProjectExtension(pi: ExtensionAPI) {
             });
   const roleHandoff = createRoleHandoff(pi, runtimeState, { getActiveRole: roleRuntime.activeRoleFor, requireRecovery: roleRecovery.requireConfirmation });
   const userControl = createWorkflowUserControl(pi, runtimeState, {
-    retire: () => roleHandoff.reset(),
+    retire: () => { roleHandoff.reset(); directionInput.invalidate(); },
     interrupt: (ctx) => {
       const current = runtimeState.workflowState;
       if (!current || current.status !== "running" || !current.currentTaskId || !["executing", "queued", "dispatching"].includes(current.handoff?.phase ?? "")) return;
       const next = markWorkflowTaskOutcomeUnknown(current, { taskId: current.currentTaskId, reason: "活动回合中断或失败；已发生的副作用需核对，不自动重放。" });
       try { workflowStore.persistWorkflowState(next, ctx); }
       catch (error) { runtimeState.pendingWorkflowRecovery ??= next; throw error; }
+    },
+    stopTimer: (ctx, stopped) => {
+      const current = runtimeState.workflowState;
+      if (!current || current.sessionId !== ctx.sessionManager.getSessionId()) return;
+      const next = stopped ? markWorkflowStopped(current) : clearWorkflowStopped(current);
+      if (next === current) return;
+      try { workflowStore.persistWorkflowState(next, ctx); }
+      catch (error) { ctx.ui.notify("工作流计时标记未保存：" + textOf(error) + "；本次停止期间可能计入运行耗时，不影响任务状态。", "warning"); }
     },
   });
   pi.on("tool_call", (event, ctx) => {
@@ -219,15 +236,24 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     scheduleWorkflow: workflowDispatch.scheduleWorkflow,
   });
 
+  const directionInput = createWorkflowDirectionInput(runtimeState, {
+    readConfig: roleRuntime.resolveSessionRoleConfig,
+    activeRoleFor: roleRuntime.activeRoleFor,
+    revise: captureWorkflowRevisionInput,
+    hasOutgoingTransfer: ctx => Boolean(outgoingTransfer(ctx, runtimeState.workflowState)),
+  });
+
   pi.on("input", async (event, ctx) => {
+    const inputGeneration = isExternalRunSource(event.source) ? directionInput.invalidate() : undefined;
     if (typeof event.text === "string" && event.text.trim().startsWith("/")) return { action: "continue" };
     const handled = (await userControl.input(event, ctx))
       ?? ((await captureWorkflowRevisionInput(event, ctx)) ? { action: "handled" as const } : undefined);
     if (handled) return handled;
-    const correction = workflowTaskCorrectionInput(runtimeState, event, ctx);
-    if (correction?.action === "handled") return correction;
+    const direction = workflowTaskCorrectionInput(runtimeState, event, ctx)
+      ?? (inputGeneration === undefined ? undefined : await directionInput.handle(event, ctx, inputGeneration));
+    if (direction?.action === "handled") return direction;
     runTimingDiagnostics.captureInput(event.source);
-    return correction ?? { action: "continue" };
+    return direction ?? { action: "continue" };
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
@@ -280,6 +306,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
     await workflowDispatch.scheduleWorkflow(ctx);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
+    directionInput.invalidate();
     resetAgentRun(true);
     runtimeState.roleContextGeneration += 1;
     runtimeState.roleTransitionGeneration += 1;
@@ -294,6 +321,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    directionInput.invalidate();
     clearRunFailure();
     resetAgentRun(true);
     try {
@@ -333,6 +361,7 @@ export default function initProjectExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_tree", async (event, ctx) => {
+    directionInput.invalidate();
     resetAgentRun(true);
     workflowDispatch.restoreWorkflowState(ctx, { updateStatus: false });
     userControl.restore(ctx);

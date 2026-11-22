@@ -36,6 +36,7 @@ export function cloneRevision(revision: WorkflowRevision): WorkflowRevision {
     ...(revision.replacedTaskIds ? { replacedTaskIds: [...revision.replacedTaskIds] } : {}),
     ...(revision.addedTaskIds ? { addedTaskIds: [...revision.addedTaskIds] } : {}),
     ...(revision.previousPlan ? { previousPlan: clonePlan(revision.previousPlan) } : {}),
+    ...(revision.previousTaskIds ? { previousTaskIds: [...revision.previousTaskIds] } : {}),
     ...(revision.previousTasks ? { previousTasks: revision.previousTasks.map(cloneTask) } : {}),
     ...(revision.replacedTasks ? { replacedTasks: revision.replacedTasks.map(cloneTask) } : {}),
     ...(revision.newPlan
@@ -90,7 +91,7 @@ export function cloneWorkflowStateCore(state: WorkflowStateCore, now = state.upd
   const { startedAt } = getWorkflowExecutionBounds(state);
   const pauseStart = Math.max(startedAt ?? now, state.updatedAt ?? now);
   const pausedMilliseconds = state.pausedMilliseconds === undefined ? undefined
-    : state.status === "paused" && startedAt !== undefined
+    : (state.status === "paused" || state.stoppedAt !== undefined) && startedAt !== undefined
       ? state.pausedMilliseconds + Math.max(0, now - pauseStart)
       : state.pausedMilliseconds;
   return {

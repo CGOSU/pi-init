@@ -4,7 +4,7 @@ export type { WorkflowExecutor } from "./role-types.ts";
 
 export type WorkflowStatus = "running" | "paused" | "replanning" | "completed" | "cancelled";
 export type WorkflowTaskStatus = "pending" | "in_progress" | "completed" | "blocked" | "superseded";
-export type WorkflowRevisionStatus = "requested" | "applied";
+export type WorkflowRevisionStatus = "requested" | "applied" | "discarded";
 export type WorkflowHandoffPhase = "prepared" | "waiting-role" | "compacting" | "dispatching" | "queued" | "executing" | "uncertain";
 export type WorkflowContinuationPhase = "pending" | "compacting" | "dispatching" | "queued";
 export type WorkflowContinuationReason = "plan-created" | "task-completed" | "replan-applied" | "retry" | "resume" | "replan-requested";
@@ -80,12 +80,19 @@ export type WorkflowPendingRevision = {
 export type WorkflowRevision = WorkflowPendingRevision & {
   status: WorkflowRevisionStatus;
   appliedAt?: number;
+  /** Set when the workflow ended before this requested revision was applied. */
+  discardedAt?: number;
   retainedTaskIds?: string[];
   replacedTaskIds?: string[];
   addedTaskIds?: string[];
   previousPlan?: WorkflowPlanSummary;
-  previousTasks?: WorkflowTask[];
+  /** Task IDs before this revision. New revisions store IDs only; completed and retained tasks stay in state.tasks. */
+  previousTaskIds?: string[];
+  /** Full records of the tasks this revision removed from the queue; the only remaining copy of them. */
   replacedTasks?: WorkflowTask[];
+  /** Legacy only: full task list before the revision. Read for history, never written. */
+  previousTasks?: WorkflowTask[];
+  /** Legacy only: plan after the revision, equal to the next revision's previousPlan or the current plan. Never written. */
   newPlan?: WorkflowPlanSnapshot;
 };
 
@@ -144,6 +151,8 @@ export type WorkflowStateCore = {
   legacySourceVersion?: number;
   /** Accumulated paused time through updatedAt; absent on unmeasured historical workflows. */
   pausedMilliseconds?: number;
+  /** The user stopped auto-run at this time while the workflow was running; that time is not active time. */
+  stoppedAt?: number;
 };
 export type WorkflowState = WorkflowStateCore;
 

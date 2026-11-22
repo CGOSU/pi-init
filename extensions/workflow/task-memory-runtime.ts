@@ -1,22 +1,22 @@
 import { workflowHandoffMessageOnBranch } from "./workflow-session-adapter.ts";
 import { WORKFLOW_TASK_MESSAGE_TYPE } from "../../src/workflow-protocol.ts";
-import { isRecord } from "../../src/value-guards.ts";
+import { isRecord, recordOrEmpty } from "../../src/value-guards.ts";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { applyParsedTaskCheckpoint, createTaskMemory, recordTaskObservations, parseTaskMemory, parseTaskCheckpoint, taskMemoryScope, taskMemoryError, type TaskMemory, type TaskObservation, type TaskSourceVersion, parseTaskMemoryIdentity } from "../../src/task-memory.ts";
-import { workflowHandoffIdentity } from "../../src/workflow-handoff.ts";
+import { sameWorkflowHandoffIdentity, workflowHandoffIdentity } from "../../src/workflow-handoff.ts";
 import type { WorkflowHandoffIdentity } from "../../src/workflow-types.ts";
 import { firstPolicyMatch, hasRecoveryGate, onEvents, type RuntimeStateView } from "../runtime-state.ts";
 import { fingerprint } from "../diagnostics/handoff-tool-diagnostics.ts";
-import { TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE, TASK_MEMORY_LIMITS } from "../../src/task-memory-protocol.ts";
+import { TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE, TASK_MEMORY_LIMITS, TASK_OBSERVATION_DERIVATION } from "../../src/task-memory-protocol.ts";
 import type { TaskMemoryParseResult } from "../../src/task-memory-parsing.ts";
 
 type Entry = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>[number];
 type MemoryBinding = { source: (message: object, ctx: ExtensionContext) => WorkflowHandoffIdentity | undefined };
 export type TaskMemoryView = { status: "available" | "legacy" | "unavailable"; memory?: TaskMemory; reason?: string; applicability?: "historical" | "matches-checkpoint-files" | "changed" | "unverified"; evidence?: TaskEvidence[] };
-function bounded(text: string, maximum: number) {
+export function bounded(text: string, maximum: number) {
   if (text.length <= maximum) return text;
   const marker = "\n[中间省略；可按来源读取]\n";
   const head = Math.floor((maximum - marker.length) / 2);
@@ -25,61 +25,85 @@ function bounded(text: string, maximum: number) {
 export function contentText(content: unknown) {
   return Array.isArray(content) ? content.filter(item => item && typeof item === "object" && item.type === "text" && typeof item.text === "string").map(item => item.text).join("\n") : "";
 }
-function taskMemoryIdentityMatches(left: WorkflowHandoffIdentity, right: WorkflowHandoffIdentity) {
-  return Object.keys(left).every(key => left[key as keyof WorkflowHandoffIdentity] === right[key as keyof WorkflowHandoffIdentity]);
-}
-function failedProgressReceipt(value: unknown) {
+function failedReceipt(value: unknown) {
   if (!isRecord(value)) return false;
-  const data = value as Record<string, unknown>;
-  return data.status === "error" || data.status === "unfinished" || data.isError === true || data.ok === false
-    || ["exitCode", "exit_code"].some(key => typeof data[key] === "number" && data[key] !== 0);
+  return value.status === "error" || value.status === "unfinished" || value.isError === true || value.ok === false
+    || ["exitCode", "exit_code"].some(key => typeof value[key] === "number" && value[key] !== 0);
+}
+/** The one failure rule for observation outcome, checkpoint progress and verification sources. */
+export function toolResultFailed(message: { isError?: unknown; details?: unknown; nestedCalls?: unknown }) {
+  const details = recordOrEmpty(message.details);
+  const nestedCalls = message.nestedCalls;
+  const calls = [...(isRecord(nestedCalls) && Array.isArray(nestedCalls.calls) ? nestedCalls.calls : []), ...(Array.isArray(details.calls) ? details.calls : [])];
+  return message.isError === true || failedReceipt(details) || calls.some(failedReceipt);
 }
 function excludedProgressSources(branch: Entry[]) {
   const excluded = new Set<string>();
   for (const entry of branch) {
-    if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-    const message = entry.message;
-    const details = message.details && typeof message.details === "object" ? message.details as Record<string, unknown> : {};
-    const calls = [...(Array.isArray(message.nestedCalls?.calls) ? message.nestedCalls.calls : []), ...(Array.isArray(details.calls) ? details.calls : [])];
-    if (failedProgressReceipt(details) || calls.some(failedProgressReceipt)) excluded.add(entry.id);
+    if (entry.type === "message" && entry.message.role === "toolResult" && toolResultFailed(entry.message)) excluded.add(entry.id);
   }
   return excluded;
+}
+// SDK-assigned identity of a source; stable across plugin versions, unlike derived summaries and fingerprints.
+const OBSERVATION_SOURCE_FIELDS = ["id", "messageEntryId", "toolCallId", "toolName"] as const;
+function sameObservationSource(actual: TaskObservation, expected: TaskObservation) {
+  return OBSERVATION_SOURCE_FIELDS.every(key => actual[key] === expected[key]);
 }
 export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateView, binding: MemoryBinding, onFailure?: (ctx: ExtensionContext) => void, historicalEvidence?: (ctx: ExtensionContext, id: string, dependencies: string[]) => TaskEvidence | undefined, onProgress?: (ctx: ExtensionContext) => void) {
   const failures = new Set<string>();
   const stopped = new Set<string>();
-  function suspend(ctx: ExtensionContext) {
+  const noticed = new Set<string>();
+  // A task stops once per memory failure; the user's "continue" accepts running without saved memory.
+  // After that, a repeated failure warns once per continue instead of stopping again: a damaged snapshot
+  // that stopped on every continue would leave the task impossible to resume.
+  function suspend(ctx: ExtensionContext, reason = "TASK_MEMORY_UNAVAILABLE") {
     const resolved = identity(ctx);
     const key = resolved.ok ? resolved.value && scope(ctx, resolved.value)
       : JSON.stringify([ctx.cwd, ctx.sessionManager.getSessionId(), state.workflowState?.workflowId, state.workflowState?.planVersion, state.workflowState?.recoveryGeneration, state.workflowState?.currentTaskId]);
-    if (!key || stopped.has(key)) return;
-    stopped.add(key);
-    onFailure?.(ctx);
+    if (!key) return;
+    if (!stopped.has(key)) {
+      stopped.add(key);
+      onFailure?.(ctx);
+      return;
+    }
+    const notice = JSON.stringify([key, state.userStopGeneration]);
+    if (state.userStopRequested || noticed.has(notice)) return;
+    noticed.add(notice);
+    ctx.ui.notify(`任务记忆仍不可用（${reason}）：已按你的继续执行，不再自动停止；此后的进展可能无法作为可恢复记忆保存。可用 /pi-init workflow status 核对，需要中止请说“停止工作”。`, "warning");
   }
   function identity(ctx: ExtensionContext): TaskMemoryParseResult<WorkflowHandoffIdentity | undefined> {
     const workflow = ctx.isProjectTrusted() ? state.workflowState : undefined;
     if (!workflow || workflow.sessionId !== ctx.sessionManager.getSessionId()) return { ok: true, value: undefined };
     const current = workflowHandoffIdentity(workflow);
     if (current) return { ok: true, value: current };
-    const taskId = workflow.currentTaskId ?? workflow.tasks.find(item => item.status === "in_progress" || item.status === "blocked")?.id;
-    if (!taskId) return { ok: true, value: undefined };
+    // Without a current task, several tasks may be blocked; the memory to show is the one recorded most recently.
+    const candidates = new Set(workflow.currentTaskId ? [workflow.currentTaskId]
+      : workflow.tasks.filter(item => item.status === "in_progress" || item.status === "blocked").map(item => item.id));
+    if (!candidates.size) return { ok: true, value: undefined };
     for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
       if (entry.type !== "custom" || entry.customType !== TASK_MEMORY_ENTRY) continue;
       const raw = isRecord(entry.data) && isRecord(entry.data.identity) ? entry.data.identity : undefined;
       if (!raw || raw.sessionId !== workflow.sessionId || raw.workflowId !== workflow.workflowId
-        || raw.planVersion !== workflow.planVersion || raw.taskId !== taskId) continue;
+        || raw.planVersion !== workflow.planVersion || typeof raw.taskId !== "string" || !candidates.has(raw.taskId)) continue;
       return parseTaskMemoryIdentity(raw);
     }
     return { ok: true, value: undefined };
   }
   function scope(ctx: ExtensionContext, current: WorkflowHandoffIdentity) { return JSON.stringify([ctx.cwd, current]); }
   const sourceObservation = readTaskSourceObservation;
-  function verifyObservations(branch: Entry[], items: Array<{ id: string; expected: TaskObservation | undefined }>, current: WorkflowHandoffIdentity, errorMessage: string, cache = new Map<string, TaskObservation | undefined>()) {
-    for (const { id, expected } of items) {
+  // Same derivation: compare exactly, so an edited summary or outcome is rejected.
+  // Older/unknown derivation: match the SDK identity only and return the re-derived observation,
+  // so a plugin upgrade never turns a live task's memory into "source missing".
+  function verifyObservations(branch: Entry[], items: Array<{ id: string; expected: TaskObservation | undefined }>, current: WorkflowHandoffIdentity, errorMessage: string, derivation: number | undefined, cache = new Map<string, TaskObservation | undefined>()): TaskObservation[] {
+    const exact = derivation === TASK_OBSERVATION_DERIVATION;
+    return items.map(({ id, expected }) => {
       if (!cache.has(id)) cache.set(id, sourceObservation(branch, id, current));
       const actual = cache.get(id);
-      if (!actual || JSON.stringify(actual) !== JSON.stringify(expected)) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", errorMessage);
-    }
+      if (!actual || !expected || !(exact ? JSON.stringify(actual) === JSON.stringify(expected) : sameObservationSource(actual, expected))) {
+        return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", errorMessage);
+      }
+      return actual;
+    });
   }
   function load(ctx: ExtensionContext, current: WorkflowHandoffIdentity) {
     const branch = ctx.sessionManager.getBranch();
@@ -92,8 +116,8 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
       if (!raw?.identity || typeof raw.identity !== "object" || taskMemoryScope(raw.identity as WorkflowHandoffIdentity) !== taskMemoryScope(current)) continue;
       const parsed = parseTaskMemory(raw);
       if (!parsed.ok) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务记忆快照损坏，不能跳过较新记录使用旧成果；" + parsed.code + "：" + parsed.message);
-      verifyObservations(branch, parsed.value.observations.map(item => ({ id: item.id, expected: item })), current, "任务记忆来源不在当前branch或与原结果不一致");
-      memory = parsed.value; found = true;
+      const verified = verifyObservations(branch, parsed.value.observations.map(item => ({ id: item.id, expected: item })), current, "任务记忆来源不在当前branch或与原结果不一致", parsed.value.derivation);
+      memory = { ...parsed.value, observations: verified }; found = true;
       if (memory.watermark) {
         const position = branch.findIndex(item => item.id === memory.watermark);
         if (position < 0 || position >= index) return taskMemoryError("TASK_MEMORY_SOURCE_MISSING", "任务记忆来源水位不可核对");
@@ -108,7 +132,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
       if (observation) observations.push(observation);
     }
     const next = observations.length ? recordTaskObservations(memory, observations, observations.at(-1)!.id) : memory;
-    return { memory: next, saved: memory, found };
+    return { memory: next, saved: memory, found, unsaved: observations.length };
   }
   function files(ctx: ExtensionContext, paths: string[]): TaskSourceVersion[] {
     if (paths.length > TASK_MEMORY_LIMITS.files) return taskMemoryError("TASK_MEMORY_FILES_INVALID", "声明的相关文件不能超过16个");
@@ -122,7 +146,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     });
   }
   function persist(ctx: ExtensionContext, memory: TaskMemory) {
-    try { pi.appendEntry(TASK_MEMORY_ENTRY, memory); failures.delete(scope(ctx, memory.identity)); }
+    try { pi.appendEntry(TASK_MEMORY_ENTRY, { ...memory, derivation: TASK_OBSERVATION_DERIVATION }); failures.delete(scope(ctx, memory.identity)); }
     catch {
       failures.add(scope(ctx, memory.identity));
       ctx.ui.notify("任务记忆保存失败；原工具结果保留，自动推进已停止，不会重跑。", "warning");
@@ -177,14 +201,16 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
       if (!parsed.ok) return taskMemoryError("TASK_MEMORY_SNAPSHOT_INVALID", "当前任务的历史记忆快照损坏，无法核对已登记进展；" + parsed.code + "：" + parsed.message);
       const memory = parsed.value;
       if (!memory.checkpoint) continue;
-      verifyObservations(
+      const verified = new Map(verifyObservations(
         branch,
         memory.checkpoint.accomplished.flatMap(item => item.evidenceIds).map(id => ({ id, expected: memory.observations.find(item => item.id === id) })),
         current,
         "历史进展来源不在当前branch或与原结果不一致",
+        memory.derivation,
         sources,
-      );
-      history.push(memory);
+      ).map(item => [item.id, item]));
+      // Compare progress against re-derived sources: a fingerprint change must not look like a new fact.
+      history.push({ ...memory, observations: memory.observations.map(item => verified.get(item.id) ?? item) });
     }
     return history;
   }
@@ -197,7 +223,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     if (!current) return taskMemoryError("TASK_MEMORY_IDENTITY_INVALID", "任务记忆缺少当前可信身份");
     const blocked = firstPolicyMatch([
       [!workflowHandoffMessageOnBranch(ctx, current), "branch-anchor"],
-      [!taskMemoryIdentityMatches(current, submitted), "stale-identity"],
+      [!sameWorkflowHandoffIdentity(current, submitted), "stale-identity"],
       [workflow?.status !== "running", "workflow-not-running"],
       [workflow?.handoff?.phase !== "executing", "handoff-not-executing"],
       [task?.status !== "in_progress", "task-not-executing"],
@@ -240,16 +266,19 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
   pi.on("turn_end", (event: TurnEndEvent, ctx) => {
     if (!ctx.isProjectTrusted() || state.runtimeDisposed || state.userStopRequested) return;
     const resolved = identity(ctx);
-    if (!resolved.ok) { suspend(ctx); return; }
+    if (!resolved.ok) { suspend(ctx, resolved.code); return; }
     const current = resolved.value;
     const bound = binding.source(event.message, ctx);
-    if (!current || !bound || !taskMemoryIdentityMatches(current, bound) || event.message.role !== "assistant" || event.toolResultEntryIds.length !== event.toolResults.length) return;
+    if (!current || !bound || !sameWorkflowHandoffIdentity(current, bound) || event.message.role !== "assistant" || event.toolResultEntryIds.length !== event.toolResults.length) return;
     try {
-      const { memory, saved } = load(ctx, current);
-      if (memory !== saved) persist(ctx, { ...memory, identity: current });
+      const { memory, saved, found, unsaved } = load(ctx, current);
+      // load() re-derives every result after the saved watermark, and batching them yields the same
+      // memory as saving each turn; a snapshot only bounds that scan. Save the first one at once.
+      if (memory !== saved && (!found || unsaved >= TASK_MEMORY_LIMITS.snapshotEveryResults)) persist(ctx, { ...memory, identity: current });
     } catch (error) {
       failures.add(scope(ctx, current));
-      if (!(error && typeof error === "object" && "code" in error && error.code === "TASK_MEMORY_WRITE_FAILED")) suspend(ctx);
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : "TASK_MEMORY_UNAVAILABLE";
+      if (code !== "TASK_MEMORY_WRITE_FAILED") suspend(ctx, code);
     }
   });
   function verificationSources(ctx: ExtensionContext, ids: string[]) {
@@ -276,7 +305,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     // It has no prior task observations to restore; do not treat that SDK ordering as corruption.
     if (current && !workflowHandoffMessageOnBranch(ctx, current)) return;
     const memory = read(ctx);
-    if (memory.status === "unavailable") suspend(ctx);
+    if (memory.status === "unavailable") suspend(ctx, memory.reason);
     const content = taskMemoryText(memory);
     if (content) return { customType: TASK_MEMORY_MESSAGE, content, display: false,
       details: { summarizedToolCallIds: memory.status === "available" ? memory.memory?.observations.map(item => item.toolCallId) ?? [] : [] } };
@@ -290,7 +319,7 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     // The SDK appends safely after a running turn's tool results, without starting another turn.
     if (message) pi.sendMessage(message, { triggerTurn: false });
   });
-  function reset() { failures.clear(); stopped.clear(); lastBoundary = undefined; }
+  function reset() { failures.clear(); stopped.clear(); noticed.clear(); lastBoundary = undefined; }
   onEvents(pi, ["session_start", "session_tree", "session_shutdown"], reset);
   return { read, checkpoint, verificationSources, suspend };
 }
@@ -326,10 +355,9 @@ export function readTaskSourceObservation(branch: Entry[], id: string, current: 
       ? owner.message.content.find(part => part.type === "toolCall" && part.id === message.toolCallId) : undefined;
     if (!call || call.type !== "toolCall" || call.name === "task_workflow" || call.name === "switch_role") return undefined;
     const text = contentText(message.content);
-    const data = message.details && typeof message.details === "object" ? message.details as Record<string, unknown> : {};
-    const failed = message.isError || data.ok === false || typeof data.exitCode === "number" && data.exitCode !== 0;
+    const failed = toolResultFailed(message);
     return { id, messageEntryId: owner.id, toolCallId: message.toolCallId, toolName: message.toolName,
       inputHash: fingerprint(call.arguments)!, outputHash: fingerprint(message.content)!, outcome: failed ? "tool-error" : "tool-ok",
-      summary: bounded(text, 1024), truncated: text.length > 1024 };
+      summary: bounded(text, TASK_MEMORY_LIMITS.observationSummary), truncated: text.length > TASK_MEMORY_LIMITS.observationSummary };
   }
 export type TaskEvidence = { id: string; text: string; truncated: boolean; sourceTaskId: string; historical: true; sourceSessionId?: string };

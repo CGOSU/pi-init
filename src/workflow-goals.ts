@@ -11,7 +11,7 @@ import {
   requireTimestamp,
 } from "./workflow-validation.ts";
 import { cloneState, cloneTask } from "./workflow-state.ts";
-import { requestWorkflowReplan } from "./workflow-replan.ts";
+import { requestWorkflowReplan, workflowHistoricalTaskIds } from "./workflow-replan.ts";
 import type { WorkflowGoal, WorkflowPlan, WorkflowState, WorkflowTask } from "./workflow-types.ts";
 
 export function normalizeWorkflowGoals(value: unknown, rootId: string, tasks: WorkflowTask[]): WorkflowGoal[] {
@@ -52,8 +52,7 @@ export function validateWorkflowGoalPlan(state: WorkflowState, input: unknown): 
   if (!Array.isArray(plan.tasks) || !plan.tasks.length) throw new Error("新目标至少需要一个任务");
   const tasks = plan.tasks.map((task, index) => normalizeTask(task, index));
   if (tasks.some(task => task.goalId !== undefined)) throw new Error("插入目标的任务归属由运行时分配，请勿指定 goalId");
-  const known = new Set(state.tasks.map(task => task.id));
-  for (const revision of state.revisions) for (const task of [...(revision.previousTasks ?? []), ...(revision.replacedTasks ?? []), ...(revision.newPlan?.tasks ?? [])]) known.add(task.id);
+  const known = workflowHistoricalTaskIds(state);
   for (const task of tasks) { if (known.has(task.id)) throw new Error("新目标不能复用已有或历史任务 id：" + task.id); known.add(task.id); }
   assertAcyclic([...state.tasks, ...tasks]);
   return { summary: requireText(plan.summary, "新目标说明"), constraints: normalizeTextList(plan.constraints, "新目标约束"), tasks, reviewRequired: false };
@@ -71,11 +70,11 @@ export function createWorkflowGoalState(state: WorkflowState, input: unknown, no
   const revision = next.revisions.find(revision => revision.revisionId === state.pendingRevision!.revisionId);
   if (!revision || revision.status !== "requested") throw new Error("目标插入缺少有效 revision");
   revision.status = "applied"; revision.appliedAt = now;
+  // Same compact record as a replan: the goal summary and constraints live in next.goals, added tasks in next.tasks.
   revision.previousPlan = { ...state.plan, constraints: [...state.plan.constraints] };
-  revision.previousTasks = state.tasks.map(cloneTask);
+  revision.previousTaskIds = state.tasks.map(task => task.id);
   revision.retainedTaskIds = retained;
   revision.addedTaskIds = added.map(task => task.id);
-  revision.newPlan = { summary: plan.summary, constraints: plan.constraints, tasks: added.map(cloneTask) };
   next.goals = [...(next.goals ?? []), { id, parentId: state.pendingRevision.goalParentId ?? state.workflowId, summary: plan.summary, constraints: plan.constraints, createdAt: now }];
   next.tasks.push(...added);
   normalizeWorkflowGoals(next.goals, next.workflowId, next.tasks);

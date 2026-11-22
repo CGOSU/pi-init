@@ -10,6 +10,9 @@ import {
     markWorkflowTaskOutcomeUnknown,
     recordWorkflowNudge,
     recoverWorkflowState,
+    sameWorkflowActionIdentity,
+    sameWorkflowHandoffIdentity,
+    sameWorkflowReplanIdentity,
     setWorkflowHandoffPhase,
     startWorkflowTask,
     validateWorkflowExecutionRoles,
@@ -25,9 +28,9 @@ import {
     type RuntimeStateAccess,
     type WorkflowActionIdentity,
     type WorkflowHandoffIdentity,
-    type WorkflowReplanIdentity,
     type WorkflowState,
 } from "../runtime-state.ts";
+import { acquireDispatchLock, releaseDispatchLock, resetDispatchLock } from "./dispatch-lock.ts";
 import type { WorkflowMessages } from "./workflow-messages.ts";
 import { latestWorkflowRecoverySource, workflowRestoreErrorForSource } from "./workflow-recovery-source.ts";
 import type { WorkflowReport } from "./workflow-report.ts";
@@ -46,25 +49,13 @@ export type WorkflowDispatchDependencies = {
   setCurrentContext: (ctx: ExtensionContext) => void;
 };
 
-function sameActionIdentity(left: WorkflowActionIdentity, right: WorkflowActionIdentity) {
-  return left.workflowId === right.workflowId
-    && left.planVersion === right.planVersion
-    && left.sessionId === right.sessionId
-    && left.recoveryGeneration === right.recoveryGeneration;
-}
-
-function sameReplanIdentity(left: WorkflowReplanIdentity, right: WorkflowReplanIdentity) {
-  return sameActionIdentity(left, right)
-    && left.revisionId === right.revisionId
-    && left.handoffId === right.handoffId;
-}
-
 // An accepted side ledger is not an opt-in. Existing contracts or an explicit
 // workflow link are: deleting a contract must not downgrade an old formal plan.
 
 export function createWorkflowDispatch(
   state: RuntimeStateAccess<
     | "workflowDispatchInFlight"
+    | "workflowDispatchLease"
     | "internalContinuationPending"
     | "pendingWorkflowRecovery"
     | "workflowRestoreError"
@@ -73,13 +64,7 @@ export function createWorkflowDispatch(
 ) {
   let localScheduleInFlight = false;
   function currentHandoff(expected: WorkflowHandoffIdentity) {
-    const current = state.workflowState;
-    const actual = current ? workflowHandoffIdentity(current) : undefined;
-    return actual !== undefined
-      && sameActionIdentity(actual, expected)
-      && actual.taskId === expected.taskId
-      && actual.attemptId === expected.attemptId
-      && actual.handoffId === expected.handoffId;
+    return sameWorkflowHandoffIdentity(workflowHandoffIdentity(state.workflowState), expected);
   }
 
   async function scheduleWorkflowReplan(ctx: ExtensionContext) {
@@ -99,14 +84,11 @@ export function createWorkflowDispatch(
     const identity = workflowReplanIdentity(current);
     if (!identity) return;
 
-    state.workflowDispatchInFlight = true;
+    const lease = acquireDispatchLock(state);
     try {
       const selection = await deps.roleRuntime.automaticRole("architect", ctx);
-      const latest = state.workflowState;
-      const latestIdentity = workflowReplanIdentity(latest);
-      if (!latestIdentity || !sameReplanIdentity(latestIdentity, identity)) return;
+      if (!sameWorkflowReplanIdentity(workflowReplanIdentity(state.workflowState), identity)) return;
       if (selection.result.role !== "architect") {
-        state.workflowDispatchInFlight = false;
         ctx.ui.notify(
           `工作流已暂停等待架构师重规划：当前角色为 ${selection.result.role}，请切换到架构设计后执行 /pi-init workflow resume。`,
           "warning",
@@ -115,11 +97,10 @@ export function createWorkflowDispatch(
       }
       deps.messages.sendWorkflowReplanMessage(ctx, identity);
     } catch (error) {
-      const latest = state.workflowState;
-      const latestIdentity = workflowReplanIdentity(latest);
-      if (!latestIdentity || !sameReplanIdentity(latestIdentity, identity)) return;
-      state.workflowDispatchInFlight = false;
+      if (!sameWorkflowReplanIdentity(workflowReplanIdentity(state.workflowState), identity)) return;
       ctx.ui.notify(`工作流已暂停等待架构师重规划：${textOf(error)}`, "warning");
+    } finally {
+      releaseDispatchLock(state, lease);
     }
   }
 
@@ -171,7 +152,7 @@ export function createWorkflowDispatch(
 
   function restoreWorkflowState(ctx: ExtensionContext, options?: { updateStatus?: boolean }) {
     deps.setCurrentContext(ctx);
-    state.workflowDispatchInFlight = false;
+    resetDispatchLock(state);
     state.internalContinuationPending = false;
     state.pendingWorkflowRecovery = undefined;
     deps.store.restoreSnapshot(undefined);
@@ -224,10 +205,8 @@ export function createWorkflowDispatch(
   function persistDispatchPause(ctx: ExtensionContext, workflowState: WorkflowState, taskId: string) {
     try {
       deps.store.persistWorkflowState(workflowState, ctx);
-      state.workflowDispatchInFlight = false;
       return true;
     } catch (error) {
-      state.workflowDispatchInFlight = false;
       ctx.ui.notify(`无法记录任务 ${taskId} 的暂停状态：${textOf(error)}`, "error");
       return false;
     }
@@ -284,7 +263,7 @@ export function createWorkflowDispatch(
       }
     }
     if (state.workflowRestoreError || localScheduleInFlight || state.workflowDispatchInFlight || !state.workflowState) return;
-    if (expectedIdentity && !sameActionIdentity(workflowActionIdentity(state.workflowState), expectedIdentity)) return;
+    if (expectedIdentity && !sameWorkflowActionIdentity(workflowActionIdentity(state.workflowState), expectedIdentity)) return;
     localScheduleInFlight = true;
     try { await scheduleWorkflowInternal(ctx); }
     finally { localScheduleInFlight = false; }
@@ -297,7 +276,7 @@ export function createWorkflowDispatch(
     const roleValidation = validateWorkflowExecutionRoles(current.tasks, { unfinishedOnly: true });
     if (!roleValidation.ok) {
       state.workflowRestoreError = { code: roleValidation.code, message: roleValidation.message };
-      state.workflowDispatchInFlight = false;
+      resetDispatchLock(state);
       ctx.ui.notify(`工作流任务不可派发（${roleValidation.code}）：${roleValidation.message}`, "error");
       return;
     }
@@ -309,8 +288,9 @@ export function createWorkflowDispatch(
       return;
     }
     if (effect.kind === "dispatch-task") {
-      state.workflowDispatchInFlight = true;
-      await prepareAndDispatchCurrentTask(ctx, effect.taskId);
+      const lease = acquireDispatchLock(state);
+      try { await prepareAndDispatchCurrentTask(ctx, effect.taskId); }
+      finally { releaseDispatchLock(state, lease); }
       return;
     }
     if (effect.kind === "nudge-task") {
@@ -344,15 +324,13 @@ export function createWorkflowDispatch(
       return;
     }
 
-    state.workflowDispatchInFlight = true;
-    const started = setWorkflowHandoffPhase(startWorkflowTask(current, effect.taskId), "waiting-role");
+    const lease = acquireDispatchLock(state);
     try {
-      deps.store.persistWorkflowState(started, ctx);
-    } catch (error) {
-      state.workflowDispatchInFlight = false;
-      throw error;
+      deps.store.persistWorkflowState(setWorkflowHandoffPhase(startWorkflowTask(current, effect.taskId), "waiting-role"), ctx);
+      await prepareAndDispatchCurrentTask(ctx, effect.taskId);
+    } finally {
+      releaseDispatchLock(state, lease);
     }
-    await prepareAndDispatchCurrentTask(ctx, effect.taskId);
   }
 
   async function resumeLocalWorkflow(ctx: ExtensionContext) {
@@ -379,7 +357,7 @@ export function createWorkflowDispatch(
 
   function resetStaleWorkflowDispatch() {
     if (localScheduleInFlight) return false;
-    state.workflowDispatchInFlight = false;
+    resetDispatchLock(state);
     return true;
   }
 

@@ -18,7 +18,12 @@ export function isWorkflowReadOnlyTool(toolName: string, input?: unknown) {
 function bounded(value: string | undefined, limit = 500) {
   return (value ?? "").replace(/[\r\n]+/g, " ").replace(/</g, "&lt;").slice(0, limit);
 }
-export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRuntimeState, deps: { retire: () => void; interrupt?: (ctx: ExtensionContext) => void }) {
+export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRuntimeState, deps: {
+  retire: () => void;
+  interrupt?: (ctx: ExtensionContext) => void;
+  /** Keeps the workflow's stop marker in line with the stop state so stopped time is not active time. */
+  stopTimer?: (ctx: ExtensionContext, stopped: boolean) => void;
+}) {
   let externalTurn = false;
   let continuationGuard: ((ctx: ExtensionContext) => boolean) | undefined;
   function persist(ctx: ExtensionContext, stopped: boolean, reason: string) {
@@ -40,6 +45,7 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
       if (resumeGuard) continuationGuard = () => false;
       ctx.ui.notify("本轮已停止，但停止记录未确认持久化：" + textOf(error), "warning");
     }
+    deps.stopTimer?.(ctx, true);
     state.traceHandoff?.(ctx, "workflow.user_stopped", { reason });
     if (state.agentRunActive) ctx.abort();
   }
@@ -94,6 +100,7 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
     state.userStopRequested = false;
     continuationGuard = undefined;
     externalTurn = allowExternalTurn;
+    deps.stopTimer?.(ctx, false);
     return true;
   }
   function restore(ctx: ExtensionContext) {
@@ -109,8 +116,9 @@ export function createWorkflowUserControl(pi: ExtensionAPI, state: ExtensionRunt
       const data = entry.data as { version?: unknown; sessionId?: unknown; workflowId?: unknown; stopped?: unknown };
       if (data?.version !== 1 || data.sessionId !== ctx.sessionManager.getSessionId() || data.workflowId !== current || typeof data.stopped !== "boolean") continue;
       state.userStopRequested = data.stopped;
-      return;
+      break;
     }
+    deps.stopTimer?.(ctx, state.userStopRequested);
   }
   async function saveTodo(ctx: ExtensionContext) {
     if (!ctx.isProjectTrusted()) throw new Error("项目尚未信任，未写入 TODO.md");

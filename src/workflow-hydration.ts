@@ -101,6 +101,15 @@ function normalizeRevisionRecord(revision: unknown, index: number): WorkflowRevi
       `已保存的工作流 revision ${revision.revisionId} 的 appliedAt`,
     );
   }
+  if (revision.discardedAt !== undefined) {
+    result.discardedAt = requireTimestamp(
+      revision.discardedAt,
+      `已保存的工作流 revision ${revision.revisionId} 的 discardedAt`,
+    );
+  }
+  if (revision.previousTaskIds !== undefined) {
+    result.previousTaskIds = normalizeTaskIds(revision.previousTaskIds, `已保存的工作流 revision ${revision.revisionId} 的 previousTaskIds`);
+  }
   if (revision.retainedTaskIds !== undefined) {
     result.retainedTaskIds = normalizeTaskIds(revision.retainedTaskIds, `已保存的工作流 revision ${revision.revisionId} 的 retainedTaskIds`);
   }
@@ -352,6 +361,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflow
   if (pausedMilliseconds !== undefined && pausedMilliseconds < 0) {
     throw new Error("已保存的工作流 pausedMilliseconds 不得为负数");
   }
+  const stoppedAt = normalizeTimestamp(state.stoppedAt, "已保存的工作流 stoppedAt");
   const nudgeCount = state.nudgeCount === undefined
     ? undefined
     : normalizePlanVersion(state.nudgeCount, "已保存的工作流 nudgeCount");
@@ -374,6 +384,7 @@ function hydrateWorkflowStateValue(state: WorkflowStateRecord): HydratedWorkflow
     ...(createdAt !== undefined ? { createdAt } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(pausedMilliseconds !== undefined ? { pausedMilliseconds } : {}),
+    ...(stoppedAt !== undefined ? { stoppedAt } : {}),
     ...(nudgeCount !== undefined ? { nudgeCount } : {}),
     ...(pauseReason !== undefined ? { pauseReason } : {}),
     ...(taskPauseReason !== undefined ? { taskPauseReason } : {}),

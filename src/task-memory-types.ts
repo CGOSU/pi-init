@@ -11,6 +11,6 @@ export type TaskCheckpoint = {
   remaining: string[]; blockers: string[]; nextStep: string; files?: TaskSourceVersion[];
 };
 export type TaskMemory = {
-  version: 1; identity: WorkflowHandoffIdentity; revision: number; progressRevision: number; watermark?: string;
+  version: 1; identity: WorkflowHandoffIdentity; revision: number; progressRevision: number; watermark?: string; derivation?: number;
   observations: TaskObservation[]; omittedObservations: number; checkpoint?: TaskCheckpoint;
 };

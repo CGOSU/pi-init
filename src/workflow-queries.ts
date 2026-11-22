@@ -46,7 +46,7 @@ export function getWorkflowExecutionDuration(state: WorkflowState | null | undef
     || !Number.isFinite(state.pausedMilliseconds) || state.pausedMilliseconds < 0) return undefined;
   const { startedAt, completedAt } = getWorkflowExecutionBounds(state);
   const endAt = state.status === "completed" ? completedAt
-    : state.status === "paused" || state.status === "cancelled" ? state.updatedAt : now ?? completedAt;
+    : state.status === "paused" || state.status === "cancelled" || state.stoppedAt !== undefined ? state.updatedAt : now ?? completedAt;
   if (startedAt === undefined || endAt === undefined || !Number.isFinite(endAt) || endAt < startedAt) return undefined;
   const duration = endAt - startedAt - state.pausedMilliseconds;
   return duration >= 0 ? duration : undefined;

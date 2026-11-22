@@ -19,6 +19,9 @@ export type ActiveRole = {
   thinkingLevel: ThinkingLevel;
 };
 
+/** Held by the one scheduling call that set workflowDispatchInFlight; see workflow/dispatch-lock.ts. */
+export type DispatchLease = { readonly workflowId: string | undefined };
+
 export type ExtensionRuntimeState = {
   traceHandoff?: (ctx: ExtensionContext, event: string, data?: Record<string, unknown>) => void;
   agentRunActive: boolean;
@@ -39,6 +42,7 @@ export type ExtensionRuntimeState = {
   workflowState?: WorkflowState;
   workflowProgressObservation?: WorkflowProgressObservation;
   workflowDispatchInFlight: boolean;
+  workflowDispatchLease?: DispatchLease;
   internalContinuationPending: boolean;
   currentContext?: ExtensionContext;
   runtimeDisposed: boolean;

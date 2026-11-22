@@ -46,6 +46,8 @@ export {
   cancelWorkflow,
   resetWorkflowNudges,
   recordWorkflowNudge,
+  markWorkflowStopped,
+  clearWorkflowStopped,
 } from "./workflow-transitions.ts";
 export {
   requestWorkflowReplan,
@@ -58,6 +60,9 @@ export {
   workflowActionIdentity,
   workflowHandoffIdentity,
   workflowReplanIdentity,
+  sameWorkflowActionIdentity,
+  sameWorkflowHandoffIdentity,
+  sameWorkflowReplanIdentity,
   validateWorkflowMutationIdentity,
   validateWorkflowHandoffIdentity,
   validateWorkflowReplanIdentity,

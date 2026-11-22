@@ -131,6 +131,7 @@ function parseObservation(value: unknown, field: string): TaskMemoryParseResult<
   const outcome = parseText(data.outcome, field + ".outcome", TASK_MEMORY_LIMITS.evidenceIdLength);
   if (!outcome.ok) return outcome;
   if (outcome.value !== "tool-ok" && outcome.value !== "tool-error" && outcome.value !== "unknown") return failure("TASK_MEMORY_INPUT_FORMAT", field + ".outcome", "未知的工具结果状态");
+  // Snapshots from older derivations may hold up to 1024 characters; loading re-derives them.
   const summary = parseText(data.summary, field + ".summary", 1024, 0);
   if (!summary.ok) return summary;
   const truncated = required(data.truncated, field + ".truncated");
@@ -166,6 +167,12 @@ export function parseTaskMemory(value: unknown): TaskMemoryParseResult<TaskMemor
     const watermark = parseText(data.watermark, "memory.watermark", TASK_MEMORY_LIMITS.evidenceIdLength);
     if (!watermark.ok) return watermark;
     memory.watermark = watermark.value;
+  }
+  if (data.derivation !== undefined) {
+    const derivation = parseInteger(data.derivation, "memory.derivation");
+    if (!derivation.ok) return derivation;
+    if (derivation.value < 1) return failure("TASK_MEMORY_INPUT_RANGE", "memory.derivation", "必须是正整数");
+    memory.derivation = derivation.value;
   }
   if (data.checkpoint !== undefined) {
     const checkpoint = parseCheckpoint(data.checkpoint, "memory.checkpoint");
