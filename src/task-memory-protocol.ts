@@ -1,6 +1,12 @@
 // Task memory persistence and context-view protocol.
 export const TASK_MEMORY_ENTRY = "pi-init-task-memory";
 export const TASK_MEMORY_MESSAGE = "pi-init-task-memory-view";
+/**
+ * How tool results are derived into observations (summary bounding, fingerprints, failure rule).
+ * Bump whenever any derived field changes. Snapshots without the field are derivation 1.
+ * 2: outcome uses the same structured failure rule as progress and verification sources.
+ */
+export const TASK_OBSERVATION_DERIVATION = 2;
 
 const pinnedObservations = 32;
 const recentObservations = 16;

@@ -75,3 +75,12 @@ test("successful parsing projects known fields and detaches nested values withou
   assert.deepEqual(parseTaskCheckpoint(checkpoint), { ok: true, value: checkpoint });
   assert.deepEqual(parseTaskMemoryIdentity(identity), { ok: true, value: identity });
 });
+
+test("observation derivation is optional and must be a positive integer when present", () => {
+  const memory = createTaskMemory(identity);
+  assert.equal(parseTaskMemory(memory).value.derivation, undefined);
+  assert.equal(parseTaskMemory({ ...memory, derivation: 2 }).value.derivation, 2);
+  rejected(parseTaskMemory({ ...memory, derivation: "2" }), "TASK_MEMORY_INPUT_TYPE", "memory.derivation");
+  rejected(parseTaskMemory({ ...memory, derivation: 1.5 }), "TASK_MEMORY_INPUT_FORMAT", "memory.derivation");
+  rejected(parseTaskMemory({ ...memory, derivation: 0 }), "TASK_MEMORY_INPUT_RANGE", "memory.derivation");
+});

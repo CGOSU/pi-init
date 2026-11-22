@@ -167,6 +167,12 @@ export function parseTaskMemory(value: unknown): TaskMemoryParseResult<TaskMemor
     if (!watermark.ok) return watermark;
     memory.watermark = watermark.value;
   }
+  if (data.derivation !== undefined) {
+    const derivation = parseInteger(data.derivation, "memory.derivation");
+    if (!derivation.ok) return derivation;
+    if (derivation.value < 1) return failure("TASK_MEMORY_INPUT_RANGE", "memory.derivation", "必须是正整数");
+    memory.derivation = derivation.value;
+  }
   if (data.checkpoint !== undefined) {
     const checkpoint = parseCheckpoint(data.checkpoint, "memory.checkpoint");
     if (!checkpoint.ok) return checkpoint;

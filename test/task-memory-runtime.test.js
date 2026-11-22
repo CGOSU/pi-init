@@ -1,4 +1,4 @@
-import { TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE } from "../src/task-memory-protocol.ts";
+import { TASK_MEMORY_ENTRY, TASK_MEMORY_MESSAGE, TASK_OBSERVATION_DERIVATION } from "../src/task-memory-protocol.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -260,7 +260,8 @@ test("structured nested failures cannot renew progress or change historical obse
   for (const metadata of cases) {
     const f = fixture();
     const failed = (await f.commit("outer script finished", false, "batch", { toolName: "codemode", ...metadata })).toolResultEntryIds[0];
-    assert.equal(f.runtime.read(f.ctx).memory.observations[0].outcome, "tool-ok", "legacy observation classification stays stable");
+    assert.equal(f.runtime.read(f.ctx).memory.observations[0].outcome, "tool-error", "observations use the same failure rule as progress");
+    assert.throws(() => f.runtime.verificationSources(f.ctx, [failed]), error => error.code === "TASK_MEMORY_VERIFICATION_INVALID", JSON.stringify(metadata));
     f.runtime.checkpoint(f.ctx, f.identity, checkpoint(failed), 0);
     assert.equal(f.progress, 0, JSON.stringify(metadata));
     const restored = createTaskMemoryRuntime(f.pi, f.state, f.binding);
@@ -275,6 +276,8 @@ test("successful nested argument omission is not classified as failed progress",
   const f = fixture();
   const id = (await f.commit("batch succeeded", false, "batch", { toolName: "codemode",
     nestedCalls: { complete: false, calls: [{ id: "root/1", name: "read", status: "ok", durationMs: 1, argumentsBytes: 9000 }] } })).toolResultEntryIds[0];
+  assert.equal(f.runtime.read(f.ctx).memory.observations[0].outcome, "tool-ok");
+  assert.deepEqual(f.runtime.verificationSources(f.ctx, [id]), [id]);
   f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
   assert.equal(f.progress, 1);
 });
@@ -502,4 +505,56 @@ test("only declared successful direct-dependency sources can be reused as histor
   assert.throws(() => f.runtime.verificationSources(f.ctx, [id]), error => error.code === "TASK_MEMORY_VERIFICATION_INVALID");
   f.state.workflowState.tasks[1].dependsOn = [];
   assert.equal(f.runtime.read(f.ctx, [id]).status, "unavailable");
+});
+
+// Rewrite every memory snapshot as if an older plugin version (no derivation field) had written it.
+function asLegacySnapshots(f, mutate = () => {}) {
+  for (const entry of f.branch) {
+    if (entry.customType !== TASK_MEMORY_ENTRY) continue;
+    delete entry.data.derivation;
+    for (const observation of entry.data.observations) mutate(observation);
+  }
+}
+
+test("memory snapshots record the observation derivation they were written with", async () => {
+  const f = fixture(); await f.commit();
+  assert.equal(f.branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data.derivation, TASK_OBSERVATION_DERIVATION);
+});
+
+test("an older observation derivation is re-derived on load instead of pausing the task", async () => {
+  const f = fixture();
+  const id = (await f.commit("outer script finished", false, "batch", { toolName: "codemode",
+    nestedCalls: { complete: true, calls: [{ id: "root/1", name: "bash", status: "error", durationMs: 1 }] } })).toolResultEntryIds[0];
+  // Older plugin: different fingerprint width, summary bounding and failure rule.
+  asLegacySnapshots(f, observation => { observation.outputHash = "legacy"; observation.summary = "legacy summary"; observation.outcome = "tool-ok"; });
+  const before = structuredClone(f.branch);
+  const view = f.runtime.read(f.ctx);
+  assert.equal(view.status, "available");
+  assert.deepEqual(view.memory.observations, [readTaskSourceObservation(f.branch, id, f.identity)]);
+  assert.equal(view.memory.observations[0].outcome, "tool-error");
+  assert.deepEqual(f.branch, before, "reading must not rewrite snapshots");
+  assert.equal(f.stops, 0);
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(id), 0);
+  const saved = f.branch.findLast(entry => entry.customType === TASK_MEMORY_ENTRY).data;
+  assert.equal(saved.derivation, TASK_OBSERVATION_DERIVATION);
+  assert.notEqual(saved.observations[0].summary, "legacy summary");
+  assert.equal(f.progress, 0, "a failed source is not progress");
+});
+
+test("an older derivation still rejects a source whose SDK identity differs", async () => {
+  const f = fixture(); await f.commit();
+  asLegacySnapshots(f, observation => { observation.toolName = "read"; });
+  assert.equal(f.runtime.read(f.ctx).status, "unavailable");
+});
+
+test("re-derived history sources cannot make an unchanged rerun look like new progress", async () => {
+  const f = fixture();
+  const first = (await f.commit("first result")).toolResultEntryIds[0];
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(first), 0);
+  assert.equal(f.progress, 1);
+  asLegacySnapshots(f, observation => { observation.inputHash = "legacy-" + observation.inputHash; observation.outputHash = "legacy"; });
+  const repeated = (await f.commit("same command with different elapsed time")).toolResultEntryIds[0];
+  assert.equal(f.stops, 0, "loading legacy snapshots after a new turn must not suspend the task");
+  f.runtime.checkpoint(f.ctx, f.identity, checkpoint(repeated), 1);
+  assert.equal(f.progress, 1);
 });
