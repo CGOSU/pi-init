@@ -46,6 +46,13 @@ import { createSessionHandoff, outgoingTransfer } from "./session/session-handof
 
 type ScaffoldRuntime = typeof import("./scaffold-runtime.ts");
 const RUN_TIMING_ENTRY_TYPE = "pi-init-run-timing";
+/*
+ * Wiring order: several callbacks below reference collaborators declared further down (userControl,
+ * sessionHandoff, roleHandoff, rejectionGuard, directionInput, workflowStore, workflowDispatch). That is safe
+ * only because Pi calls these callbacks from event handlers, never while this factory runs. Do not invoke a
+ * callback during construction; a call before its target is declared throws a ReferenceError.
+ * extension-lifecycle tests construct the extension and emit events, which covers this contract.
+ */
 export default function initProjectExtension(pi: ExtensionAPI) {
   const runtimeState = createExtensionRuntimeState();
   let assistantFailureScope: string | undefined;

@@ -76,13 +76,15 @@ export function createTaskMemoryRuntime(pi: ExtensionAPI, state: RuntimeStateVie
     if (!workflow || workflow.sessionId !== ctx.sessionManager.getSessionId()) return { ok: true, value: undefined };
     const current = workflowHandoffIdentity(workflow);
     if (current) return { ok: true, value: current };
-    const taskId = workflow.currentTaskId ?? workflow.tasks.find(item => item.status === "in_progress" || item.status === "blocked")?.id;
-    if (!taskId) return { ok: true, value: undefined };
+    // Without a current task, several tasks may be blocked; the memory to show is the one recorded most recently.
+    const candidates = new Set(workflow.currentTaskId ? [workflow.currentTaskId]
+      : workflow.tasks.filter(item => item.status === "in_progress" || item.status === "blocked").map(item => item.id));
+    if (!candidates.size) return { ok: true, value: undefined };
     for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
       if (entry.type !== "custom" || entry.customType !== TASK_MEMORY_ENTRY) continue;
       const raw = isRecord(entry.data) && isRecord(entry.data.identity) ? entry.data.identity : undefined;
       if (!raw || raw.sessionId !== workflow.sessionId || raw.workflowId !== workflow.workflowId
-        || raw.planVersion !== workflow.planVersion || raw.taskId !== taskId) continue;
+        || raw.planVersion !== workflow.planVersion || typeof raw.taskId !== "string" || !candidates.has(raw.taskId)) continue;
       return parseTaskMemoryIdentity(raw);
     }
     return { ok: true, value: undefined };

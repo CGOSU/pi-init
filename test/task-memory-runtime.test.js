@@ -605,3 +605,18 @@ test("after the user continues past a memory failure, a repeat warns once per co
   assert.equal(warnings(), 2);
   assert.equal(f.stops, 1);
 });
+
+test("with several blocked tasks and no current task, memory is read for the task that recorded it most recently", async () => {
+  const f = fixture(); await f.commit();
+  const workflow = f.state.workflowState;
+  workflow.status = "paused";
+  workflow.recoveryGeneration++;
+  workflow.tasks[0].status = "blocked";
+  workflow.tasks.unshift({ id: "earlier", role: "developer-test", status: "blocked" }); // listed first, no memory
+  delete workflow.currentTaskId;
+  delete workflow.handoff;
+  const view = f.runtime.read(f.ctx);
+  assert.equal(view.status, "available");
+  assert.equal(view.memory.identity.taskId, "task");
+  assert.match(taskMemoryText(view), /91 passed/);
+});
