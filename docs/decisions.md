@@ -8,6 +8,18 @@
 
 ## 已确认决策
 
+### 2026-11-22：派发锁只经租约读写，身份比较收敛为一组函数
+
+- 决定：`workflowDispatchInFlight` 只通过 `extensions/workflow/dispatch-lock.ts` 写入。调度调用在等待角色选择或发送前 `acquireDispatchLock` 取得租约，并在 `finally` 中 `releaseDispatchLock`；只有当前租约能释放，且不替另一个工作流释放。恢复、显式 resume、结果提交与不可派发计划等生命周期边界调用 `resetDispatchLock`。发送消息的 `workflow-messages.ts` 不再触碰派发锁。身份比较统一为 `src/workflow-handoff.ts` 的 `sameWorkflowActionIdentity`、`sameWorkflowHandoffIdentity`、`sameWorkflowReplanIdentity`，各自只比较声明的字段，替代派发、编排器、消息发送与任务记忆中的五种写法。
+- 原因：锁原先在三个文件有十五处写入，部分退出分支依赖别处稍后清除，已导致停止后卡住；按交接身份判断是否释放，又会在发送结果未知、等待期间追加重规划方向等身份变化场景下遗留锁。按调用方自己的字段集合比较身份，字段增减时容易遗漏。
+- 约束：本条替代下方“派发锁由持有交接身份的调度路径释放”中按交接身份决定是否释放的条件；该条的重规划发送失败回退不变。锁仍以布尔字段供各处读取，租约只在内存中，不持久化。
+
+### 2026-11-22：取消工作流时未应用的重规划记为 discarded
+
+- 决定：revision 状态新增 `discarded` 与 `discardedAt`；`cancelWorkflow` 把仍为 `requested` 的重规划标为 `discarded`，不再写成 `applied` 和 `appliedAt`。
+- 原因：原实现使取消前尚未应用的方向在审计历史中显示为已生效。
+- 约束：已保存的旧取消记录保持原样，不迁移；旧版插件不认识 `discarded`，降级后加载此类已取消工作流会报恢复错误。旧版身份迁移按 `applied` 计数推导 planVersion，`discarded` 不计入，符合其未生效的含义。
+
 ### 2026-11-22：任务记忆观察按派生版本核对，并由单一规则判定工具失败
 
 - 决定：`src/task-memory-protocol.ts` 的 `TASK_OBSERVATION_DERIVATION`（当前为 3）标识观察的派生方式，包括摘要截断（`observationSummary`，512 字符）、输入/输出指纹及失败规则；快照写入时记录 `derivation`，缺失视为 1。加载时同版本逐字节比对，防止篡改摘要或结果；版本不同只核对 SDK 分配的 `id`、`messageEntryId`、`toolCallId`、`toolName`，再改用按当前规则重新派生的观察，历史 checkpoint 的进展比较同样使用重新派生的来源。观察 outcome、checkpoint 进展排除及 `verificationSources` 共用 `toolResultFailed`：`isError`，或 details/嵌套调用中出现 `status` error/unfinished、`ok:false`、非零 `exitCode`/`exit_code` 即为失败。
@@ -24,14 +36,15 @@
 
 - 决定：`prepareAndDispatchCurrentTask` 与 `scheduleWorkflowReplan` 在 `finally` 中，仅当交接身份仍与本次调度一致时释放 `workflowDispatchInFlight`；身份已变化时由改变身份的路径负责，不覆盖新工作流的调度状态。新增 `replan-dispatch-failed` 迁移：仅 `dispatching` 且身份匹配时退回 `pending` 并更换 `handoffId`；只有消息发送本身抛错才回退，消息已发出、仅 `queued` 持久化失败时仍停在 `dispatching`、不重发。
 - 原因：角色切换 await 期间用户停止会直接返回而遗留锁，“继续”只清除停止标记，`agent_settled` 的自动调度随后一直被跳过；重规划发送失败后停在 `dispatching`，调度与 resume 都不会处理，只能 reload。更换 `handoffId` 与 reload 恢复一致，迟到的旧消息无法据此提交重规划。
-- 约束：不改变正常发送、暂停、取消路径的锁行为；锁仍有多处写入点，后续宜收敛为“加锁者负责解锁”。
+- 约束：不改变正常发送、暂停、取消路径的锁行为。释放条件已由“派发锁只经租约读写”条目替代。
 
 ### 2026-11-22：冻结的交接来源只经用户确认放弃
 
 - 决定：来源因工作流交接冻结（最新 outgoing 为 `prepared` 或工作流为 `session-transfer-pending`）时，再次执行 `/pi-init fresh` 进入处理流程：先在来源 session 所在目录查找含同一交接 ID incoming 记录的会话，找到则拒绝放弃并给出其路径；未找到时说明检查范围与无法读取的文件，经用户确认后追加 `phase: "cancelled"`，工作流恢复为 `task-blocked`（存在阻塞任务时）或 `session-handoff-review`。`cancelled` 已写入而工作流状态未保存时，下次 `fresh` 不再询问，直接补全恢复。
 - 原因：`newSession` 在写入目标之前失败或冻结状态保存失败时，原实现只记控制台警告，来源永久冻结且再次 `fresh` 只提示“核对已有目标”，工作流在当前会话无法继续。Pi SDK 1.5.0 在出现首条 user/assistant 消息时落盘，目标 setup 写入 user 种子消息，故已接收交接的目标会出现在来源同目录。
-- 约束：不自动解冻，不新增命令。遗漏在其他目录且未激活的目标激活时读取来源意图，`cancelled` 会使其拒绝激活；已在其他目录激活的目标无法检测，由确认框提示用户取消。普通会话交接（`general-session-transfer.ts`）的同类冻结尚未处理。
-- 验证（以上四项）：调整与新增的回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js` 与新增的 `test/session-replacement.test.js`。记录时尚未取得 `node ./scripts/test.js` 与 `tsc --noEmit` 的实际输出，不视为已通过，结果待补。
+- 普通会话交接（`general-session-transfer.ts`）采用同一出口：来源被冻结时再次 `/pi-init fresh`，在同目录找到含同一 ID 的 incoming 则拒绝；未找到时经确认追加 `cancelled` 并清除内存中的未确认标记。冻结记录本身未写入时只清除未确认标记，效果与重新加载相同。放弃后须用 `session_handoff` 重新准备才能再次交接。两种交接共用 `session-replacement.ts` 的 `findTransferTarget`。
+- 约束：不自动解冻，不新增命令。遗漏在其他目录且未激活的目标激活时读取来源意图，`cancelled` 会使其拒绝激活；已在其他目录激活的目标无法检测，由确认框提示用户取消。
+- 验证（以上四项）：调整与新增的回归位于 `test/workflow-dispatch.test.js`、`test/workflow-orchestration.test.js`、`test/task-memory-runtime.test.js`、`test/task-memory-parsing.test.js`、`test/session-handoff.test.js`、`test/general-session-transfer.test.js` 与新增的 `test/session-replacement.test.js`。记录时尚未取得 `node ./scripts/test.js` 与 `tsc --noEmit` 的实际输出，不视为已通过，结果待补。
 
 ### 2026-11-21：待审计划的重复读取只结束本轮
 
