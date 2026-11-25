@@ -9,7 +9,7 @@ type Count = { state: string; tokens?: number; message?: string };
 type Usage = { state: string; read: Count; write: Count };
 type ActiveRequest = {
   cwd: string; sessionId: string; scope: string; provider?: string; model?: string;
-  data: Data; streamObserved: boolean; responseId?: string; assistantId?: string;
+  data: Data; streamObserved: boolean; unresolvedHttpFailure?: boolean; responseId?: string; assistantId?: string;
   usage: Usage; usageEvents: number; lastUsage?: string; terminalUsage?: string; responseStarted?: boolean;
 };
 
@@ -122,12 +122,14 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
     if (!request) return;
     active = undefined;
     const raw = request.usage;
-    const associated = request.data.correlation === "ordered-hooks" && request.data.observationError !== true;
+    const correlation = request.data.correlation === "ordered-hooks" && request.unresolvedHttpFailure
+      ? "unknown-http-failure" : request.data.correlation;
+    const associated = correlation === "ordered-hooks" && request.data.observationError !== true;
     const usable = associated && outcome === "assistant" && raw.state === "observed";
     const rawState = request.data.observationError === true ? "observation-error" : !associated ? "association-unknown"
       : !request.streamObserved ? "no-observation" : raw.state;
     remember(request.responseId);
-    emit(ctx, "cache.request", { ...request.data, streamHook: request.streamObserved ? "observed" : streamHook,
+    emit(ctx, "cache.request", { ...request.data, correlation, streamHook: request.streamObserved ? "observed" : streamHook,
       responseFingerprint: request.responseId, rawUsageState: rawState,
       rawReadState: raw.read.state, rawReadTokens: raw.read.tokens, rawWriteState: raw.write.state, rawWriteTokens: raw.write.tokens,
       normalizedStage: "message_end", normalizedReadState: normalized.read.state, normalizedReadTokens: normalized.read.tokens,
@@ -263,7 +265,17 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
       finish(ctx, outcome, usage(message.usage, "cacheRead", "cacheWrite"));
     });
   }
-  return { request, stream, assistantStart, assistant, boundary,
+  function response(ctx: ExtensionContext, status: number) {
+    safe(ctx, () => {
+      const request = current(ctx);
+      if (!request) return;
+      if (status >= 400) request.unresolvedHttpFailure = true;
+      // Pi reports a successful HTTP response before consuming its stream. A late 2xx
+      // cannot establish which attempt supplied events that have already been observed.
+      else if (status >= 200 && status < 300 && !request.streamObserved) request.unresolvedHttpFailure = false;
+    });
+  }
+  return { request, stream, assistantStart, assistant, boundary, response,
     projection(ctx: ExtensionContext, data: Data) { safe(ctx, () => {
       projection = undefined;
       if (Number.isSafeInteger(data.inputMessages) && Number(data.inputMessages) >= 0 && Number.isSafeInteger(data.outputMessages)
@@ -272,6 +284,5 @@ export function createCacheRequestDiagnostics(state: ExtensionRuntimeState, emit
       }
     }); },
     streamUnavailable() { streamHook = "unavailable"; },
-    response(ctx: ExtensionContext, status: number) { safe(ctx, () => { const request = current(ctx); if (request && status >= 400) request.data.correlation = "unknown-http-failure"; }); },
     settle(ctx: ExtensionContext, aborted: boolean) { boundary(ctx, aborted ? "aborted" : "settled-without-assistant"); } };
 }

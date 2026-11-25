@@ -191,6 +191,27 @@ test("raw failure, HTTP error, abort and missing assistant never become confirme
   });
 });
 
+for (const { name, before, after = [], assistantId = "id", conclusion = "unknown" } of [
+  { name: "successful retry before the stream", before: [429, 503, 200], conclusion: "raw-read-positive" },
+  { name: "missing success status", before: [429] },
+  { name: "success status after the stream", before: [429], after: [200] },
+  { name: "mismatched assistant response ID", before: [429, 200], assistantId: "other-id" },
+]) test(`HTTP retry cache association: ${name}`, async () => {
+  await withDiagnostics(async ({ start, response, end, emit, rows }) => {
+    await start();
+    for (const status of before) await emit("after_provider_response", { status });
+    await response("id", { input_tokens_details: { cached_tokens: 25 } });
+    for (const status of after) await emit("after_provider_response", { status });
+    await end({ responseId: assistantId, usage: { cacheRead: 25 } });
+    await emit("agent_settled", { aborted: false });
+    const data = await rows();
+    const cache = data.find(row => row.kind === "cache-request");
+    assert.equal(cache.cacheConclusion, conclusion);
+    assert.equal(cache.readComparison, conclusion === "unknown" ? "unknown" : "equal");
+    assert.ok(data.some(row => row.kind === "issue" && row.category === "provider-http" && row.code === "HTTP_429"));
+  });
+});
+
 test("Anthropic start and delta usage merge only supplied counters", async () => {
   await withDiagnostics(async ({ ctx, start, emit, end, cacheRows }) => {
     ctx.model = { provider: "anthropic", id: "claude", api: "anthropic-messages" };

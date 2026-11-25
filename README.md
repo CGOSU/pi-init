@@ -59,9 +59,9 @@ pi install https://github.com/CGOSU/pi-init
 
 此入口用于开发，会克隆包含 `test/` 的默认分支，不受 npm `files` 白名单影响。日常使用请选择上述 `@dist` 分支。
 
-当前运行时以 Pi SDK 1.5.0 为基线：`pi-ai`、`pi-coding-agent`、`pi-tui` 的 peer 范围均为 `^1.5.0`；Node 引擎声明为 `>=22.19.0`。本轮在 Pi SDK 1.5.0、Node 26.13.0 的宿主执行验证；不声明旧 SDK/Node 的兼容性，也未运行旧版本矩阵或真实 Windows 验收。
+最低支持 Pi 1.6.1 和 Node.js 22.19.0。`pi-ai`、`pi-coding-agent`、`pi-tui` 的 peer 范围均为 `^1.6.1`，开发与测试固定使用 Pi SDK 1.6.1。使用 Pi 1.5.x 或 1.6.0 的用户须先升级 Pi，或继续使用旧版 `pi-init`。
 
-安装后重启 Pi，在项目中运行 `/pi-init` 打开控制中心。Pi 1.5.0 及以上版本会在此扩展更新后的下次新启动时，显示 `CHANGELOG.md` 中比上次已见版本更新的条目；首次安装只记录版本，不显示历史更新。也可以直接在本仓库试用：
+安装后重启 Pi，在项目中运行 `/pi-init` 打开控制中心。扩展更新后的下次新启动会显示 `CHANGELOG.md` 中比上次已见版本更新的条目；首次安装只记录版本，不显示历史更新。也可以直接在本仓库试用：
 
 ```bash
 pi --no-extensions -e ./extensions/index.ts
