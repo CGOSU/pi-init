@@ -75,7 +75,7 @@ function buildRuntimeSection(
     step.nextAction,
   ].join("\n");
   return [
-    "当前运行状态（仅用于本轮职责路由，不改变持久状态）：",
+    "当前运行状态（仅用于本轮职责路由，不改变持久状态；若存在多条 pi_init_runtime，始终以最后一条更新为准）：",
     `当前职责：${role}`,
     workflowSummary(state),
     recoveryGuidance(state, step),
@@ -111,7 +111,7 @@ export function createRuntimeRoutingContext(
     if (!event.systemPromptOptions?.sections) return;
     const sections = event.systemPromptOptions.sections;
     sections.pi_init_policy = "[pi-init 插件自有规范，已加载，无需重复读取SKILL.md]\n来源：" + fileURLToPath(new URL("SKILL.md", policyRoot))
-      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。\n" + commonPolicy;
+      + "\n通用规范不改写项目AGENTS或历史，不默默覆盖项目具体要求；动态身份、恢复/停止状态及工具守卫优先。会话中若出现多条 pi_init_role_policy、pi_init_execution 或 pi_init_runtime 更新，始终以最后一条为准，忽略更早系统消息中的旧职责、旧恢复门或旧工作流状态。\n" + commonPolicy;
     // Keep static policy ahead of dynamic sections; let the host append section deltas.
     // Never replace the full prompt or copy authority into a conversation message.
     delete sections.pi_init_role_policy;
