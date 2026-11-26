@@ -11,10 +11,31 @@ const SECTION_KEY = "pi_init_runtime";
 const SECTION_OPEN = `<${SECTION_KEY}>\n`;
 const SECTION_CLOSE = `\n</${SECTION_KEY}>`;
 
+type ContextMessage = ContextWithSystemEvent["messages"][number];
+type SystemDeltaMessage = Extract<ContextMessage, { role: "system" }>;
+type RuntimeDeltaAnchor = {
+  index: number;
+  boundary: string;
+  message: SystemDeltaMessage;
+};
+
 function formatRuntimeSection(existing: string, section: string) {
   return existing.startsWith(SECTION_OPEN) && existing.endsWith(SECTION_CLOSE)
     ? `${SECTION_OPEN}${section}${SECTION_CLOSE}`
     : section;
+}
+
+function messageBoundaryKey(message: ContextMessage) {
+  if (message.role === "system") return ["system", message.timestamp, message.sections?.[SECTION_KEY] ?? null];
+  if (message.role === "toolResult") return ["toolResult", message.timestamp, message.toolCallId];
+  if (message.role === "custom") return ["custom", message.timestamp, message.customType];
+  return [message.role, message.timestamp];
+}
+
+function prefixBoundarySignature(messages: ContextMessage[], endIndex: number) {
+  const keys: unknown[] = [];
+  for (let index = 0; index < endIndex; index++) keys.push(messageBoundaryKey(messages[index]));
+  return JSON.stringify(keys);
 }
 
 type RuntimeRoutingDependencies = {
@@ -82,7 +103,11 @@ export function createRuntimeRoutingContext(
     }
     return rolePolicies.get(role);
   }
+  let anchorScope: string | undefined;
+  let anchors: RuntimeDeltaAnchor[] = [];
   function beforeAgentStart(event: BeforeAgentStartEvent, ctx: ExtensionContext) {
+    anchorScope = undefined;
+    anchors = [];
     if (!event.systemPromptOptions?.sections) return;
     const sections = event.systemPromptOptions.sections;
     sections.pi_init_policy = "[pi-init 插件自有规范，已加载，无需重复读取SKILL.md]\n来源：" + fileURLToPath(new URL("SKILL.md", policyRoot))
@@ -101,32 +126,77 @@ export function createRuntimeRoutingContext(
   }
 
   function contextWithSystem(event: ContextWithSystemEvent, ctx: ExtensionContext) {
-    // A same-role confirmation can finish without starting a fresh run. Refresh
-    // all active runtime sections in the request (including the leading system
-    // message used as top-level instructions), not the persisted host transcript.
+    // A same-role confirmation or workflow state change can finish without starting
+    // a fresh run. Never rewrite leading or historical system messages (which breaks
+    // cached prompt prefixes); emit anchored request-local system deltas instead.
     const { messages } = event;
-    let hasActiveSection = false;
+    let latestRuntime: string | undefined;
+    let latestSystemIndex = -1;
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index];
       if (message.role !== "system" || !message.sections || !(SECTION_KEY in message.sections)) continue;
-      if (message.sections[SECTION_KEY] === null) return;
-      hasActiveSection = true;
+      const value = message.sections[SECTION_KEY];
+      if (typeof value !== "string") return;
+      latestRuntime = value;
+      latestSystemIndex = index;
       break;
     }
-    if (!hasActiveSection) return;
-    const section = buildRuntimeSection(state, ctx, deps);
-    let updated: typeof messages | undefined;
-    for (let index = 0; index < messages.length; index++) {
-      const message = messages[index];
-      if (message.role !== "system" || !message.sections) continue;
-      const existing = message.sections[SECTION_KEY];
-      if (typeof existing !== "string") continue;
-      const formatted = formatRuntimeSection(existing, section);
-      if (existing === formatted) continue;
-      updated ??= messages.slice();
-      updated[index] = { ...message, sections: { ...message.sections, [SECTION_KEY]: formatted } };
+    if (latestRuntime === undefined) return;
+
+    const scope = JSON.stringify([ctx.sessionManager?.getSessionId?.(), state.roleContextGeneration]);
+    if (scope !== anchorScope) {
+      anchorScope = scope;
+      anchors = [];
     }
-    if (updated) return { messages: updated };
+
+    const validAnchors: RuntimeDeltaAnchor[] = [];
+    for (const anchor of anchors) {
+      if (anchor.index <= latestSystemIndex || anchor.index > messages.length) break;
+      if (prefixBoundarySignature(messages, anchor.index) !== anchor.boundary) break;
+      validAnchors.push(anchor);
+    }
+
+    const section = buildRuntimeSection(state, ctx, deps);
+    const formatted = formatRuntimeSection(latestRuntime, section);
+    const effectiveRuntime = validAnchors.at(-1)?.message.sections?.[SECTION_KEY] ?? latestRuntime;
+
+    if (effectiveRuntime !== formatted) {
+      const last = messages.at(-1) as { timestamp?: number } | undefined;
+      const delta: SystemDeltaMessage = {
+        role: "system",
+        content: "",
+        sections: { [SECTION_KEY]: formatted },
+        timestamp: typeof last?.timestamp === "number" ? last.timestamp : 0,
+      };
+      const entry: RuntimeDeltaAnchor = {
+        index: messages.length,
+        boundary: prefixBoundarySignature(messages, messages.length),
+        message: delta,
+      };
+      if (validAnchors.at(-1)?.index === messages.length) {
+        const priorRuntime = validAnchors.length > 1
+          ? validAnchors[validAnchors.length - 2].message.sections?.[SECTION_KEY]
+          : latestRuntime;
+        if (priorRuntime === formatted) validAnchors.pop();
+        else validAnchors[validAnchors.length - 1] = entry;
+      } else {
+        validAnchors.push(entry);
+      }
+    }
+
+    if (validAnchors.length === 0) return;
+    anchors = validAnchors;
+
+    const updated: ContextMessage[] = [];
+    let anchorCursor = 0;
+    for (let index = 0; index < messages.length; index++) {
+      while (anchorCursor < validAnchors.length && validAnchors[anchorCursor].index === index) {
+        updated.push(validAnchors[anchorCursor++].message);
+      }
+      updated.push(messages[index]);
+    }
+    while (anchorCursor < validAnchors.length) updated.push(validAnchors[anchorCursor++].message);
+    return { messages: updated };
   }
 
   return { beforeAgentStart, contextWithSystem };
