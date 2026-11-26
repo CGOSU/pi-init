@@ -67,7 +67,7 @@ test("同一 run 确认职责后，下一次模型请求不再提示恢复", asy
   const wrapRuntime = (text) => `<pi_init_runtime>\n${text}\n</pi_init_runtime>`;
   const update = {
     role: "system", content: "", timestamp: 2,
-    sections: { pi_init_runtime: sections.pi_init_runtime, other_extension: "keep me" },
+    sections: { pi_init_runtime: wrapRuntime(sections.pi_init_runtime), other_extension: "keep me" },
     toolsRemoved: [{ name: "unused" }],
   };
   const messages = [
@@ -89,19 +89,31 @@ test("同一 run 确认职责后，下一次模型请求不再提示恢复", asy
   assert.equal(harness.entries.at(-1).data.status, "acknowledged");
 
   const next = await request();
-  const leadingRuntime = next[0].sections.pi_init_runtime;
   const runtime = getCurrentSystemMessage(next).sections.pi_init_runtime;
-  assert.ok(leadingRuntime.startsWith("<pi_init_runtime>\n") && leadingRuntime.endsWith("\n</pi_init_runtime>"));
-  assert.match(leadingRuntime, /职责恢复：已确认/);
-  assert.doesNotMatch(leadingRuntime, /工作流下一步：recover/);
+  assert.equal(next.length, messages.length + 1);
+  assert.deepEqual(next[0], messages[0], "首条 system 必须保持原样以保留缓存前缀");
   assert.equal(next[0].sections.host_section, "keep host");
+  assert.equal(next[1], messages[1]);
+  assert.deepEqual(next[2], update);
+  assert.equal(next[3].role, "system");
+  assert.ok(runtime.startsWith("<pi_init_runtime>\n") && runtime.endsWith("\n</pi_init_runtime>"));
   assert.match(runtime, /职责恢复：已确认/);
   assert.doesNotMatch(runtime, /工作流下一步：recover/);
-  assert.equal(next[1], messages[1]);
-  assert.deepEqual(next[2], { ...update, sections: { ...update.sections, pi_init_runtime: runtime } });
   assert.match(messages[0].sections.pi_init_runtime, /工作流下一步：recover/);
   assert.match(messages[2].sections.pi_init_runtime, /工作流下一步：recover/);
   assert.equal(await request(next), next);
+
+  // Subsequent turns in the same run keep the injected delta anchored at index 3
+  // so the prefix through next remains identical for prompt caching.
+  const followUp = [
+    ...messages,
+    { role: "assistant", content: [{ type: "text", text: "checking" }], timestamp: 3 },
+    { role: "user", content: "next", timestamp: 4 },
+  ];
+  const nextTurn = await request(followUp);
+  assert.deepEqual(nextTurn.slice(0, next.length), next);
+  assert.deepEqual(nextTurn.slice(next.length), followUp.slice(messages.length));
+  assert.equal(getCurrentSystemMessage(nextTurn).sections.pi_init_runtime, runtime);
 });
 
 test("before_agent_start 在活动 Local 工作流恢复时保留职责恢复门", async () => {

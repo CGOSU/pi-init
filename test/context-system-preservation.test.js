@@ -5,6 +5,7 @@ import { getCurrentSystemMessage, getCurrentTools } from "@earendil-works/pi-ai"
 import { createExtensionRuntimeState } from "../extensions/runtime-state.ts";
 import { ROLE_RECOVERY_MESSAGE_TYPE } from "../extensions/role/role-recovery.ts";
 import { createRoleContextPipeline } from "../extensions/role/role-context-pipeline.ts";
+import { createRuntimeRoutingContext } from "../extensions/role/runtime-routing-context.ts";
 import { createWorkflowDelivery } from "../extensions/workflow/workflow-delivery.ts";
 
 function fixture() {
@@ -118,5 +119,129 @@ test("SDK completion-report projection preserves tool declarations and system ch
   assert.equal(output.at(-1).customType, "pi-init-workflow-delivery-basis");
   assert.match(output.at(-1).content, /Result ready/);
   assert.deepEqual(messages, before);
+  assert.deepEqual(f.errors, []);
+});
+
+function wrapSections(sections) {
+  return Object.fromEntries(Object.entries(sections).filter(([, value]) => Boolean(value)).map(([name, value]) => [name, `<${name}>\n${value}\n</${name}>`]));
+}
+
+function diffSections(previous, current) {
+  const patch = {};
+  for (const [name, value] of Object.entries(current)) if (previous[name] !== value) patch[name] = value;
+  for (const name of Object.keys(previous)) if (current[name] === undefined) patch[name] = null;
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+test("SDK runtime routing preserves leading and historical system prefix across same-model role handoffs", async () => {
+  const f = fixture();
+  let thinking = "high";
+  f.state.activeRole = { role: "developer-test", provider: f.ctx.model.provider, model: f.ctx.model.id, thinkingLevel: "high" };
+  const routing = createRuntimeRoutingContext(f.state, {
+    getActiveRole: () => f.state.activeRole,
+    getThinkingLevel: () => thinking,
+  });
+  f.pi.on("context_with_system", routing.contextWithSystem);
+
+  const event1 = { type: "before_agent_start", systemPromptOptions: { sections: {} } };
+  routing.beforeAgentStart(event1, f.ctx);
+  const messages = [
+    { role: "system", content: "Stable host instructions", sections: wrapSections(event1.systemPromptOptions.sections), toolsAdded: [tool("read"), tool("edit")], timestamp: 0 },
+    { role: "user", content: "Inspect bug", timestamp: 1 },
+  ];
+  const req1 = await f.runner.emitContext(messages);
+  assert.deepEqual(req1, messages);
+
+  // Switch role on the same model with a different thinking level (developer-test/high -> architect/max)
+  messages.push(assistant("Switching to architect"));
+  thinking = "max";
+  f.state.activeRole = { role: "architect", provider: f.ctx.model.provider, model: f.ctx.model.id, thinkingLevel: "max" };
+  const event2 = { type: "before_agent_start", systemPromptOptions: { sections: {} } };
+  routing.beforeAgentStart(event2, f.ctx);
+  const patch2 = diffSections(getCurrentSystemMessage(messages).sections, wrapSections(event2.systemPromptOptions.sections));
+  assert.ok(patch2?.pi_init_runtime);
+  messages.push(
+    { role: "system", content: "", sections: patch2, timestamp: 2 },
+    { role: "custom", customType: "pi-init-role-handoff", content: "handoff", display: false, timestamp: 3 },
+  );
+  const beforeReq2 = structuredClone(messages);
+  const req2 = await f.runner.emitContext(messages);
+  assert.deepEqual(req2, beforeReq2, "role handoff must not rewrite leading or historical system messages");
+  assert.deepEqual(req2.slice(0, req1.length), req1, "all prior cached prefix messages must stay byte-identical");
+  assert.match(getCurrentSystemMessage(req2).sections.pi_init_runtime, /当前职责：架构设计/);
+
+  // Switch back (architect/max -> developer-test/high)
+  messages.push(assistant("Back to implementation"));
+  thinking = "high";
+  f.state.activeRole = { role: "developer-test", provider: f.ctx.model.provider, model: f.ctx.model.id, thinkingLevel: "high" };
+  const event3 = { type: "before_agent_start", systemPromptOptions: { sections: {} } };
+  routing.beforeAgentStart(event3, f.ctx);
+  const patch3 = diffSections(getCurrentSystemMessage(messages).sections, wrapSections(event3.systemPromptOptions.sections));
+  messages.push(
+    { role: "system", content: "", sections: patch3, timestamp: 4 },
+    { role: "custom", customType: "pi-init-role-handoff", content: "handoff back", display: false, timestamp: 5 },
+  );
+  const req3 = await f.runner.emitContext(messages);
+  assert.deepEqual(req3.slice(0, req2.length), req2, "switching back must keep the entire architect prefix intact");
+  assert.match(getCurrentSystemMessage(req3).sections.pi_init_runtime, /当前职责：开发测试/);
+  assert.deepEqual(f.errors, []);
+});
+
+test("SDK in-run runtime updates stay anchored without mutating messages[0] across follow-up turns", async () => {
+  const f = fixture();
+  f.state.roleRecoveryPending = true;
+  f.state.activeRole = { role: "developer-test", provider: f.ctx.model.provider, model: f.ctx.model.id, thinkingLevel: "high" };
+  const routing = createRuntimeRoutingContext(f.state, {
+    getActiveRole: () => f.state.activeRole,
+    getThinkingLevel: () => "high",
+  });
+  f.pi.on("context_with_system", routing.contextWithSystem);
+  const event1 = { type: "before_agent_start", systemPromptOptions: { sections: {} } };
+  routing.beforeAgentStart(event1, f.ctx);
+
+  const messages = [
+    { role: "system", content: "Stable host instructions", sections: wrapSections(event1.systemPromptOptions.sections), toolsAdded: [tool("read")], timestamp: 0 },
+    { role: "user", content: "Continue", timestamp: 1 },
+  ];
+  const req1 = await f.runner.emitContext(messages);
+  assert.deepEqual(req1, messages);
+
+  // Same-run recovery confirmation (no before_agent_start)
+  f.state.roleRecoveryPending = false;
+  messages.push(
+    { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "switch_role", arguments: { role: "developer-test" } }], timestamp: 2 },
+    { role: "toolResult", toolCallId: "c1", toolName: "switch_role", content: [{ type: "text", text: "confirmed" }], isError: false, timestamp: 3 },
+  );
+  const req2 = await f.runner.emitContext(messages);
+  assert.deepEqual(req2[0], req1[0], "leading system message must remain untouched");
+  assert.deepEqual(req2.slice(0, messages.length), messages);
+  assert.equal(req2.length, messages.length + 1);
+  assert.equal(req2.at(-1).role, "system");
+  assert.match(getCurrentSystemMessage(req2).sections.pi_init_runtime, /职责恢复：已确认/);
+
+  // Follow-up turn in the same run keeps the delta anchored at index 4
+  messages.push(
+    { role: "assistant", content: [{ type: "toolCall", id: "c2", name: "read", arguments: {} }], timestamp: 4 },
+    { role: "toolResult", toolCallId: "c2", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false, timestamp: 5 },
+  );
+  const req3 = await f.runner.emitContext(messages);
+  assert.deepEqual(req3.slice(0, req2.length), req2, "in-run delta must stay anchored so follow-up turns preserve cache");
+  assert.deepEqual(req3.slice(req2.length), messages.slice(4));
+
+  // Second in-run state change appends a second anchored delta without moving the first
+  f.state.userStopRequested = true;
+  const req4 = await f.runner.emitContext(messages);
+  assert.deepEqual(req4.slice(0, req3.length), req3);
+  assert.equal(req4.length, req3.length + 1);
+  assert.match(getCurrentSystemMessage(req4).sections.pi_init_runtime, /自动执行已暂停/);
+
+  // Reverting the second state change before any new message pops the redundant tail delta
+  f.state.userStopRequested = false;
+  const req5 = await f.runner.emitContext(messages);
+  assert.deepEqual(req5, req3);
+
+  // Respect explicit removal of pi_init_runtime
+  const removed = [...messages, { role: "system", content: "", sections: { pi_init_runtime: null }, timestamp: 6 }];
+  assert.deepEqual(await f.runner.emitContext(removed), removed);
   assert.deepEqual(f.errors, []);
 });
