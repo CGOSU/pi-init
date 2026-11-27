@@ -35,14 +35,14 @@ export async function configureAutoModel(
   config: ResolvedRoleConfig,
   field: "auto-model" | "auto-initial" | "auto-range",
   runtime: RoleRuntime,
-) {
+): Promise<boolean> {
   const previous = config.autoModel;
   let autoModel: AutoModelConfig;
   if (field === "auto-model") {
     const models = getAvailableRoleModels(ctx);
     const current = previous && models.find((model) => model.provider === previous.provider && model.id === previous.model);
     const selected = await selectModelWithSearch(ctx, "Auto 固定模型", models, current);
-    if (!selected || isMenuBack(selected)) return;
+    if (!selected || isMenuBack(selected)) return false;
     const supported = getSupportedThinkingLevels(selected);
     const initial = previous && supported.includes(previous.initialThinkingLevel)
       ? previous.initialThinkingLevel
@@ -62,7 +62,7 @@ export async function configureAutoModel(
   } else {
     if (!previous) {
       ctx.ui.notify("请先配置 Auto 固定模型", "info");
-      return;
+      return false;
     }
     const model = ctx.modelRegistry.find(previous.provider, previous.model);
     if (!model) throw new Error("Auto 固定模型不在当前目录中");
@@ -76,16 +76,17 @@ export async function configureAutoModel(
     if (field === "auto-initial") {
       const levels = supported.slice(supported.indexOf(previous.minThinkingLevel), supported.indexOf(previous.maxThinkingLevel) + 1);
       const initial = await pick("Auto 默认强度", levels, previous.initialThinkingLevel);
-      if (!initial || isMenuBack(initial)) return;
+      if (!initial || isMenuBack(initial)) return false;
       autoModel = { ...previous, initialThinkingLevel: initial as ThinkingLevel };
     } else {
       const initialIndex = supported.indexOf(previous.initialThinkingLevel);
       const min = await pick("Auto 最低强度", supported.slice(0, initialIndex + 1), previous.minThinkingLevel);
-      if (!min || isMenuBack(min)) return;
+      if (!min || isMenuBack(min)) return false;
       const max = await pick("Auto 最高强度", supported.slice(initialIndex), previous.maxThinkingLevel);
-      if (!max || isMenuBack(max)) return;
+      if (!max || isMenuBack(max)) return false;
       autoModel = { ...previous, minThinkingLevel: min as ThinkingLevel, maxThinkingLevel: max as ThinkingLevel };
     }
   }
   await stageAutoModel(ctx, autoModel, runtime);
+  return true;
 }

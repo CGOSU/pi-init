@@ -383,3 +383,31 @@ test("fresh-session action closes the entire control-center stack before capture
   await center.showControlCenter(h.context);
   assert.equal(configReads, 1);
 });
+
+test("配置 Auto 固定模型后立即应用到当前会话，即使宿主尚未配置或处于其他模型", async () => {
+  await withTempDirectory(async (directory) => {
+    const fixed = { provider: "test", id: "fixed", reasoning: true };
+    let step = 0;
+    const keys = [
+      ["\n"], // 打开模型策略
+      ["\u001b[B", "\n"], // 选择 Auto（固定模型）
+      ["\u001b[B", "\n"], // 打开固定模型选择
+      ["\n"], // 选定 fixed 模型
+      ["\u001b"], // 返回
+    ];
+    const harness = createExtensionHarness([], {
+      cwd: directory,
+      mode: "tui",
+      trusted: true,
+      model: undefined,
+      availableModels: [fixed],
+      thinkingLevel: "off",
+      custom: async (call) => {
+        for (const key of keys[step++] ?? ["\u001b"]) call.component.handleInput(key);
+      },
+    });
+    await harness.commands.get("pi-init").handler("config", harness.context);
+    assert.deepEqual(harness.context.model, fixed);
+    assert.equal(harness.getThinkingLevel(), "medium");
+  });
+});

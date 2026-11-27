@@ -397,14 +397,25 @@ export function createAutoModelRuntime(pi: ExtensionAPI, state: ExtensionRuntime
     ctx.ui.notify(`手动推理强度 ${pi.getThinkingLevel()} 已接管，Auto 自动调整暂停；可在模型策略菜单中恢复 Auto。`, "info");
   });
   pi.on?.("input", async (event, ctx) => {
-    if (event.source === "extension" || taskScope(0).kind === "workflow") return;
-    const config = await readConfig(ctx);
+    let config: ResolvedRoleConfig;
+    try { config = await readConfig(ctx); }
+    catch { return; }
     if (config.modelStrategy !== "auto") return;
-    const saved = load(ctx, config.autoModel!);
-    syncScope(saved);
-    saved.pendingBoundary = true;
-    saved.inputRevision += 1;
-    save();
+    const fixed = config.autoModel!;
+    if ((ctx.isIdle?.() ?? true) && !state.agentRunActive && !config.requiresAutomaticMigration && !blocked(ctx) && !isSameModel(ctx, fixed)) {
+      try { await ensure(ctx, config); }
+      catch (error) {
+        ctx.ui.notify(textOf(error), "error");
+        return { action: "handled" as const };
+      }
+    }
+    if (event.source !== "extension" && taskScope(0).kind !== "workflow") {
+      const saved = load(ctx, fixed);
+      syncScope(saved);
+      saved.pendingBoundary = true;
+      saved.inputRevision += 1;
+      save();
+    }
   });
   pi.on?.("tool_result", async (event, ctx) => {
     if (!memory || event.toolName === "switch_role" || event.toolName === "task_workflow" || !state.activeRole || blocked(ctx)) return;

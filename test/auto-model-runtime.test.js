@@ -797,3 +797,145 @@ test("switch_role supports one-step role switch plus thinkingLevel assessment an
     assert.equal(handoffs.length, 2);
   });
 });
+
+test("Auto pre-applies fixed model before AgentSession.prompt validates missing or unauthenticated host model", async () => {
+  for (const initialModel of [undefined, { provider: "broken-provider", id: "unconfigured-model" }]) {
+    const f = fixture();
+    f.ctx.model = initialModel;
+    f.thinking = "off";
+    let started = 0;
+    const host = {
+      _isEmittingAgentSettled: false,
+      _compactionAbortController: undefined,
+      isStreaming: false,
+      promptTemplates: [],
+      _extensionRunner: f.runner,
+      get model() { return f.ctx.model; },
+      _modelRuntime: {
+        hasConfiguredAuth: provider => provider === fixed.provider,
+        checkAuth: async provider => provider === fixed.provider ? { apiKey: "ok" } : undefined,
+        isUsingOAuth: () => false,
+      },
+      _runInputHandlers: AgentSession.prototype._runInputHandlers,
+      _expandSkillCommand: text => text,
+      async _startRun() {
+        started += 1;
+        await f.start();
+      },
+    };
+    await AgentSession.prototype.prompt.call(host, "你好", { expandPromptTemplates: false });
+    assert.equal(started, 1);
+    assert.equal(f.ctx.model.provider, fixed.provider);
+    assert.equal(f.ctx.model.id, fixed.model);
+    assert.equal(f.thinking, fixed.initialThinkingLevel);
+    assert.deepEqual(f.errors, []);
+  }
+
+  // Unavailable Auto fixed model fails closed during input without throwing a misleading error about the host model.
+  const broken = fixture();
+  broken.ctx.model = undefined;
+  broken.available = false;
+  let brokenStarted = 0;
+  const brokenHost = {
+    _isEmittingAgentSettled: false,
+    _compactionAbortController: undefined,
+    isStreaming: false,
+    promptTemplates: [],
+    _extensionRunner: broken.runner,
+    get model() { return broken.ctx.model; },
+    _modelRuntime: {
+      hasConfiguredAuth: () => false,
+      checkAuth: async () => undefined,
+      isUsingOAuth: () => false,
+    },
+    _runInputHandlers: AgentSession.prototype._runInputHandlers,
+    _expandSkillCommand: text => text,
+    async _startRun() { brokenStarted += 1; },
+  };
+  await AgentSession.prototype.prompt.call(brokenHost, "你好", { expandPromptTemplates: false });
+  assert.equal(brokenStarted, 0);
+  assert.equal(broken.ctx.model, undefined);
+  assert.match(broken.notices.at(-1).message, /Auto 固定模型不可用/);
+
+  // Stop, recovery, legacy migration, and active-run guards still block automatic input switching.
+  for (const protect of [
+    f => { f.state.userStopRequested = true; },
+    f => { f.state.roleRecoveryPending = true; },
+    f => { f.state.agentRunActive = true; },
+    f => { f.ctx.isIdle = () => false; },
+    f => { f.config = resolveRoleConfig({ ...f.config, schemaVersion: 2, mode: "confirm" }).value; },
+  ]) {
+    const guarded = fixture();
+    const other = { provider: "other", id: "other" };
+    guarded.ctx.model = other;
+    protect(guarded);
+    const result = await guarded.runner.emitInput("继续", undefined, "interactive");
+    assert.equal(result.action, "continue");
+    assert.equal(guarded.ctx.model, other);
+  }
+});
+
+test("session_start applies Auto fixed model when host model is missing or mismatched, while respecting recovery and legacy gates", async () => {
+  const autoFixed = { provider: "openai-codex", id: "gpt-6.1-sol", reasoning: true };
+  for (const initialModel of [undefined, { provider: "other-provider", id: "broken-model" }]) {
+    await withTempDirectory(async cwd => {
+      await mkdir(join(cwd, ".pi"), { recursive: true });
+      await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
+        schemaVersion: 3,
+        modelStrategy: "auto",
+        autoModel: {
+          provider: autoFixed.provider,
+          model: autoFixed.id,
+          initialThinkingLevel: "high",
+          minThinkingLevel: "low",
+          maxThinkingLevel: "high",
+        },
+        roleModels: {
+          architect: { provider: "nonexistent", model: "unconfigured", thinkingLevel: "high" },
+        },
+      }));
+      const harness = createExtensionHarness([], {
+        cwd,
+        trusted: true,
+        model: initialModel,
+        availableModels: [autoFixed],
+        thinkingLevel: "off",
+      });
+      for (const handler of harness.handlers.get("session_start") ?? []) {
+        await handler({ type: "session_start", reason: "startup" }, harness.context);
+      }
+      assert.deepEqual(harness.context.model, autoFixed);
+      assert.equal(harness.getThinkingLevel(), "high");
+    });
+  }
+
+  // Reload on a non-empty session enters recovery protection and must not auto-switch during session_start.
+  await withTempDirectory(async cwd => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "role-models.json"), JSON.stringify({
+      schemaVersion: 3,
+      modelStrategy: "auto",
+      autoModel: {
+        provider: autoFixed.provider,
+        model: autoFixed.id,
+        initialThinkingLevel: "high",
+        minThinkingLevel: "low",
+        maxThinkingLevel: "high",
+      },
+      roleModels: {},
+    }));
+    const other = { provider: "other-provider", id: "other-model" };
+    const harness = createExtensionHarness([{ type: "message", id: "m1", message: { role: "user", content: "hi" } }], {
+      cwd,
+      trusted: true,
+      model: other,
+      availableModels: [autoFixed, other],
+      thinkingLevel: "low",
+    });
+    for (const handler of harness.handlers.get("session_start") ?? []) {
+      await handler({ type: "session_start", reason: "reload" }, harness.context);
+    }
+    assert.deepEqual(harness.context.model, other);
+    assert.equal(harness.getThinkingLevel(), "low");
+  });
+});
