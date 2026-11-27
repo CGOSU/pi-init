@@ -237,26 +237,38 @@ export function createControlCenter(deps: ControlCenterDependencies) {
         return saveMenuOptions(ctx).onSave();
       },
     };
+    const applyAutoIfReady = async (nextConfig: ResolvedRoleConfig) => {
+      if (nextConfig.modelStrategy !== "auto" || nextConfig.requiresAutomaticMigration || state.userStopRequested) return;
+      try { await roleRuntime.ensureAutoModel?.(ctx, nextConfig, true); }
+      catch (error) { ctx.ui.notify(String(error instanceof Error ? error.message : error), "error"); }
+    };
     while (true) {
       const displayConfig = { ...config, modelStrategy: selectedStrategy };
       const action = await showMenu(ctx, "角色与模型", roleMenuItems(displayConfig, state.configuredRoleNames), saveOptions);
       if (!action || isMenuBack(action)) return;
       if (action === "strategy") {
+        let appliedAuto = false;
         try {
           const strategy = await configureModelStrategy(ctx, displayConfig);
           if (strategy === "roles") roleRuntime.stageRoleConfig({ modelStrategy: "roles" });
-          if (strategy === "auto" && config.autoModel) await stageAutoModel(ctx, config.autoModel, roleRuntime);
+          if (strategy === "auto" && config.autoModel) {
+            await stageAutoModel(ctx, config.autoModel, roleRuntime);
+            appliedAuto = true;
+          }
           if (strategy) selectedStrategy = strategy;
         } catch (error) {
           ctx.ui.notify(String(error instanceof Error ? error.message : error), "error");
         }
         config = await roleRuntime.readSessionRoleConfig(ctx);
+        if (appliedAuto) await applyAutoIfReady(config);
         continue;
       }
       if (action === "auto-model" || action === "auto-initial" || action === "auto-range") {
-        try { await configureAutoModel(ctx, config, action, roleRuntime); }
+        let updated = false;
+        try { updated = await configureAutoModel(ctx, config, action, roleRuntime); }
         catch (error) { ctx.ui.notify(String(error instanceof Error ? error.message : error), "error"); }
         config = await roleRuntime.readSessionRoleConfig(ctx);
+        if (updated) await applyAutoIfReady(config);
         continue;
       }
       if (action === "resume-auto") {
@@ -267,6 +279,7 @@ export function createControlCenter(deps: ControlCenterDependencies) {
       if (action === "enable-automatic") {
         await roleRuntime.enableAutomaticSwitching(ctx);
         config = await roleRuntime.readSessionRoleConfig(ctx);
+        await applyAutoIfReady(config);
         ctx.ui.notify("已为当前会话启用全自动；显式保存才迁移项目配置。", "info");
         continue;
       }

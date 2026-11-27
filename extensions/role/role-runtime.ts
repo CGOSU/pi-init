@@ -355,8 +355,16 @@ export function createRoleRuntime(
       return { ok: false as const, code, message: textOf(error) };
     }
   }
+  async function ensureAutoModel(ctx: ExtensionContext, resolvedConfig?: ResolvedRoleConfig, explicit = false) {
+    const config = resolvedConfig ?? await readSessionRoleConfig(ctx);
+    if (config.modelStrategy !== "auto") return false;
+    await autoModel.ensure(ctx, config, explicit);
+    return true;
+  }
+
   return {
     activeRoleFor,
+    ensureAutoModel,
     suggestThinking: autoModel.suggest,
     resumeAutoThinking: autoModel.resume,
 

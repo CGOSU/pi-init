@@ -347,6 +347,14 @@ export default function initProjectExtension(pi: ExtensionAPI) {
         : undefined;
       roleRuntime.refreshRoleStatus(ctx);
       showRoleConfigNotice(ctx, config);
+      if (config.modelStrategy === "auto" && !config.requiresAutomaticMigration && config.autoModel
+        && (ctx.model?.provider !== config.autoModel.provider || ctx.model?.id !== config.autoModel.model)) {
+        try {
+          await roleRuntime.ensureAutoModel(ctx, config);
+        } catch {
+          // Keep startup notice/status intact; unavailable Auto models still fail closed before execution.
+        }
+      }
       if (!runtimeState.userStopRequested) {
             await workflowDispatch.scheduleWorkflow(ctx);
       }
